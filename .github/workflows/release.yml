@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the release and upload assets
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17' # AGP 9 needs JDK 17+; matches the local Zulu 21/17 setup
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.1'
+          channel: stable
+          cache: true
+
+      # The committed android/gradle.properties carries workarounds for the
+      # dev machine (a Windows-only unix-socket tmpdir and tight heap caps).
+      # User-home properties take precedence over project ones, so this
+      # neutralizes them on the runner without touching the repo file.
+      - name: Override machine-specific Gradle properties
+        run: |
+          mkdir -p ~/.gradle
+          cat > ~/.gradle/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=1G
+          kotlin.daemon.jvmargs=-Xmx2G
+          EOF
+
+      - name: Restore release keystore
+        run: printf '%s' "$KEYSTORE_B64" | base64 --decode > android/app/expense_tracker.jks
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+
+      # storeFile is resolved by android/app/build.gradle.kts relative to
+      # android/app/, where the keystore was just restored.
+      - name: Write key.properties
+        run: |
+          cat > android/key.properties <<EOF
+          storeFile=expense_tracker.jks
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=expense_tracker
+          EOF
+
+      - run: flutter pub get
+      - run: flutter test # never ship a red build
+
+      # One universal APK: matches the hand-published v1.0.0 asset and keeps
+      # the in-app "Check for updates" flow (release page → single download).
+      - run: flutter build apk --release
+
+      # The gradle script silently falls back to debug signing when
+      # key.properties is unusable (e.g. a typo'd secret). Fail loudly instead
+      # of publishing a debug-signed "release". APKs carry v2+ signatures that
+      # keytool cannot read, so this must be apksigner.
+      - name: Verify release signature
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/apksigner" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -q 'CN=Expense Tracker'
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: build/app/outputs/flutter-apk/app-release.apk
+          generate_release_notes: true
