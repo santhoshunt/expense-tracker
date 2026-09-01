@@ -4,7 +4,10 @@ import 'package:provider/provider.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/merchant_stats.dart';
+import '../services/recurring_detector.dart';
 import '../utils/app_theme.dart';
+import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../widgets/balance_breakdown.dart';
 import '../widgets/budget_detail_sheet.dart';
@@ -29,12 +32,17 @@ class DashboardScreen extends StatefulWidget {
   final void Function(String? groupId, DateTime month)? onViewGroup;
   final void Function(String budgetId, DateTime month)? onViewBudget;
 
+  /// Called when a Top-merchants row is tapped: [query] is the normalized
+  /// merchant identity, pre-filled into the Transactions search.
+  final void Function(String query, DateTime month)? onViewMerchant;
+
   const DashboardScreen({
     super.key,
     this.onViewTransactions,
     this.onViewCategory,
     this.onViewGroup,
     this.onViewBudget,
+    this.onViewMerchant,
   });
 
   @override
@@ -43,6 +51,38 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   late DateTime _month;
+
+  /// Recurring detection scans the whole ledger — memoized on the provider's
+  /// revision token so it reruns only when data actually changes.
+  Object? _recurringRev;
+  List<RecurringHit> _recurringHits = const [];
+
+  List<RecurringHit> _recurring(FinanceProvider finance) {
+    if (!identical(_recurringRev, finance.revision)) {
+      _recurringRev = finance.revision;
+      _recurringHits = detectRecurring(
+        finance.transactions,
+        now: DateTime.now(),
+      );
+    }
+    return _recurringHits;
+  }
+
+  /// Per-merchant totals scan every row's SMS body — memoized on
+  /// (revision, month) like the recurring hits.
+  Object? _merchantsRev;
+  DateTime? _merchantsMonth;
+  List<MerchantSpend> _merchants = const [];
+
+  List<MerchantSpend> _topMerchants(FinanceProvider finance) {
+    if (!identical(_merchantsRev, finance.revision) ||
+        _merchantsMonth != _month) {
+      _merchantsRev = finance.revision;
+      _merchantsMonth = _month;
+      _merchants = topMerchants(finance.transactions, month: _month);
+    }
+    return _merchants;
+  }
 
   @override
   void initState() {
@@ -106,6 +146,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final groupSpend = finance.groupSpendInMonth(_month);
     final groupTotal = groupSpend.fold(0.0, (sum, e) => sum + e.$2);
     final transfersBy = finance.transfersByCategoryInMonth(_month);
+    final topMerchantsList = _topMerchants(finance);
     final colors = AppColors.of(context);
     final scheme = Theme.of(context).colorScheme;
 
@@ -148,6 +189,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 16),
         ],
+        // Card bills coming due + detected recurring payments. Not
+        // month-scoped, so it sits above the month selector.
+        _UpcomingCard(finance: finance, hits: _recurring(finance)),
         // Month selector governs the stat cards and category breakdown.
         Row(
           children: [
@@ -330,6 +374,81 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
         ],
+        // Where the money actually went: per-payee totals for the month,
+        // re-derived from SMS bodies / manual notes. Display-only — the
+        // transactions filter can't express a free-text payee (yet).
+        if (topMerchantsList.isNotEmpty) ...[
+          const SizedBox(height: 24),
+          Text('Top merchants', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  for (final m in topMerchantsList)
+                    InkWell(
+                      borderRadius: BorderRadius.circular(AppRadius.control),
+                      onTap: widget.onViewMerchant == null
+                          ? null
+                          // The search matches notes/bodies, so the query is
+                          // the normalized identity, not the cased label.
+                          : () => widget.onViewMerchant!(
+                              m.key.substring(m.key.indexOf('|') + 1),
+                              _month,
+                            ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.storefront_outlined,
+                              size: 20,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    m.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  Text(
+                                    m.count == 1
+                                        ? '1 payment'
+                                        : '${m.count} payments',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 120),
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  fmtMoney(m.total),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
         // Spending per parent group (Needs/Wants/…). Grouped transfer
         // outflows are included in their group's sum; "Other" collects
         // ungrouped categories.
@@ -455,6 +574,247 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
         const SizedBox(height: 120),
       ],
+    );
+  }
+}
+
+/// "Upcoming": card bills coming due plus detected monthly payments,
+/// soonest first. Renders nothing (zero height) when there is nothing to
+/// show, so the sections around it keep their spacing.
+class _UpcomingCard extends StatelessWidget {
+  final FinanceProvider finance;
+  final List<RecurringHit> hits;
+  const _UpcomingCard({required this.finance, required this.hits});
+
+  /// One duration for the fold, the chevron flip and the count fade, so the
+  /// three movements read as a single gesture.
+  static const _foldDuration = Duration(milliseconds: 250);
+
+  static String _inDays(int days) => days == 0
+      ? 'today'
+      : days == 1
+      ? 'tomorrow'
+      : 'in $days days';
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<SettingsProvider>();
+    final scheme = Theme.of(context).colorScheme;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    final entries =
+        <
+          ({
+            DateTime due,
+            IconData icon,
+            Color color,
+            String label,
+            String sub,
+            double amount,
+            bool urgent,
+            String? hideKey,
+          })
+        >[];
+
+    for (final a in finance.openAccounts) {
+      if (!a.isCard || a.dueDay == null) continue;
+      final out = finance.accountOutstanding(a);
+      if (out == null || out <= 0) continue;
+      final due = nextMonthlyOccurrence(a.dueDay!, now);
+      final days = due.difference(today).inDays;
+      entries.add((
+        due: due,
+        icon: Icons.credit_card,
+        color: scheme.error,
+        label: '${a.name} bill',
+        sub: 'Due ${fmtDateCompact(due)} · ${_inDays(days)}',
+        amount: out,
+        urgent: days <= 3,
+        hideKey: null,
+      ));
+    }
+
+    for (final h in hits) {
+      if (settings.hiddenUpcoming.contains(h.key)) continue;
+      final c = categoryById(h.categoryId, fallbackType: h.type);
+      final days = h.daysUntil(now);
+      entries.add((
+        due: h.nextDue,
+        icon: c.icon,
+        color: c.color,
+        label: h.label,
+        sub: days < 0
+            ? 'Overdue · expected ${fmtDateCompact(h.nextDue)}'
+            : 'Expected ${fmtDateCompact(h.nextDue)} · ${_inDays(days)}',
+        amount: h.expectedAmount,
+        urgent: days < 0,
+        hideKey: h.key,
+      ));
+    }
+    if (entries.isEmpty) return const SizedBox.shrink();
+    entries.sort((a, b) => a.due.compareTo(b.due));
+    final collapsed = settings.upcomingCollapsed;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Tappable header: the card can dominate the top of the dashboard,
+        // so it folds to this row (persisted per device).
+        InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.control),
+          onTap: () =>
+              context.read<SettingsProvider>().setUpcomingCollapsed(!collapsed),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Text(
+                  'Upcoming',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(width: 8),
+                // Always laid out so the header doesn't reflow — the count
+                // just fades in as the list folds away.
+                AnimatedOpacity(
+                  opacity: collapsed ? 1 : 0,
+                  duration: _foldDuration,
+                  curve: Curves.easeOutCubic,
+                  child: Text(
+                    '${entries.length}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+                const Spacer(),
+                AnimatedRotation(
+                  turns: collapsed ? 0.5 : 0,
+                  duration: _foldDuration,
+                  curve: Curves.easeOutCubic,
+                  child: Icon(
+                    Icons.expand_less,
+                    size: 20,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Fold with a combined height + fade animation; the zero-height
+        // second child keeps full width so only the height moves.
+        AnimatedCrossFade(
+          duration: _foldDuration,
+          sizeCurve: Curves.easeOutCubic,
+          crossFadeState: collapsed
+              ? CrossFadeState.showSecond
+              : CrossFadeState.showFirst,
+          secondChild: const SizedBox(width: double.infinity),
+          firstChild: Column(
+            children: [
+              const SizedBox(height: 8),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      for (final e in entries.take(6))
+                        InkWell(
+                          borderRadius: BorderRadius.circular(
+                            AppRadius.control,
+                          ),
+                          // Detected patterns can be wrong — long-press hides one.
+                          // Card bills aren't hideable; clear the card's due day
+                          // instead.
+                          onLongPress: e.hideKey == null
+                              ? null
+                              : () =>
+                                    _confirmHide(context, e.label, e.hideKey!),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: Row(
+                              children: [
+                                Icon(e.icon, size: 20, color: e.color),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        e.label,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      Text(
+                                        e.sub,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: e.urgent
+                                                  ? scheme.error
+                                                  : null,
+                                            ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                ConstrainedBox(
+                                  constraints: const BoxConstraints(
+                                    maxWidth: 120,
+                                  ),
+                                  child: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      fmtMoney(e.amount),
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  void _confirmHide(BuildContext context, String label, String key) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Hide "$label"?'),
+        content: const Text(
+          'This detected payment will no longer appear in Upcoming or fire '
+          'reminders.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              ctx.read<SettingsProvider>().hideUpcoming(key);
+              Navigator.pop(ctx);
+            },
+            child: const Text('Hide'),
+          ),
+        ],
+      ),
     );
   }
 }

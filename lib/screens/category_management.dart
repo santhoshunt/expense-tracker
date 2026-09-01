@@ -6,7 +6,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
-import '../widgets/anchored_picker.dart';
+import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
 import '../widgets/section_header.dart';
@@ -465,7 +465,6 @@ class _CategoriesTabState extends State<CategoriesTab> {
               const SizedBox(height: 16),
               AppDropdownField<String>(
                 label: 'Move transactions to',
-                searchable: true,
                 items: [
                   for (final t in targets)
                     PickerItem(

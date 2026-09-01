@@ -9,11 +9,13 @@ import android.os.Build
 import android.provider.Settings
 import android.provider.Telephony
 import android.service.notification.NotificationListenerService
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity() {
+// FlutterFragmentActivity (not FlutterActivity): local_auth's BiometricPrompt
+// needs an androidx FragmentActivity to attach its fragment to.
+class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val CHANNEL = "expense_tracker/sms"
         private const val PERMISSION_REQUEST = 7301

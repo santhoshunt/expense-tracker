@@ -9,6 +9,7 @@ import 'services/drive_backup_service.dart';
 import 'services/notification_service.dart';
 import 'utils/app_theme.dart';
 import 'widgets/keyboard_unfocus.dart';
+import 'widgets/lock_gate.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -84,6 +85,8 @@ class _Root extends StatelessWidget {
     if (!loaded) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    return const HomeScreen();
+    // Inside MaterialApp (theme, Navigator) and below the providers, so the
+    // gate can read SettingsProvider and its lock screen is themed.
+    return const LockGate(child: HomeScreen());
   }
 }
