@@ -282,7 +282,11 @@ void main() {
       categoryId: 'other_expense',
       amount: 900,
       note: 'rent',
-      date: DateTime.now().add(const Duration(minutes: 1)),
+      // +100ms: strictly after the manual stamp even on Windows' ~15ms
+      // clock ticks (bare now() can EQUAL it), while keeping the future
+      // offset far below the "+1 minute" that crossed midnight and left
+      // balance math when the suite ran at 23:59.
+      date: DateTime.now().add(const Duration(milliseconds: 100)),
     );
     await p.assignAccount(txId, id);
     // Used to sit frozen at the manual figure regardless of later activity.
@@ -612,14 +616,18 @@ void main() {
       await p.confirmTransaction(p.pendingTransactions.single.id);
       expect(p.accountBalance(p.accountById(acc.id)!), 45000);
 
-      // A NEWER alert takes over again — the documented handoff.
+      // A NEWER alert takes over again — the documented handoff. +100ms,
+      // not +5min: a future date crosses midnight when the suite runs in
+      // the last minutes of a day and future-dated rows leave balance math
+      // (flaked at ~23:55) — while bare now() can EQUAL the manual stamp
+      // on Windows' ~15ms clock ticks.
       await p.addImported([
         bankSpend(
           sender: 'VM-HDFCBK',
           amount: 50,
           last4: '1234',
           avlBal: 47000,
-          date: DateTime.now().add(const Duration(minutes: 5)),
+          date: DateTime.now().add(const Duration(milliseconds: 100)),
           ref: 'R4',
         ),
       ]);
@@ -975,14 +983,18 @@ void main() {
     final rdId = await p.addAccount(name: 'RD', type: AccountType.savings);
     await p.setManualBalance(rdId, 10000);
 
-    final now = DateTime.now();
+    // Millisecond offsets, not minutes or bare now(): the rows must be
+    // strictly after the manual stamp, but Windows' clock ticks ~15ms so
+    // bare DateTime.now() can EQUAL the stamp, and "+1min" crossed midnight
+    // when the suite ran at 23:59 (future rows leave balance math).
+    final base = DateTime.now();
     // Expense-typed "To savings" = deposit into this account.
     final dep = await p.addTransaction(
       type: TxType.expense,
       categoryId: kSavingsTransferCategoryId,
       amount: 5000,
       note: 'RD instalment',
-      date: now.add(const Duration(minutes: 1)),
+      date: base.add(const Duration(milliseconds: 100)),
     );
     await p.assignAccount(dep, rdId);
     expect(p.accountBalance(p.accountById(rdId)!), 15000);
@@ -993,7 +1005,7 @@ void main() {
       categoryId: kTransferInCategoryId,
       amount: 2000,
       note: 'partial withdrawal',
-      date: now.add(const Duration(minutes: 2)),
+      date: base.add(const Duration(milliseconds: 200)),
     );
     await p.assignAccount(wd, rdId);
     expect(p.accountBalance(p.accountById(rdId)!), 13000);
@@ -1004,7 +1016,7 @@ void main() {
       categoryId: 'investment',
       amount: 1000,
       note: 'interest',
-      date: now.add(const Duration(minutes: 3)),
+      date: base.add(const Duration(milliseconds: 300)),
     );
     await p.assignAccount(interest, rdId);
     expect(p.accountBalance(p.accountById(rdId)!), 14000);

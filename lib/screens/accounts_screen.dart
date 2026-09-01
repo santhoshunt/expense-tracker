@@ -3,11 +3,13 @@ import 'package:provider/provider.dart';
 
 import '../models/account.dart';
 import '../providers/finance_provider.dart';
+import '../services/savings_goal.dart';
 import '../services/sms_parser.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
+import '../utils/dates.dart';
 import '../utils/format.dart';
-import '../widgets/anchored_picker.dart';
+import '../widgets/picker_sheet.dart';
 import '../widgets/balance_breakdown.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
@@ -284,6 +286,64 @@ class _BankBalance extends StatelessWidget {
           provenance,
           style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
         ),
+        if (account.type == AccountType.savings &&
+            (account.goalAmount ?? 0) > 0)
+          _GoalProgress(account: account),
+      ],
+    );
+  }
+}
+
+/// Progress toward a savings goal, plus a projected completion date from
+/// the trailing-90-day deposit rate.
+class _GoalProgress extends StatelessWidget {
+  final Account account;
+  const _GoalProgress({required this.account});
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.watch<FinanceProvider>();
+    final scheme = Theme.of(context).colorScheme;
+    final colors = AppColors.of(context);
+    final goal = account.goalAmount!;
+    final balance = finance.accountBalance(account);
+    final reached = balance >= goal;
+
+    String line;
+    if (reached) {
+      line = 'Goal reached · ${fmtMoney(goal)}';
+    } else {
+      line = 'Saved ${fmtMoney(balance)} of ${fmtMoney(goal)}';
+      final projected = projectedGoalDate(
+        balance: balance,
+        goal: goal,
+        avgMonthlyNet: avgMonthlyNet(
+          finance.transactionsForAccount(account.id),
+          now: DateTime.now(),
+        ),
+        now: DateTime.now(),
+      );
+      // No projection line when nothing is flowing in — a made-up date is
+      // worse than none.
+      if (projected != null) line += ' · on track for ~${fmtMonth(projected)}';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 10),
+        AnimatedProgress(
+          value: goal <= 0 ? 0 : (balance / goal).clamp(0.0, 1.0),
+          minHeight: 8,
+          borderRadius: const BorderRadius.all(Radius.circular(5)),
+          color: colors.green,
+          backgroundColor: colors.green.withValues(alpha: 0.12),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          line,
+          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+        ),
       ],
     );
   }
@@ -355,6 +415,172 @@ Future<void> showCreditLimitDialog(
                   return;
                 }
                 ctx.read<FinanceProvider>().setCreditLimit(account.id, v);
+                Navigator.pop(ctx);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// Savings goal target for a savings/asset account. Same input contract as
+/// the credit-limit dialog: empty clears, an unreadable entry errors instead
+/// of silently clearing.
+Future<void> showSavingsGoalDialog(
+  BuildContext context,
+  Account account,
+) async {
+  final ctrl = TextEditingController(
+    text: account.goalAmount?.toStringAsFixed(0) ?? '',
+  );
+  String? error;
+  await showDialog(
+    context: context,
+    builder: (ctx) => DisposeScope(
+      disposables: [ctrl],
+      child: StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          scrollable: true,
+          title: const Text('Savings goal'),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: 'Target amount',
+              prefixText: '₹ ',
+              helperText:
+                  'The account card shows progress and a projected date '
+                  'from your recent deposits. Leave blank to clear.',
+              helperMaxLines: 4,
+              border: const OutlineInputBorder(),
+              errorText: error,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final text = ctrl.text.trim();
+                if (text.isEmpty) {
+                  ctx.read<FinanceProvider>().setSavingsGoal(account.id, null);
+                  Navigator.pop(ctx);
+                  return;
+                }
+                final v = parseAmount(text);
+                if (v == null) {
+                  setState(() => error = 'Enter a number, e.g. 500000');
+                  return;
+                }
+                if (v <= 0) {
+                  setState(
+                    () => error =
+                        'Enter an amount above 0 — leave empty to clear',
+                  );
+                  return;
+                }
+                ctx.read<FinanceProvider>().setSavingsGoal(account.id, v);
+                Navigator.pop(ctx);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// Statement + payment due day for a card. Same input contract as the
+/// credit-limit dialog: empty clears, an unreadable entry errors instead of
+/// silently clearing.
+Future<void> showCardCycleDialog(BuildContext context, Account account) async {
+  final stmtCtrl = TextEditingController(
+    text: account.statementDay?.toString() ?? '',
+  );
+  final dueCtrl = TextEditingController(text: account.dueDay?.toString() ?? '');
+  String? stmtError;
+  String? dueError;
+  await showDialog(
+    context: context,
+    builder: (ctx) => DisposeScope(
+      disposables: [stmtCtrl, dueCtrl],
+      child: StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          scrollable: true,
+          title: const Text('Statement & due dates'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: stmtCtrl,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Statement day',
+                  helperText:
+                      'Day of month the statement is generated. '
+                      'Leave blank if unknown.',
+                  helperMaxLines: 3,
+                  border: const OutlineInputBorder(),
+                  errorText: stmtError,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: dueCtrl,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Payment due day',
+                  helperText:
+                      'Day of month the bill is due — drives the '
+                      '"bill due" reminder. Shorter months use their last '
+                      'day. Leave blank to clear.',
+                  helperMaxLines: 4,
+                  border: const OutlineInputBorder(),
+                  errorText: dueError,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                // Empty clears; anything unreadable or out of range errors.
+                (int?, String?) parseDay(String raw) {
+                  final text = raw.trim();
+                  if (text.isEmpty) return (null, null);
+                  final v = int.tryParse(text);
+                  if (v == null || v < 1 || v > 31) {
+                    return (null, 'Enter a day between 1 and 31');
+                  }
+                  return (v, null);
+                }
+
+                final (stmt, sErr) = parseDay(stmtCtrl.text);
+                final (due, dErr) = parseDay(dueCtrl.text);
+                if (sErr != null || dErr != null) {
+                  setState(() {
+                    stmtError = sErr;
+                    dueError = dErr;
+                  });
+                  return;
+                }
+                ctx.read<FinanceProvider>().setCardCycle(
+                  account.id,
+                  statementDay: stmt,
+                  dueDay: due,
+                );
                 Navigator.pop(ctx);
               },
               child: const Text('Save'),
@@ -447,6 +673,51 @@ class _CardFigures extends StatelessWidget {
           'Spent this month ${fmtMoney(spent)}',
           style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
         ),
+        if (account.dueDay != null) ...[
+          const SizedBox(height: 6),
+          Builder(
+            builder: (context) {
+              final hasDues = outstanding != null && outstanding > 0;
+              if (!hasDues) {
+                return Text(
+                  'No dues',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                );
+              }
+              final due = nextMonthlyOccurrence(
+                account.dueDay!,
+                DateTime.now(),
+              );
+              final days = due
+                  .difference(
+                    DateTime(
+                      DateTime.now().year,
+                      DateTime.now().month,
+                      DateTime.now().day,
+                    ),
+                  )
+                  .inDays;
+              final when = days == 0
+                  ? 'today'
+                  : days == 1
+                  ? 'tomorrow'
+                  : 'in $days days';
+              // Imminent dues stand out; a comfortable gap stays muted.
+              final urgent = days <= 3;
+              return Text(
+                'Bill due ${fmtDateCompact(due)} · $when',
+                style: TextStyle(
+                  color: urgent ? scheme.error : scheme.onSurfaceVariant,
+                  fontWeight: urgent ? FontWeight.w600 : null,
+                  fontSize: 12,
+                ),
+              );
+            },
+          ),
+        ],
       ],
     );
   }
@@ -475,8 +746,12 @@ class _AccountMenu extends StatelessWidget {
             _toggleType(context);
           case 'kind':
             _setKind(context);
+          case 'goal':
+            showSavingsGoalDialog(context, account);
           case 'limit':
             _setLimit(context);
+          case 'cycle':
+            showCardCycleDialog(context, account);
           case 'balance':
             _setBalance(context);
           case 'merge':
@@ -508,10 +783,17 @@ class _AccountMenu extends StatelessWidget {
               const PopupMenuItem(value: 'type', child: Text('Change type…')),
               if (account.type == AccountType.savings)
                 const PopupMenuItem(value: 'kind', child: Text('Kind & icon…')),
+              if (account.type == AccountType.savings)
+                const PopupMenuItem(value: 'goal', child: Text('Set goal…')),
               if (account.isCard)
                 const PopupMenuItem(
                   value: 'limit',
                   child: Text('Set credit limit'),
+                ),
+              if (account.isCard)
+                const PopupMenuItem(
+                  value: 'cycle',
+                  child: Text('Statement & due dates…'),
                 ),
               PopupMenuItem(
                 value: 'balance',
@@ -661,35 +943,19 @@ class _AccountMenu extends StatelessWidget {
     );
   }
 
-  void _toggleType(BuildContext context) {
-    showDialog(
+  Future<void> _toggleType(BuildContext context) async {
+    final result = await showPickerSheet<AccountType>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Account type'),
-        children: [
-          for (final t in AccountType.values)
-            SimpleDialogOption(
-              onPressed: () {
-                ctx.read<FinanceProvider>().setAccountType(account.id, t);
-                Navigator.pop(ctx);
-              },
-              child: Row(
-                children: [
-                  Icon(t.icon, size: 20),
-                  const SizedBox(width: 12),
-                  Expanded(child: Text(t.label)),
-                  if (t == account.type)
-                    Icon(
-                      Icons.check,
-                      size: 18,
-                      color: Theme.of(ctx).colorScheme.primary,
-                    ),
-                ],
-              ),
-            ),
-        ],
-      ),
+      title: 'Account type',
+      items: [
+        for (final t in AccountType.values)
+          PickerItem(value: t, label: t.label, leading: Icon(t.icon, size: 20)),
+      ],
+      selected: account.type,
     );
+    final t = result?.value;
+    if (t == null || !context.mounted) return;
+    context.read<FinanceProvider>().setAccountType(account.id, t);
   }
 
   void _setLimit(BuildContext context) =>
@@ -840,7 +1106,7 @@ class _AccountMenu extends StatelessWidget {
     );
   }
 
-  void _merge(BuildContext context) {
+  Future<void> _merge(BuildContext context) async {
     final finance = context.read<FinanceProvider>();
     final others = finance.openAccounts
         .where((a) => a.id != account.id)
@@ -851,59 +1117,48 @@ class _AccountMenu extends StatelessWidget {
       );
       return;
     }
-    showDialog(
+    // Picking a target only selects it — the merge itself is confirmed
+    // separately: it permanently removes this account (name, balance,
+    // credit limit) with no undo.
+    final result = await showPickerSheet<Account>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: Text('Merge "${account.name}" into…'),
-        children: [
-          for (final a in others)
-            SimpleDialogOption(
-              // Picking a target only selects it — the merge itself is
-              // confirmed separately: it permanently removes this account
-              // (name, balance, credit limit) with no undo.
-              onPressed: () async {
-                final txCount = finance.transactions
-                    .where(
-                      (t) =>
-                          t.acctKey != null && account.keys.contains(t.acctKey),
-                    )
-                    .length;
-                final ok = await showDialog<bool>(
-                  context: ctx,
-                  builder: (dCtx) => AlertDialog(
-                    title: Text('Merge "${account.name}"?'),
-                    content: Text(
-                      '$txCount transaction${txCount == 1 ? '' : 's'} '
-                      'move${txCount == 1 ? 's' : ''} to "${a.name}". '
-                      '"${account.name}" is removed permanently, along '
-                      'with its name, type, manual balance and credit '
-                      'limit. This cannot be undone.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(dCtx, false),
-                        child: const Text('Cancel'),
-                      ),
-                      FilledButton(
-                        onPressed: () => Navigator.pop(dCtx, true),
-                        child: const Text('Merge'),
-                      ),
-                    ],
-                  ),
-                );
-                if (ok == true) {
-                  finance.mergeAccounts(account.id, a.id);
-                }
-                if (ctx.mounted) Navigator.pop(ctx);
-              },
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(a.name),
-              ),
-            ),
+      title: 'Merge "${account.name}" into…',
+      items: [
+        for (final a in others)
+          PickerItem(value: a, label: a.name, leading: Icon(a.icon, size: 20)),
+      ],
+    );
+    final a = result?.value;
+    if (a == null || !context.mounted) return;
+    final txCount = finance.transactions
+        .where((t) => t.acctKey != null && account.keys.contains(t.acctKey))
+        .length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (dCtx) => AlertDialog(
+        title: Text('Merge "${account.name}"?'),
+        content: Text(
+          '$txCount transaction${txCount == 1 ? '' : 's'} '
+          'move${txCount == 1 ? 's' : ''} to "${a.name}". '
+          '"${account.name}" is removed permanently, along '
+          'with its name, type, manual balance and credit '
+          'limit. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dCtx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dCtx, true),
+            child: const Text('Merge'),
+          ),
         ],
       ),
     );
+    if (ok == true) {
+      finance.mergeAccounts(account.id, a.id);
+    }
   }
 
   void _delete(BuildContext context) async {
@@ -958,8 +1213,6 @@ Future<String?> showAccountKeyDialog(BuildContext context) async {
                 AppDropdownField<String>(
                   label: 'Bank',
                   value: bankCode,
-                  // 39 opaque codes — searchable by design.
-                  searchable: true,
                   items: [
                     for (final code in SmsTxnParser.knownBankCodes)
                       PickerItem(value: code, label: code),

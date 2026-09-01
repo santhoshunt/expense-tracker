@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/format.dart';
-import '../widgets/anchored_picker.dart';
+import '../widgets/picker_sheet.dart';
 import '../widgets/undo_snackbar.dart';
 
 Future<void> showAddTransactionSheet(BuildContext context, {Tx? existing}) {
@@ -331,9 +331,6 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                 AppDropdownField<String>(
                   label: 'Category',
                   value: _categoryId,
-                  // Always searchable, not just past the 8-item threshold —
-                  // income/transfer lists are short but still get searched.
-                  searchable: true,
                   items: [
                     for (final c in categories)
                       PickerItem(

@@ -62,12 +62,25 @@ class Account {
   /// When [manualBalance] was entered.
   final DateTime? manualBalanceAt;
 
+  /// Day of month (1–31) the card statement is generated, cards only.
+  /// Days past a month's end clamp to its last day. Null = not set.
+  final int? statementDay;
+
+  /// Day of month (1–31) the card payment is due, cards only. Drives the
+  /// "bill due" line, the dashboard Upcoming card and the due reminder.
+  /// Days past a month's end clamp to its last day. Null = not set.
+  final int? dueDay;
+
   /// User-defined kind of a savings/asset account ("RD", "Stocks", "Gold"…).
   /// Shown instead of the generic "Savings" label.
   final String? kind;
 
   /// Icon key into [kAssetIconChoices] for savings/asset accounts.
   final String? kindIcon;
+
+  /// Savings goal: target amount for a savings/asset account. Drives the
+  /// progress bar and the projected-completion line. Null = no goal.
+  final double? goalAmount;
 
   /// When the user closed the account (matured FD, emptied asset…). A closed
   /// account leaves the open lists, pickers and totals but keeps its identity
@@ -83,8 +96,11 @@ class Account {
     this.creditLimit,
     this.manualBalance,
     this.manualBalanceAt,
+    this.statementDay,
+    this.dueDay,
     this.kind,
     this.kindIcon,
+    this.goalAmount,
     this.closedAt,
   });
 
@@ -112,9 +128,15 @@ class Account {
     double? manualBalance,
     DateTime? manualBalanceAt,
     bool clearManualBalance = false,
+    int? statementDay,
+    bool clearStatementDay = false,
+    int? dueDay,
+    bool clearDueDay = false,
     String? kind,
     String? kindIcon,
     bool clearKind = false,
+    double? goalAmount,
+    bool clearGoalAmount = false,
     DateTime? closedAt,
     bool clearClosedAt = false,
   }) => Account(
@@ -129,8 +151,13 @@ class Account {
     manualBalanceAt: clearManualBalance
         ? null
         : (manualBalanceAt ?? this.manualBalanceAt),
+    statementDay: clearStatementDay
+        ? null
+        : (statementDay ?? this.statementDay),
+    dueDay: clearDueDay ? null : (dueDay ?? this.dueDay),
     kind: clearKind ? null : (kind ?? this.kind),
     kindIcon: clearKind ? null : (kindIcon ?? this.kindIcon),
+    goalAmount: clearGoalAmount ? null : (goalAmount ?? this.goalAmount),
     closedAt: clearClosedAt ? null : (closedAt ?? this.closedAt),
   );
 
@@ -143,8 +170,11 @@ class Account {
     if (manualBalance != null) 'manualBalance': manualBalance,
     if (manualBalanceAt != null)
       'manualBalanceAt': manualBalanceAt!.toIso8601String(),
+    if (statementDay != null) 'statementDay': statementDay,
+    if (dueDay != null) 'dueDay': dueDay,
     if (kind != null) 'kind': kind,
     if (kindIcon != null) 'kindIcon': kindIcon,
+    if (goalAmount != null) 'goalAmount': goalAmount,
     if (closedAt != null) 'closedAt': closedAt!.toIso8601String(),
   };
 
@@ -170,8 +200,11 @@ class Account {
       creditLimit: (json['creditLimit'] as num?)?.toDouble(),
       manualBalance: manualBalance,
       manualBalanceAt: manualBalanceAt,
+      statementDay: (json['statementDay'] as num?)?.toInt(),
+      dueDay: (json['dueDay'] as num?)?.toInt(),
       kind: json['kind'] as String?,
       kindIcon: json['kindIcon'] as String?,
+      goalAmount: (json['goalAmount'] as num?)?.toDouble(),
       closedAt: json['closedAt'] is String
           ? DateTime.parse(json['closedAt'] as String)
           : null,

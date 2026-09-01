@@ -4,14 +4,18 @@ import 'package:flutter/material.dart';
 // ScrollCacheExtent is not yet re-exported through material.dart.
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/app_icon_service.dart';
+import '../services/app_lock_service.dart';
 import '../services/drive_backup_service.dart';
+import '../services/update_service.dart';
 import '../services/notification_service.dart';
 import '../services/notification_source.dart';
 import '../services/sms_source.dart';
@@ -19,7 +23,7 @@ import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/figma_palette.dart';
 import '../utils/format.dart';
-import '../widgets/anchored_picker.dart';
+import '../widgets/picker_sheet.dart';
 import '../widgets/category_chip_label.dart';
 import '../widgets/color_picker_dialog.dart';
 import '../widgets/dispose_scope.dart';
@@ -193,6 +197,16 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 12),
             const _DriveBackupSection(),
             const SizedBox(height: 24),
+            Text('Privacy', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'The lock re-arms on launch and after the app has been in the '
+              'background for a couple of minutes.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            const _PrivacySection(),
+            const SizedBox(height: 24),
             Text('Categories', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             FrostedPanel(
@@ -210,6 +224,10 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ),
             ),
+            const SizedBox(height: 24),
+            Text('About', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            const _AboutSection(),
           ],
         ),
       ),
@@ -232,9 +250,6 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
   bool _loading = true;
   GoogleSignInAccount? _account;
   String _freq = 'daily';
-
-  /// Glues the frequency picker panel to its tile through rebuilds.
-  final _freqLink = LayerLink();
   DateTime? _lastBackup;
   String? _lastError;
   bool _uploading = false;
@@ -421,41 +436,36 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                 child: const Text('Disconnect'),
               ),
             ),
-            CompositedTransformTarget(
-              link: _freqLink,
-              child: Builder(
-                builder: (tileContext) => ListTile(
-                  leading: const Icon(Icons.schedule_outlined),
-                  title: const Text('Frequency'),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(DriveBackupService.freqLabel(_freq)),
-                      const Icon(Icons.arrow_drop_down),
-                    ],
-                  ),
-                  onTap: () async {
-                    final result = await showAnchoredPicker<String>(
-                      anchorContext: tileContext,
-                      link: _freqLink,
-                      items: [
-                        for (final f in const ['daily', 'weekly', 'monthly'])
-                          PickerItem(
-                            value: f,
-                            label: DriveBackupService.freqLabel(f),
-                          ),
-                      ],
-                      selected: _freq,
-                    );
-                    final v = result?.value;
-                    if (v == null || !context.mounted) return;
-                    // Optimistic like every other setting: the visible value
-                    // must not snap back while the prefs write completes.
-                    setState(() => _freq = v);
-                    await context.read<DriveBackupService>().setFrequency(v);
-                  },
-                ),
+            ListTile(
+              leading: const Icon(Icons.schedule_outlined),
+              title: const Text('Frequency'),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(DriveBackupService.freqLabel(_freq)),
+                  const Icon(Icons.arrow_drop_down),
+                ],
               ),
+              onTap: () async {
+                final result = await showPickerSheet<String>(
+                  context: context,
+                  title: 'Frequency',
+                  items: [
+                    for (final f in const ['daily', 'weekly', 'monthly'])
+                      PickerItem(
+                        value: f,
+                        label: DriveBackupService.freqLabel(f),
+                      ),
+                  ],
+                  selected: _freq,
+                );
+                final v = result?.value;
+                if (v == null || !context.mounted) return;
+                // Optimistic like every other setting: the visible value
+                // must not snap back while the prefs write completes.
+                setState(() => _freq = v);
+                await context.read<DriveBackupService>().setFrequency(v);
+              },
             ),
             ListTile(
               leading: _uploading
@@ -1072,6 +1082,25 @@ class _BudgetSectionState extends State<_BudgetSection> {
                   },
                 ),
             ],
+            // Independent of the cap: card due dates and detected recurring
+            // payments exist without any budget.
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Payment reminders'),
+              subtitle: Text(
+                'Card bills and detected recurring payments, checked when '
+                'the app opens',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              value: settings.upcomingReminders,
+              onChanged: (on) async {
+                await context.read<SettingsProvider>().setUpcomingReminders(on);
+                if (on) {
+                  await NotificationService.instance.requestPermission();
+                }
+                await _checkNotifications();
+              },
+            ),
           ],
         ),
       ),
@@ -1407,6 +1436,183 @@ class _CustomAccentSwatch extends StatelessWidget {
             size: 20,
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// App lock toggle. Enabling requires one successful authentication first:
+/// a device that cannot authenticate must never be able to arm a lock it
+/// cannot open. Disabling is immediate — reaching this screen already means
+/// the app is unlocked.
+class _PrivacySection extends StatefulWidget {
+  const _PrivacySection();
+
+  @override
+  State<_PrivacySection> createState() => _PrivacySectionState();
+}
+
+class _PrivacySectionState extends State<_PrivacySection> {
+  final _lock = AppLockService();
+  bool _busy = false;
+
+  Future<void> _toggle(bool on) async {
+    if (_busy) return;
+    final settings = context.read<SettingsProvider>();
+    if (!on) {
+      await settings.setAppLock(false);
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busy = true);
+    try {
+      if (!await _lock.isSupported()) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Set up a screen lock (PIN or fingerprint) on this device '
+              'first.',
+            ),
+          ),
+        );
+        return;
+      }
+      if (await _lock.authenticate()) await settings.setAppLock(true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = context.select<SettingsProvider, bool>((s) => s.appLock);
+    return FrostedPanel(
+      radius: BorderRadius.circular(20),
+      child: SwitchListTile(
+        secondary: const Icon(Icons.lock_outline),
+        title: const Text('App lock'),
+        subtitle: Text(
+          'Require fingerprint or device PIN when opening the app',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        value: enabled,
+        onChanged: _busy ? null : _toggle,
+      ),
+    );
+  }
+}
+
+/// Version + manual update check against the GitHub releases API.
+class _AboutSection extends StatefulWidget {
+  const _AboutSection();
+
+  @override
+  State<_AboutSection> createState() => _AboutSectionState();
+}
+
+class _AboutSectionState extends State<_AboutSection> {
+  /// Settled-value convention (see _AppIconSectionState): the version can't
+  /// change within a process, and a static survives the tile being rebuilt,
+  /// so the async lookup runs once and never shifts tile height again.
+  static String? _lastKnownVersion;
+  bool _checking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_lastKnownVersion == null) _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(
+          () => _lastKnownVersion = '${info.version} (${info.buildNumber})',
+        );
+      }
+    } catch (_) {
+      // Leave the placeholder; the tile is informational only.
+    }
+  }
+
+  Future<void> _checkForUpdates() async {
+    if (_checking) return;
+    setState(() => _checking = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final result = await UpdateService().check();
+      if (!mounted) return;
+      switch (result) {
+        case UpToDate(:final currentVersion):
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text("You're on the latest version ($currentVersion)."),
+            ),
+          );
+        case UpdateAvailable(:final latestTag, :final htmlUrl):
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Update available'),
+              content: Text(
+                'Version $latestTag is out. The release page on GitHub has '
+                'the APK.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Not now'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    launchUrl(
+                      Uri.parse(htmlUrl),
+                      mode: LaunchMode.externalApplication,
+                    );
+                  },
+                  child: const Text('View release'),
+                ),
+              ],
+            ),
+          );
+        case CheckFailed(:final message):
+          messenger.showSnackBar(SnackBar(content: Text(message)));
+      }
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FrostedPanel(
+      radius: BorderRadius.circular(20),
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('Version'),
+            subtitle: Text(_lastKnownVersion ?? '…'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.system_update_alt),
+            title: const Text('Check for updates'),
+            subtitle: Text(
+              'Compares with the latest GitHub release',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            trailing: _checking
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.chevron_right),
+            onTap: _checking ? null : _checkForUpdates,
+          ),
+        ],
       ),
     );
   }

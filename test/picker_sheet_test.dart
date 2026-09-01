@@ -1,14 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:expense_tracker/widgets/anchored_picker.dart';
+import 'package:expense_tracker/widgets/picker_sheet.dart';
 
 void main() {
   Widget host({
     required List<PickerItem<String>> items,
     String? value,
     required ValueChanged<String?> onChanged,
-    bool? searchable,
   }) => MaterialApp(
     home: Scaffold(
       body: Padding(
@@ -19,7 +18,6 @@ void main() {
           onChanged: onChanged,
           label: 'Pick one',
           hint: 'Nothing yet',
-          searchable: searchable,
         ),
       ),
     ),
@@ -31,7 +29,7 @@ void main() {
     const PickerItem(value: 'cherry', label: 'Cherry'),
   ];
 
-  testWidgets('opens a compact panel and returns the tapped value', (
+  testWidgets('opens a sheet with a bold title and returns the tapped value', (
     tester,
   ) async {
     String? picked;
@@ -41,12 +39,34 @@ void main() {
     await tester.tap(find.text('Apple')); // field shows the selection
     await tester.pumpAndSettle();
 
+    // Field label + the sheet's own title.
+    expect(find.text('Pick one'), findsNWidgets(2));
     expect(find.text('Banana'), findsOneWidget);
     await tester.tap(find.text('Banana'));
     await tester.pumpAndSettle();
 
     expect(picked, 'banana');
-    expect(find.text('Cherry'), findsNothing); // panel closed
+    expect(find.text('Cherry'), findsNothing); // sheet closed
+  });
+
+  testWidgets('selected row carries the check_circle, others do not', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(items: fruit, value: 'banana', onChanged: (_) {}),
+    );
+    await tester.tap(find.text('Banana'));
+    await tester.pumpAndSettle();
+
+    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+    final row = find.ancestor(
+      of: find.byIcon(Icons.check_circle),
+      matching: find.byType(Row),
+    );
+    expect(
+      find.descendant(of: row.first, matching: find.text('Banana')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('dismissing does not fire onChanged', (tester) async {
@@ -56,7 +76,7 @@ void main() {
     );
     await tester.tap(find.text('Apple'));
     await tester.pumpAndSettle();
-    // Tap the transparent barrier well away from the panel.
+    // Tap the barrier well above the sheet.
     await tester.tapAt(const Offset(5, 5));
     await tester.pumpAndSettle();
     expect(calls, 0);
@@ -100,12 +120,7 @@ void main() {
         const PickerItem(value: 'potato', label: 'Potato'),
       ];
       await tester.pumpWidget(
-        host(
-          items: items,
-          value: 'banana',
-          onChanged: (_) {},
-          searchable: true,
-        ),
+        host(items: items, value: 'banana', onChanged: (_) {}),
       );
       await tester.tap(find.text('Banana'));
       await tester.pumpAndSettle();
@@ -120,72 +135,39 @@ void main() {
       expect(find.text('VEG'), findsOneWidget);
       // Fruit section survives only through the always-visible selection.
       expect(find.text('Apple'), findsNothing);
-      expect(find.text('Banana'), findsWidgets); // field + panel row
+      expect(find.text('Banana'), findsWidgets); // field + sheet row
       expect(find.text('FRUIT'), findsOneWidget);
     },
   );
 
-  testWidgets('search box appears automatically above 8 items', (tester) async {
-    final many = [
-      for (var i = 0; i < 12; i++)
-        PickerItem(value: 'v$i', label: 'Option number $i'),
-    ];
-    await tester.pumpWidget(host(items: many, onChanged: (_) {}));
-    await tester.tap(find.text('Nothing yet'));
-    await tester.pumpAndSettle();
-    expect(find.byType(TextField), findsOneWidget);
-
-    // And the panel stays compact: its list is scrollable, not full-screen.
-    expect(find.text('Option number 0'), findsOneWidget);
-  });
-
-  testWidgets('panel follows the field when the layout reflows', (
+  testWidgets('search field is always shown, even for a 3-item list', (
     tester,
   ) async {
-    // Simulates a keyboard-driven reflow: the field moves after the panel
-    // is already open; the follower must keep the panel glued to it.
-    Widget at(double topPadding) => MaterialApp(
-      home: Scaffold(
-        body: Padding(
-          padding: EdgeInsets.only(top: topPadding, left: 24, right: 24),
-          child: Column(
-            children: [
-              AppDropdownField<String>(
-                items: fruit,
-                value: 'apple',
-                onChanged: (_) {},
-                label: 'Pick one',
-              ),
-            ],
-          ),
-        ),
-      ),
+    await tester.pumpWidget(
+      host(items: fruit, value: 'apple', onChanged: (_) {}),
     );
+    await tester.tap(find.text('Apple'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsOneWidget);
+  });
 
-    await tester.pumpWidget(at(200));
+  testWidgets('header rows are not tappable', (tester) async {
+    var calls = 0;
+    final items = <PickerItem<String>>[
+      const PickerItem.header('Fruit'),
+      ...fruit,
+    ];
+    await tester.pumpWidget(
+      host(items: items, value: 'apple', onChanged: (_) => calls++),
+    );
     await tester.tap(find.text('Apple'));
     await tester.pumpAndSettle();
 
-    final fieldBottomBefore = tester
-        .getBottomLeft(find.byType(AppDropdownField<String>))
-        .dy;
-    final panelTopBefore = tester.getTopLeft(find.text('Banana').last).dy;
-    expect(panelTopBefore, greaterThan(fieldBottomBefore));
-
-    // Reflow: the field jumps 120px up while the panel is open.
-    await tester.pumpWidget(at(80));
+    await tester.tap(find.text('FRUIT'));
     await tester.pumpAndSettle();
-
-    final fieldBottomAfter = tester
-        .getBottomLeft(find.byType(AppDropdownField<String>))
-        .dy;
-    final panelTopAfter = tester.getTopLeft(find.text('Banana').last).dy;
-    expect(fieldBottomAfter, lessThan(fieldBottomBefore));
-    // Panel moved WITH the field: same gap as before, within a pixel.
-    expect(
-      (panelTopAfter - fieldBottomAfter) - (panelTopBefore - fieldBottomBefore),
-      closeTo(0, 1),
-    );
+    // Sheet still open, nothing fired.
+    expect(find.text('Banana'), findsOneWidget);
+    expect(calls, 0);
   });
 
   testWidgets('selected row is auto-scrolled into view in a long list', (
@@ -204,5 +186,43 @@ void main() {
     expect(tester.getRect(row).height, greaterThan(0));
     await tester.tap(row); // would throw if off-screen
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('sheet opened from inside an AlertDialog returns a value', (
+    tester,
+  ) async {
+    String? picked;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showDialog<void>(
+                context: context,
+                builder: (_) => AlertDialog(
+                  content: AppDropdownField<String>(
+                    items: fruit,
+                    value: 'apple',
+                    onChanged: (v) => picked = v,
+                    label: 'Pick one',
+                  ),
+                ),
+              ),
+              child: const Text('Open dialog'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Open dialog'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Apple'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cherry'));
+    await tester.pumpAndSettle();
+
+    expect(picked, 'cherry');
+    // The dialog underneath is still up; only the sheet closed.
+    expect(find.byType(AlertDialog), findsOneWidget);
   });
 }

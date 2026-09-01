@@ -619,6 +619,11 @@ class SmsTxnParser {
     return false;
   }
 
+  /// Extracts the payee/merchant name from an alert body (`''` when none).
+  /// Public: recurring-payment detection re-derives merchant identity from
+  /// stored bodies, since [Tx] deliberately has no merchant field.
+  static String merchantOf(String body) => _merchant(body);
+
   static String _merchant(String body) {
     final m = _merchantRe.firstMatch(body);
     if (m == null) return '';

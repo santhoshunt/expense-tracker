@@ -10,7 +10,7 @@ import '../services/sms_parser.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
-import '../widgets/anchored_picker.dart';
+import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
 import '../widgets/keyboard_unfocus.dart';
@@ -760,19 +760,9 @@ class _TransactionsTabState extends State<_TransactionsTab> {
   }
 }
 
-class _ClassificationTile extends StatefulWidget {
+class _ClassificationTile extends StatelessWidget {
   final Tx tx;
   const _ClassificationTile({required this.tx});
-
-  @override
-  State<_ClassificationTile> createState() => _ClassificationTileState();
-}
-
-class _ClassificationTileState extends State<_ClassificationTile> {
-  /// Glues the change-category panel to this tile through rebuilds/reflows.
-  final _link = LayerLink();
-
-  Tx get tx => widget.tx;
 
   @override
   Widget build(BuildContext context) {
@@ -794,74 +784,71 @@ class _ClassificationTileState extends State<_ClassificationTile> {
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: FrostedPanel(
         radius: BorderRadius.circular(16),
-        child: CompositedTransformTarget(
-          link: _link,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: () => _showCategoryPicker(context),
-            onLongPress: () => _showRuleFromTransaction(context),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: Row(
-                children: [
-                  // Rounded-square category icon
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: cat.color.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Icon(
-                      cat.icon,
-                      color: categoryGlyphColor(context, cat.color),
-                      size: 22,
-                    ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _showCategoryPicker(context),
+          onLongPress: () => _showRuleFromTransaction(context),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(
+              children: [
+                // Rounded-square category icon
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: cat.color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '${cat.label} · ${fmtDateMaybeTime(tx.date)}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
+                  child: Icon(
+                    cat.icon,
+                    color: categoryGlyphColor(context, cat.color),
+                    size: 22,
                   ),
-                  const SizedBox(width: 12),
-                  // Width-capped like TransactionTile: shrink extreme
-                  // figures instead of overflowing the row.
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 140),
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(
-                        '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
-                        style: TextStyle(
-                          color: amountColor,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
                         ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${cat.label} · ${fmtDateMaybeTime(tx.date)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // Width-capped like TransactionTile: shrink extreme
+                // figures instead of overflowing the row.
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 140),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
+                      style: TextStyle(
+                        color: amountColor,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
                       ),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
@@ -871,16 +858,13 @@ class _ClassificationTileState extends State<_ClassificationTile> {
 
   /// Category picker — tap to reassign. Changing type is allowed since SMS
   /// imports sometimes miscategorise income vs expense.
-  /// Compact searchable picker anchored to the tapped tile — the SimpleDialog
-  /// this replaces grew to nearly full screen with 30+ categories.
   Future<void> _showCategoryPicker(BuildContext context) async {
     final finance = context.read<FinanceProvider>();
-    final result = await showAnchoredPicker<String>(
-      anchorContext: context,
-      link: _link,
+    final result = await showPickerSheet<String>(
+      context: context,
+      title: 'Category',
       items: _categoryPickerItems(context, includeSpam: false),
       selected: tx.categoryId,
-      searchable: true,
     );
     final id = result?.value;
     if (id == null) return;
@@ -1242,7 +1226,6 @@ Future<void> _showRuleDialog(
                   AppDropdownField<String>(
                     label: 'Then classify as',
                     value: categoryId,
-                    searchable: true,
                     items: [..._categoryPickerItems(ctx)],
                     onChanged: (v) {
                       if (v != null) setState(() => categoryId = v);

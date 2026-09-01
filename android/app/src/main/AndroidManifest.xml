@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.READ_SMS"/>
     <!-- Show budget-threshold alerts (Android 13+ prompts at runtime). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- App lock: fingerprint/face prompt (falls back to device PIN). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <!-- No storage permission: exports go through the system save dialog
          (Storage Access Framework), which needs none on any API level. -->
     <!-- allowBackup=false: shared_prefs holds the user's complete raw bank
@@ -141,6 +143,12 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- url_launcher: open the GitHub release page in a browser
+             ("Check for updates" in Settings → About). -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
         </intent>
     </queries>
 </manifest>

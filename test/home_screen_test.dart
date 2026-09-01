@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/spend_budget.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
@@ -282,6 +283,88 @@ void main() {
 
     expect(find.text('lunch'), findsOneWidget);
     expect(find.text('cab'), findsNothing);
+  });
+
+  testWidgets('top merchants row deep-links to a merchant search', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    final now = DateTime.now();
+    final month = DateTime(now.year, now.month, 1);
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 500,
+      note: 'Zomato order',
+      date: month,
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'transport',
+      amount: 200,
+      note: 'cab',
+      date: month,
+    );
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    final scrollable = find.byType(Scrollable).first;
+    await tester.scrollUntilVisible(
+      find.text('Top merchants'),
+      200,
+      scrollable: scrollable,
+    );
+    await tester.pumpAndSettle();
+
+    // The merchants row shows the title-cased label, unique on screen.
+    final row = find
+        .ancestor(
+          of: find.text('Zomato Order'),
+          matching: find.byWidgetPredicate(
+            (w) => w is InkWell && w.onTap != null,
+          ),
+        )
+        .first;
+    await tester.ensureVisible(row);
+    await tester.pumpAndSettle();
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+
+    // Transactions tab: search pre-filled with the identity, list filtered.
+    expect(find.text('Zomato order'), findsOneWidget);
+    expect(find.text('cab'), findsNothing);
+  });
+
+  testWidgets('upcoming card collapses to its header and re-expands', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    final id = await p.addAccount(
+      name: 'HDFC Card',
+      type: AccountType.creditCard,
+    );
+    await p.setManualBalance(id, 5000); // outstanding → bill row appears
+    await p.setCardCycle(id, dueDay: DateTime.now().day);
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    expect(find.text('HDFC Card bill'), findsOneWidget);
+
+    // AnimatedCrossFade keeps the folded child mounted (faded + zero
+    // height), so assert on the fold's rendered height, not text absence.
+    final fold = find.byType(AnimatedCrossFade).first;
+    expect(tester.getSize(fold).height, greaterThan(50));
+
+    await tester.tap(find.text('Upcoming'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(fold).height, lessThan(1));
+
+    await tester.tap(find.text('Upcoming'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(fold).height, greaterThan(50));
+    expect(find.text('HDFC Card bill'), findsOneWidget);
   });
 
   testWidgets('filter sheet search narrows chips; selections stay visible', (

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/services/backup_service.dart';
+import 'package:expense_tracker/services/sms_parser.dart';
 
 Future<FinanceProvider> seededProvider() async {
   final p = FinanceProvider();
@@ -192,6 +193,53 @@ void main() {
       );
       expect(added, 0);
       expect(p.transactions.length, 3);
+    });
+
+    test('buildCsvOf exports exactly the given rows, in the given order', () {
+      final rows = [
+        Tx(
+          id: 'b',
+          type: TxType.expense,
+          categoryId: 'food',
+          amount: 200,
+          note: 'Second on screen',
+          date: DateTime(2026, 7, 1),
+        ),
+        Tx(
+          id: 'a',
+          type: TxType.expense,
+          categoryId: 'food',
+          amount: 100,
+          note: 'First on screen',
+          date: DateTime(2026, 7, 5),
+        ),
+      ];
+      final lines = BackupService.buildCsvOf(rows).split('\r\n');
+      expect(lines, hasLength(3), reason: 'header + the two rows, no extras');
+      expect(lines[0].split(',').first, 'id');
+      expect(lines[1], contains('"b"'));
+      expect(lines[2], contains('"a"'), reason: 'caller order kept, not date');
+    });
+
+    test('full-history buildCsv still includes pending rows', () async {
+      final p = await seededProvider();
+      await p.addImported([
+        ParsedTxn(
+          type: TxType.expense,
+          amount: 55,
+          merchant: 'SHOP',
+          date: DateTime(2026, 7, 9),
+          ref: 'R9',
+          categoryId: 'other_expense',
+          sender: 'VM-HDFCBK',
+          rawBody: 'Rs.55 debited from a/c XX1234.',
+          acctKey: 'HDFC:1234',
+        ),
+      ]);
+      expect(p.pendingCount, 1);
+      final csv = BackupService.buildCsv(p);
+      // 3 confirmed + 1 pending + header.
+      expect(csv.split('\r\n'), hasLength(5));
     });
 
     test('CSV without mandatory columns is rejected', () {

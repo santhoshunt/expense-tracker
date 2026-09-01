@@ -13,6 +13,7 @@ import '../services/drive_backup_service.dart';
 import '../services/notification_service.dart';
 import '../services/sms_import_service.dart';
 import '../services/sms_source.dart';
+import '../services/upcoming_monitor.dart';
 import '../widgets/glossy.dart';
 import 'accounts_screen.dart';
 import 'add_transaction_sheet.dart';
@@ -33,6 +34,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _importing = false;
   final _smsImport = SmsImportService();
   final _budgetMonitor = BudgetMonitor();
+  final _upcomingMonitor = UpcomingMonitor();
   final _budgetWidgets = BudgetWidgetService();
   FinanceProvider? _finance;
   SettingsProvider? _settings;
@@ -57,6 +59,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     onViewCategory: _viewCategory,
     onViewGroup: _viewGroup,
     onViewBudget: _viewBudget,
+    onViewMerchant: _viewMerchant,
   );
   late final Widget _accountsTab = AccountsScreen(onViewAccount: _viewAccount);
   TransactionsScreen? _transactionsTab;
@@ -102,6 +105,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _viewBudget(String budgetId, DateTime month) =>
       _openTransactions(TxFilterRequest(budgetId: budgetId, month: month));
 
+  // Top-merchant rows: merchants have no structured field, so the deep-link
+  // pre-fills the free-text search with the normalized identity.
+  void _viewMerchant(String query, DateTime month) => _openTransactions(
+    TxFilterRequest(type: TxType.expense, month: month, query: query),
+  );
+
   @override
   void initState() {
     super.initState();
@@ -109,6 +118,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _autoImport();
       _ensureNotificationPermission();
+      // Due reminders must run even on a quiet open — the budget listener
+      // below only fires on data CHANGES, and a bill comes due without any.
+      _checkUpcoming();
       // Unconditional: the listener-driven syncs only fire on CHANGES, so a
       // quiet open (nothing imported, nothing edited) never wrote the
       // widget snapshot — the widget config screen then claimed "No budgets
@@ -183,7 +195,20 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           context.read<SettingsProvider>(),
         )
         .catchError((Object e) => debugPrint('Budget check failed: $e'));
+    // Imports can change what's due (a card payment clears the bill, a new
+    // debit completes a recurring pattern) — re-evaluate alongside budgets.
+    _checkUpcoming();
     _syncBudgetWidgets();
+  }
+
+  void _checkUpcoming() {
+    if (!mounted) return;
+    _upcomingMonitor
+        .check(
+          context.read<FinanceProvider>(),
+          context.read<SettingsProvider>(),
+        )
+        .catchError((Object e) => debugPrint('Upcoming check failed: $e'));
   }
 
   /// Pushes fresh figures to the Android home-screen budget widgets. Cheap

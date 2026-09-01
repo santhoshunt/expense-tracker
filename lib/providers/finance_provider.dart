@@ -2214,6 +2214,36 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(accounts: true);
   }
 
+  /// Savings goal target. Null clears; zero/negative/non-finite rejected —
+  /// a ₹0 goal would render as instantly "reached".
+  Future<void> setSavingsGoal(String id, double? amount) async {
+    final i = _accounts.indexWhere((a) => a.id == id);
+    if (i == -1) return;
+    if (amount != null && (!amount.isFinite || amount <= 0)) return;
+    _accounts[i] = amount == null
+        ? _accounts[i].copyWith(clearGoalAmount: true)
+        : _accounts[i].copyWith(goalAmount: amount);
+    notifyListeners();
+    await _persist(accounts: true);
+  }
+
+  /// Card billing cycle: statement day and payment due day of month. Null
+  /// clears the respective day; values outside 1–31 are rejected.
+  Future<void> setCardCycle(String id, {int? statementDay, int? dueDay}) async {
+    final i = _accounts.indexWhere((a) => a.id == id);
+    if (i == -1) return;
+    bool bad(int? d) => d != null && (d < 1 || d > 31);
+    if (bad(statementDay) || bad(dueDay)) return;
+    _accounts[i] = _accounts[i].copyWith(
+      statementDay: statementDay,
+      clearStatementDay: statementDay == null,
+      dueDay: dueDay,
+      clearDueDay: dueDay == null,
+    );
+    notifyListeners();
+    await _persist(accounts: true);
+  }
+
   /// User-entered balance (banks) / outstanding (cards). Stamped with "now"
   /// so a later SMS-reported figure takes over again. Null clears it.
   Future<void> setManualBalance(String id, double? value) async {

@@ -29,6 +29,10 @@ class SettingsProvider extends ChangeNotifier {
   static const _kAlert80 = 'budget_alert_80_v1';
   static const _kAlert90 = 'budget_alert_90_v1';
   static const _kAlertOver = 'budget_alert_over_v1';
+  static const _kUpcomingReminders = 'upcoming_reminders_v1';
+  static const _kUpcomingHidden = 'upcoming_hidden_v1';
+  static const _kUpcomingCollapsed = 'upcoming_collapsed_v1';
+  static const _kAppLock = 'app_lock_enabled_v1';
 
   ThemeMode _mode = ThemeMode.dark; // the app's native look
   Color _accent = FigmaPalette.primary;
@@ -38,6 +42,10 @@ class SettingsProvider extends ChangeNotifier {
   bool _alert80 = true;
   bool _alert90 = true;
   bool _alertOver = true;
+  bool _upcomingReminders = true;
+  Set<String> _upcomingHidden = {};
+  bool _upcomingCollapsed = false;
+  bool _appLock = false;
   bool _loaded = false;
 
   ThemeMode get mode => _mode;
@@ -50,6 +58,19 @@ class SettingsProvider extends ChangeNotifier {
   bool get alert80 => _alert80;
   bool get alert90 => _alert90;
   bool get alertOver => _alertOver;
+
+  /// Notify on open when a card bill or detected recurring payment is due.
+  bool get upcomingReminders => _upcomingReminders;
+
+  /// Recurring-detection keys the user hid from the Upcoming card.
+  Set<String> get hiddenUpcoming => Set.unmodifiable(_upcomingHidden);
+
+  /// Dashboard Upcoming card folded to its header. Per-device UI state —
+  /// deliberately not in the backup block.
+  bool get upcomingCollapsed => _upcomingCollapsed;
+
+  /// Biometric/device-credential gate on the whole app.
+  bool get appLock => _appLock;
 
   bool get loaded => _loaded;
 
@@ -90,6 +111,19 @@ class SettingsProvider extends ChangeNotifier {
     _alert80 = tryRead(() => prefs.getBool(_kAlert80) ?? true, true);
     _alert90 = tryRead(() => prefs.getBool(_kAlert90) ?? true, true);
     _alertOver = tryRead(() => prefs.getBool(_kAlertOver) ?? true, true);
+    _upcomingReminders = tryRead(
+      () => prefs.getBool(_kUpcomingReminders) ?? true,
+      true,
+    );
+    _upcomingHidden = tryRead(
+      () => (prefs.getStringList(_kUpcomingHidden) ?? const []).toSet(),
+      <String>{},
+    );
+    _upcomingCollapsed = tryRead(
+      () => prefs.getBool(_kUpcomingCollapsed) ?? false,
+      false,
+    );
+    _appLock = tryRead(() => prefs.getBool(_kAppLock) ?? false, false);
     _loaded = true;
     notifyListeners();
   }
@@ -173,6 +207,59 @@ class SettingsProvider extends ChangeNotifier {
     await _persistPref(_kAccent, (p) => p.setInt(_kAccent, color.toARGB32()));
   }
 
+  Future<void> setUpcomingReminders(bool enabled) async {
+    if (enabled == _upcomingReminders) return;
+    _upcomingReminders = enabled;
+    notifyListeners();
+    await _persistPref(
+      _kUpcomingReminders,
+      (p) => p.setBool(_kUpcomingReminders, enabled),
+    );
+  }
+
+  /// Hides one detected recurring payment from the Upcoming card (and the
+  /// reminder monitor). Keys come from RecurringHit.key.
+  Future<void> hideUpcoming(String key) async {
+    if (!_upcomingHidden.add(key)) return;
+    notifyListeners();
+    await _persistPref(
+      _kUpcomingHidden,
+      (p) => p.setStringList(_kUpcomingHidden, _upcomingHidden.toList()),
+    );
+  }
+
+  Future<void> setUpcomingCollapsed(bool collapsed) async {
+    if (collapsed == _upcomingCollapsed) return;
+    _upcomingCollapsed = collapsed;
+    notifyListeners();
+    await _persistPref(
+      _kUpcomingCollapsed,
+      (p) => p.setBool(_kUpcomingCollapsed, collapsed),
+    );
+  }
+
+  /// Un-hides everything hidden via [hideUpcoming].
+  Future<void> resetHiddenUpcoming() async {
+    if (_upcomingHidden.isEmpty) return;
+    _upcomingHidden = {};
+    notifyListeners();
+    await _persistPref(
+      _kUpcomingHidden,
+      (p) => p.setStringList(_kUpcomingHidden, const []),
+    );
+  }
+
+  /// App lock is deliberately NOT part of the backup block: it is a property
+  /// of this device's enrollment. Restoring "locked" onto a device without
+  /// biometrics/PIN set up would gate the app behind a prompt that can never
+  /// succeed.
+  Future<void> setAppLock(bool enabled) async {
+    if (enabled == _appLock) return;
+    _appLock = enabled;
+    notifyListeners();
+    await _persistPref(_kAppLock, (p) => p.setBool(_kAppLock, enabled));
+  }
+
   Future<void> setAutoImport(AutoImportFrequency frequency) async {
     if (frequency == _autoImport) return;
     _autoImport = frequency;
@@ -196,6 +283,9 @@ class SettingsProvider extends ChangeNotifier {
     'alert80': _alert80,
     'alert90': _alert90,
     'alertOver': _alertOver,
+    'upcomingReminders': _upcomingReminders,
+    'upcomingHidden': _upcomingHidden.toList(),
+    // appLock is intentionally absent — see setAppLock.
   };
 
   /// Restores [toBackupMap]'s block. Missing or wrongly-typed keys keep the
@@ -219,6 +309,15 @@ class SettingsProvider extends ChangeNotifier {
     if (map['alert80'] is bool) _alert80 = map['alert80'] as bool;
     if (map['alert90'] is bool) _alert90 = map['alert90'] as bool;
     if (map['alertOver'] is bool) _alertOver = map['alertOver'] as bool;
+    if (map['upcomingReminders'] is bool) {
+      _upcomingReminders = map['upcomingReminders'] as bool;
+    }
+    if (map['upcomingHidden'] is List) {
+      _upcomingHidden = {
+        for (final k in map['upcomingHidden'] as List)
+          if (k is String) k,
+      };
+    }
     await _persistPref('backup restore', (p) async {
       await p.remove(budgetAlertMonthKey(DateTime.now()));
       await p.setString(_kThemeMode, _mode.name);
@@ -229,6 +328,8 @@ class SettingsProvider extends ChangeNotifier {
       await p.setBool(_kAlert80, _alert80);
       await p.setBool(_kAlert90, _alert90);
       await p.setBool(_kAlertOver, _alertOver);
+      await p.setBool(_kUpcomingReminders, _upcomingReminders);
+      await p.setStringList(_kUpcomingHidden, _upcomingHidden.toList());
     });
     notifyListeners();
   }

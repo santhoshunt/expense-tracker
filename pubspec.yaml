@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ^3.12.1
@@ -50,6 +50,14 @@ dependencies:
   google_sign_in: ^6.2.0
   googleapis: ^12.0.0
   extension_google_sign_in_as_googleapis_auth: ^2.0.0
+  # App lock: biometric / device-credential gate (requires
+  # FlutterFragmentActivity — see MainActivity.kt).
+  local_auth: ^2.3.0
+  # Manual "Check for updates" against the GitHub releases API, and the
+  # Version tile in Settings → About.
+  http: ^1.2.0
+  package_info_plus: ^8.1.0
+  url_launcher: ^6.3.0
 
 dev_dependencies:
   flutter_test:

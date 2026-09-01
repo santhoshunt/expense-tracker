@@ -9,12 +9,14 @@ import '../models/account.dart';
 import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../services/backup_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../utils/contrast.dart';
 import '../widgets/category_chip_label.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
+import '../widgets/picker_sheet.dart';
 import '../widgets/transaction_tile.dart';
 import '../widgets/undo_snackbar.dart';
 import 'add_transaction_sheet.dart';
@@ -46,6 +48,11 @@ class TxFilterRequest {
   final String? budgetId;
   final String? groupId;
 
+  /// Free-text search, pre-filled into the search field — the merchant
+  /// deep-link's only handle, since merchants live in SMS bodies/notes
+  /// rather than any structured field.
+  final String? query;
+
   const TxFilterRequest({
     this.type,
     this.accountId,
@@ -53,6 +60,7 @@ class TxFilterRequest {
     this.categoryId,
     this.budgetId,
     this.groupId,
+    this.query,
   });
 }
 
@@ -222,8 +230,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       // Cancel any in-flight debounce or it re-applies the pre-reset text
       // ~250ms after the deep-link lands.
       _searchDebounce?.cancel();
-      _search = '';
-      _searchCtrl.clear();
+      _search = req?.query ?? '';
+      _searchCtrl.text = _search;
       // A deep-link is a navigation, not an edit — leftover multi-select
       // mode would greet it with a selection bar nobody asked for.
       _selected.clear();
@@ -481,6 +489,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           onSort: (s) => setState(() => _sort = s),
           hasAdvancedFilters: _hasAdvancedFilters,
           onOpenFilters: _openFilterSheet,
+          onExport: _exportCsv,
         ),
         if (activeAccount != null ||
             _monthFilter != null ||
@@ -754,25 +763,19 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       ).showSnackBar(const SnackBar(content: Text('No accounts yet.')));
       return;
     }
-    final picked = await showDialog<String>(
+    final result = await showPickerSheet<String>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Assign to account'),
-        children: [
-          for (final a in accounts)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(ctx, a.id),
-              child: Row(
-                children: [
-                  Icon(a.icon, size: 18),
-                  const SizedBox(width: 10),
-                  Flexible(child: Text(a.name)),
-                ],
-              ),
-            ),
-        ],
-      ),
+      title: 'Assign to account',
+      items: [
+        for (final a in accounts)
+          PickerItem(
+            value: a.id,
+            label: a.name,
+            leading: Icon(a.icon, size: 18),
+          ),
+      ],
     );
+    final picked = result?.value;
     if (picked == null || !mounted) return;
     final target = accounts.firstWhere((a) => a.id == picked);
     final n = _selected.length;
@@ -832,6 +835,28 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       'Date & time',
       onUndo: () => finance.restoreEditedTransactions(snapshot),
     );
+  }
+
+  /// Exports exactly what the list is showing — same rows, same order.
+  Future<void> _exportCsv() async {
+    final rows = [for (final (_, tx) in _rows) ?tx];
+    final messenger = ScaffoldMessenger.of(context);
+    if (rows.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Nothing to export.')),
+      );
+      return;
+    }
+    try {
+      final path = await BackupService.exportCsvRows(rows);
+      // Null = the save dialog was cancelled — not worth a snackbar.
+      if (path != null && path.isNotEmpty) {
+        messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
+      }
+    } catch (e) {
+      debugPrint('CSV export failed: $e');
+      messenger.showSnackBar(const SnackBar(content: Text('Export failed.')));
+    }
   }
 
   Future<void> _openFilterSheet() async {
@@ -1265,6 +1290,7 @@ class _SearchAndFilterBar extends StatelessWidget {
   final ValueChanged<_Sort> onSort;
   final bool hasAdvancedFilters;
   final VoidCallback onOpenFilters;
+  final VoidCallback onExport;
 
   const _SearchAndFilterBar({
     required this.searchCtrl,
@@ -1276,6 +1302,7 @@ class _SearchAndFilterBar extends StatelessWidget {
     required this.onSort,
     required this.hasAdvancedFilters,
     required this.onOpenFilters,
+    required this.onExport,
   });
 
   @override
@@ -1320,15 +1347,22 @@ class _SearchAndFilterBar extends StatelessWidget {
               const SizedBox(width: 8),
               FrostedPanel(
                 radius: BorderRadius.circular(AppRadius.section),
-                child: PopupMenuButton<_Sort>(
+                child: IconButton(
                   tooltip: 'Sort',
                   icon: const Icon(Icons.sort, size: 20),
-                  initialValue: sort,
-                  onSelected: onSort,
-                  itemBuilder: (_) => [
-                    for (final s in _Sort.values)
-                      PopupMenuItem(value: s, child: Text(_sortLabels[s]!)),
-                  ],
+                  onPressed: () async {
+                    final result = await showPickerSheet<_Sort>(
+                      context: context,
+                      title: 'Sort by',
+                      items: [
+                        for (final s in _Sort.values)
+                          PickerItem(value: s, label: _sortLabels[s]!),
+                      ],
+                      selected: sort,
+                    );
+                    final v = result?.value;
+                    if (v != null) onSort(v);
+                  },
                 ),
               ),
               const SizedBox(width: 8),
@@ -1341,6 +1375,15 @@ class _SearchAndFilterBar extends StatelessWidget {
                     child: const Icon(Icons.filter_list, size: 20),
                   ),
                   onPressed: onOpenFilters,
+                ),
+              ),
+              const SizedBox(width: 8),
+              FrostedPanel(
+                radius: BorderRadius.circular(AppRadius.section),
+                child: IconButton(
+                  tooltip: 'Export CSV',
+                  icon: const Icon(Icons.ios_share, size: 20),
+                  onPressed: onExport,
                 ),
               ),
             ],

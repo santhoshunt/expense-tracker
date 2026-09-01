@@ -172,12 +172,20 @@ class BackupService {
       id: categoryById(id).label,
   };
 
+  /// Every transaction (confirmed + pending), date-desc — the Home menu's
+  /// full-history export.
+  static List<Tx> _allRows(FinanceProvider finance) =>
+      [...finance.transactions, ...finance.pendingTransactions]
+        ..sort((a, b) => b.date.compareTo(a.date));
+
   /// Transactions (confirmed + pending) as CSV text.
-  static String buildCsv(FinanceProvider finance) {
-    final all = [...finance.transactions, ...finance.pendingTransactions]
-      ..sort((a, b) => b.date.compareTo(a.date));
-    return _csvOfTxs((all, _labelsFor(all)));
-  }
+  static String buildCsv(FinanceProvider finance) =>
+      buildCsvOf(_allRows(finance));
+
+  /// [rows] as CSV text, in the caller's order — the filtered-list export
+  /// hands over exactly what the Transactions screen is showing.
+  static String buildCsvOf(List<Tx> rows) =>
+      _csvOfTxs((rows, _labelsFor(rows)));
 
   /// The string-building half of [buildCsv]: pure over its input, so
   /// [exportCsv] can run it under [compute]. `Tx` holds only sendable fields;
@@ -217,18 +225,22 @@ class BackupService {
   /// [compute] hop: the record payload has to be isolate-sendable, and the
   /// labels have to be resolved on this side of it.
   @visibleForTesting
-  static Future<Uint8List> csvBytes(FinanceProvider finance) {
-    final all = [...finance.transactions, ...finance.pendingTransactions]
-      ..sort((a, b) => b.date.compareTo(a.date));
-    return compute(_csvBytesOfTxs, (
-      all,
-      _labelsFor(all),
-    ), debugLabel: 'buildCsv');
-  }
+  static Future<Uint8List> csvBytes(FinanceProvider finance) =>
+      csvBytesOf(_allRows(finance));
+
+  /// Bytes for an explicit row list, in the caller's order.
+  @visibleForTesting
+  static Future<Uint8List> csvBytesOf(List<Tx> rows) =>
+      compute(_csvBytesOfTxs, (rows, _labelsFor(rows)), debugLabel: 'buildCsv');
 
   /// Saves a CSV of all transactions. Returns the path, or null if cancelled.
-  static Future<String?> exportCsv(FinanceProvider finance) async {
-    final bytes = await csvBytes(finance);
+  static Future<String?> exportCsv(FinanceProvider finance) =>
+      exportCsvRows(_allRows(finance));
+
+  /// Saves a CSV of exactly [rows] (e.g. the Transactions tab's filtered
+  /// list), in the given order. Returns the path, or null if cancelled.
+  static Future<String?> exportCsvRows(List<Tx> rows) async {
+    final bytes = await csvBytesOf(rows);
     return _save(
       'expense_tracker_transactions_${_stamp()}',
       bytes,
