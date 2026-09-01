@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shown in the launcher's widget picker under each preview. -->
+    <string name="budget_widget_description">One budget\'s monthly progress at a glance — name, amounts and bar.</string>
+    <string name="budget_widget_detailed_description">One budget\'s monthly progress with percent used, amount left and last update.</string>
+</resources>

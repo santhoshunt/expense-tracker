@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget card: the app's dark surface with rounded corners. Fixed dark
+     look — RemoteViews can't follow the Flutter theme, and the app's native
+     identity is the dark kit. Light text goes on top (contrast rule). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#252836" />
+    <corners android:radius="16dp" />
+</shape>

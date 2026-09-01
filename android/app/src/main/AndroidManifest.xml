@@ -1,0 +1,146 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Google Drive backup (opt-in): the only network use in the app. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Read bank/UPI alert SMS to auto-import transactions (opt-in at runtime). -->
+    <uses-permission android:name="android.permission.READ_SMS"/>
+    <!-- Show budget-threshold alerts (Android 13+ prompts at runtime). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- No storage permission: exports go through the system save dialog
+         (Storage Access Framework), which needs none on any API level. -->
+    <!-- allowBackup=false: shared_prefs holds the user's complete raw bank
+         SMS history — cloud auto-backup / device-to-device transfer would
+         ship it off-device, contradicting the in-app "scanned on-device
+         only" promise. The explicit rules files keep newer Android versions
+         (data-extraction rules, API 31+) in agreement. -->
+    <application
+        android:label="Expense Tracker"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- Alternate launcher icons, switched from Settings by enabling one
+             alias and disabling the rest. MainActivity itself carries the
+             default icon; exactly one launcher entry is enabled at a time. -->
+        <activity-alias
+            android:name=".IconSwoosh"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_swoosh"
+            android:label="Expense Tracker"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconClassic"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_classic"
+            android:label="Expense Tracker"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".IconMidnight"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_midnight"
+            android:label="Expense Tracker"
+            android:targetActivity=".MainActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity-alias>
+        <!-- Home-screen budget widgets: render the per-budget snapshot the
+             Flutter side writes into SharedPreferences; each instance is
+             configured to one budget via BudgetWidgetConfigActivity. Two
+             picker entries — compact 4×1 (bar only) and detailed 4×2 (adds
+             status + month lines). -->
+        <receiver
+            android:name=".BudgetWidgetProvider"
+            android:exported="true"
+            android:label="Budget (compact)">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/budget_widget_info"/>
+        </receiver>
+        <receiver
+            android:name=".BudgetWidgetDetailedProvider"
+            android:exported="true"
+            android:label="Budget (detailed)">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/budget_widget_detailed_info"/>
+        </receiver>
+        <activity
+            android:name=".BudgetWidgetConfigActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
+            </intent-filter>
+        </activity>
+        <!-- Captures bank-alert notifications (RCS business messages are not
+             readable via the SMS provider). Inert until the user grants
+             notification access in system settings. -->
+        <service
+            android:name=".TxnNotificationListener"
+            android:exported="false"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
+        </service>
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>

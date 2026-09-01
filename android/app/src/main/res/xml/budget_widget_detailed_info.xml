@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 4×2 detailed variant — see budget_widget_info.xml for the shared
+     rationale (updatePeriodMillis=0: app-driven refresh only). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:configure="com.fabletest.expense_tracker.BudgetWidgetConfigActivity"
+    android:description="@string/budget_widget_detailed_description"
+    android:initialLayout="@layout/budget_widget_detailed"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:previewLayout="@layout/budget_widget_detailed"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />
