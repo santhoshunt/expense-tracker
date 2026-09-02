@@ -8,9 +8,13 @@ import '../models/transaction.dart';
 /// debited elsewhere ("To savings") is a deposit here (+), a transfer
 /// credited elsewhere is a withdrawal here (−); non-transfer rows (interest
 /// income, fees) keep their natural sign.
+///
+/// A PAIRED leg is exempt: its own bank alert ("credited to RD") already
+/// carries the savings-side direction, so inverting it would turn the
+/// deposit into a withdrawal. Keep in step with `_computeFigures`.
 double signedForSavings(Tx t) {
   final v = t.type == TxType.income ? t.amount : -t.amount;
-  return isTransferCategory(t.categoryId) ? -v : v;
+  return isTransferCategory(t.categoryId) && t.pairId == null ? -v : v;
 }
 
 /// Average net inflow per month over the trailing [windowDays] (default 90

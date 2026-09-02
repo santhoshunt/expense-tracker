@@ -139,6 +139,8 @@ class BackupService {
     'acctKey',
     'balanceAfter',
     'userCategorized',
+    // Appended last so older column positions are unchanged.
+    'pairId',
   ];
 
   /// Quote-escapes [v]; a leading formula trigger (`= + - @`, per OWASP)
@@ -212,6 +214,7 @@ class BackupService {
           _csvEscape(t.acctKey ?? ''),
           t.balanceAfter?.toStringAsFixed(2) ?? '',
           t.userCategorized.toString(),
+          _csvEscape(t.pairId ?? ''),
         ].join(','),
       );
     }
@@ -336,6 +339,7 @@ class BackupService {
     final smsBodyCol = col('smsbody');
     final myShareCol = col('myshare');
     final userCategorizedCol = col('usercategorized');
+    final pairIdCol = col('pairid');
 
     String cell(List<String> r, int? c) {
       final v = c == null || c >= r.length ? '' : r[c].trim();
@@ -410,6 +414,10 @@ class BackupService {
         acctKey: acctKey.isEmpty ? null : acctKey,
         balanceAfter: balanceAfter,
         myShare: myShare,
+        pairId: switch (cell(r, pairIdCol)) {
+          '' => null,
+          final p => p,
+        },
       );
       // CSVs written before the smsBody column existed kept the raw SMS in
       // the note, so that note has to be moved. Files with either the

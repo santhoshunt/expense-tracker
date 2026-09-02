@@ -8,7 +8,9 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../models/reminder.dart';
 import '../models/spend_budget.dart';
+import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/app_icon_service.dart';
@@ -22,10 +24,12 @@ import '../services/notification_source.dart';
 import '../services/sms_source.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
+import '../utils/dates.dart';
 import '../utils/figma_palette.dart';
 import '../utils/format.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/budget_dialog.dart';
+import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/color_picker_dialog.dart';
 import '../widgets/glossy.dart';
 import 'classifiers_screen.dart';
@@ -185,6 +189,18 @@ class SettingsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const _CustomBudgetsSection(),
+            const SizedBox(height: 24),
+            Text('Reminders', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'Bills the app cannot detect from SMS: cash, a new payee, '
+              'money to send home. They show in Upcoming and notify on open.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            const _RemindersSection(),
             const SizedBox(height: 24),
             Text(
               'Cloud backup',
@@ -598,6 +614,105 @@ class _CustomBudgetsSection extends StatelessWidget {
   }
 }
 
+/// Manual monthly reminders: list with edit/delete plus an add flow. The
+/// editor lives in widgets/ so the dashboard's Upcoming card shares it.
+class _RemindersSection extends StatelessWidget {
+  const _RemindersSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.watch<FinanceProvider>();
+    final scheme = Theme.of(context).colorScheme;
+    final thisMonth = monthKey(DateTime.now());
+
+    String subtitle(Reminder r) => [
+      'Day ${r.dayOfMonth}',
+      if (r.expectedAmount != null) fmtMoneyCompact(r.expectedAmount!),
+      if (r.lastPaidMonth == thisMonth) 'paid this month',
+    ].join(' · ');
+
+    return FrostedPanel(
+      radius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (finance.reminders.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                child: Text(
+                  'No reminders yet.',
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                ),
+              ),
+            for (final r in finance.reminders)
+              ListTile(
+                dense: true,
+                onTap: () => showReminderEditor(context, existing: r),
+                leading: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: categoryById(
+                    r.categoryId,
+                  ).color.withValues(alpha: 0.15),
+                  child: Icon(
+                    categoryById(r.categoryId).icon,
+                    color: categoryGlyphColor(
+                      context,
+                      categoryById(r.categoryId).color,
+                    ),
+                    size: 18,
+                  ),
+                ),
+                title: Text(r.name),
+                subtitle: Text(
+                  subtitle(r),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                trailing: IconButton(
+                  tooltip: 'Delete reminder',
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  onPressed: () => _confirmDelete(context, r),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+              child: TextButton.icon(
+                icon: const Icon(Icons.add),
+                label: const Text('Add reminder'),
+                onPressed: () => showReminderEditor(context),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmDelete(BuildContext context, Reminder r) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete "${r.name}"?'),
+        content: const Text('Transactions are not affected.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && context.mounted) {
+      await context.read<FinanceProvider>().deleteReminder(r.id);
+    }
+  }
+}
+
 /// Launcher-icon picker: previews of the default (provided) receipt logo and
 /// the alternates, applied via Android activity-alias switching.
 class _AppIconSection extends StatefulWidget {
@@ -709,16 +824,17 @@ class _BudgetSection extends StatefulWidget {
   State<_BudgetSection> createState() => _BudgetSectionState();
 }
 
-class _BudgetSectionState extends State<_BudgetSection> {
+class _BudgetSectionState extends State<_BudgetSection>
+    with WidgetsBindingObserver {
   // Survives State re-creation: the "notifications blocked" row must not
   // appear/disappear a beat after the section rebuilds (height change
   // mid-scroll jerks the list).
-  static bool? _lastKnownNotifEnabled;
+  static NotificationStatus? _lastKnownNotifStatus;
 
   late final TextEditingController _capCtrl;
   late final FocusNode _capFocus;
   late final SettingsProvider _settings; // captured: dispose can't use context
-  bool? _notifEnabled = _lastKnownNotifEnabled;
+  NotificationStatus? _notifStatus = _lastKnownNotifStatus;
 
   @override
   void initState() {
@@ -732,7 +848,15 @@ class _BudgetSectionState extends State<_BudgetSection> {
     // character rebuilds the whole settings screen with the keyboard open,
     // and the keep-focused-field-visible logic then fights scroll gestures.
     _capFocus = FocusNode()..addListener(_onCapFocusChange);
+    // Resume re-check: a system-level block is fixed on an Android Settings
+    // page, and the row must reflect that on the way back.
+    WidgetsBinding.instance.addObserver(this);
     _checkNotifications();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _checkNotifications();
   }
 
   void _onCapFocusChange() {
@@ -745,9 +869,9 @@ class _BudgetSectionState extends State<_BudgetSection> {
   String? _capError;
 
   Future<void> _checkNotifications() async {
-    final enabled = await NotificationService.instance.areEnabled;
-    _lastKnownNotifEnabled = enabled;
-    if (mounted) setState(() => _notifEnabled = enabled);
+    final status = await NotificationService.instance.status;
+    _lastKnownNotifStatus = status;
+    if (mounted) setState(() => _notifStatus = status);
   }
 
   @override
@@ -763,6 +887,7 @@ class _BudgetSectionState extends State<_BudgetSection> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     // Detach first: disposing a FocusNode fires a final focus-change, which
     // would otherwise re-enter _commitCap during teardown.
     _capFocus.removeListener(_onCapFocusChange);
@@ -855,9 +980,13 @@ class _BudgetSectionState extends State<_BudgetSection> {
                     }
                   : null,
             ),
-            // Alerts silently go nowhere while notifications are blocked —
-            // make that state visible with a fix-it button.
-            if (hasCap && settings.budgetAlerts && _notifEnabled == false)
+            // Alerts silently go nowhere while notifications cannot be shown —
+            // say WHICH problem it is, since each has a different remedy and
+            // only a fresh runtime denial can be fixed from inside the app.
+            if (hasCap &&
+                settings.budgetAlerts &&
+                _notifStatus != null &&
+                _notifStatus != NotificationStatus.enabled)
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Row(
@@ -870,7 +999,18 @@ class _BudgetSectionState extends State<_BudgetSection> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Notifications are blocked — alerts cannot be shown.',
+                        switch (_notifStatus!) {
+                          NotificationStatus.appBlocked =>
+                            'Notifications are turned off for this app. '
+                                'Turn them on in Android Settings → Apps → '
+                                'Expense Tracker → Notifications.',
+                          NotificationStatus.channelBlocked =>
+                            'The "Budget alerts" notification channel is '
+                                'muted in Android Settings.',
+                          _ =>
+                            'Notifications could not be initialised on this '
+                                'device, so alerts cannot be shown.',
+                        },
                         // The one row here the user must not miss: bodyMedium
                         // + w600 (12px error-on-white was under AA).
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -879,13 +1019,17 @@ class _BudgetSectionState extends State<_BudgetSection> {
                         ),
                       ),
                     ),
-                    TextButton(
-                      onPressed: () async {
-                        await NotificationService.instance.requestPermission();
-                        await _checkNotifications();
-                      },
-                      child: const Text('Allow'),
-                    ),
+                    // The system dialog only helps for a runtime denial; a
+                    // muted channel or a plugin failure has no in-app fix.
+                    if (_notifStatus == NotificationStatus.appBlocked)
+                      TextButton(
+                        onPressed: () async {
+                          await NotificationService.instance
+                              .requestPermission();
+                          await _checkNotifications();
+                        },
+                        child: const Text('Request'),
+                      ),
                   ],
                 ),
               ),

@@ -37,6 +37,7 @@ class SettingsProvider extends ChangeNotifier {
   /// into [_kCollapsedSections] on load.
   static const _kLegacyUpcomingCollapsed = 'upcoming_collapsed_v1';
   static const _kAppLock = 'app_lock_enabled_v1';
+  static const _kDismissedPairs = 'pair_dismissed_v1';
 
   ThemeMode _mode = ThemeMode.dark; // the app's native look
   Color _accent = FigmaPalette.primary;
@@ -49,6 +50,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _upcomingReminders = true;
   Set<String> _upcomingHidden = {};
   Set<String> _collapsedSections = {};
+  Set<String> _dismissedPairs = {};
   bool _appLock = false;
   bool _loaded = false;
 
@@ -76,6 +78,11 @@ class SettingsProvider extends ChangeNotifier {
 
   /// Biometric/device-credential gate on the whole app.
   bool get appLock => _appLock;
+
+  /// Transfer-pair suggestions the user rejected ("Not a transfer"), keyed
+  /// by pairSuggestionKey (two row ids). Backed up: the judgement is about
+  /// the data, not the device.
+  Set<String> get dismissedPairSuggestions => Set.unmodifiable(_dismissedPairs);
 
   bool get loaded => _loaded;
 
@@ -137,8 +144,21 @@ class SettingsProvider extends ChangeNotifier {
       });
     }
     _appLock = tryRead(() => prefs.getBool(_kAppLock) ?? false, false);
+    _dismissedPairs = tryRead(
+      () => (prefs.getStringList(_kDismissedPairs) ?? const []).toSet(),
+      <String>{},
+    );
     _loaded = true;
     notifyListeners();
+  }
+
+  Future<void> dismissPairSuggestion(String key) async {
+    if (!_dismissedPairs.add(key)) return;
+    notifyListeners();
+    await _persistPref(
+      _kDismissedPairs,
+      (p) => p.setStringList(_kDismissedPairs, _dismissedPairs.toList()),
+    );
   }
 
   /// Best-effort prefs write. A platform failure must neither crash the
@@ -297,6 +317,7 @@ class SettingsProvider extends ChangeNotifier {
     'alertOver': _alertOver,
     'upcomingReminders': _upcomingReminders,
     'upcomingHidden': _upcomingHidden.toList(),
+    'dismissedPairs': _dismissedPairs.toList(),
     // appLock is intentionally absent — see setAppLock.
   };
 
@@ -330,6 +351,12 @@ class SettingsProvider extends ChangeNotifier {
           if (k is String) k,
       };
     }
+    if (map['dismissedPairs'] is List) {
+      _dismissedPairs = {
+        for (final k in map['dismissedPairs'] as List)
+          if (k is String) k,
+      };
+    }
     await _persistPref('backup restore', (p) async {
       await p.remove(budgetAlertMonthKey(DateTime.now()));
       await p.setString(_kThemeMode, _mode.name);
@@ -342,6 +369,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setBool(_kAlertOver, _alertOver);
       await p.setBool(_kUpcomingReminders, _upcomingReminders);
       await p.setStringList(_kUpcomingHidden, _upcomingHidden.toList());
+      await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());
     });
     notifyListeners();
   }

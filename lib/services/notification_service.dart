@@ -1,12 +1,44 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+/// Why a notification would or would not reach the user right now.
+///
+/// Kept distinct because each needs a different remedy: [appBlocked] is the
+/// system-level switch (only Android Settings can flip it), [channelBlocked]
+/// is the app's own "Budget alerts" channel muted there, and [unavailable]
+/// means the plugin itself failed (a build or device problem, not the user).
+/// Collapsing all three to "blocked" sent people to a permission dialog that
+/// could not help them.
+enum NotificationStatus { enabled, appBlocked, channelBlocked, unavailable }
+
+/// Pure mapping behind [NotificationService.status], separated so the
+/// decision table is unit-testable without a platform.
+NotificationStatus notificationStatusFrom({
+  required bool initFailed,
+  required bool? appEnabled,
+  required Importance? channelImportance,
+}) {
+  if (initFailed || appEnabled == null) return NotificationStatus.unavailable;
+  if (!appEnabled) return NotificationStatus.appBlocked;
+  // No channel yet (API < 26, or never created) is fine; only an explicit
+  // "none" importance means the user muted it.
+  if (channelImportance == Importance.none) {
+    return NotificationStatus.channelBlocked;
+  }
+  return NotificationStatus.enabled;
+}
+
 /// Thin wrapper over flutter_local_notifications for app-generated alerts
 /// (currently budget thresholds). Android-focused: on other platforms the
 /// methods are safe no-ops.
 class NotificationService {
   NotificationService._();
   static final NotificationService instance = NotificationService._();
+
+  /// Test seam: widget tests have no platform plugin, so they inject the
+  /// status the UI should render.
+  @visibleForTesting
+  static Future<NotificationStatus> Function()? statusOverride;
 
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _initialised = false;
@@ -56,39 +88,66 @@ class NotificationService {
   /// enabled + channel blocked used to report true, so the monitor recorded
   /// the threshold as delivered while show() was a silent no-op — the alert
   /// was then suppressed for the rest of the month.
-  Future<bool> get areEnabled async {
-    if (!_supported) return false;
+  Future<bool> get areEnabled async =>
+      (await status) == NotificationStatus.enabled;
+
+  /// Detailed availability, see [NotificationStatus]. Never throws.
+  Future<NotificationStatus> get status async {
+    final override = statusOverride;
+    if (override != null) return override();
+    if (!_supported) return NotificationStatus.unavailable;
     // Everything below talks to the plugin. Under widget tests the platform
     // interface is never registered and throws a LateInitializationError
-    // (an Error, so plain `on Exception` would miss it) — treat any failure
-    // as "notifications unavailable" rather than crashing the caller.
+    // (an Error, so plain `on Exception` would miss it); on a device the
+    // plugin can fail to initialise (a missing small-icon resource shipped
+    // exactly that way once). Neither is a permission problem, so they must
+    // not read as "blocked".
     try {
-      return await _areEnabled();
+      await init();
+    } catch (e) {
+      debugPrint('Notification init failed: $e');
+      return NotificationStatus.unavailable;
+    }
+    try {
+      return await _status();
     } catch (e) {
       debugPrint('Notification availability check failed: $e');
-      return false;
+      return NotificationStatus.unavailable;
     }
   }
 
-  Future<bool> _areEnabled() async {
-    await init();
+  Future<NotificationStatus> _status() async {
     if (defaultTargetPlatform == TargetPlatform.android) {
       final android = _plugin
           .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin
           >();
-      final appEnabled = await android?.areNotificationsEnabled() ?? false;
-      if (!appEnabled) return false;
-      final channels = await android?.getNotificationChannels();
-      final channel = channels?.where((c) => c.id == _channelId).firstOrNull;
-      return channel == null || channel.importance != Importance.none;
+      if (android == null) return NotificationStatus.unavailable;
+      final appEnabled = await android.areNotificationsEnabled();
+      Importance? channelImportance;
+      if (appEnabled == true) {
+        final channels = await android.getNotificationChannels();
+        channelImportance = channels
+            ?.where((c) => c.id == _channelId)
+            .firstOrNull
+            ?.importance;
+      }
+      return notificationStatusFrom(
+        initFailed: false,
+        appEnabled: appEnabled,
+        channelImportance: channelImportance,
+      );
     }
     final ios = _plugin
         .resolvePlatformSpecificImplementation<
           IOSFlutterLocalNotificationsPlugin
         >();
-    final options = await ios?.checkPermissions();
-    return options?.isEnabled ?? false;
+    if (ios == null) return NotificationStatus.unavailable;
+    final options = await ios.checkPermissions();
+    if (options == null) return NotificationStatus.unavailable;
+    return options.isEnabled
+        ? NotificationStatus.enabled
+        : NotificationStatus.appBlocked;
   }
 
   /// Requests notification permission (Android 13+ / iOS). Safe to call more

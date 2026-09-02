@@ -20,6 +20,10 @@ class FakeNotifications implements NotificationService {
   Future<bool> get areEnabled async => enabled;
 
   @override
+  Future<NotificationStatus> get status async =>
+      enabled ? NotificationStatus.enabled : NotificationStatus.appBlocked;
+
+  @override
   Future<bool> requestPermission() async => enabled;
 
   @override

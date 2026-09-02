@@ -212,15 +212,70 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     final finance = context.read<FinanceProvider>();
     final navigator = Navigator.of(context);
     final tx = widget.existing!;
+    // Deleting one leg of a pair unlinks the other; the snapshot lets Undo
+    // put both the row and the partner's link back.
+    final partner = await finance.deleteTransaction(tx.id);
+    if (!mounted) return;
     // Immediate delete + Undo instead of a confirmation dialog — the
     // snackbar rides the app-level messenger, so it outlives this sheet.
     showUndoSnackBar(
       context,
       'Deleted ${tx.category.label} · ${fmtMoney(tx.amount)}',
-      () => finance.restoreTransaction(tx),
+      () => finance.restoreEditedTransactions([tx, ?partner]),
     );
-    await finance.deleteTransaction(tx.id);
     navigator.pop();
+  }
+
+  /// "Paired transfer" line for a row linked to its other leg, with Unpair.
+  Widget _pairedBanner(BuildContext context, Tx tx) {
+    final finance = context.read<FinanceProvider>();
+    final partner = finance.pairPartnerOf(tx);
+    final scheme = Theme.of(context).colorScheme;
+    final summary = partner == null
+        ? 'other leg missing'
+        : '${partner.type == TxType.income ? '+' : '−'}'
+              '${fmtMoney(partner.amount)} · ${fmtDateCompact(partner.date)}';
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+      decoration: BoxDecoration(
+        color: scheme.secondaryContainer.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.link, size: 18, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Paired transfer · $summary',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+            onPressed: () async {
+              final pairId = tx.pairId!;
+              final a = tx.id;
+              final b = partner?.id;
+              final navigator = Navigator.of(context);
+              await finance.unpair(pairId);
+              if (!context.mounted) return;
+              // Categories stay as they are (transfer); Undo re-links.
+              showUndoSnackBar(
+                context,
+                'Unpaired',
+                b == null ? () {} : () => finance.pairTransactions(a, b),
+              );
+              navigator.pop();
+            },
+            child: const Text('Unpair'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -286,6 +341,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     child: const Text('Save changes'),
                   ),
                   const SizedBox(height: 16),
+                  if (widget.existing!.pairId != null)
+                    _pairedBanner(context, widget.existing!),
                 ],
                 // No per-segment icons and no selected checkmark: three
                 // segments wide, icon + label + check made "Expense" wrap onto
