@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/backup_service.dart';
 import '../services/merchant_stats.dart';
 import '../services/recurring_detector.dart';
 import '../utils/app_theme.dart';
@@ -12,6 +14,8 @@ import '../utils/format.dart';
 import '../widgets/animated_fold.dart';
 import '../widgets/balance_breakdown.dart';
 import '../widgets/budget_detail_sheet.dart';
+import '../widgets/budget_dialog.dart';
+import '../widgets/dispose_scope.dart';
 import '../widgets/spending_heatmap.dart';
 import '../widgets/glossy.dart';
 import '../widgets/motion.dart';
@@ -53,6 +57,11 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> {
   late DateTime _month;
 
+  /// Year view: the stat cards, category breakdown and bar chart cover
+  /// `_month.year`; the month-only sections (budgets, merchants, heatmap,
+  /// transfers) step aside.
+  bool _yearMode = false;
+
   /// Recurring detection scans the whole ledger — memoized on the provider's
   /// revision token so it reruns only when data actually changes.
   Object? _recurringRev;
@@ -64,6 +73,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _recurringHits = detectRecurring(
         finance.transactions,
         now: DateTime.now(),
+        alias: finance.merchantAlias,
       );
     }
     return _recurringHits;
@@ -80,9 +90,81 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _merchantsMonth != _month) {
       _merchantsRev = finance.revision;
       _merchantsMonth = _month;
-      _merchants = topMerchants(finance.transactions, month: _month);
+      _merchants = topMerchants(
+        finance.transactions,
+        month: _month,
+        alias: finance.merchantAlias,
+      );
     }
     return _merchants;
+  }
+
+  /// Long-press on a Top-merchants row: give the payee a readable name.
+  /// Parsed identities can be a VPA fragment or an FD reference ("Fd No"),
+  /// and the alias follows the identity into Upcoming and search too.
+  Future<void> _renameMerchant(
+    BuildContext context,
+    FinanceProvider finance,
+    MerchantSpend m,
+  ) async {
+    final identity = m.key.substring(m.key.indexOf('|') + 1);
+    final existing = finance.merchantAlias(identity);
+    final ctrl = TextEditingController(text: m.label);
+    final result = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => DisposeScope(
+        disposables: [ctrl],
+        child: AlertDialog(
+          title: const Text('Rename merchant'),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+            decoration: InputDecoration(
+              labelText: 'Display name',
+              helperText: 'Detected as "$identity"',
+              helperMaxLines: 2,
+            ),
+            onSubmitted: (v) => Navigator.pop(ctx, v),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            if (existing != null)
+              TextButton(
+                // Empty string = clear the alias (distinct from Cancel's null).
+                onPressed: () => Navigator.pop(ctx, ''),
+                child: const Text('Reset'),
+              ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null) return;
+    await finance.setMerchantAlias(identity, result);
+  }
+
+  /// The budget that caps exactly this one category (include mode, single
+  /// id), if the user made one — the category row's long-press edits it
+  /// instead of creating a duplicate.
+  static SpendBudget? _singleCategoryBudget(
+    FinanceProvider finance,
+    String categoryId,
+  ) {
+    for (final b in finance.budgets) {
+      if (b.mode == BudgetMode.include &&
+          b.categoryIds.length == 1 &&
+          b.categoryIds.contains(categoryId)) {
+        return b;
+      }
+    }
+    return null;
   }
 
   @override
@@ -92,15 +174,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _month = DateTime(now.year, now.month);
   }
 
-  void _shiftMonth(int delta) =>
-      setState(() => _month = DateTime(_month.year, _month.month + delta));
+  /// Steps one month, or one year in Year view (the month is kept so
+  /// switching back lands on the same month of the new year).
+  void _shiftMonth(int delta) => setState(
+    () => _month = _yearMode
+        ? DateTime(_month.year + delta, _month.month)
+        : DateTime(_month.year, _month.month + delta),
+  );
 
-  /// Jump straight to any month that has data (plus the current month).
+  /// Jump straight to any month (or, in Year view, year) that has data,
+  /// plus the current one.
   Future<void> _pickMonth(BuildContext context, FinanceProvider finance) async {
     final now = DateTime.now();
     final current = DateTime(now.year, now.month);
     final months = finance.monthsWithData;
-    final options = [if (!months.contains(current)) current, ...months];
+    final List<DateTime> options;
+    if (_yearMode) {
+      final years = <int>{now.year, for (final m in months) m.year}.toList()
+        ..sort((a, b) => b.compareTo(a));
+      options = [for (final y in years) DateTime(y, _month.month)];
+    } else {
+      options = [if (!months.contains(current)) current, ...months];
+    }
+    bool isCurrent(DateTime m) =>
+        _yearMode ? m.year == _month.year : m == _month;
     final picked = await showModalBottomSheet<DateTime>(
       context: context,
       useSafeArea: true,
@@ -115,18 +212,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ListTile(
               leading: Icon(
                 Icons.calendar_month,
-                color: m == _month
+                color: isCurrent(m)
                     ? Theme.of(ctx).colorScheme.primary
                     : Theme.of(ctx).colorScheme.onSurfaceVariant,
               ),
-              title: Text(fmtMonth(m)),
-              selected: m == _month,
+              title: Text(_yearMode ? '${m.year}' : fmtMonth(m)),
+              selected: isCurrent(m),
               onTap: () => Navigator.pop(ctx, m),
             ),
         ],
       ),
     );
     if (picked != null && mounted) setState(() => _month = picked);
+  }
+
+  Future<void> _exportYearPdf(
+    BuildContext context,
+    FinanceProvider finance,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final year = _month.year;
+    try {
+      final path = await BackupService.exportPdf(finance, year: year);
+      if (path == null) return;
+      messenger.showSnackBar(SnackBar(content: Text('Saved report $year')));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Export failed: $e')));
+    }
   }
 
   @override
@@ -142,8 +254,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (m.isAfter(latestMonth)) latestMonth = m;
     }
     final recent = finance.transactions.take(5).toList();
-    final byCategory = finance.expenseByCategory(_month);
-    final monthExpense = finance.expenseInMonth(_month);
+    final year = _month.year;
+    // In Year view the "month" figures below are the year's: same widgets,
+    // wider window.
+    final byCategory = _yearMode
+        ? finance.expenseByCategoryInYear(year)
+        : finance.expenseByCategory(_month);
+    final monthExpense = _yearMode
+        ? finance.expenseInYear(year)
+        : finance.expenseInMonth(_month);
     final groupSpend = finance.groupSpendInMonth(_month);
     final groupTotal = groupSpend.fold(0.0, (sum, e) => sum + e.$2);
     final transfersBy = finance.transfersByCategoryInMonth(_month);
@@ -197,7 +316,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         Row(
           children: [
             IconButton(
-              tooltip: 'Previous month',
+              tooltip: _yearMode ? 'Previous year' : 'Previous month',
               onPressed: () => _shiftMonth(-1),
               icon: const Icon(Icons.chevron_left),
             ),
@@ -214,7 +333,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     children: [
                       Flexible(
                         child: Text(
-                          fmtMonth(_month),
+                          _yearMode ? '$year' : fmtMonth(_month),
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
@@ -231,15 +350,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
             IconButton(
-              tooltip: 'Next month',
-              onPressed: _month.isBefore(latestMonth)
+              tooltip: _yearMode ? 'Next year' : 'Next month',
+              onPressed:
+                  (_yearMode
+                      ? year < latestMonth.year
+                      : _month.isBefore(latestMonth))
                   ? () => _shiftMonth(1)
                   : null,
               icon: const Icon(Icons.chevron_right),
             ),
           ],
         ),
-        const SizedBox(height: 4),
+        // Month / Year scope, plus the year report export while in Year view.
+        Row(
+          children: [
+            Expanded(
+              child: GlassSegmented<bool>(
+                options: const [(false, 'Month'), (true, 'Year')],
+                selected: _yearMode,
+                onChanged: (v) => setState(() => _yearMode = v),
+              ),
+            ),
+            if (_yearMode) ...[
+              const SizedBox(width: 8),
+              FrostedPanel(
+                radius: BorderRadius.circular(AppRadius.section),
+                child: IconButton(
+                  tooltip: 'Export year report (PDF)',
+                  icon: const Icon(Icons.picture_as_pdf_outlined, size: 20),
+                  onPressed: () => _exportYearPdf(context, finance),
+                ),
+              ),
+            ],
+          ],
+        ),
+        const SizedBox(height: 12),
         // Horizontally scrollable so each card is wide enough to show its
         // amount on one line, however large the number. The height follows
         // the system font scale — fixed 88dp clips at "Large" text size.
@@ -249,12 +394,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             scrollDirection: Axis.horizontal,
             padding: EdgeInsets.zero,
             children: [
+              // Year-view taps stay month-scoped deep links (the Transactions
+              // filter has no year), so they are disabled there.
               _StatCard(
                 label: 'Income',
-                value: finance.incomeInMonth(_month),
+                value: _yearMode
+                    ? finance.incomeInYear(year)
+                    : finance.incomeInMonth(_month),
                 icon: Icons.arrow_downward,
                 color: colors.green,
-                onTap: widget.onViewTransactions == null
+                onTap: widget.onViewTransactions == null || _yearMode
                     ? null
                     : () => widget.onViewTransactions!(TxType.income, _month),
               ),
@@ -264,7 +413,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 value: monthExpense,
                 icon: Icons.arrow_upward,
                 color: scheme.error,
-                onTap: widget.onViewTransactions == null
+                onTap: widget.onViewTransactions == null || _yearMode
                     ? null
                     : () => widget.onViewTransactions!(TxType.expense, _month),
               ),
@@ -275,10 +424,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               // gated figure separately).
               _StatCard(
                 label: 'Saved',
-                value: finance.savingsOutflowInMonth(_month),
+                value: _yearMode
+                    ? finance.savingsOutflowInYear(year)
+                    : finance.savingsOutflowInMonth(_month),
                 icon: Icons.savings_outlined,
                 color: colors.orange,
-                onTap: widget.onViewCategory == null
+                onTap: widget.onViewCategory == null || _yearMode
                     ? null
                     : () => widget.onViewCategory!(
                         kSavingsTransferCategoryId,
@@ -295,7 +446,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             final budget = context.select<SettingsProvider, double>(
               (s) => s.monthlyBudget,
             );
-            if (budget <= 0) return const SizedBox.shrink();
+            if (budget <= 0 || _yearMode) return const SizedBox.shrink();
             return Padding(
               padding: const EdgeInsets.only(top: 16),
               child: _BudgetCard(
@@ -306,8 +457,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           },
         ),
         // Custom spend limits, one compact progress row each — full ring
-        // cards would dominate the page with several budgets.
-        if (finance.budgets.isNotEmpty) ...[
+        // cards would dominate the page with several budgets. Budgets are
+        // monthly, so the Year view skips them.
+        if (finance.budgets.isNotEmpty && !_yearMode) ...[
           const SizedBox(height: 24),
           Text('Budgets', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
@@ -344,7 +496,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             padding: const EdgeInsets.all(16),
             child: CategoryDonutChart(
               data: byCategory,
-              onCategoryTap: widget.onViewCategory == null
+              onCategoryTap: widget.onViewCategory == null || _yearMode
                   ? null
                   : (id) => widget.onViewCategory!(id, _month),
             ),
@@ -366,9 +518,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       fraction: monthExpense == 0
                           ? 0
                           : entry.value / monthExpense,
-                      onTap: widget.onViewCategory == null
+                      budgetLimit: _yearMode
+                          ? null
+                          : _singleCategoryBudget(finance, entry.key.id)?.limit,
+                      onTap: widget.onViewCategory == null || _yearMode
                           ? null
                           : () => widget.onViewCategory!(entry.key.id, _month),
+                      // Shortcut to a per-category cap: opens the shared
+                      // budget dialog pre-filled (or the existing one).
+                      onLongPress: () => showBudgetDialog(
+                        context,
+                        existing: _singleCategoryBudget(finance, entry.key.id),
+                        presetName: entry.key.label,
+                        presetMode: BudgetMode.include,
+                        presetCategoryIds: {entry.key.id},
+                      ),
                     ),
                 ],
               ),
@@ -378,7 +542,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         // Where the money actually went: per-payee totals for the month,
         // re-derived from SMS bodies / manual notes. Display-only — the
         // transactions filter can't express a free-text payee (yet).
-        if (topMerchantsList.isNotEmpty) ...[
+        // Shown whenever the month has spending: an empty month-start used to
+        // make the whole section vanish, which read as a bug rather than
+        // "nothing identifiable yet".
+        if (!_yearMode &&
+            (topMerchantsList.isNotEmpty || monthExpense > 0)) ...[
           const SizedBox(height: 24),
           Text('Top merchants', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
@@ -387,6 +555,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
               padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
+                  if (topMerchantsList.isEmpty)
+                    Text(
+                      'No identifiable merchants in ${fmtMonth(_month)} yet. '
+                      'Payments to phone numbers, VPAs without a name and '
+                      'bank references are left out; add a note to a '
+                      'transaction to name it.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
                   for (final m in topMerchantsList)
                     InkWell(
                       borderRadius: BorderRadius.circular(AppRadius.control),
@@ -398,6 +576,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               m.key.substring(m.key.indexOf('|') + 1),
                               _month,
                             ),
+                      onLongPress: () => _renameMerchant(context, finance, m),
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 6),
                         child: Row(
@@ -453,7 +632,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         // Spending per parent group (Needs/Wants/…). Grouped transfer
         // outflows are included in their group's sum; "Other" collects
         // ungrouped categories.
-        if (finance.groups.isNotEmpty && groupTotal > 0) ...[
+        if (finance.groups.isNotEmpty && groupTotal > 0 && !_yearMode) ...[
           const SizedBox(height: 24),
           Text('By group', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
@@ -484,7 +663,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
         // Spending hotspots: which DATES were hot this month, and which
         // weekdays are usually hot across history.
-        if (monthExpense > 0) ...[
+        if (monthExpense > 0 && !_yearMode) ...[
           const SizedBox(height: 24),
           Text(
             'Spending heatmap',
@@ -500,7 +679,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
         // Transfers: own-account moves for the month. Not income or expense —
         // shown separately so the flows are still visible.
-        if (transfersBy.isNotEmpty) ...[
+        if (transfersBy.isNotEmpty && !_yearMode) ...[
           const SizedBox(height: 24),
           Text('Transfers', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
@@ -539,14 +718,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ],
         const SizedBox(height: 24),
-        Text('Last 6 months', style: Theme.of(context).textTheme.titleMedium),
+        Text(
+          _yearMode ? 'Months of $year' : 'Last 6 months',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
         const SizedBox(height: 8),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
               children: [
-                const MonthlyBarChart(),
+                MonthlyBarChart(
+                  months: _yearMode
+                      ? [for (var m = 1; m <= 12; m++) DateTime(year, m)]
+                      : null,
+                ),
                 const SizedBox(height: 8),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -675,15 +861,13 @@ class _UpcomingCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(width: 8),
-                // Always laid out so the header doesn't reflow — the count
-                // just fades in as the list folds away.
-                AnimatedOpacity(
-                  opacity: collapsed ? 1 : 0,
-                  duration: _foldDuration,
-                  curve: Curves.easeOutCubic,
-                  child: Text(
-                    '${entries.length}',
-                    style: Theme.of(context).textTheme.bodySmall,
+                // Static in both states. Fading the count in step with the
+                // fold rendered its glyphs in two halves on Impeller, so the
+                // header no longer animates any text.
+                Text(
+                  '${entries.length}',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
                   ),
                 ),
                 const Spacer(),
@@ -1131,6 +1315,11 @@ class _CategoryRow extends StatelessWidget {
   /// Opens Transactions filtered to this category/group (wired at the call
   /// site — the two sections using this row filter differently).
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+
+  /// Cap of the single-category budget on this row, if any — shown as an
+  /// "of ₹X" suffix rather than a second bar in an already dense list.
+  final double? budgetLimit;
 
   const _CategoryRow({
     required this.icon,
@@ -1139,12 +1328,15 @@ class _CategoryRow extends StatelessWidget {
     required this.amount,
     required this.fraction,
     this.onTap,
+    this.onLongPress,
+    this.budgetLimit,
   });
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
+      onLongPress: onLongPress,
       borderRadius: BorderRadius.circular(AppRadius.control),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
@@ -1185,8 +1377,17 @@ class _CategoryRow extends StatelessWidget {
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            fmtMoney(amount),
-                            style: const TextStyle(fontWeight: FontWeight.w600),
+                            budgetLimit == null
+                                ? fmtMoney(amount)
+                                : '${fmtMoney(amount)} of '
+                                      '${fmtMoneyCompact(budgetLimit!)}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  budgetLimit != null && amount > budgetLimit!
+                                  ? Theme.of(context).colorScheme.error
+                                  : null,
+                            ),
                           ),
                         ),
                       ),

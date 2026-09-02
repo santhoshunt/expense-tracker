@@ -149,6 +149,26 @@ void main() {
     expect(bytes.length, greaterThan(500));
   });
 
+  test('PDF year report covers only that year', () async {
+    final p = await seededProvider();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 999,
+      note: 'Old dinner',
+      date: DateTime(2025, 3, 2),
+    );
+    final all = await BackupService.buildPdf(p);
+    final y2025 = await BackupService.buildPdf(p, year: 2025);
+    final y2024 = await BackupService.buildPdf(p, year: 2024);
+    expect(y2025.sublist(0, 4), [0x25, 0x50, 0x44, 0x46]);
+    // One row versus four: the year report is the smaller document, and an
+    // empty year still renders (the "no transactions" page).
+    expect(y2025.length, lessThan(all.length));
+    expect(y2024.length, greaterThan(500));
+    expect(y2024.length, lessThan(y2025.length));
+  });
+
   group('CSV', () {
     test('export → import round-trips all transactions', () async {
       final source = await seededProvider();

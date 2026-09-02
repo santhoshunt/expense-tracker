@@ -95,7 +95,11 @@ class UpcomingMonitor {
         ));
       }
 
-      final hits = detectRecurring(finance.transactions, now: now);
+      final hits = detectRecurring(
+        finance.transactions,
+        now: now,
+        alias: finance.merchantAlias,
+      );
       for (final h in hits) {
         if (settings.hiddenUpcoming.contains(h.key)) continue;
         final days = h.daysUntil(now);

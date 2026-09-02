@@ -12,7 +12,9 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
+import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
+import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/animated_fold.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
 
@@ -390,6 +392,20 @@ void main() {
 
     expect(find.text('HDFC Card bill'), findsOneWidget);
 
+    // The header count is static in both states — animating it (an
+    // AnimatedOpacity fade) rendered the glyphs in halves on Impeller.
+    final header = find
+        .ancestor(of: find.text('Upcoming'), matching: find.byType(Row))
+        .first;
+    final count = find.descendant(of: header, matching: find.text('1'));
+    expect(count, findsOneWidget);
+    // (The tab switcher above fades whole pages; only the header row itself
+    // must be free of opacity animation.)
+    expect(
+      find.descendant(of: header, matching: find.byType(AnimatedOpacity)),
+      findsNothing,
+    );
+
     // AnimatedFold keeps the folded child mounted at zero height, so assert
     // on the fold's rendered height, not text absence.
     final fold = find.byType(AnimatedFold).first;
@@ -398,11 +414,13 @@ void main() {
     await tester.tap(find.text('Upcoming'));
     await tester.pumpAndSettle();
     expect(tester.getSize(fold).height, lessThan(1));
+    expect(count, findsOneWidget);
 
     await tester.tap(find.text('Upcoming'));
     await tester.pumpAndSettle();
     expect(tester.getSize(fold).height, greaterThan(50));
     expect(find.text('HDFC Card bill'), findsOneWidget);
+    expect(count, findsOneWidget);
   });
 
   testWidgets('review cards collapse; Reject all discards with Undo', (
@@ -576,5 +594,328 @@ void main() {
     expect(find.byTooltip('Settings'), findsOneWidget);
 
     debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('search matches amount, category label and account name', (
+    tester,
+  ) async {
+    Tx row(String id, String note, String cat, double amount, {String? acct}) =>
+        Tx(
+          id: id,
+          type: TxType.expense,
+          categoryId: cat,
+          amount: amount,
+          note: note,
+          date: DateTime(2026, 7, 1),
+          acctKey: acct,
+        );
+    SharedPreferences.setMockInitialValues({
+      'transactions_v1': jsonEncode([
+        row('c', 'coffee', 'food', 120, acct: 'HDFC:1234').toJson(),
+        row('t', 'cab', 'transport', 340).toJson(),
+      ]),
+    });
+    final p = FinanceProvider();
+    await p.load();
+    final owner = p.accountForKey('HDFC:1234');
+    if (owner != null) {
+      await p.renameAccount(owner.id, 'Salary Account');
+    } else {
+      final id = await p.addAccount(
+        name: 'Salary Account',
+        type: AccountType.bank,
+      );
+      expect(await p.addAccountKey(id, 'HDFC:1234'), isTrue);
+    }
+    await tester.pumpWidget(app(p));
+    await tester.tap(find.text('Transactions').last);
+    await tester.pumpAndSettle();
+    expect(find.text('coffee'), findsOneWidget);
+    expect(find.text('cab'), findsOneWidget);
+
+    Future<void> search(String q) async {
+      await tester.enterText(find.byType(TextField).first, q);
+      await tester.pump(const Duration(milliseconds: 300)); // debounce
+      await tester.pumpAndSettle();
+    }
+
+    await search('340');
+    expect(find.text('cab'), findsOneWidget);
+    expect(find.text('coffee'), findsNothing);
+
+    await search('transport');
+    expect(find.text('cab'), findsOneWidget);
+    expect(find.text('coffee'), findsNothing);
+
+    await search('salary');
+    expect(find.text('coffee'), findsOneWidget);
+    expect(find.text('cab'), findsNothing);
+  });
+
+  testWidgets('date range filter keeps whole days and shows a chip', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    Future<void> add(String note, DateTime date) => p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 10,
+      note: note,
+      date: date,
+    );
+    await add('early', DateTime(2026, 7, 1, 12));
+    await add('mid', DateTime(2026, 7, 7, 9));
+    await add('edge', DateTime(2026, 7, 10, 23, 30));
+    await add('late', DateTime(2026, 7, 11, 0, 10));
+
+    Widget screen(TxFilterRequest? req, int token) => MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: p),
+        ChangeNotifierProvider(create: (_) => SettingsProvider()),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: TransactionsScreen(request: req, filterToken: token),
+        ),
+      ),
+    );
+    await tester.pumpWidget(screen(null, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('early'), findsOneWidget);
+    expect(find.text('late'), findsOneWidget);
+
+    final range = DateTimeRange(
+      start: DateTime(2026, 7, 5),
+      end: DateTime(2026, 7, 10),
+    );
+    await tester.pumpWidget(screen(TxFilterRequest(range: range), 1));
+    await tester.pumpAndSettle();
+
+    expect(find.text('mid'), findsOneWidget);
+    expect(find.text('edge'), findsOneWidget, reason: 'end day inclusive');
+    expect(find.text('early'), findsNothing);
+    expect(find.text('late'), findsNothing);
+    expect(find.text('5 – 10 Jul 2026'), findsOneWidget);
+
+    // Dismissing the chip clears the range.
+    await tester.tap(
+      find.descendant(
+        of: find.widgetWithText(InputChip, '5 – 10 Jul 2026'),
+        matching: find.byTooltip('Delete'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('early'), findsOneWidget);
+    expect(find.text('late'), findsOneWidget);
+  });
+
+  testWidgets('long-pressing a category row opens a prefilled budget', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 800,
+      note: 'groceries',
+      date: DateTime.now(),
+    );
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    // Only the category rows carry a long-press (the donut legend above
+    // them shows the same label without one). The list is lazy, so scroll
+    // until the row itself is built.
+    final row = find
+        .ancestor(
+          of: find.text('Food & Dining'),
+          matching: find.byWidgetPredicate(
+            (w) => w is InkWell && w.onLongPress != null,
+          ),
+        )
+        .first;
+    // The single category owns 100% of the month — that share label exists
+    // only on the row, so scrolling to it mounts the row.
+    await tester.scrollUntilVisible(
+      find.text('100%'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.longPress(row);
+    await tester.pumpAndSettle();
+
+    expect(find.text('New budget'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Food & Dining'), findsOneWidget);
+    final fields = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(fields.at(1), '5000');
+    await tester.pump();
+    await tester.tap(find.text('Create'));
+    await tester.pumpAndSettle();
+
+    final b = p.budgets.single;
+    expect(b.name, 'Food & Dining');
+    expect(b.mode, BudgetMode.include);
+    expect(b.categoryIds, {'food'});
+    expect(b.limit, 5000);
+    // The row now shows the cap beside the spend.
+    expect(find.textContaining(' of ₹'), findsOneWidget);
+
+    // A second long-press edits that budget instead of creating another.
+    await tester.longPress(row);
+    await tester.pumpAndSettle();
+    expect(find.text('Edit budget'), findsOneWidget);
+  });
+
+  testWidgets('Year view swaps the month sections for the year', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 800,
+      note: 'groceries',
+      date: DateTime.now(),
+    );
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+    final year = DateTime.now().year;
+    final list = find.byType(Scrollable).first;
+    final monthLabel = find.text(
+      fmtMonth(DateTime(year, DateTime.now().month)),
+    );
+    expect(monthLabel, findsOneWidget);
+    expect(find.byTooltip('Export year report (PDF)'), findsNothing);
+
+    // The scope switch sits near the top, so it is built and tappable
+    // without scrolling.
+    await tester.tap(find.text('Year'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('$year'),
+      findsOneWidget,
+      reason: 'selector shows the year',
+    );
+    expect(monthLabel, findsNothing);
+    expect(find.byTooltip('Export year report (PDF)'), findsOneWidget);
+
+    // The dashboard list is lazy: scroll the chart section into view.
+    await tester.scrollUntilVisible(
+      find.text('Months of $year'),
+      300,
+      scrollable: list,
+    );
+    expect(find.text('Months of $year'), findsOneWidget);
+    expect(find.text('Last 6 months'), findsNothing);
+    expect(find.text('Spending heatmap'), findsNothing);
+
+    // Back to Month: the month-only sections return.
+    await tester.scrollUntilVisible(find.text('Month'), -300, scrollable: list);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Month'));
+    await tester.pumpAndSettle();
+    // Rows above the viewport count as offstage for finders even when built,
+    // so bring the selector back on screen before asserting on it.
+    await tester.scrollUntilVisible(monthLabel, -300, scrollable: list);
+    expect(monthLabel, findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Spending heatmap'),
+      300,
+      scrollable: list,
+    );
+    expect(find.text('Spending heatmap'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Last 6 months'),
+      300,
+      scrollable: list,
+    );
+    expect(find.text('Last 6 months'), findsOneWidget);
+  });
+
+  testWidgets('long-pressing a Top merchant renames it everywhere', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    SharedPreferences.setMockInitialValues({
+      'transactions_v1': jsonEncode([
+        Tx(
+          id: 'fd1',
+          type: TxType.expense,
+          categoryId: 'other_expense',
+          amount: 5000,
+          note: '',
+          smsBody:
+              'Rs.5000.00 debited from a/c XX1234 to FD NO 12345 on 01-07-26.',
+          date: DateTime(now.year, now.month, 1, 10),
+          source: TxSource.sms,
+          sender: 'VM-HDFCBK',
+        ).toJson(),
+      ]),
+    });
+    final p = FinanceProvider();
+    await p.load();
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    final row = find
+        .ancestor(
+          of: find.text('Fd No 12345'),
+          matching: find.byWidgetPredicate(
+            (w) => w is InkWell && w.onLongPress != null,
+          ),
+        )
+        .first;
+    await tester.scrollUntilVisible(
+      find.text('Fd No 12345'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.longPress(row);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Rename merchant'), findsOneWidget);
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Fd No 12345'),
+      'HDFC FD',
+    );
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    expect(p.merchantAlias('fd no 12345'), 'HDFC FD');
+    expect(find.text('HDFC FD'), findsOneWidget);
+    expect(find.text('Fd No 12345'), findsNothing);
+  });
+
+  testWidgets('Top merchants explains itself when nothing is identifiable', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    // Spending this month, but only to a phone number: no merchant identity.
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'other_expense',
+      amount: 300,
+      note: '9215676766',
+      date: DateTime.now(),
+    );
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    // Scroll until the hint itself is on screen (the header alone can be
+    // visible while the card below it is still off-stage).
+    final list = find.byType(Scrollable).first;
+    final hint = find.textContaining('No identifiable merchants in');
+    await tester.scrollUntilVisible(hint, 300, scrollable: list);
+    expect(hint, findsOneWidget);
+    expect(find.text('Top merchants'), findsOneWidget);
   });
 }
