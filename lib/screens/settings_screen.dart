@@ -1743,9 +1743,9 @@ class _AboutSectionState extends State<_AboutSection> {
     try {
       final info = await PackageInfo.fromPlatform();
       if (mounted) {
-        setState(
-          () => _lastKnownVersion = '${info.version} (${info.buildNumber})',
-        );
+        // Version name only: the Android build number in parentheses read
+        // as noise next to it.
+        setState(() => _lastKnownVersion = info.version);
       }
     } catch (_) {
       // Leave the placeholder; the tile is informational only.

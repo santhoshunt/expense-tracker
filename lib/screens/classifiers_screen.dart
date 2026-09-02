@@ -88,14 +88,20 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
         _ => null,
       },
       body: AmbientBackground(
-        child: TabBarView(
-          controller: _tab,
-          children: [
-            _RulesTab(),
-            _ImportTab(),
-            _TransactionsTab(),
-            const CategoriesTab(),
-          ],
+        // Transparent Material: the tabs' ListTiles paint their ink on the
+        // nearest Material, and the ambient ColoredBox in between would hide
+        // it (debug assertion under tests, invisible splashes on device).
+        child: Material(
+          type: MaterialType.transparency,
+          child: TabBarView(
+            controller: _tab,
+            children: [
+              _RulesTab(),
+              _ImportTab(),
+              _TransactionsTab(),
+              const CategoriesTab(),
+            ],
+          ),
         ),
       ),
     );
@@ -130,12 +136,6 @@ class _RulesTabState extends State<_RulesTab> {
   /// (Transactions-screen idiom.)
   final Set<String> _selected = {};
   bool get _selecting => _selected.isNotEmpty;
-
-  void _toggleSelect(String id) {
-    setState(
-      () => _selected.contains(id) ? _selected.remove(id) : _selected.add(id),
-    );
-  }
 
   /// Merge is only meaningful within one category: the matcher's type gate
   /// skips mismatched rules anyway, so a cross-category merge would change
@@ -211,25 +211,59 @@ class _RulesTabState extends State<_RulesTab> {
     }
 
     final q = _search.trim().toLowerCase();
-    final visible = rules.where((r) => ruleMatchesQuery(r, q)).toList();
+    // Direction pairs (same pattern, opposite-direction categories) render
+    // as ONE tile owned by the earlier rule; the twin is skipped. Resolved
+    // over the full list so a search hit on either member keeps the pair.
+    final siblingOf = <String, ClassifierRule>{};
+    final absorbed = <String>{};
+    for (final r in rules) {
+      if (absorbed.contains(r.id) || siblingOf.containsKey(r.id)) continue;
+      final s = directionSiblingOf(r, rules);
+      if (s == null || absorbed.contains(s.id) || siblingOf.containsKey(s.id)) {
+        continue;
+      }
+      siblingOf[r.id] = s;
+      absorbed.add(s.id);
+    }
+    bool shows(ClassifierRule r) =>
+        ruleMatchesQuery(r, q) ||
+        (siblingOf[r.id] != null && ruleMatchesQuery(siblingOf[r.id]!, q));
+    final visible = rules
+        .where((r) => !absorbed.contains(r.id) && shows(r))
+        .toList();
     final userRules = visible.where((r) => !r.isBuiltIn).toList();
     final builtinRules = visible.where((r) => r.isBuiltIn).toList();
 
     // Drop selections that no longer exist or were re-filtered away, so the
     // bar count never lies (transactions-screen idiom).
     if (_selected.isNotEmpty) {
-      final visibleIds = {for (final r in visible) r.id};
+      final visibleIds = {
+        for (final r in visible) ...[r.id, ?siblingOf[r.id]?.id],
+      };
       _selected.removeWhere((id) => !visibleIds.contains(id));
     }
 
     Widget header(String label) => UppercaseSectionHeader(label);
 
-    Widget tile(ClassifierRule r) => _RuleTile(
-      rule: r,
-      selectionMode: _selecting,
-      selected: _selected.contains(r.id),
-      onToggleSelect: () => _toggleSelect(r.id),
-    );
+    Widget tile(ClassifierRule r) {
+      final sibling = siblingOf[r.id];
+      return _RuleTile(
+        rule: r,
+        sibling: sibling,
+        selectionMode: _selecting,
+        selected: _selected.contains(r.id),
+        // A pair selects as one unit (both ids), so the count stays honest
+        // and a merge can never split a pair.
+        onToggleSelect: () => setState(() {
+          final ids = {r.id, ?sibling?.id};
+          if (_selected.contains(r.id)) {
+            _selected.removeAll(ids);
+          } else {
+            _selected.addAll(ids);
+          }
+        }),
+      );
+    }
 
     // Flat item list keeps the whole thing lazily built. Filtering happens
     // before the section split, so an all-filtered section drops its header.
@@ -362,27 +396,39 @@ class _RuleSelectionBar extends StatelessWidget {
 
 class _RuleTile extends StatelessWidget {
   final ClassifierRule rule;
+
+  /// The opposite-direction twin (see [directionSiblingOf]); the tile then
+  /// reads as one rule pair and edits/deletes both.
+  final ClassifierRule? sibling;
   final bool selectionMode;
   final bool selected;
   final VoidCallback onToggleSelect;
 
   const _RuleTile({
     required this.rule,
+    this.sibling,
     required this.selectionMode,
     required this.selected,
     required this.onToggleSelect,
   });
+
+  /// "↑ Food & Dining (expense)" / "↓ Salary (income)".
+  static String _arrowLabel(TxCategory c) =>
+      '${c.type == TxType.income ? '↓' : '↑'} ${c.label} '
+      '(${c.type == TxType.income ? 'income' : 'expense'})';
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isSpam = rule.isSpamRule;
     final cat = isSpam ? null : categoryById(rule.categoryId);
+    final sib = sibling;
+    final sibCat = sib == null ? null : categoryById(sib.categoryId);
 
     return ListTile(
       onTap: selectionMode
           ? onToggleSelect
-          : () => _showRuleDialog(context, existing: rule),
+          : () => _showRuleDialog(context, existing: rule, sibling: sib),
       onLongPress: onToggleSelect,
       selected: selected,
       // The avatar flips to a check when picked (TransactionTile precedent —
@@ -392,9 +438,13 @@ class _RuleTile extends StatelessWidget {
             ? scheme.primary.withValues(alpha: 0.18)
             : isSpam
             ? scheme.error.withValues(alpha: 0.12)
+            : sib != null
+            ? scheme.primary.withValues(alpha: 0.12)
             : cat!.color.withValues(alpha: 0.15),
         child: selected
             ? Icon(Icons.check, color: scheme.primary, size: 20)
+            : sib != null
+            ? Icon(Icons.swap_vert, color: scheme.primary, size: 20)
             : Icon(
                 isSpam ? Icons.block : cat!.icon,
                 color: isSpam
@@ -419,10 +469,19 @@ class _RuleTile extends StatelessWidget {
           if (rule.patterns.length > 1)
             'or ${rule.patterns.length - 1} more condition'
                 '${rule.patterns.length == 2 ? '' : 's'}',
-          isSpam
-              ? 'Spam — never imported'
-              : '→ ${cat!.label} '
-                    '(${cat.type == TxType.income ? 'income' : 'expense'})',
+          if (isSpam)
+            'Spam — never imported'
+          else if (sibCat != null)
+            // Expense side first, whichever rule owns the tile.
+            [
+              for (final c in [cat!, sibCat])
+                if (c.type == TxType.expense) _arrowLabel(c),
+              for (final c in [cat, sibCat])
+                if (c.type == TxType.income) _arrowLabel(c),
+            ].join(' · ')
+          else
+            '→ ${cat!.label} '
+                '(${cat.type == TxType.income ? 'income' : 'expense'})',
         ].join(' · '),
       ),
       // No delete while selecting — a mis-tap next to a checkable row would
@@ -430,21 +489,39 @@ class _RuleTile extends StatelessWidget {
       trailing: selectionMode
           ? null
           : IconButton(
-              tooltip: 'Delete rule',
+              tooltip: sib == null ? 'Delete rule' : 'Delete rule pair',
               // 20 matches every other trailing delete icon in the app.
               icon: const Icon(Icons.delete_outline, size: 20),
               onPressed: () {
                 final finance = context.read<FinanceProvider>();
-                // Position = match priority; Undo must put it back where it was.
-                final index = finance.rules.indexWhere((r) => r.id == rule.id);
+                // Position = match priority; Undo must put each back where
+                // it was. Indexes are captured before either delete and
+                // restored lowest-first so the second insert lands right.
+                final all = finance.rules;
+                final index = all.indexWhere((r) => r.id == rule.id);
+                final sibIndex = sib == null
+                    ? -1
+                    : all.indexWhere((r) => r.id == sib.id);
                 finance.deleteRule(rule.id);
+                if (sib != null) finance.deleteRule(sib.id);
                 // patterns.first, not the raw stored string — the '|' encoding is
                 // an implementation detail users never typed.
                 showUndoSnackBar(
                   context,
-                  'Deleted rule "${rule.patterns.firstOrNull ?? rule.pattern}"'
+                  'Deleted rule${sib == null ? '' : ' pair'} '
+                  '"${rule.patterns.firstOrNull ?? rule.pattern}"'
                   '${rule.patterns.length > 1 ? ' (+${rule.patterns.length - 1})' : ''}',
-                  () => finance.restoreRule(rule, index),
+                  () {
+                    if (sib == null) {
+                      finance.restoreRule(rule, index);
+                    } else if (sibIndex < index) {
+                      finance.restoreRule(sib, sibIndex);
+                      finance.restoreRule(rule, index);
+                    } else {
+                      finance.restoreRule(rule, index);
+                      finance.restoreRule(sib, sibIndex);
+                    }
+                  },
                 );
               },
             ),
@@ -1071,7 +1148,8 @@ Future<void> _showTestMessageDialog(BuildContext context) async {
                                 '${target.type == TxType.income ? 'income' : 'expense'}'
                                 ' — skipped for this '
                                 '${parsed.type == TxType.income ? 'income' : 'expense'}'
-                                ' message.';
+                                ' message. Add a rule for the other direction '
+                                'to classify both ways.';
                             continue;
                           }
                           v +=
@@ -1186,9 +1264,31 @@ Future<void> _showImportRuleDialog(
   );
 }
 
+/// Category rows of one money direction only, for the pair's second slot.
+List<PickerItem<String?>> _oppositeDirectionItems(TxType type) => [
+  const PickerItem<String?>(value: null, label: 'Not for this direction'),
+  PickerItem<String?>.header(type == TxType.income ? 'Income' : 'Expenses'),
+  for (final c in allCategories)
+    if (c.type == type && !c.isTransfer)
+      PickerItem<String?>(
+        value: c.id,
+        label: c.label,
+        leading: Icon(c.icon, color: c.color, size: 20),
+      ),
+  const PickerItem<String?>.header('Transfers'),
+  for (final c in allCategories)
+    if (c.type == type && c.isTransfer)
+      PickerItem<String?>(
+        value: c.id,
+        label: c.label,
+        leading: Icon(c.icon, color: c.color, size: 20),
+      ),
+];
+
 Future<void> _showRuleDialog(
   BuildContext context, {
   ClassifierRule? existing,
+  ClassifierRule? sibling,
   String? patternSuggestion,
 }) async {
   // One controller per OR-condition. `allCtrls` only grows — DisposeScope
@@ -1200,6 +1300,17 @@ Future<void> _showRuleDialog(
   ];
   final allCtrls = List<TextEditingController>.of(ctrls);
   var categoryId = existing?.categoryId ?? 'food';
+  // The opposite-direction twin (a second ordinary rule sharing the
+  // pattern): pre-filled when editing a rule that already has one.
+  final twin =
+      sibling ??
+      (existing == null
+          ? null
+          : directionSiblingOf(
+              existing,
+              context.read<FinanceProvider>().rules,
+            ));
+  String? otherCategoryId = twin?.categoryId;
 
   await showDialog(
     context: context,
@@ -1207,7 +1318,13 @@ Future<void> _showRuleDialog(
       disposables: allCtrls,
       child: StatefulBuilder(
         builder: (ctx, setState) => AlertDialog(
-          title: Text(existing == null ? 'New classifier rule' : 'Edit rule'),
+          title: Text(
+            existing == null
+                ? 'New classifier rule'
+                : twin == null
+                ? 'Edit rule'
+                : 'Edit rule pair',
+          ),
           // Scrollable: autofocused field + keyboard on a small screen. Top
           // padding keeps the first field's floating label from clipping.
           // UnfocusOnScroll: dragging the dialog while a condition field is
@@ -1228,9 +1345,49 @@ Future<void> _showRuleDialog(
                     value: categoryId,
                     items: [..._categoryPickerItems(ctx)],
                     onChanged: (v) {
-                      if (v != null) setState(() => categoryId = v);
+                      if (v == null) return;
+                      setState(() {
+                        categoryId = v;
+                        // The second slot must stay the OPPOSITE direction;
+                        // drop it when the first pick moves onto its side
+                        // (or becomes spam, which has no direction).
+                        final other = otherCategoryId;
+                        if (v == kSpamCategoryId ||
+                            (other != null &&
+                                categoryById(other).type ==
+                                    categoryById(v).type)) {
+                          otherCategoryId = null;
+                        }
+                      });
                     },
                   ),
+                  // Rules only fire for alerts moving money in the category's
+                  // direction (the matcher skips the rest), so one keyword
+                  // needs a rule per direction to classify both ways. The
+                  // twin is a second ordinary rule sharing the pattern.
+                  if (categoryId != kSpamCategoryId) ...[
+                    const SizedBox(height: 8),
+                    AppDropdownField<String?>(
+                      label: 'And when money moves the other way',
+                      value: otherCategoryId,
+                      items: _oppositeDirectionItems(
+                        categoryById(categoryId).type == TxType.income
+                            ? TxType.expense
+                            : TxType.income,
+                      ),
+                      onChanged: (v) => setState(() => otherCategoryId = v),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4, left: 12),
+                      child: Text(
+                        'Rules only fire for messages moving money in the '
+                        "category's direction. A second category here "
+                        'lets the same words classify money in and out '
+                        'differently.',
+                        style: Theme.of(ctx).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
                   // The add-condition button sits with the dropdown, above
                   // the conditions: with several fields plus a keyboard it
                   // lived below the fold exactly when it was needed.
@@ -1361,7 +1518,7 @@ Future<void> _showRuleDialog(
                         if (ok != true || !ctx.mounted) return;
                       }
                       Navigator.pop(ctx);
-                      final applied = existing == null
+                      var applied = existing == null
                           ? await finance.addRule(pattern, categoryId)
                           : await finance.updateRule(
                               existing.copyWith(
@@ -1369,6 +1526,31 @@ Future<void> _showRuleDialog(
                                 categoryId: categoryId,
                               ),
                             );
+                      // The opposite-direction twin: create, repoint or
+                      // drop it to match the second slot. Deleting never
+                      // re-applies (rows keep their categories), same as the
+                      // tile's delete.
+                      final other = otherCategoryId;
+                      if (other != null) {
+                        final twinApplied = twin == null
+                            ? await finance.addRule(pattern, other)
+                            : await finance.updateRule(
+                                twin.copyWith(
+                                  pattern: pattern,
+                                  categoryId: other,
+                                ),
+                              );
+                        applied = (
+                          reclassified:
+                              applied.reclassified + twinApplied.reclassified,
+                          droppedPending:
+                              applied.droppedPending +
+                              twinApplied.droppedPending,
+                          dropped: [...applied.dropped, ...twinApplied.dropped],
+                        );
+                      } else if (twin != null) {
+                        await finance.deleteRule(twin.id);
+                      }
                       // Rules re-apply to history immediately — say what that
                       // did. A broad spam rule silently emptying the review
                       // queue was the worst case, so dropped imports get a
@@ -1384,20 +1566,19 @@ Future<void> _showRuleDialog(
                               'dropped as spam',
                       ];
                       if (parts.isNotEmpty) {
+                        final dropped = applied.dropped;
                         messenger
                           ..hideCurrentSnackBar()
                           ..showSnackBar(
                             SnackBar(
                               content: Text(parts.join(' · ')),
                               duration: const Duration(seconds: 5),
-                              action: applied.dropped.isEmpty
+                              action: dropped.isEmpty
                                   ? null
                                   : SnackBarAction(
                                       label: 'Restore',
-                                      onPressed: () =>
-                                          finance.restoreEditedTransactions(
-                                            applied.dropped,
-                                          ),
+                                      onPressed: () => finance
+                                          .restoreEditedTransactions(dropped),
                                     ),
                             ),
                           );
