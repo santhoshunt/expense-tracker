@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +13,7 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
+import 'package:expense_tracker/widgets/animated_fold.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
 
 Widget app(FinanceProvider provider) => MultiProvider(
@@ -31,22 +34,41 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  testWidgets('backup menu groups export and import into submenus', (
+  /// Bounded pumps for flows that show the Settings screen: its Drive
+  /// section keeps an INDETERMINATE progress bar up while the sign-in state
+  /// loads (which never resolves under tests), so pumpAndSettle would time
+  /// out. Two pumps advance past route/sheet/dialog transitions instead.
+  Future<void> pumpThrough(WidgetTester tester) async {
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+  }
+
+  testWidgets('data actions moved to Settings; export sheet lists formats', (
     tester,
   ) async {
     final p = FinanceProvider();
     await p.load();
     await tester.pumpWidget(app(p));
 
-    await tester.tap(find.byTooltip('More options'));
-    await tester.pumpAndSettle();
+    // The ⋮ menu is gone; a direct settings button replaced it.
+    expect(find.byTooltip('More options'), findsNothing);
+    expect(find.byTooltip('Settings'), findsOneWidget);
 
-    expect(find.text('Export'), findsOneWidget);
-    expect(find.text('Import'), findsOneWidget);
+    await tester.tap(find.byTooltip('Settings'));
+    await pumpThrough(tester);
+    // The settings list mounts lazily — scroll the Data section into view.
+    await tester.scrollUntilVisible(
+      find.text('Export…'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pump();
+    expect(find.text('Export…'), findsOneWidget);
+    expect(find.text('Import…'), findsOneWidget);
     expect(find.text('Delete all data'), findsOneWidget);
 
-    await tester.tap(find.text('Export'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.text('Export…'));
+    await pumpThrough(tester);
     expect(find.text('Backup (JSON)'), findsOneWidget);
     expect(find.text('Transactions (CSV)'), findsOneWidget);
     expect(find.text('Report (PDF)'), findsOneWidget);
@@ -66,14 +88,23 @@ void main() {
     );
     await tester.pumpWidget(app(p));
 
-    await tester.tap(find.byTooltip('More options'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Settings'));
+    await pumpThrough(tester);
+    await tester.scrollUntilVisible(
+      find.text('Delete all data'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pump();
     await tester.tap(find.text('Delete all data'));
-    await tester.pumpAndSettle();
+    await pumpThrough(tester);
 
     expect(find.text('Delete all data?'), findsOneWidget);
     await tester.tap(find.text('Delete everything'));
-    await tester.pumpAndSettle();
+    // Dialog closes, the busy barrier shows while the wipe persists, then
+    // pops — three bounded pumps carry it through.
+    await pumpThrough(tester);
+    await pumpThrough(tester);
 
     expect(p.transactions, isEmpty);
   });
@@ -116,12 +147,19 @@ void main() {
     await p.load();
     await tester.pumpWidget(app(p));
 
-    await tester.tap(find.byTooltip('More options'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Import'));
-    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Settings'));
+    await pumpThrough(tester);
+    await tester.scrollUntilVisible(
+      find.text('Import…'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pump();
+    await tester.tap(find.text('Import…'));
+    await pumpThrough(tester);
     await tester.tap(find.text('Backup (JSON)'));
-    await tester.pumpAndSettle();
+    await pumpThrough(tester);
+    await pumpThrough(tester);
 
     expect(find.text('Import backup'), findsOneWidget);
     expect(find.text('Merge'), findsOneWidget);
@@ -129,7 +167,7 @@ void main() {
 
     // Cancel closes without touching the file picker.
     await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
+    await pumpThrough(tester);
     expect(find.text('Merge'), findsNothing);
   });
 
@@ -352,9 +390,9 @@ void main() {
 
     expect(find.text('HDFC Card bill'), findsOneWidget);
 
-    // AnimatedCrossFade keeps the folded child mounted (faded + zero
-    // height), so assert on the fold's rendered height, not text absence.
-    final fold = find.byType(AnimatedCrossFade).first;
+    // AnimatedFold keeps the folded child mounted at zero height, so assert
+    // on the fold's rendered height, not text absence.
+    final fold = find.byType(AnimatedFold).first;
     expect(tester.getSize(fold).height, greaterThan(50));
 
     await tester.tap(find.text('Upcoming'));
@@ -365,6 +403,121 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.getSize(fold).height, greaterThan(50));
     expect(find.text('HDFC Card bill'), findsOneWidget);
+  });
+
+  testWidgets('review cards collapse; Reject all discards with Undo', (
+    tester,
+  ) async {
+    Tx pendingTx(String id, double amount, {bool spam = false}) => Tx(
+      id: id,
+      type: TxType.expense,
+      categoryId: 'other_expense',
+      amount: amount,
+      note: 'row $id',
+      date: DateTime(2026, 7, 1),
+      pending: true,
+      suspectedSpam: spam,
+    );
+    SharedPreferences.setMockInitialValues({
+      'transactions_v1': jsonEncode([
+        pendingTx('p1', 100).toJson(),
+        pendingTx('p2', 200).toJson(),
+        pendingTx('s1', 300, spam: true).toJson(),
+      ]),
+    });
+    final p = FinanceProvider();
+    await p.load();
+    await tester.pumpWidget(app(p));
+    await tester.tap(find.text('Transactions').last);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Imported from SMS · 2'), findsOneWidget);
+    expect(find.textContaining('Suspected spam · 1'), findsOneWidget);
+
+    Finder foldOf(String headerSub) => find
+        .descendant(
+          of: find
+              .ancestor(
+                of: find.textContaining(headerSub),
+                matching: find.byType(Card),
+              )
+              .first,
+          matching: find.byType(AnimatedFold),
+        )
+        .first;
+
+    // Both cards fold to their headers and re-expand.
+    final pendingFold = foldOf('Imported from SMS');
+    expect(tester.getSize(pendingFold).height, greaterThan(50));
+    await tester.tap(find.textContaining('Imported from SMS'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(pendingFold).height, lessThan(1));
+
+    final spamFold = foldOf('Suspected spam');
+    await tester.tap(find.textContaining('Suspected spam'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(spamFold).height, lessThan(1));
+
+    await tester.tap(find.textContaining('Imported from SMS'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(pendingFold).height, greaterThan(50));
+
+    // Reject all: dialog → queue emptied (spam untouched) → Undo restores.
+    await tester.tap(find.text('Reject all'));
+    await tester.pumpAndSettle();
+    expect(find.text('Reject all 2 imports?'), findsOneWidget);
+    await tester.tap(find.text('Reject all').last);
+    await tester.pumpAndSettle();
+
+    expect(p.pendingTransactions.where((t) => !t.suspectedSpam), isEmpty);
+    expect(p.pendingTransactions.where((t) => t.suspectedSpam), hasLength(1));
+
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(p.pendingTransactions.where((t) => !t.suspectedSpam), hasLength(2));
+  });
+
+  testWidgets('month select-all and bulk delete with Undo', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 500,
+      note: 'lunch',
+      date: DateTime(2026, 7, 1),
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'transport',
+      amount: 200,
+      note: 'cab',
+      date: DateTime(2026, 7, 2),
+    );
+    await tester.pumpWidget(app(p));
+    await tester.tap(find.text('Transactions').last);
+    await tester.pumpAndSettle();
+
+    // The month-header button toggles the whole month in and out.
+    await tester.tap(find.byTooltip('Select month'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Delete'), findsOneWidget);
+    await tester.tap(find.byTooltip('Select month'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Delete'), findsNothing);
+
+    await tester.tap(find.byTooltip('Select month'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Delete'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete 2 transactions?'), findsOneWidget);
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+
+    expect(p.transactions, isEmpty);
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(p.transactions, hasLength(2));
   });
 
   testWidgets('filter sheet search narrows chips; selections stay visible', (
@@ -419,8 +572,8 @@ void main() {
     await tester.pumpWidget(app(p));
 
     expect(find.byIcon(Icons.sms_outlined), findsNothing);
-    // Backup menu is platform-independent and stays visible.
-    expect(find.byTooltip('More options'), findsOneWidget);
+    // The settings button is platform-independent and stays visible.
+    expect(find.byTooltip('Settings'), findsOneWidget);
 
     debugDefaultTargetPlatformOverride = null;
   });

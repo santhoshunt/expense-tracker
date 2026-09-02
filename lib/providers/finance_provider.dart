@@ -1182,12 +1182,43 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(tx: true);
   }
 
+  /// Bulk delete for the selection bar: removes every row whose id is in
+  /// [ids] and returns the removed rows so the caller can offer Undo (via
+  /// [restoreTransactions]). One notify + persist for the whole batch.
+  Future<List<Tx>> deleteTransactions(Iterable<String> ids) async {
+    final wanted = ids.toSet();
+    final removed = [
+      for (final t in _transactions)
+        if (wanted.contains(t.id)) t,
+    ];
+    if (removed.isEmpty) return removed;
+    _transactions.removeWhere((t) => wanted.contains(t.id));
+    notifyListeners();
+    await _persist(tx: true);
+    return removed;
+  }
+
   /// The undo half of [deleteTransaction]: reinserts the captured object
   /// verbatim (same id, flags and account key). Ordering doesn't depend on
   /// list position — views sort by date — so appending is enough.
   Future<void> restoreTransaction(Tx tx) async {
     if (_transactions.any((t) => t.id == tx.id)) return;
     _transactions.add(tx);
+    notifyListeners();
+    await _persist(tx: true);
+  }
+
+  /// Batch [restoreTransaction]: the undo half of [deleteTransactions] and
+  /// [discardAllPending]. Rows whose id meanwhile reappeared are skipped.
+  Future<void> restoreTransactions(List<Tx> rows) async {
+    final existing = {for (final t in _transactions) t.id};
+    var added = 0;
+    for (final tx in rows) {
+      if (existing.contains(tx.id)) continue;
+      _transactions.add(tx);
+      added++;
+    }
+    if (added == 0) return;
     notifyListeners();
     await _persist(tx: true);
   }
@@ -3138,5 +3169,21 @@ class FinanceProvider extends ChangeNotifier {
     }
     notifyListeners();
     await _persist(tx: true);
+  }
+
+  /// The reject counterpart of [confirmAllPending]: removes every pending
+  /// import EXCEPT suspected spam and returns the removed rows (still
+  /// `pending: true`) so the caller can offer Undo via
+  /// [restoreTransactions] — the rows then rejoin the review queue.
+  Future<List<Tx>> discardAllPending() async {
+    final removed = [
+      for (final t in _transactions)
+        if (t.pending && !t.suspectedSpam) t,
+    ];
+    if (removed.isEmpty) return removed;
+    _transactions.removeWhere((t) => t.pending && !t.suspectedSpam);
+    notifyListeners();
+    await _persist(tx: true);
+    return removed;
   }
 }

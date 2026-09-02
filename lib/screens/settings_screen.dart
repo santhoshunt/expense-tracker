@@ -14,7 +14,9 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/app_icon_service.dart';
 import '../services/app_lock_service.dart';
+import '../services/backup_service.dart';
 import '../services/drive_backup_service.dart';
+import '../services/sms_import_service.dart';
 import '../services/update_service.dart';
 import '../services/notification_service.dart';
 import '../services/notification_source.dart';
@@ -48,8 +50,12 @@ class SettingsScreen extends StatelessWidget {
           // shifts the layout enough to evict them again — a destroy/recreate
           // loop that snaps the scroll position ~60lp every ~150ms while
           // dragging (the "heavy glitch"). The page is ~25 light children,
-          // so laying them all out permanently is cheap.
-          scrollCacheExtent: const ScrollCacheExtent.pixels(double.infinity),
+          // so laying them all out permanently is cheap. 100k px, not
+          // double.infinity: the viewport inflates its SEMANTICS clip by the
+          // cache extent, and an infinite rect trips a semantics assertion
+          // (seen under widget tests). The page is a few thousand px tall,
+          // so 100k keeps every child alive just the same.
+          scrollCacheExtent: const ScrollCacheExtent.pixels(100000),
           // Release focus as soon as a drag starts: a focused text field
           // (budget cap) keeps re-scrolling itself into view on every
           // keyboard-inset change, which fights the user's gesture.
@@ -196,6 +202,16 @@ class SettingsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const _DriveBackupSection(),
+            const SizedBox(height: 24),
+            Text('Data', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'Export or import your data as files, or wipe everything. '
+              'Moved here from the home screen menu.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            const _DataSection(),
             const SizedBox(height: 24),
             Text('Privacy', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
@@ -1436,6 +1452,399 @@ class _CustomAccentSwatch extends StatelessWidget {
             size: 20,
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Export / import / delete-all, moved here from the home screen's ⋮ menu.
+/// The handlers are ports of the old home_screen methods; format choice now
+/// goes through the standard picker sheet instead of nested submenus.
+class _DataSection extends StatefulWidget {
+  const _DataSection();
+
+  @override
+  State<_DataSection> createState() => _DataSectionState();
+}
+
+class _DataSectionState extends State<_DataSection> {
+  final _smsImport = SmsImportService();
+
+  Future<void> _pickAndRun({
+    required String title,
+    required List<PickerItem<String>> items,
+  }) async {
+    final result = await showPickerSheet<String>(
+      context: context,
+      title: title,
+      items: items,
+    );
+    final action = result?.value;
+    if (action != null && mounted) await _handleBackupAction(action);
+  }
+
+  /// Runs [work] behind a modal spinner so a full-ledger export/import isn't
+  /// a frozen, feedback-free screen. The barrier also blocks a second tap
+  /// while the first operation is still writing.
+  Future<T> _withBusy<T>(String label, Future<T> Function() work) async {
+    final navigator = Navigator.of(context, rootNavigator: true);
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => PopScope(
+          canPop: false,
+          child: Dialog(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 24,
+                    height: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2.5),
+                  ),
+                  const SizedBox(width: 16),
+                  Flexible(child: Text(label)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    try {
+      return await work();
+    } finally {
+      if (navigator.mounted) navigator.pop();
+    }
+  }
+
+  Future<void> _handleBackupAction(String action) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final finance = context.read<FinanceProvider>();
+    try {
+      switch (action) {
+        case 'export_json':
+          final path = await _withBusy(
+            'Building backup…',
+            () => BackupService.exportJson(
+              finance,
+              settings: context.read<SettingsProvider>(),
+            ),
+          );
+          if (path != null && path.isNotEmpty) {
+            messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
+          }
+        case 'export_pdf':
+          final path = await _withBusy(
+            'Building PDF report…',
+            () => BackupService.exportPdf(finance),
+          );
+          if (path != null && path.isNotEmpty) {
+            messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
+          }
+        case 'delete_all':
+          final includeConfig = await _confirmDeleteAll();
+          if (includeConfig == null) return;
+          // Same busy barrier as every other branch: the wipe persists up to
+          // seven blobs, and no second action must land mid-write.
+          await _withBusy('Deleting…', () async {
+            await finance.clearAll(includeConfig: includeConfig);
+            await _smsImport.resetLastScan();
+          });
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                includeConfig
+                    ? 'All data deleted; rules & categories reset to '
+                          'defaults.'
+                    : 'Transactions and accounts deleted. Rules, categories, '
+                          'groups and budgets were kept.',
+              ),
+            ),
+          );
+        case 'export_csv':
+          final path = await _withBusy(
+            'Building CSV…',
+            () => BackupService.exportCsv(finance),
+          );
+          if (path != null && path.isNotEmpty) {
+            messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
+          }
+        case 'import_json':
+          final replace = await _askImportMode();
+          if (replace == null) return;
+          final txAdded = await _withBusy(
+            'Importing backup…',
+            () => BackupService.importJson(
+              finance,
+              replace: replace,
+              settings: context.read<SettingsProvider>(),
+            ),
+          );
+          if (txAdded == null) return; // picker cancelled
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                replace
+                    ? 'Restored $txAdded transactions.'
+                    : 'Imported $txAdded new transactions.',
+              ),
+            ),
+          );
+        case 'import_csv':
+          final replace = await _askImportMode();
+          if (replace == null) return;
+          final added = await _withBusy(
+            'Importing CSV…',
+            () => BackupService.importCsv(finance, replace: replace),
+          );
+          if (added == null) return; // picker cancelled
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                replace
+                    ? 'Replaced transactions with $added rows from CSV.'
+                    : 'Imported $added new transactions from CSV.',
+              ),
+            ),
+          );
+        case 'import_drive':
+          final driveService = context.read<DriveBackupService>();
+          // Interactive sign-in only when the silent path has no account —
+          // and before the busy dialog, so the account chooser isn't
+          // fighting a barrier.
+          var account = await driveService.currentUser;
+          if (!mounted) return;
+          account ??= await driveService.signIn();
+          if (account == null) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('Google sign-in was cancelled or failed.'),
+              ),
+            );
+            return;
+          }
+          final replaceFromDrive = await _askImportMode();
+          if (replaceFromDrive == null || !mounted) return;
+          final settingsProvider = context.read<SettingsProvider>();
+          final restored = await _withBusy('Restoring cloud backup…', () async {
+            final backup = await driveService.downloadLatest();
+            final added = await finance.importData(
+              backup.data,
+              replace: replaceFromDrive,
+            );
+            // Same rule as the file import: the preference block only
+            // applies on replace — merge keeps the device's own settings.
+            final block = backup.data['settings'];
+            if (replaceFromDrive && block is Map<String, dynamic>) {
+              await settingsProvider.applyBackupMap(block);
+            }
+            return (backup: backup, added: added);
+          });
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                replaceFromDrive
+                    ? 'Restored ${restored.added} transactions from the '
+                          'cloud backup '
+                          '(${DriveBackupService.formatLastBackup(restored.backup.createdAt)}).'
+                    : 'Imported ${restored.added} new transactions from the '
+                          'cloud backup.',
+              ),
+            ),
+          );
+      }
+    } on FormatException catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Import failed: ${e.message}')),
+      );
+    } catch (_) {
+      // Any import action, not just JSON — a failed CSV import used to report
+      // that an *export* had failed.
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            action.startsWith('import')
+                ? 'Import failed: could not read that file.'
+                : 'Export failed.',
+          ),
+        ),
+      );
+    }
+  }
+
+  /// null = cancelled; otherwise whether rules & config are wiped too.
+  Future<bool?> _confirmDeleteAll() async {
+    // Confirmed + pending, without filtering or sorting either list.
+    final count = context.read<FinanceProvider>().transactionCount;
+    var includeConfig = false;
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          scrollable: true,
+          icon: Icon(
+            Icons.warning_amber_rounded,
+            color: Theme.of(ctx).colorScheme.error,
+          ),
+          title: const Text('Delete all data?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'This permanently deletes $count transaction${count == 1 ? '' : 's'} '
+                'and all accounts. '
+                'This cannot be undone — consider exporting a JSON backup first.',
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text(
+                  'Also delete rules, categories, groups '
+                  '& budgets',
+                ),
+                subtitle: const Text('Resets them to the built-in defaults'),
+                value: includeConfig,
+                onChanged: (v) => setState(() => includeConfig = v ?? false),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error,
+              ),
+              onPressed: () => Navigator.pop(ctx, includeConfig),
+              child: const Text('Delete everything'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// true = replace everything, false = merge, null = cancelled.
+  /// States the blast radius in numbers — the sibling delete-all dialog
+  /// counts what it destroys, and Replace destroys exactly as much.
+  Future<bool?> _askImportMode() {
+    final finance = context.read<FinanceProvider>();
+    final txCount = finance.transactions.length;
+    final acctCount = finance.accounts.length;
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        // Two paragraphs + three actions overflow a landscape viewport.
+        scrollable: true,
+        title: const Text('Import backup'),
+        content: Text(
+          'Merge keeps your current data and adds entries from the backup '
+          'that are not already present.\n\n'
+          'Replace deletes your current $txCount transaction'
+          '${txCount == 1 ? '' : 's'} and $acctCount account'
+          '${acctCount == 1 ? '' : 's'} (including manually created ones), '
+          'then restores only the backup.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Replace'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Merge'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return FrostedPanel(
+      radius: BorderRadius.circular(20),
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.file_upload_outlined),
+            title: const Text('Export…'),
+            subtitle: Text(
+              'Backup (JSON), transactions (CSV) or a PDF report',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _pickAndRun(
+              title: 'Export',
+              items: const [
+                PickerItem(
+                  value: 'export_json',
+                  label: 'Backup (JSON)',
+                  leading: Icon(Icons.data_object, size: 20),
+                ),
+                PickerItem(
+                  value: 'export_csv',
+                  label: 'Transactions (CSV)',
+                  leading: Icon(Icons.table_chart_outlined, size: 20),
+                ),
+                PickerItem(
+                  value: 'export_pdf',
+                  label: 'Report (PDF)',
+                  leading: Icon(Icons.picture_as_pdf_outlined, size: 20),
+                ),
+              ],
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.file_download_outlined),
+            title: const Text('Import…'),
+            subtitle: Text(
+              'From a backup file, a CSV, or Google Drive',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _pickAndRun(
+              title: 'Import',
+              items: const [
+                PickerItem(
+                  value: 'import_json',
+                  label: 'Backup (JSON)',
+                  leading: Icon(Icons.data_object, size: 20),
+                ),
+                PickerItem(
+                  value: 'import_csv',
+                  label: 'Transactions (CSV)',
+                  leading: Icon(Icons.table_chart_outlined, size: 20),
+                ),
+                PickerItem(
+                  value: 'import_drive',
+                  label: 'From Google Drive',
+                  leading: Icon(Icons.cloud_download_outlined, size: 20),
+                ),
+              ],
+            ),
+          ),
+          ListTile(
+            leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
+            title: Text(
+              'Delete all data',
+              style: TextStyle(color: scheme.error),
+            ),
+            onTap: () => _handleBackupAction('delete_all'),
+          ),
+        ],
       ),
     );
   }
