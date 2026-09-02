@@ -9,6 +9,7 @@ import '../services/recurring_detector.dart';
 import '../utils/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
+import '../widgets/animated_fold.dart';
 import '../widgets/balance_breakdown.dart';
 import '../widgets/budget_detail_sheet.dart';
 import '../widgets/spending_heatmap.dart';
@@ -654,7 +655,7 @@ class _UpcomingCard extends StatelessWidget {
     }
     if (entries.isEmpty) return const SizedBox.shrink();
     entries.sort((a, b) => a.due.compareTo(b.due));
-    final collapsed = settings.upcomingCollapsed;
+    final collapsed = settings.isSectionCollapsed('upcoming');
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -664,7 +665,7 @@ class _UpcomingCard extends StatelessWidget {
         InkWell(
           borderRadius: BorderRadius.circular(AppRadius.control),
           onTap: () =>
-              context.read<SettingsProvider>().setUpcomingCollapsed(!collapsed),
+              context.read<SettingsProvider>().toggleSection('upcoming'),
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Row(
@@ -700,16 +701,11 @@ class _UpcomingCard extends StatelessWidget {
             ),
           ),
         ),
-        // Fold with a combined height + fade animation; the zero-height
-        // second child keeps full width so only the height moves.
-        AnimatedCrossFade(
-          duration: _foldDuration,
-          sizeCurve: Curves.easeOutCubic,
-          crossFadeState: collapsed
-              ? CrossFadeState.showSecond
-              : CrossFadeState.showFirst,
-          secondChild: const SizedBox(width: double.infinity),
-          firstChild: Column(
+        // Pure height reveal, no fade: cross-fading made the amounts appear
+        // half-transparent while the card expanded.
+        AnimatedFold(
+          collapsed: collapsed,
+          child: Column(
             children: [
               const SizedBox(height: 8),
               Card(

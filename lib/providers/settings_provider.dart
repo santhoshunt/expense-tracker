@@ -31,7 +31,11 @@ class SettingsProvider extends ChangeNotifier {
   static const _kAlertOver = 'budget_alert_over_v1';
   static const _kUpcomingReminders = 'upcoming_reminders_v1';
   static const _kUpcomingHidden = 'upcoming_hidden_v1';
-  static const _kUpcomingCollapsed = 'upcoming_collapsed_v1';
+  static const _kCollapsedSections = 'collapsed_sections_v1';
+
+  /// Pre-1.1.1 key: a single bool for the dashboard Upcoming card, folded
+  /// into [_kCollapsedSections] on load.
+  static const _kLegacyUpcomingCollapsed = 'upcoming_collapsed_v1';
   static const _kAppLock = 'app_lock_enabled_v1';
 
   ThemeMode _mode = ThemeMode.dark; // the app's native look
@@ -44,7 +48,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _alertOver = true;
   bool _upcomingReminders = true;
   Set<String> _upcomingHidden = {};
-  bool _upcomingCollapsed = false;
+  Set<String> _collapsedSections = {};
   bool _appLock = false;
   bool _loaded = false;
 
@@ -65,9 +69,10 @@ class SettingsProvider extends ChangeNotifier {
   /// Recurring-detection keys the user hid from the Upcoming card.
   Set<String> get hiddenUpcoming => Set.unmodifiable(_upcomingHidden);
 
-  /// Dashboard Upcoming card folded to its header. Per-device UI state —
-  /// deliberately not in the backup block.
-  bool get upcomingCollapsed => _upcomingCollapsed;
+  /// Collapsible sections folded to their headers ('upcoming',
+  /// 'pending_review', 'spam_review'). Per-device UI state — deliberately
+  /// not in the backup block.
+  bool isSectionCollapsed(String id) => _collapsedSections.contains(id);
 
   /// Biometric/device-credential gate on the whole app.
   bool get appLock => _appLock;
@@ -119,10 +124,18 @@ class SettingsProvider extends ChangeNotifier {
       () => (prefs.getStringList(_kUpcomingHidden) ?? const []).toSet(),
       <String>{},
     );
-    _upcomingCollapsed = tryRead(
-      () => prefs.getBool(_kUpcomingCollapsed) ?? false,
-      false,
+    _collapsedSections = tryRead(
+      () => (prefs.getStringList(_kCollapsedSections) ?? const []).toSet(),
+      <String>{},
     );
+    // One-shot legacy fold-in; best-effort like every other write here.
+    if (prefs.getBool(_kLegacyUpcomingCollapsed) == true) {
+      _collapsedSections.add('upcoming');
+      await _persistPref(_kCollapsedSections, (p) async {
+        await p.setStringList(_kCollapsedSections, _collapsedSections.toList());
+        await p.remove(_kLegacyUpcomingCollapsed);
+      });
+    }
     _appLock = tryRead(() => prefs.getBool(_kAppLock) ?? false, false);
     _loaded = true;
     notifyListeners();
@@ -228,13 +241,12 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
-  Future<void> setUpcomingCollapsed(bool collapsed) async {
-    if (collapsed == _upcomingCollapsed) return;
-    _upcomingCollapsed = collapsed;
+  Future<void> toggleSection(String id) async {
+    if (!_collapsedSections.add(id)) _collapsedSections.remove(id);
     notifyListeners();
     await _persistPref(
-      _kUpcomingCollapsed,
-      (p) => p.setBool(_kUpcomingCollapsed, collapsed),
+      _kCollapsedSections,
+      (p) => p.setStringList(_kCollapsedSections, _collapsedSections.toList()),
     );
   }
 

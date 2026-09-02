@@ -58,6 +58,19 @@ class NotificationService {
   /// was then suppressed for the rest of the month.
   Future<bool> get areEnabled async {
     if (!_supported) return false;
+    // Everything below talks to the plugin. Under widget tests the platform
+    // interface is never registered and throws a LateInitializationError
+    // (an Error, so plain `on Exception` would miss it) — treat any failure
+    // as "notifications unavailable" rather than crashing the caller.
+    try {
+      return await _areEnabled();
+    } catch (e) {
+      debugPrint('Notification availability check failed: $e');
+      return false;
+    }
+  }
+
+  Future<bool> _areEnabled() async {
     await init();
     if (defaultTargetPlatform == TargetPlatform.android) {
       final android = _plugin
@@ -82,6 +95,15 @@ class NotificationService {
   /// than once; returns true when notifications may be shown.
   Future<bool> requestPermission() async {
     if (!_supported) return false;
+    try {
+      return await _requestPermission();
+    } catch (e) {
+      debugPrint('Notification permission request failed: $e');
+      return false;
+    }
+  }
+
+  Future<bool> _requestPermission() async {
     await init();
     if (defaultTargetPlatform == TargetPlatform.android) {
       final android = _plugin

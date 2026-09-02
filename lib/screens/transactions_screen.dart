@@ -9,7 +9,9 @@ import '../models/account.dart';
 import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
+import '../widgets/animated_fold.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../utils/contrast.dart';
@@ -524,6 +526,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             onCategory: () => _bulkCategory(filtered),
             onAccount: _bulkAccount,
             onDateTime: _bulkDateTime,
+            onDelete: _bulkDelete,
             onClose: () => setState(_selected.clear),
           ),
         Expanded(
@@ -585,7 +588,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         itemBuilder: (_, i) {
                           final (month, tx) = _rows[i];
                           return month != null
-                              ? _MonthHeader(month: month, txs: _groups[month]!)
+                              ? _MonthHeader(
+                                  month: month,
+                                  txs: _groups[month]!,
+                                  onSelectMonth: () => _selectMonth(month),
+                                )
                               : TransactionTile(
                                   tx: tx!,
                                   selectionMode: _selecting,
@@ -857,6 +864,59 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       debugPrint('CSV export failed: $e');
       messenger.showSnackBar(const SnackBar(content: Text('Export failed.')));
     }
+  }
+
+  Future<void> _bulkDelete() async {
+    final finance = context.read<FinanceProvider>();
+    final ids = Set<String>.of(_selected);
+    if (ids.isEmpty) return;
+    final count = ids.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete $count transaction${count == 1 ? '' : 's'}?'),
+        content: const Text(
+          'They are removed from the ledger. Undo restores them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+              foregroundColor: Theme.of(ctx).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final removed = await finance.deleteTransactions(ids);
+    if (!mounted || removed.isEmpty) return;
+    setState(_selected.clear);
+    showUndoSnackBar(
+      context,
+      'Deleted ${removed.length} transaction${removed.length == 1 ? '' : 's'}',
+      () => finance.restoreTransactions(removed),
+    );
+  }
+
+  /// Month-header select toggle: selects every VISIBLE row of that month,
+  /// or clears them when they are all already selected.
+  void _selectMonth(DateTime month) {
+    final ids = [for (final t in _groups[month] ?? const <Tx>[]) t.id];
+    if (ids.isEmpty) return;
+    setState(() {
+      if (ids.every(_selected.contains)) {
+        _selected.removeAll(ids);
+      } else {
+        _selected.addAll(ids);
+      }
+    });
   }
 
   Future<void> _openFilterSheet() async {
@@ -1212,6 +1272,7 @@ class _SelectionBar extends StatelessWidget {
   final VoidCallback onCategory;
   final VoidCallback onAccount;
   final VoidCallback onDateTime;
+  final VoidCallback onDelete;
   final VoidCallback onClose;
 
   const _SelectionBar({
@@ -1220,6 +1281,7 @@ class _SelectionBar extends StatelessWidget {
     required this.onCategory,
     required this.onAccount,
     required this.onDateTime,
+    required this.onDelete,
     required this.onClose,
   });
 
@@ -1271,6 +1333,12 @@ class _SelectionBar extends StatelessWidget {
                 visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.schedule, size: 20),
                 onPressed: onDateTime,
+              ),
+              IconButton(
+                tooltip: 'Delete',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.delete_outline, size: 20, color: scheme.error),
+                onPressed: onDelete,
               ),
             ],
           ),
@@ -1409,7 +1477,14 @@ class _MonthHeader extends StatelessWidget {
   final DateTime month;
   final List<Tx> txs;
 
-  const _MonthHeader({required this.month, required this.txs});
+  /// Selects (or clears) every visible row of this month.
+  final VoidCallback? onSelectMonth;
+
+  const _MonthHeader({
+    required this.month,
+    required this.txs,
+    this.onSelectMonth,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1491,6 +1566,17 @@ class _MonthHeader extends StatelessWidget {
                   ],
                 ),
               ),
+            ),
+          if (onSelectMonth != null)
+            IconButton(
+              tooltip: 'Select month',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(
+                Icons.checklist,
+                size: 18,
+                color: scheme.onSurfaceVariant,
+              ),
+              onPressed: onSelectMonth,
             ),
         ],
       ),
@@ -1614,73 +1700,157 @@ class _PendingReviewCard extends StatelessWidget {
   final List<Tx> pending;
   const _PendingReviewCard({required this.pending});
 
+  // Bulk and effectively irreversible (rows join the ledger with no batch
+  // inverse) — warrants a dialog instead of an Undo snackbar.
+  Future<void> _confirmAll(BuildContext context) async {
+    final finance = context.read<FinanceProvider>();
+    final count = pending.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Confirm all $count transaction${count == 1 ? '' : 's'}?'),
+        content: const Text(
+          'They join the ledger as reviewed entries. '
+          'Suspected spam stays in its own queue.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Confirm all'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) await finance.confirmAllPending();
+  }
+
+  Future<void> _rejectAll(BuildContext context) async {
+    final finance = context.read<FinanceProvider>();
+    final count = pending.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Reject all $count import${count == 1 ? '' : 's'}?'),
+        content: const Text(
+          'They leave the review queue without joining the ledger. '
+          'Suspected spam stays in its own queue. Undo restores them.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+              foregroundColor: Theme.of(ctx).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reject all'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    final removed = await finance.discardAllPending();
+    if (removed.isEmpty || !context.mounted) return;
+    showUndoSnackBar(
+      context,
+      'Discarded ${removed.length} import${removed.length == 1 ? '' : 's'}',
+      () => finance.restoreTransactions(removed),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final collapsed = context.watch<SettingsProvider>().isSectionCollapsed(
+      'pending_review',
+    );
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       color: scheme.secondaryContainer.withValues(alpha: 0.4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 0),
-            child: Row(
-              children: [
-                Icon(Icons.sms, size: 18, color: scheme.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Imported from SMS · ${pending.length} to review',
-                    style: Theme.of(context).textTheme.titleSmall,
+          InkWell(
+            onTap: () => context.read<SettingsProvider>().toggleSection(
+              'pending_review',
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: Row(
+                children: [
+                  Icon(Icons.sms, size: 18, color: scheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Imported from SMS · ${pending.length} to review',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
                   ),
-                ),
-                TextButton(
-                  // Bulk and effectively irreversible (rows join the ledger
-                  // with no batch inverse) — the one review action that
-                  // warrants a dialog instead of an Undo snackbar.
-                  onPressed: () async {
-                    final finance = context.read<FinanceProvider>();
-                    final count = pending.length;
-                    final ok = await showDialog<bool>(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: Text(
-                          'Confirm all $count transaction'
-                          '${count == 1 ? '' : 's'}?',
-                        ),
-                        content: const Text(
-                          'They join the ledger as reviewed entries. '
-                          'Suspected spam stays in its own queue.',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx, false),
-                            child: const Text('Cancel'),
-                          ),
-                          FilledButton(
-                            onPressed: () => Navigator.pop(ctx, true),
-                            child: const Text('Confirm all'),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (ok == true) await finance.confirmAllPending();
-                  },
-                  child: const Text('Confirm all'),
-                ),
-              ],
+                  AnimatedRotation(
+                    turns: collapsed ? 0.5 : 0,
+                    duration: AnimatedFold.duration,
+                    curve: Curves.easeOutCubic,
+                    child: Icon(
+                      Icons.expand_less,
+                      size: 20,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 240),
-            child: ListView.builder(
-              shrinkWrap: true,
-              // Explicit: otherwise the list absorbs the extend-body
-              // safe-area insets as phantom top/bottom padding.
-              padding: EdgeInsets.zero,
-              itemCount: pending.length,
-              itemBuilder: (context, i) => _PendingRow(tx: pending[i]),
+          AnimatedFold(
+            collapsed: collapsed,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Bulk actions live inside the fold: a collapsed card can't
+                // fire them, and the wrapped title above keeps its room.
+                // Compact everywhere: two review cards + toolbar + list must
+                // fit short viewports without overflowing the tab Column.
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          foregroundColor: scheme.error,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: () => _rejectAll(context),
+                        child: const Text('Reject all'),
+                      ),
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: () => _confirmAll(context),
+                        child: const Text('Confirm all'),
+                      ),
+                    ],
+                  ),
+                ),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 200),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    // Explicit: otherwise the list absorbs the extend-body
+                    // safe-area insets as phantom top/bottom padding.
+                    padding: EdgeInsets.zero,
+                    itemCount: pending.length,
+                    itemBuilder: (context, i) => _PendingRow(tx: pending[i]),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -1697,38 +1867,58 @@ class _SuspectedSpamCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final collapsed = context.watch<SettingsProvider>().isSectionCollapsed(
+      'spam_review',
+    );
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       color: scheme.errorContainer.withValues(alpha: 0.35),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.warning_amber_rounded,
-                  size: 18,
-                  color: scheme.error,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Suspected spam · ${suspects.length} — review one by one',
-                    style: Theme.of(context).textTheme.titleSmall,
+          InkWell(
+            onTap: () =>
+                context.read<SettingsProvider>().toggleSection('spam_review'),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.warning_amber_rounded,
+                    size: 18,
+                    color: scheme.error,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Suspected spam · ${suspects.length} — review one by one',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                  ),
+                  AnimatedRotation(
+                    turns: collapsed ? 0.5 : 0,
+                    duration: AnimatedFold.duration,
+                    curve: Curves.easeOutCubic,
+                    child: Icon(
+                      Icons.expand_less,
+                      size: 20,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 200),
-            child: ListView.builder(
-              shrinkWrap: true,
-              padding: EdgeInsets.zero,
-              itemCount: suspects.length,
-              itemBuilder: (context, i) => _PendingRow(tx: suspects[i]),
+          AnimatedFold(
+            collapsed: collapsed,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 160),
+              child: ListView.builder(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: suspects.length,
+                itemBuilder: (context, i) => _PendingRow(tx: suspects[i]),
+              ),
             ),
           ),
         ],

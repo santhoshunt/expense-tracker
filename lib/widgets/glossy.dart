@@ -204,7 +204,12 @@ class FrostedPanel extends StatelessWidget {
             : null,
       ),
       clipBehavior: Clip.antiAlias,
-      child: child,
+      // Transparent Material between the colored box and any ListTile/InkWell
+      // child: they paint splashes on the NEAREST Material, and painting on
+      // one *behind* the colored decoration is both invisible and a debug
+      // assertion ("ListTile background color or ink splashes may be
+      // invisible") the widget tests trip.
+      child: Material(type: MaterialType.transparency, child: child),
     );
   }
 }
