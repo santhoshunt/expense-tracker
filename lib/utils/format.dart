@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart' show DateTimeRange;
 import 'package:intl/intl.dart';
 
 final NumberFormat _currency = NumberFormat.currency(
@@ -47,3 +48,20 @@ String fmtDateMaybeTime(DateTime d) =>
 String fmtDateCompact(DateTime d) => (d.hour == 0 && d.minute == 0)
     ? _dayMonth.format(d)
     : '${_dayMonth.format(d)}, ${_time.format(d)}';
+
+/// Inclusive day range, collapsing whatever the two ends share:
+/// "3 – 9 Aug 2026", "12 Jun – 3 Aug 2026", "20 Dec 2025 – 4 Jan 2026".
+String fmtDateRange(DateTimeRange r) {
+  final a = r.start;
+  final b = r.end;
+  if (a.year == b.year && a.month == b.month && a.day == b.day) {
+    return fmtDate(a);
+  }
+  if (a.year == b.year && a.month == b.month) {
+    return '${a.day} – ${fmtDate(b)}';
+  }
+  if (a.year == b.year) {
+    return '${_dayMonth.format(a)} – ${fmtDate(b)}';
+  }
+  return '${fmtDate(a)} – ${fmtDate(b)}';
+}

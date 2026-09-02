@@ -55,6 +55,14 @@ class RecurringHit {
 /// user's note steps in — so a consistent note ("EB bill") turns otherwise
 /// anonymous imported payments into a detectable pattern.
 String? recurringKeyOf(Tx t) {
+  final identity = merchantIdentityOf(t);
+  return identity == null ? null : '${t.type.name}|$identity';
+}
+
+/// The direction-less half of [recurringKeyOf]: the normalized merchant (or
+/// note) text, or null when the row carries none. Merchant aliases key on
+/// this so one rename covers a payee's debits and refunds alike.
+String? merchantIdentityOf(Tx t) {
   if (t.suspectedSpam || isTransferCategory(t.categoryId)) return null;
   // Never key on t.sender — it is the bank's DLT channel, so every debit
   // from the same bank would collapse into one "pattern".
@@ -72,8 +80,12 @@ String? recurringKeyOf(Tx t) {
   // reference ("to 9215676766…"), never a payee — surfacing it as a
   // "merchant" is noise.
   if (!identity.contains(RegExp('[a-z]'))) return null;
-  return '${t.type.name}|$identity';
+  return identity;
 }
+
+/// Lookup from a merchant identity ([merchantIdentityOf]) to the user's
+/// chosen display name; null when the payee has no alias.
+typedef MerchantAliasLookup = String? Function(String identity);
 
 /// Scans [confirmed] (any order) for monthly patterns as of [now].
 ///
@@ -85,6 +97,7 @@ String? recurringKeyOf(Tx t) {
 List<RecurringHit> detectRecurring(
   List<Tx> confirmed, {
   required DateTime now,
+  MerchantAliasLookup? alias,
 }) {
   final today = DateTime(now.year, now.month, now.day);
   final horizon = DateTime(now.year - 1, now.month, now.day);
@@ -132,7 +145,7 @@ List<RecurringHit> detectRecurring(
     hits.add(
       RecurringHit(
         key: key,
-        label: merchantDisplayLabel(latest),
+        label: merchantDisplayLabel(latest, alias: alias),
         categoryId: latest.categoryId,
         type: latest.type,
         expectedAmount: _median(recentAmounts),
@@ -157,8 +170,14 @@ double _median(List<double> values) {
 
 /// Human label from a row: the extracted merchant for SMS rows (title-cased
 /// — alert bodies shout in ALL CAPS), the note for manual ones. Shared by
-/// recurring detection and the merchant spend breakdown.
-String merchantDisplayLabel(Tx t) {
+/// recurring detection and the merchant spend breakdown. A user [alias] for
+/// the row's identity wins over the derived text.
+String merchantDisplayLabel(Tx t, {MerchantAliasLookup? alias}) {
+  if (alias != null) {
+    final identity = merchantIdentityOf(t);
+    final named = identity == null ? null : alias(identity);
+    if (named != null && named.isNotEmpty) return named;
+  }
   var raw = t.source == TxSource.sms
       ? SmsTxnParser.merchantOf(t.smsText)
       : t.note.trim();

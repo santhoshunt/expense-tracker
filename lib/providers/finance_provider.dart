@@ -12,6 +12,7 @@ import '../models/import_rule.dart';
 import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../services/budget.dart';
+import '../services/recurring_detector.dart';
 import '../services/sms_parser.dart';
 import '../utils/figma_palette.dart';
 
@@ -140,6 +141,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _groupsKey = 'category_groups_v1';
   static const _groupsSeededKey = 'category_groups_seeded_v1';
   static const _budgetsKey = 'spend_budgets_v1';
+  static const _merchantAliasesKey = 'merchant_aliases_v1';
 
   final List<Tx> _transactions = [];
   final List<ClassifierRule> _rules = [];
@@ -152,6 +154,9 @@ class FinanceProvider extends ChangeNotifier {
   /// ones.
   final Map<String, String> _groupAssignments = {};
   final List<SpendBudget> _budgets = [];
+
+  /// merchant identity ([merchantIdentityOf]) → user-chosen display name.
+  final Map<String, String> _merchantAliases = {};
   bool _loaded = false;
 
   bool get loaded => _loaded;
@@ -473,6 +478,46 @@ class FinanceProvider extends ChangeNotifier {
   List<MapEntry<TxCategory, double>> expenseByCategory(DateTime month) =>
       _monthTotals(month).byCategory;
 
+  // --- Year aggregates (dashboard Year view) --------------------------------
+  //
+  // Built from the memoised month totals rather than a separate pass: the
+  // twelve lookups are cached individually, so flipping between the month
+  // and year views costs nothing after the first paint.
+
+  static Iterable<DateTime> _monthsOf(int year) =>
+      Iterable.generate(12, (i) => DateTime(year, i + 1));
+
+  double incomeInYear(int year) =>
+      _monthsOf(year).fold(0.0, (s, m) => s + incomeInMonth(m));
+
+  double expenseInYear(int year) =>
+      _monthsOf(year).fold(0.0, (s, m) => s + expenseInMonth(m));
+
+  double savingsOutflowInYear(int year) =>
+      _monthsOf(year).fold(0.0, (s, m) => s + savingsOutflowInMonth(m));
+
+  /// Expense totals per category across [year], largest first.
+  List<MapEntry<TxCategory, double>> expenseByCategoryInYear(int year) {
+    final totals = <String, (TxCategory, double)>{};
+    for (final m in _monthsOf(year)) {
+      for (final e in _monthTotals(m).byCategory) {
+        final prev = totals[e.key.id];
+        totals[e.key.id] = (e.key, (prev?.$2 ?? 0) + e.value);
+      }
+    }
+    final out = [for (final (cat, total) in totals.values) MapEntry(cat, total)]
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return out;
+  }
+
+  /// Income and expense per calendar month of [year], January first.
+  List<({DateTime month, double income, double expense})> monthlySeries(
+    int year,
+  ) => [
+    for (final m in _monthsOf(year))
+      (month: m, income: incomeInMonth(m), expense: expenseInMonth(m)),
+  ];
+
   /// Money that arrived via transfer categories during [month].
   double transferInInMonth(DateTime month) => _monthTotals(month).transferIn;
 
@@ -706,6 +751,14 @@ class FinanceProvider extends ChangeNotifier {
           ..clear()
           ..addAll(decoded);
       }, _budgets.clear);
+    }
+    final aliasesRaw = prefs.getString(_merchantAliasesKey);
+    if (aliasesRaw != null) {
+      await _guardedLoad('merchantAliases', () async {
+        _merchantAliases
+          ..clear()
+          ..addAll(_decodeAliases(jsonDecode(aliasesRaw)));
+      }, _merchantAliases.clear);
     }
     // Index must be live before backfill so _ensureAccount sees existing keys.
     _rebuildKeyIndex();
@@ -985,6 +1038,7 @@ class FinanceProvider extends ChangeNotifier {
     overrides: true,
     groups: true,
     budgets: true,
+    aliases: true,
   );
 
   /// Writes only the collections the caller says it changed.
@@ -1009,6 +1063,7 @@ class FinanceProvider extends ChangeNotifier {
     bool overrides = false,
     bool groups = false,
     bool budgets = false,
+    bool aliases = false,
   }) async {
     try {
       await _persistOrThrow(
@@ -1020,6 +1075,7 @@ class FinanceProvider extends ChangeNotifier {
         overrides: overrides,
         groups: groups,
         budgets: budgets,
+        aliases: aliases,
       );
       if (_persistFailed) {
         _persistFailed = false;
@@ -1042,6 +1098,7 @@ class FinanceProvider extends ChangeNotifier {
     bool overrides = false,
     bool groups = false,
     bool budgets = false,
+    bool aliases = false,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     if (tx) {
@@ -1105,6 +1162,23 @@ class FinanceProvider extends ChangeNotifier {
         jsonEncode(_budgets.map((b) => b.toJson()).toList()),
       );
     }
+    if (aliases) {
+      await prefs.setString(_merchantAliasesKey, jsonEncode(_merchantAliases));
+    }
+  }
+
+  /// Tolerant decode for the alias map: non-string entries and blank names
+  /// are dropped rather than failing the whole collection.
+  static Map<String, String> _decodeAliases(Object? raw) {
+    if (raw is! Map) return const {};
+    return {
+      for (final e in raw.entries)
+        if (e.key is String &&
+            (e.key as String).isNotEmpty &&
+            e.value is String &&
+            (e.value as String).trim().isNotEmpty)
+          e.key as String: (e.value as String).trim(),
+    };
   }
 
   // Monotonic counter: the timestamp alone collides when two ids are minted
@@ -1690,6 +1764,33 @@ class FinanceProvider extends ChangeNotifier {
     _budgets.removeWhere((b) => b.id == id);
     notifyListeners();
     await _persist(budgets: true);
+  }
+
+  // --- Merchant aliases -----------------------------------------------------
+
+  /// identity → display name, see [merchantIdentityOf].
+  Map<String, String> get merchantAliases => Map.unmodifiable(_merchantAliases);
+
+  /// The user's name for a merchant identity, or null. Passed as the `alias`
+  /// lookup to `topMerchants`/`detectRecurring`/`merchantDisplayLabel`.
+  String? merchantAlias(String identity) => _merchantAliases[identity];
+
+  /// [merchantAlias] resolved from a row.
+  String? merchantAliasFor(Tx t) {
+    final identity = merchantIdentityOf(t);
+    return identity == null ? null : _merchantAliases[identity];
+  }
+
+  /// Sets (or, with a null/blank [name], removes) the alias for [identity].
+  Future<void> setMerchantAlias(String identity, String? name) async {
+    final trimmed = name?.trim() ?? '';
+    final changed = trimmed.isEmpty
+        ? _merchantAliases.remove(identity) != null
+        : _merchantAliases[identity] != trimmed;
+    if (!changed) return;
+    if (trimmed.isNotEmpty) _merchantAliases[identity] = trimmed;
+    notifyListeners();
+    await _persist(aliases: true);
   }
 
   /// Removes [id] from the group-assignment map and every budget's category
@@ -2735,6 +2836,7 @@ class FinanceProvider extends ChangeNotifier {
       _groups.clear();
       _groupAssignments.clear();
       _budgets.clear();
+      _merchantAliases.clear();
       setCustomCategories(const []);
       setBuiltinOverrides(const {});
       // Reseed immediately (flags stay set) so the app keeps working
@@ -2753,6 +2855,7 @@ class FinanceProvider extends ChangeNotifier {
       overrides: includeConfig,
       groups: includeConfig,
       budgets: includeConfig,
+      aliases: includeConfig,
     );
   }
 
@@ -2769,7 +2872,8 @@ class FinanceProvider extends ChangeNotifier {
     // v11: callers may add a 'settings' block (SettingsProvider.toBackupMap
     // — monthly cap, alert flags, auto-import cadence, theme); applied on
     // replace-mode restores only.
-    'version': 11,
+    // v12: `merchantAliases` (identity → display name).
+    'version': 12,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
@@ -2794,6 +2898,7 @@ class FinanceProvider extends ChangeNotifier {
     // looked populated and the loss was invisible).
     'rules': _rules.map((r) => r.toJson()).toList(),
     'importRules': _importRules.map((r) => r.toJson()).toList(),
+    'merchantAliases': Map<String, String>.from(_merchantAliases),
   };
 
   /// Card/bank kind for every SMS-derived account key in the ledger.
@@ -2901,6 +3006,11 @@ class FinanceProvider extends ChangeNotifier {
               )
               .toList()
         : null;
+    // v12 addition; absent = leave the device's aliases alone.
+    final rawAliases = data['merchantAliases'];
+    final importedAliases = rawAliases is Map
+        ? _decodeAliases(rawAliases)
+        : null;
     // Built-in overrides are a v7 addition. Ids that aren't built-ins are
     // dropped (a hand-edited file must not invent categories); since
     // built-ins became fully editable, type/transfer-ness is TRUSTED from
@@ -3004,6 +3114,11 @@ class FinanceProvider extends ChangeNotifier {
           ..clear()
           ..addAll(importedBudgets);
       }
+      if (importedAliases != null) {
+        _merchantAliases
+          ..clear()
+          ..addAll(importedAliases);
+      }
       if (importedRules != null) {
         _rules
           ..clear()
@@ -3029,6 +3144,7 @@ class FinanceProvider extends ChangeNotifier {
         overrides: importedOverrides != null,
         groups: importedGroups != null || importedAssignments != null,
         budgets: importedBudgets != null,
+        aliases: importedAliases != null,
         rules: importedRules != null,
         importRules: importedImportRules != null,
       );
@@ -3077,6 +3193,12 @@ class FinanceProvider extends ChangeNotifier {
     final newBudgets = [
       ...?importedBudgets?.where((b) => !budgetIds.contains(b.id)),
     ];
+    // Aliases merge per identity, existing wins.
+    final newAliases = <String, String>{
+      if (importedAliases != null)
+        for (final e in importedAliases.entries)
+          if (!_merchantAliases.containsKey(e.key)) e.key: e.value,
+    };
     // Rules merge by id, existing wins. Order is match priority: imported
     // user rules slot in at the END of the device's user segment (device
     // rules keep top priority) while imported built-in-id rules append at
@@ -3120,6 +3242,7 @@ class FinanceProvider extends ChangeNotifier {
     });
     if (newGroups.isNotEmpty || assignmentsChanged) sanitizeAssignments();
     _budgets.addAll(newBudgets);
+    _merchantAliases.addAll(newAliases);
     if (newRules.isNotEmpty) {
       final firstBuiltin = _rules.indexWhere((r) => r.isBuiltIn);
       final userEnd = firstBuiltin == -1 ? _rules.length : firstBuiltin;
@@ -3135,6 +3258,7 @@ class FinanceProvider extends ChangeNotifier {
         newOverrides.isNotEmpty ||
         groupsChanged ||
         newBudgets.isNotEmpty ||
+        newAliases.isNotEmpty ||
         newRules.isNotEmpty ||
         newImportRules.isNotEmpty) {
       // Merged categories are registered above, so the invariant check sees
@@ -3152,6 +3276,7 @@ class FinanceProvider extends ChangeNotifier {
         overrides: newOverrides.isNotEmpty,
         groups: groupsChanged,
         budgets: newBudgets.isNotEmpty,
+        aliases: newAliases.isNotEmpty,
         rules: newRules.isNotEmpty,
         importRules: newImportRules.isNotEmpty,
       );

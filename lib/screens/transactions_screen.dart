@@ -15,9 +15,11 @@ import '../widgets/animated_fold.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../utils/contrast.dart';
+import '../utils/search_text.dart';
 import '../widgets/category_chip_label.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
+import '../widgets/month_picker_sheet.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/transaction_tile.dart';
 import '../widgets/undo_snackbar.dart';
@@ -55,6 +57,10 @@ class TxFilterRequest {
   /// rather than any structured field.
   final String? query;
 
+  /// Inclusive day range; mutually exclusive with [month] (range wins when
+  /// both are set).
+  final DateTimeRange? range;
+
   const TxFilterRequest({
     this.type,
     this.accountId,
@@ -63,6 +69,7 @@ class TxFilterRequest {
     this.budgetId,
     this.groupId,
     this.query,
+    this.range,
   });
 }
 
@@ -94,6 +101,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   double? _maxAmount;
   String? _accountId;
   DateTime? _monthFilter;
+
+  /// Inclusive day range. Exclusive with [_monthFilter]: the filter sheet
+  /// sets one and clears the other.
+  DateTimeRange? _rangeFilter;
+
+  /// Search text per row id (see [searchHaystack]); building one walks the
+  /// SMS body with the merchant regex, so it is kept across pipeline runs
+  /// and dropped only when the ledger revision changes.
+  final Map<String, String> _haystacks = {};
 
   /// Ids of transactions picked in multi-select mode; non-empty = selecting.
   final Set<String> _selected = {};
@@ -169,6 +185,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           label: 'Month · ${fmtMonth(_monthFilter!)}',
           onDeleted: () => setState(() => _monthFilter = null),
         ),
+      if (_rangeFilter != null)
+        chip(
+          avatar: const Icon(Icons.date_range, size: 16),
+          label: fmtDateRange(_rangeFilter!),
+          onDeleted: () => setState(() => _rangeFilter = null),
+        ),
       for (final b in finance.budgets)
         if (_budgetFilter.contains(b.id))
           chip(
@@ -210,7 +232,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       _minAmount != null ||
       _maxAmount != null ||
       _accountId != null ||
-      _monthFilter != null;
+      _monthFilter != null ||
+      _rangeFilter != null;
 
   @override
   void didUpdateWidget(TransactionsScreen oldWidget) {
@@ -238,7 +261,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       // mode would greet it with a selection bar nobody asked for.
       _selected.clear();
       _accountId = req?.accountId;
-      _monthFilter = req?.month;
+      _rangeFilter = req?.range;
+      _monthFilter = _rangeFilter == null ? req?.month : null;
       if (req?.categoryId != null) _categoryFilter.add(req!.categoryId!);
       if (req?.groupId != null) _groupFilter.add(req!.groupId!);
       if (req?.budgetId != null) _budgetFilter.add(req!.budgetId!);
@@ -265,10 +289,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   List<Tx> _applyFilters(List<Tx> all, FinanceProvider finance) {
-    final q = _search.trim().toLowerCase();
+    final q = normalizeSearchText(_search);
     final budgetFilterList = _budgetFilter.isEmpty
         ? const <SpendBudget>[]
         : finance.budgets.where((b) => _budgetFilter.contains(b.id)).toList();
+    // Whole days: the picker returns midnights, the rows carry times.
+    final r = _rangeFilter;
+    final rangeStart = r == null
+        ? null
+        : DateTime(r.start.year, r.start.month, r.start.day);
+    final rangeEnd = r == null
+        ? null
+        : DateTime(r.end.year, r.end.month, r.end.day + 1);
     return all.where((t) {
       if (_accountId != null &&
           finance.accountForKey(t.acctKey)?.id != _accountId) {
@@ -276,6 +308,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       }
       final m = _monthFilter;
       if (m != null && (t.date.year != m.year || t.date.month != m.month)) {
+        return false;
+      }
+      if (rangeStart != null &&
+          (t.date.isBefore(rangeStart) || !t.date.isBefore(rangeEnd!))) {
         return false;
       }
       switch (_filter) {
@@ -312,11 +348,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       }
       if (_minAmount != null && t.amount < _minAmount!) return false;
       if (_maxAmount != null && t.amount > _maxAmount!) return false;
-      if (q.isNotEmpty &&
-          !t.note.toLowerCase().contains(q) &&
-          !t.smsBody.toLowerCase().contains(q) &&
-          !t.sender.toLowerCase().contains(q)) {
-        return false;
+      if (q.isNotEmpty) {
+        final hay = _haystacks[t.id] ??= searchHaystack(
+          t,
+          accountName: finance.accountForKey(t.acctKey)?.name,
+          merchantAlias: finance.merchantAliasFor(t),
+        );
+        if (!hay.contains(q)) return false;
       }
       return true;
     }).toList();
@@ -328,7 +366,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   String _pipelineInputs() => [
     _filter.index,
     _sort.index,
-    _search.trim().toLowerCase(),
+    normalizeSearchText(_search),
     (_categoryFilter.toList()..sort()).join(','),
     (_groupFilter.toList()..sort()).join(','),
     (_budgetFilter.toList()..sort()).join(','),
@@ -336,6 +374,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _maxAmount,
     _accountId,
     _monthFilter,
+    _rangeFilter?.start,
+    _rangeFilter?.end,
   ].join('|');
 
   /// Runs filter → group-by-month → sort → flatten, caching the result.
@@ -348,6 +388,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         fingerprint == _pipelineFingerprint) {
       return;
     }
+    // Category labels, account names and aliases all ride on the revision.
+    if (!identical(_pipelineRevision, finance.revision)) _haystacks.clear();
     _pipelineRevision = finance.revision;
     _pipelineFingerprint = fingerprint;
 
@@ -495,6 +537,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ),
         if (activeAccount != null ||
             _monthFilter != null ||
+            _rangeFilter != null ||
             _categoryFilter.isNotEmpty ||
             _groupFilter.isNotEmpty ||
             _budgetFilter.isNotEmpty)
@@ -561,6 +604,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               _maxAmount = null;
                               _accountId = null;
                               _monthFilter = null;
+                              _rangeFilter = null;
                             });
                           },
                         ),
@@ -602,9 +646,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         },
                       ),
                     ),
-                    // With a month filter the list holds a single month —
-                    // nothing to jump between.
-                    if (_monthFilter == null)
+                    // With a month or range filter the list holds one
+                    // month (or a few) — nothing worth jumping between.
+                    if (_monthFilter == null && _rangeFilter == null)
                       Positioned(
                         right: 4,
                         top: 8,
@@ -924,11 +968,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final selectedGroups = Set<String>.from(_groupFilter);
     final selectedBudgets = Set<String>.from(_budgetFilter);
     var accountId = _accountId;
+    var month = _monthFilter;
+    var range = _rangeFilter;
     // Live query narrowing the chip sections — the category list alone can
     // hold dozens of chips.
     var filterQuery = '';
     final finance = context.read<FinanceProvider>();
     final accounts = finance.accounts;
+    final monthsWithData = finance.monthsWithData;
     final groups = finance.groups;
     final budgets = finance.budgets;
     final minCtrl = TextEditingController(
@@ -990,6 +1037,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           selectedGroups.clear();
                           selectedBudgets.clear();
                           accountId = null;
+                          month = null;
+                          range = null;
                         });
                       },
                       child: const Text('Clear all'),
@@ -1012,6 +1061,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           _minAmount = parseAmount(minCtrl.text);
                           _maxAmount = parseAmount(maxCtrl.text);
                           _accountId = accountId;
+                          _monthFilter = month;
+                          _rangeFilter = range;
                         });
                         Navigator.pop(ctx);
                       },
@@ -1073,6 +1124,82 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            // Not narrowed by the filter query: three fixed
+                            // choices, and the one that is active must stay
+                            // reachable.
+                            const SizedBox(height: 12),
+                            Text(
+                              'Date',
+                              style: Theme.of(ctx).textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: [
+                                ChoiceChip(
+                                  label: const Text('All time'),
+                                  selected: month == null && range == null,
+                                  onSelected: (_) => setSheetState(() {
+                                    month = null;
+                                    range = null;
+                                  }),
+                                ),
+                                ChoiceChip(
+                                  label: Text(
+                                    month == null ? 'Month…' : fmtMonth(month!),
+                                  ),
+                                  avatar: const Icon(
+                                    Icons.calendar_month,
+                                    size: 16,
+                                  ),
+                                  selected: month != null,
+                                  onSelected: (_) async {
+                                    final picked = await showMonthPickerSheet(
+                                      ctx,
+                                      title: 'Month',
+                                      months: monthsWithData,
+                                      selected: month,
+                                    );
+                                    if (picked == null) return;
+                                    setSheetState(() {
+                                      month = picked;
+                                      range = null;
+                                    });
+                                  },
+                                ),
+                                ChoiceChip(
+                                  label: Text(
+                                    range == null
+                                        ? 'Custom range…'
+                                        : fmtDateRange(range!),
+                                  ),
+                                  avatar: const Icon(
+                                    Icons.date_range,
+                                    size: 16,
+                                  ),
+                                  selected: range != null,
+                                  onSelected: (_) async {
+                                    final now = DateTime.now();
+                                    final picked = await showDateRangePicker(
+                                      context: ctx,
+                                      firstDate: DateTime(2000),
+                                      lastDate: DateTime(
+                                        now.year,
+                                        now.month,
+                                        now.day,
+                                      ),
+                                      initialDateRange: range,
+                                    );
+                                    if (picked == null) return;
+                                    setSheetState(() {
+                                      range = picked;
+                                      month = null;
+                                    });
+                                  },
+                                ),
+                              ],
+                            ),
                             if (visAccounts.isNotEmpty) ...[
                               const SizedBox(height: 12),
                               Text(
@@ -1393,7 +1520,7 @@ class _SearchAndFilterBar extends StatelessWidget {
                     controller: searchCtrl,
                     onChanged: onSearch,
                     decoration: InputDecoration(
-                      hintText: 'Search notes and senders',
+                      hintText: 'Search notes, merchants, amounts…',
                       prefixIcon: const Icon(Icons.search),
                       suffixIcon: value.text.isEmpty
                           ? null
@@ -1626,72 +1753,13 @@ class _JumpControls extends StatelessWidget {
     );
   }
 
-  /// Fixed-height frosted sheet with a scrollable month list — a long
-  /// history must not overflow past the navigation bar.
-  Future<void> _showMonthPicker(BuildContext context) {
-    return showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      useSafeArea: true,
-      // Absolute cap for tall screens; short landscape viewports get a
-      // fraction of the viewport instead of overflowing a fixed 420.
-      constraints: BoxConstraints(
-        maxHeight: switch (MediaQuery.sizeOf(context).height * 0.6) {
-          final h when h < 420 => h,
-          _ => 420,
-        },
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          child: FrostedPanel(
-            radius: BorderRadius.circular(28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 10),
-                Container(
-                  width: 36,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Theme.of(
-                      ctx,
-                    ).colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-                  child: Text(
-                    'Jump to month',
-                    style: Theme.of(ctx).textTheme.titleSmall,
-                  ),
-                ),
-                Flexible(
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.only(bottom: 8),
-                    itemCount: months.length,
-                    itemBuilder: (_, i) => ListTile(
-                      dense: true,
-                      title: Text(
-                        DateFormat('MMMM yyyy').format(months[i]),
-                        textAlign: TextAlign.center,
-                      ),
-                      onTap: () {
-                        Navigator.pop(ctx);
-                        onMonth(months[i]);
-                      },
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+  Future<void> _showMonthPicker(BuildContext context) async {
+    final picked = await showMonthPickerSheet(
+      context,
+      title: 'Jump to month',
+      months: months,
     );
+    if (picked != null) onMonth(picked);
   }
 }
 

@@ -7,19 +7,21 @@ import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 
-/// Income vs expense bars for the last six months, drawn with CustomPaint
-/// to avoid a charting dependency.
+/// Income vs expense bars per month, drawn with CustomPaint to avoid a
+/// charting dependency. Defaults to the last six months; the dashboard's
+/// Year view passes the twelve months of a year instead.
 class MonthlyBarChart extends StatelessWidget {
-  const MonthlyBarChart({super.key});
+  final List<DateTime>? months;
+
+  const MonthlyBarChart({super.key, this.months});
 
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
     final now = DateTime.now();
-    final months = List.generate(
-      6,
-      (i) => DateTime(now.year, now.month - (5 - i)),
-    );
+    final months =
+        this.months ??
+        List.generate(6, (i) => DateTime(now.year, now.month - (5 - i)));
     final data = months
         .map(
           (m) => _MonthData(

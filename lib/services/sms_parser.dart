@@ -624,24 +624,47 @@ class SmsTxnParser {
   /// stored bodies, since [Tx] deliberately has no merchant field.
   static String merchantOf(String body) => _merchant(body);
 
+  /// Account/card fragments that the keyword regex can pick up first, e.g.
+  /// "from Card XX3010 at AMAZON" → "Card XX3010".
+  static final RegExp _accountFragmentRe = RegExp(
+    r'^(a/?c|acct|account|card)\b',
+    caseSensitive: false,
+  );
+
+  /// Helpline footers: "To dispute call 18002662", "Not you? SMS BLOCK to
+  /// 98…", "For disputes call …". They follow the same to/at/from keywords
+  /// as a payee, so they surfaced as merchants ("Dispute Call 18002662").
+  static final RegExp _footerRe = RegExp(
+    r'\b(disputes?|call|sms|block|helpline|contact|enquir(?:y|ies)|customer\s*care|toll\s*free|not\s+you|unauthori[sz]ed)\b',
+    caseSensitive: false,
+  );
+
   static String _merchant(String body) {
-    final m = _merchantRe.firstMatch(body);
-    if (m == null) return '';
-    var name = m.group(1)!.trim();
-    // UPI VPA like `merchant.name@okaxis` → keep the readable part.
-    if (name.contains('@')) name = name.split('@').first;
-    name = name
-        .replaceAll(RegExp(r'[._*]+'), ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
-        .trim();
-    // Skip captures that are clearly account fragments, e.g. "a/c XX1234".
-    if (RegExp(
-      r'^(a/?c|acct|account|card)\b',
-      caseSensitive: false,
-    ).hasMatch(name)) {
-      return '';
+    // First ACCEPTABLE capture, not first capture: an account fragment or a
+    // footer earlier in the body must not hide the real payee after it.
+    // A rejected capture can swallow the next keyword ("from Card XX3010 at
+    // AMAZON" is one match), so the search resumes just past the rejected
+    // keyword rather than past the whole match.
+    for (var from = 0; ;) {
+      final it = _merchantRe.allMatches(body, from).iterator;
+      if (!it.moveNext()) return '';
+      final m = it.current;
+      from = m.start + 1;
+      var name = m.group(1)!.trim();
+      // UPI VPA like `merchant.name@okaxis` → keep the readable part.
+      if (name.contains('@')) name = name.split('@').first;
+      name = name
+          .replaceAll(RegExp(r'[._*]+'), ' ')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (name.isEmpty) continue;
+      if (_accountFragmentRe.hasMatch(name)) continue;
+      if (_footerRe.hasMatch(name)) continue;
+      // No letters = a phone number, VPA number or bank reference ("SMS
+      // BLOCK to 9840909000"), never a payee.
+      if (!RegExp('[A-Za-z]').hasMatch(name)) continue;
+      return name;
     }
-    return name;
   }
 
   static final List<DateFormat> _dateFormats = [

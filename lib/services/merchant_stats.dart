@@ -32,6 +32,7 @@ List<MerchantSpend> topMerchants(
   List<Tx> txs, {
   required DateTime month,
   int limit = 6,
+  MerchantAliasLookup? alias,
 }) {
   final start = DateTime(month.year, month.month);
   final end = DateTime(month.year, month.month + 1);
@@ -54,7 +55,7 @@ List<MerchantSpend> topMerchants(
     for (final e in totals.entries)
       MerchantSpend(
         key: e.key,
-        label: merchantDisplayLabel(newest[e.key]!),
+        label: merchantDisplayLabel(newest[e.key]!, alias: alias),
         total: e.value,
         count: counts[e.key]!,
       ),

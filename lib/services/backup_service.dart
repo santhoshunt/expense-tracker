@@ -454,11 +454,14 @@ class BackupService {
   static const PdfColor _red = PdfColor.fromInt(0xFFC62828);
   static const PdfColor _greenText = PdfColor.fromInt(0xFF1B5E20);
 
-  /// Saves a PDF statement. Returns the saved path, or null if cancelled.
-  static Future<String?> exportPdf(FinanceProvider finance) async {
-    final bytes = await buildPdf(finance);
+  /// Saves a PDF statement — the whole ledger, or one [year] of it.
+  /// Returns the saved path, or null if cancelled.
+  static Future<String?> exportPdf(FinanceProvider finance, {int? year}) async {
+    final bytes = await buildPdf(finance, year: year);
     return _save(
-      'expense_tracker_report_${_stamp()}',
+      year == null
+          ? 'expense_tracker_report_${_stamp()}'
+          : 'expense_tracker_report_${year}_${_stamp()}',
       bytes,
       'pdf',
       MimeType.pdf,
@@ -500,7 +503,10 @@ class BackupService {
 
   /// Builds the report bytes. Exposed separately so tests can render it
   /// without touching the platform save dialog.
-  static Future<Uint8List> buildPdf(FinanceProvider finance) async {
+  static Future<Uint8List> buildPdf(
+    FinanceProvider finance, {
+    int? year,
+  }) async {
     final baseFont = pw.Font.ttf(
       await rootBundle.load('assets/fonts/NotoSans-Regular.ttf'),
     );
@@ -511,7 +517,23 @@ class BackupService {
     final doc = pw.Document(
       theme: pw.ThemeData.withFont(base: baseFont, bold: boldFont),
     );
-    final txs = finance.transactions;
+    final txs = year == null
+        ? finance.transactions
+        : [
+            for (final t in finance.transactions)
+              if (t.date.year == year) t,
+          ];
+    // Summary figures follow the same population as the table: whole-ledger
+    // provider totals, or the year's own sums.
+    final sumIncome = year == null
+        ? finance.totalIncome
+        : finance.incomeInYear(year);
+    final sumExpense = year == null
+        ? finance.totalExpense
+        : finance.expenseInYear(year);
+    final sumSavings = year == null
+        ? finance.totalSavingsTransfers
+        : finance.savingsOutflowInYear(year);
 
     // Group transactions by month, newest first.
     final byMonth = <DateTime, List<Tx>>{};
@@ -535,7 +557,7 @@ class BackupService {
     }
     final catEntries = catTotals.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    final totalExpense = finance.totalExpense;
+    final totalExpense = sumExpense;
 
     String clip(String s, [int max = 160]) {
       final oneLine = s.replaceAll(RegExp(r'\s+'), ' ').trim();
@@ -575,7 +597,9 @@ class BackupService {
               crossAxisAlignment: pw.CrossAxisAlignment.end,
               children: [
                 pw.Text(
-                  'Expense Tracker — Statement',
+                  year == null
+                      ? 'Expense Tracker — Statement'
+                      : 'Expense Tracker — Report $year',
                   style: pw.TextStyle(
                     fontSize: 16,
                     fontWeight: pw.FontWeight.bold,
@@ -595,10 +619,19 @@ class BackupService {
           pw.SizedBox(height: 10),
           pw.Row(
             children: [
-              _summaryBox('TOTAL INCOME', finance.totalIncome, _greenText),
-              _summaryBox('TOTAL EXPENSES', finance.totalExpense, _red),
-              _summaryBox('TO SAVINGS', finance.totalSavingsTransfers, _green),
-              _summaryBox('AVAILABLE BALANCE', finance.balance, _green),
+              _summaryBox('TOTAL INCOME', sumIncome, _greenText),
+              _summaryBox('TOTAL EXPENSES', sumExpense, _red),
+              _summaryBox('TO SAVINGS', sumSavings, _green),
+              // Balance is a running figure; a single year has a net
+              // instead.
+              if (year == null)
+                _summaryBox('AVAILABLE BALANCE', finance.balance, _green)
+              else
+                _summaryBox(
+                  'NET FOR $year',
+                  sumIncome - sumExpense - sumSavings,
+                  _green,
+                ),
             ],
           ),
           if (catEntries.isNotEmpty) ...[
