@@ -105,13 +105,30 @@ class TransactionTile extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              // One leg of a paired transfer.
+                              if (tx.pairId != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 4),
+                                  child: Icon(
+                                    Icons.link,
+                                    size: 14,
+                                    color: scheme.onSurfaceVariant,
+                                    semanticLabel: 'paired transfer',
+                                  ),
+                                ),
+                            ],
                           ),
                           const SizedBox(height: 2),
                           // Both flexible so neither can push the other off

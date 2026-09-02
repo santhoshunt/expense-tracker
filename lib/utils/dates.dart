@@ -5,6 +5,11 @@ library;
 /// normalizes, which is exactly what the day-0 trick relies on).
 int daysInMonth(int year, int month) => DateTime(year, month + 1, 0).day;
 
+/// `yyyy-MM` — the month bucket used by reminder dedup markers and by
+/// "paid this month" bookkeeping. Sorts correctly as a string.
+String monthKey(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}';
+
 /// The next date whose day-of-month is [day], on or after [from] (compared
 /// by calendar date; the returned DateTime is at midnight).
 ///

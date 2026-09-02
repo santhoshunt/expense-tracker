@@ -11,6 +11,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
+import '../services/transfer_pairing.dart';
 import '../widgets/animated_fold.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
@@ -143,6 +144,31 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   // its output is cached and recomputed only when the data or the filters
   // actually change (see _recomputePipeline) — not on selection taps,
   // scroll-driven setStates or jump-control visibility toggles.
+  /// Transfer-pair suggestions walk every row, so they are memoised on the
+  /// ledger revision plus the dismissal list (dashboard `_recurring` idiom).
+  Object? _pairRev;
+  int _pairDismissedCount = -1;
+  List<PairSuggestion> _pairs = const [];
+
+  List<PairSuggestion> _pairSuggestions(
+    FinanceProvider finance,
+    List<Tx> pending,
+    List<Tx> confirmed,
+  ) {
+    final dismissed = context.read<SettingsProvider>().dismissedPairSuggestions;
+    if (!identical(_pairRev, finance.revision) ||
+        _pairDismissedCount != dismissed.length) {
+      _pairRev = finance.revision;
+      _pairDismissedCount = dismissed.length;
+      _pairs = suggestTransferPairs(
+        [...pending, ...confirmed],
+        dismissed: dismissed,
+        accountFor: finance.accountForKey,
+      );
+    }
+    return _pairs;
+  }
+
   Object? _pipelineRevision;
   String? _pipelineFingerprint;
   List<Tx> _filtered = const [];
@@ -515,11 +541,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final activeAccount = _accountId == null
         ? null
         : finance.accountById(_accountId!);
+    final suggestions = pending.isEmpty
+        ? const <PairSuggestion>[]
+        : _pairSuggestions(finance, allPending, allConfirmed);
 
     return Column(
       children: [
         if (spamSuspects.isNotEmpty) _SuspectedSpamCard(suspects: spamSuspects),
-        if (pending.isNotEmpty) _PendingReviewCard(pending: pending),
+        if (pending.isNotEmpty)
+          _PendingReviewCard(pending: pending, suggestions: suggestions),
         _SearchAndFilterBar(
           searchCtrl: _searchCtrl,
           onSearch: _onSearchChanged,
@@ -1642,7 +1672,7 @@ class _MonthHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 24, 52, 6),
       child: Row(
         children: [
-          Expanded(
+          Flexible(
             child: Text(
               label,
               maxLines: 1,
@@ -1659,6 +1689,22 @@ class _MonthHeader extends StatelessWidget {
               ),
             ),
           ),
+          // Beside the name, not the amounts: it acts on the month, and next
+          // to the totals it read as an amount action.
+          if (onSelectMonth != null)
+            IconButton(
+              tooltip: 'Select month',
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              constraints: const BoxConstraints(),
+              icon: Icon(
+                Icons.checklist,
+                size: 18,
+                color: scheme.onSurfaceVariant,
+              ),
+              onPressed: onSelectMonth,
+            ),
+          const Spacer(),
           // Width-capped as one unit: at large text scales the pair shrinks
           // to fit instead of overflowing past the jump controls.
           if (income > 0 || expense > 0)
@@ -1693,17 +1739,6 @@ class _MonthHeader extends StatelessWidget {
                   ],
                 ),
               ),
-            ),
-          if (onSelectMonth != null)
-            IconButton(
-              tooltip: 'Select month',
-              visualDensity: VisualDensity.compact,
-              icon: Icon(
-                Icons.checklist,
-                size: 18,
-                color: scheme.onSurfaceVariant,
-              ),
-              onPressed: onSelectMonth,
             ),
         ],
       ),
@@ -1766,7 +1801,13 @@ class _JumpControls extends StatelessWidget {
 /// Review queue for regular SMS imports: confirm/discard each, or the batch.
 class _PendingReviewCard extends StatelessWidget {
   final List<Tx> pending;
-  const _PendingReviewCard({required this.pending});
+
+  /// "Looks like a transfer" rows, rendered above the batch actions.
+  final List<PairSuggestion> suggestions;
+  const _PendingReviewCard({
+    required this.pending,
+    this.suggestions = const [],
+  });
 
   // Bulk and effectively irreversible (rows join the ledger with no batch
   // inverse) — warrants a dialog instead of an Undo snackbar.
@@ -1880,6 +1921,11 @@ class _PendingReviewCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // Two legs of one own-account move arrive as an expense and
+                // an income; pairing books both as transfers so neither
+                // inflates Spent or Income.
+                for (final s in suggestions.take(3))
+                  _TransferSuggestionRow(suggestion: s),
                 // Bulk actions live inside the fold: a collapsed card can't
                 // fire them, and the wrapped title above keeps its room.
                 // Compact everywhere: two review cards + toolbar + list must
@@ -1920,6 +1966,95 @@ class _PendingReviewCard extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One "Looks like a transfer" suggestion: pair the two legs, or dismiss
+/// the guess for good.
+class _TransferSuggestionRow extends StatelessWidget {
+  final PairSuggestion suggestion;
+  const _TransferSuggestionRow({required this.suggestion});
+
+  static String _side(FinanceProvider finance, Tx t) =>
+      finance.accountForKey(t.acctKey)?.name ??
+      (t.sender.isNotEmpty ? t.sender : 'Unknown account');
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.read<FinanceProvider>();
+    final scheme = Theme.of(context).colorScheme;
+    final s = suggestion;
+    final kindLabel = switch (s.kind) {
+      PairKind.cardPayment => 'card payment',
+      PairKind.savings => 'savings deposit',
+      PairKind.transfer => 'transfer',
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.sync_alt, size: 18, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Looks like a $kindLabel · ${fmtMoney(s.out.amount)}',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      '${_side(finance, s.out)} → ${_side(finance, s.incoming)}'
+                      ' · ${fmtDateCompact(s.out.date)}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                onPressed: () => context
+                    .read<SettingsProvider>()
+                    .dismissPairSuggestion(s.key),
+                child: const Text('Not a transfer'),
+              ),
+              FilledButton.tonal(
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                onPressed: () async {
+                  final pairId = await finance.pairTransactions(
+                    s.out.id,
+                    s.incoming.id,
+                  );
+                  if (pairId == null || !context.mounted) return;
+                  showUndoSnackBar(
+                    context,
+                    'Paired as $kindLabel',
+                    () => finance.unpair(pairId),
+                  );
+                },
+                child: const Text('Pair'),
+              ),
+            ],
           ),
         ],
       ),

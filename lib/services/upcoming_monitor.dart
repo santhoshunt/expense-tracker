@@ -6,6 +6,7 @@ import '../utils/dates.dart';
 import '../utils/format.dart';
 import 'notification_service.dart';
 import 'recurring_detector.dart';
+import 'reminder_schedule.dart';
 
 /// Fires "card bill due" and "recurring payment expected" notifications.
 ///
@@ -24,6 +25,10 @@ class UpcomingMonitor {
   /// them).
   static const recurringWindowDays = 2;
 
+  /// Manual reminders notify when due within this many days (overdue ones
+  /// included until marked paid or past the grace window).
+  static const reminderWindowDays = 2;
+
   final NotificationService notifications;
   bool _busy = false;
   bool _rerunRequested = false;
@@ -32,14 +37,18 @@ class UpcomingMonitor {
   UpcomingMonitor({NotificationService? notifications})
     : notifications = notifications ?? NotificationService.instance;
 
-  static String _ym(DateTime d) =>
-      '${d.year}-${d.month.toString().padLeft(2, '0')}';
+  static String _ym(DateTime d) => monthKey(d);
 
   static String cardDueKey(String accountId, DateTime due) =>
       'card_due_fired_${accountId}_${_ym(due)}';
 
   static String recurringDueKey(String hitKey, DateTime due) =>
       'recurring_due_fired_${hitKey}_${_ym(due)}';
+
+  /// Marking a reminder paid moves its due date to a new month, hence a new
+  /// key — no marker clearing needed.
+  static String reminderDueKey(String reminderId, DateTime due) =>
+      'reminder_due_fired_${reminderId}_${_ym(due)}';
 
   static String _inDays(int days) => days == 0
       ? 'today'
@@ -68,7 +77,8 @@ class UpcomingMonitor {
         for (final k in prefs.getKeys().toList()) {
           final isOurs =
               k.startsWith('card_due_fired_') ||
-              k.startsWith('recurring_due_fired_');
+              k.startsWith('recurring_due_fired_') ||
+              k.startsWith('reminder_due_fired_');
           if (!isOurs) continue;
           final suffix = k.substring(k.lastIndexOf('_') + 1);
           if (suffix.compareTo(ym) < 0) await prefs.remove(k);
@@ -113,6 +123,22 @@ class UpcomingMonitor {
                     '${fmtDate(h.nextDue)}'
               : '~${fmtMoney(h.expectedAmount)} expected ${_inDays(days)} '
                     '(${fmtDate(h.nextDue)})',
+        ));
+      }
+
+      for (final r in finance.reminders) {
+        final due = reminderNextDue(r, now);
+        final days = reminderDaysUntil(r, now);
+        if (days > reminderWindowDays) continue;
+        final amount = r.expectedAmount;
+        final when = days < 0
+            ? 'was due on ${fmtDate(due)}'
+            : 'due ${_inDays(days)} (${fmtDate(due)})';
+        checks.add((
+          key: reminderDueKey(r.id, due),
+          id: 96000 + ((r.id.hashCode & 0x7fffffff) % 1000),
+          title: 'Reminder: ${r.name}',
+          body: amount == null ? when : '${fmtMoney(amount)} $when',
         ));
       }
 

@@ -51,7 +51,7 @@ void main() {
 
       // Default target is Food & Dining (expense), so the second slot offers
       // income categories.
-      await tester.tap(find.text('And when money moves the other way'));
+      await tester.tap(find.text('Other direction'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Salary').last);
       await tester.pumpAndSettle();
@@ -101,7 +101,7 @@ void main() {
 
     await tester.tap(find.text('contains "amma"'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('And when money moves the other way'));
+    await tester.tap(find.text('Other direction'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Not for this direction').last);
     await tester.pumpAndSettle();

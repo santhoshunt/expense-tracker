@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Resources referenced only from Dart are invisible to the release resource
+  shrinker. The notification small icon is passed to flutter_local_notifications
+  by name, so without this keep the release APK shipped without it, the plugin
+  failed to initialise, and no notification could ever be shown.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_notify" />

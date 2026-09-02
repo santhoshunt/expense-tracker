@@ -1299,6 +1299,8 @@ Future<void> _showRuleDialog(
       TextEditingController(text: s),
   ];
   final allCtrls = List<TextEditingController>.of(ctrls);
+  // The condition field that should take focus: null = the first one.
+  TextEditingController? focusCtrl;
   var categoryId = existing?.categoryId ?? 'food';
   // The opposite-direction twin (a second ordinary rule sharing the
   // pattern): pre-filled when editing a rule that already has one.
@@ -1368,7 +1370,7 @@ Future<void> _showRuleDialog(
                   if (categoryId != kSpamCategoryId) ...[
                     const SizedBox(height: 8),
                     AppDropdownField<String?>(
-                      label: 'And when money moves the other way',
+                      label: 'Other direction',
                       value: otherCategoryId,
                       items: _oppositeDirectionItems(
                         categoryById(categoryId).type == TxType.income
@@ -1396,10 +1398,16 @@ Future<void> _showRuleDialog(
                     child: TextButton.icon(
                       icon: const Icon(Icons.add, size: 18),
                       label: const Text('Add another condition (OR)'),
+                      // Inserted at the top so the new field appears right
+                      // under this button (appending put it below every
+                      // existing condition, off-screen with a keyboard up).
+                      // The rows are keyed by controller, so the existing
+                      // fields keep their text and focus.
                       onPressed: () => setState(() {
                         final c = TextEditingController();
-                        ctrls.add(c);
+                        ctrls.insert(0, c);
                         allCtrls.add(c);
+                        focusCtrl = c;
                       }),
                     ),
                   ),
@@ -1417,7 +1425,10 @@ Future<void> _showRuleDialog(
                             // resizes.
                             key: ObjectKey(ctrls[i]),
                             controller: ctrls[i],
-                            autofocus: i == 0,
+                            // First field on open, or the one just added.
+                            autofocus: focusCtrl == null
+                                ? i == 0
+                                : ctrls[i] == focusCtrl,
                             // Prefills from an SMS can run 5–6 display lines —
                             // wrap instead of scrolling invisibly in one line.
                             minLines: i == 0 ? 2 : 1,

@@ -9,11 +9,14 @@ import '../models/account.dart';
 import '../models/category_group.dart';
 import '../models/default_rules.dart';
 import '../models/import_rule.dart';
+import '../models/reminder.dart';
 import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../services/budget.dart';
 import '../services/recurring_detector.dart';
 import '../services/sms_parser.dart';
+import '../services/transfer_pairing.dart';
+import '../utils/dates.dart';
 import '../utils/figma_palette.dart';
 
 /// Income / expense / savings totals for one month, plus the per-category
@@ -142,6 +145,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _groupsSeededKey = 'category_groups_seeded_v1';
   static const _budgetsKey = 'spend_budgets_v1';
   static const _merchantAliasesKey = 'merchant_aliases_v1';
+  static const _remindersKey = 'reminders_v1';
 
   final List<Tx> _transactions = [];
   final List<ClassifierRule> _rules = [];
@@ -157,6 +161,7 @@ class FinanceProvider extends ChangeNotifier {
 
   /// merchant identity ([merchantIdentityOf]) → user-chosen display name.
   final Map<String, String> _merchantAliases = {};
+  final List<Reminder> _reminders = [];
   bool _loaded = false;
 
   bool get loaded => _loaded;
@@ -760,6 +765,17 @@ class FinanceProvider extends ChangeNotifier {
           ..addAll(_decodeAliases(jsonDecode(aliasesRaw)));
       }, _merchantAliases.clear);
     }
+    final remindersRaw = prefs.getString(_remindersKey);
+    if (remindersRaw != null) {
+      await _guardedLoad('reminders', () async {
+        final decoded = (jsonDecode(remindersRaw) as List)
+            .map((e) => Reminder.fromJson(e as Map<String, dynamic>))
+            .toList();
+        _reminders
+          ..clear()
+          ..addAll(decoded);
+      }, _reminders.clear);
+    }
     // Index must be live before backfill so _ensureAccount sees existing keys.
     _rebuildKeyIndex();
     // Seeding + migrations are best-effort: a failure mid-way (disk full,
@@ -983,6 +999,11 @@ class FinanceProvider extends ChangeNotifier {
       _loadWarnings.add('setup');
     }
     _rebuildKeyIndex();
+    // Category registry is final now: reminders can be validated and any
+    // half-pair (a leg deleted by an older build, a hand-edited backup)
+    // unlinked.
+    if (_sanitizeReminders()) await _persist(reminders: true);
+    if (_clearOrphanPairs()) await _persist(tx: true);
     _loaded = true;
     notifyListeners();
   }
@@ -1039,6 +1060,7 @@ class FinanceProvider extends ChangeNotifier {
     groups: true,
     budgets: true,
     aliases: true,
+    reminders: true,
   );
 
   /// Writes only the collections the caller says it changed.
@@ -1064,6 +1086,7 @@ class FinanceProvider extends ChangeNotifier {
     bool groups = false,
     bool budgets = false,
     bool aliases = false,
+    bool reminders = false,
   }) async {
     try {
       await _persistOrThrow(
@@ -1076,6 +1099,7 @@ class FinanceProvider extends ChangeNotifier {
         groups: groups,
         budgets: budgets,
         aliases: aliases,
+        reminders: reminders,
       );
       if (_persistFailed) {
         _persistFailed = false;
@@ -1099,6 +1123,7 @@ class FinanceProvider extends ChangeNotifier {
     bool groups = false,
     bool budgets = false,
     bool aliases = false,
+    bool reminders = false,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     if (tx) {
@@ -1164,6 +1189,12 @@ class FinanceProvider extends ChangeNotifier {
     }
     if (aliases) {
       await prefs.setString(_merchantAliasesKey, jsonEncode(_merchantAliases));
+    }
+    if (reminders) {
+      await prefs.setString(
+        _remindersKey,
+        jsonEncode(_reminders.map((r) => r.toJson()).toList()),
+      );
     }
   }
 
@@ -1246,19 +1277,41 @@ class FinanceProvider extends ChangeNotifier {
       userCategorized: categoryChanged ? true : null,
       clearBalanceAfter: dayChanged && updated.balanceAfter != null,
     );
+    // A pair whose leg left the transfer categories is no longer a transfer.
+    if (updated.pairId != null) _clearOrphanPairs();
     notifyListeners();
     await _persist(tx: true);
   }
 
-  Future<void> deleteTransaction(String id) async {
-    _transactions.removeWhere((t) => t.id == id);
+  /// Removes one row. When it was one leg of a transfer pair, the other leg
+  /// is unlinked and its PRE-unlink copy returned, so an Undo can put both
+  /// the row and the link back via [restoreEditedTransactions]. Null for
+  /// unpaired rows (and unknown ids).
+  Future<Tx?> deleteTransaction(String id) async {
+    final i = _transactions.indexWhere((t) => t.id == id);
+    if (i == -1) return null;
+    final victim = _transactions[i];
+    Tx? partner;
+    if (victim.pairId != null) {
+      final pi = _transactions.indexWhere(
+        (t) => t.id != id && t.pairId == victim.pairId,
+      );
+      if (pi != -1) {
+        partner = _transactions[pi];
+        _transactions[pi] = partner.copyWith(clearPairId: true);
+      }
+    }
+    _transactions.removeAt(i);
     notifyListeners();
     await _persist(tx: true);
+    return partner;
   }
 
   /// Bulk delete for the selection bar: removes every row whose id is in
   /// [ids] and returns the removed rows so the caller can offer Undo (via
   /// [restoreTransactions]). One notify + persist for the whole batch.
+  /// Surviving halves of pairs are unlinked (bulk Undo restores the rows,
+  /// not the link — one persisted field, accepted).
   Future<List<Tx>> deleteTransactions(Iterable<String> ids) async {
     final wanted = ids.toSet();
     final removed = [
@@ -1267,9 +1320,113 @@ class FinanceProvider extends ChangeNotifier {
     ];
     if (removed.isEmpty) return removed;
     _transactions.removeWhere((t) => wanted.contains(t.id));
+    _clearOrphanPairs();
     notifyListeners();
     await _persist(tx: true);
     return removed;
+  }
+
+  // --- Transfer pairing -----------------------------------------------------
+
+  /// The other leg of [t]'s transfer pair, or null.
+  Tx? pairPartnerOf(Tx t) {
+    final pid = t.pairId;
+    if (pid == null) return null;
+    return _transactions
+        .where((x) => x.pairId == pid && x.id != t.id)
+        .firstOrNull;
+  }
+
+  /// Links an expense row and an income row as the two legs of one
+  /// own-account transfer. Both are re-categorised into the transfer
+  /// categories for the move's kind (receiver savings → "To savings" /
+  /// transfer_in; receiver card → card_bill / card_payment; else
+  /// transfer_out / transfer_in), marked user-categorised and confirmed,
+  /// and lose any group-split share. Returns the new pair id, or null when
+  /// the rows are missing, same-typed or already paired.
+  Future<String?> pairTransactions(String idA, String idB) async {
+    final ia = _transactions.indexWhere((t) => t.id == idA);
+    final ib = _transactions.indexWhere((t) => t.id == idB);
+    if (ia == -1 || ib == -1) return null;
+    final a = _transactions[ia];
+    final b = _transactions[ib];
+    if (a.type == b.type || a.pairId != null || b.pairId != null) return null;
+    final out = a.type == TxType.expense ? a : b;
+    final inn = a.type == TxType.expense ? b : a;
+    // A manual pairing of a card-side debit is still honoured as a plain
+    // transfer; only the suggestion engine refuses it.
+    final kind =
+        pairKindFor(
+          send: accountForKey(out.acctKey),
+          recv: accountForKey(inn.acctKey),
+        ) ??
+        PairKind.transfer;
+    final cats = pairCategoriesFor(kind);
+    // Built-ins are editable: a flipped target would mint a row violating
+    // type == category.type, so verify and fall back.
+    String guarded(String wanted, String fallback, Tx leg) {
+      if (categoryById(wanted).type == leg.type) return wanted;
+      if (categoryById(fallback).type == leg.type) return fallback;
+      return leg.categoryId;
+    }
+
+    final pairId = 'pair_${_newId()}';
+    Tx link(Tx t, String cat) => t.copyWith(
+      pairId: pairId,
+      categoryId: cat,
+      userCategorized: true,
+      pending: false,
+      clearMyShare: true,
+    );
+    _transactions[_transactions.indexWhere((t) => t.id == out.id)] = link(
+      out,
+      guarded(cats.out, 'transfer_out', out),
+    );
+    _transactions[_transactions.indexWhere((t) => t.id == inn.id)] = link(
+      inn,
+      guarded(cats.incoming, 'transfer_in', inn),
+    );
+    notifyListeners();
+    await _persist(tx: true);
+    return pairId;
+  }
+
+  /// Removes the link from both legs. Categories stay as they are (still
+  /// transfers); the user recategorises if the pairing was wrong.
+  Future<void> unpair(String pairId) async {
+    var changed = false;
+    for (var i = 0; i < _transactions.length; i++) {
+      if (_transactions[i].pairId != pairId) continue;
+      _transactions[i] = _transactions[i].copyWith(clearPairId: true);
+      changed = true;
+    }
+    if (!changed) return;
+    notifyListeners();
+    await _persist(tx: true);
+  }
+
+  /// Drops links that no longer describe a transfer: a pair id not held by
+  /// exactly two rows, two legs of the same direction, or a leg outside the
+  /// transfer categories. Caller persists when this returns true.
+  bool _clearOrphanPairs() {
+    final legs = <String, List<int>>{};
+    for (var i = 0; i < _transactions.length; i++) {
+      final pid = _transactions[i].pairId;
+      if (pid != null) (legs[pid] ??= []).add(i);
+    }
+    var changed = false;
+    legs.forEach((pid, idx) {
+      final valid =
+          idx.length == 2 &&
+          _transactions[idx[0]].type != _transactions[idx[1]].type &&
+          idx.every((i) => isTransferCategory(_transactions[i].categoryId));
+      if (valid) return;
+      for (final i in idx) {
+        _transactions[i] = _transactions[i].copyWith(clearPairId: true);
+      }
+      changed = true;
+    });
+    return changed;
   }
 
   /// The undo half of [deleteTransaction]: reinserts the captured object
@@ -1578,6 +1735,18 @@ class FinanceProvider extends ChangeNotifier {
     _rules.removeWhere((r) => r.categoryId == id);
     setCustomCategories(customCategories.where((c) => c.id != id));
     final detached = _detachCategory(id);
+    // Reminders on the deleted category follow the rows' remap when the
+    // target is money-out, else fall back to "Other" expense.
+    var remindersChanged = false;
+    for (var i = 0; i < _reminders.length; i++) {
+      if (_reminders[i].categoryId != id) continue;
+      _reminders[i] = _reminders[i].copyWith(
+        categoryId: target != null && target.type == TxType.expense
+            ? target.id
+            : 'other_expense',
+      );
+      remindersChanged = true;
+    }
     notifyListeners();
     await _persist(
       categories: true,
@@ -1585,6 +1754,7 @@ class FinanceProvider extends ChangeNotifier {
       tx: true,
       groups: detached.groups,
       budgets: detached.budgets,
+      reminders: remindersChanged,
     );
   }
 
@@ -1791,6 +1961,96 @@ class FinanceProvider extends ChangeNotifier {
     if (trimmed.isNotEmpty) _merchantAliases[identity] = trimmed;
     notifyListeners();
     await _persist(aliases: true);
+  }
+
+  // --- Manual reminders -----------------------------------------------------
+
+  List<Reminder> get reminders => List.unmodifiable(_reminders);
+
+  Future<String> addReminder({
+    required String name,
+    required int dayOfMonth,
+    double? expectedAmount,
+    required String categoryId,
+  }) async {
+    final id = 'rem_${DateTime.now().microsecondsSinceEpoch}_${_idSeq++}';
+    _reminders.add(
+      Reminder(
+        id: id,
+        name: name.trim(),
+        dayOfMonth: dayOfMonth.clamp(1, 31),
+        expectedAmount:
+            expectedAmount != null &&
+                expectedAmount.isFinite &&
+                expectedAmount > 0
+            ? expectedAmount
+            : null,
+        categoryId: categoryId,
+      ),
+    );
+    _sanitizeReminders();
+    notifyListeners();
+    await _persist(reminders: true);
+    return id;
+  }
+
+  Future<void> updateReminder(Reminder updated) async {
+    final i = _reminders.indexWhere((r) => r.id == updated.id);
+    if (i == -1) return;
+    _reminders[i] = updated;
+    _sanitizeReminders();
+    notifyListeners();
+    await _persist(reminders: true);
+  }
+
+  Future<void> deleteReminder(String id) async {
+    final before = _reminders.length;
+    _reminders.removeWhere((r) => r.id == id);
+    if (_reminders.length == before) return;
+    notifyListeners();
+    await _persist(reminders: true);
+  }
+
+  /// Undo half of [deleteReminder]: puts the captured reminder back.
+  Future<void> restoreReminder(Reminder r) async {
+    if (_reminders.any((x) => x.id == r.id)) return;
+    _reminders.add(r);
+    notifyListeners();
+    await _persist(reminders: true);
+  }
+
+  /// Records the occurrence due on [due] as paid, so the reminder skips to
+  /// the following month (see reminderNextDue).
+  Future<void> markReminderPaid(String id, DateTime due) async {
+    final i = _reminders.indexWhere((r) => r.id == id);
+    if (i == -1) return;
+    _reminders[i] = _reminders[i].copyWith(lastPaidMonth: monthKey(due));
+    notifyListeners();
+    await _persist(reminders: true);
+  }
+
+  /// Undo half of [markReminderPaid].
+  Future<void> clearReminderPaid(String id) async {
+    final i = _reminders.indexWhere((r) => r.id == id);
+    if (i == -1 || _reminders[i].lastPaidMonth == null) return;
+    _reminders[i] = _reminders[i].copyWith(clearLastPaidMonth: true);
+    notifyListeners();
+    await _persist(reminders: true);
+  }
+
+  /// Reminders are money-out by definition: an unknown or income-typed
+  /// category (deleted, or flipped by a built-in override) falls back to
+  /// "Other" expense. Returns whether anything changed.
+  bool _sanitizeReminders() {
+    var changed = false;
+    for (var i = 0; i < _reminders.length; i++) {
+      final r = _reminders[i];
+      final known = allCategories.any((c) => c.id == r.categoryId);
+      if (known && categoryById(r.categoryId).type == TxType.expense) continue;
+      _reminders[i] = r.copyWith(categoryId: 'other_expense');
+      changed = true;
+    }
+    return changed;
   }
 
   /// Removes [id] from the group-assignment map and every budget's category
@@ -2050,10 +2310,18 @@ class FinanceProvider extends ChangeNotifier {
     // it is a deposit (+); an income-typed transfer back to the bank is a
     // withdrawal (−). Non-transfer rows (interest income, fees) keep their
     // natural sign, as does everything on bank/card accounts.
+    // A PAIRED leg is exempt from the inversion: it is the savings account's
+    // own alert ("credited to RD"), so its TxType already points the right
+    // way; inverting would book the deposit as a withdrawal. Mirrored by
+    // signedForSavings in services/savings_goal.dart.
     final invertTransfers = acc.type == AccountType.savings;
     double signed(Tx t) {
       final v = t.type == TxType.income ? t.amount : -t.amount;
-      return (invertTransfers && isTransferCategory(t.categoryId)) ? -v : v;
+      return (invertTransfers &&
+              t.pairId == null &&
+              isTransferCategory(t.categoryId))
+          ? -v
+          : v;
     }
 
     // `txs` is oldest-first, so the last stated figure seen is the newest.
@@ -2520,6 +2788,8 @@ class FinanceProvider extends ChangeNotifier {
       changed++;
     }
     if (changed > 0) {
+      // Legs moved out of the transfer categories stop being a pair.
+      if (!clearShare) _clearOrphanPairs();
       notifyListeners();
       await _persist(tx: true);
     }
@@ -2791,6 +3061,7 @@ class FinanceProvider extends ChangeNotifier {
       _transactions
         ..clear()
         ..addAll(sanitized);
+      _clearOrphanPairs();
       // Parity with importData's replace mode: stale accounts must not
       // survive a "replace everything" import.
       _accounts.clear();
@@ -2804,6 +3075,7 @@ class FinanceProvider extends ChangeNotifier {
     final fresh = sanitized.where((t) => !ids.contains(t.id)).toList();
     _transactions.addAll(fresh);
     if (fresh.isNotEmpty) {
+      _clearOrphanPairs();
       _ensureAccountsForTransactions();
       notifyListeners();
       await _persist(tx: true, accounts: true);
@@ -2837,6 +3109,7 @@ class FinanceProvider extends ChangeNotifier {
       _groupAssignments.clear();
       _budgets.clear();
       _merchantAliases.clear();
+      _reminders.clear();
       setCustomCategories(const []);
       setBuiltinOverrides(const {});
       // Reseed immediately (flags stay set) so the app keeps working
@@ -2856,6 +3129,7 @@ class FinanceProvider extends ChangeNotifier {
       groups: includeConfig,
       budgets: includeConfig,
       aliases: includeConfig,
+      reminders: includeConfig,
     );
   }
 
@@ -2873,7 +3147,8 @@ class FinanceProvider extends ChangeNotifier {
     // — monthly cap, alert flags, auto-import cadence, theme); applied on
     // replace-mode restores only.
     // v12: `merchantAliases` (identity → display name).
-    'version': 12,
+    // v13: `reminders` collection; transactions may carry `pairId`.
+    'version': 13,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
@@ -2899,6 +3174,7 @@ class FinanceProvider extends ChangeNotifier {
     'rules': _rules.map((r) => r.toJson()).toList(),
     'importRules': _importRules.map((r) => r.toJson()).toList(),
     'merchantAliases': Map<String, String>.from(_merchantAliases),
+    'reminders': _reminders.map((r) => r.toJson()).toList(),
   };
 
   /// Card/bank kind for every SMS-derived account key in the ledger.
@@ -3011,6 +3287,15 @@ class FinanceProvider extends ChangeNotifier {
     final importedAliases = rawAliases is Map
         ? _decodeAliases(rawAliases)
         : null;
+    // v13 addition, same absent-means-keep rule.
+    final rawReminders = data['reminders'];
+    final importedReminders = rawReminders is List
+        ? rawReminders
+              .map(
+                (e) => Reminder.fromJson(Map<String, dynamic>.from(e as Map)),
+              )
+              .toList()
+        : null;
     // Built-in overrides are a v7 addition. Ids that aren't built-ins are
     // dropped (a hand-edited file must not invent categories); since
     // built-ins became fully editable, type/transfer-ness is TRUSTED from
@@ -3119,6 +3404,11 @@ class FinanceProvider extends ChangeNotifier {
           ..clear()
           ..addAll(importedAliases);
       }
+      if (importedReminders != null) {
+        _reminders
+          ..clear()
+          ..addAll(importedReminders);
+      }
       if (importedRules != null) {
         _rules
           ..clear()
@@ -3132,6 +3422,8 @@ class FinanceProvider extends ChangeNotifier {
       // Registry is final now — safe to enforce the type/category invariant
       // (CSV imports get this via importTransactions; this path didn't).
       sanitizeTail(_transactions.length);
+      _clearOrphanPairs();
+      final remindersSanitized = _sanitizeReminders();
       _rebuildKeyIndex();
       _acctKindHints = kindHints;
       _ensureAccountsForTransactions();
@@ -3145,6 +3437,7 @@ class FinanceProvider extends ChangeNotifier {
         groups: importedGroups != null || importedAssignments != null,
         budgets: importedBudgets != null,
         aliases: importedAliases != null,
+        reminders: importedReminders != null || remindersSanitized,
         rules: importedRules != null,
         importRules: importedImportRules != null,
       );
@@ -3199,6 +3492,10 @@ class FinanceProvider extends ChangeNotifier {
         for (final e in importedAliases.entries)
           if (!_merchantAliases.containsKey(e.key)) e.key: e.value,
     };
+    final reminderIds = _reminders.map((r) => r.id).toSet();
+    final newReminders = [
+      ...?importedReminders?.where((r) => !reminderIds.contains(r.id)),
+    ];
     // Rules merge by id, existing wins. Order is match priority: imported
     // user rules slot in at the END of the device's user segment (device
     // rules keep top priority) while imported built-in-id rules append at
@@ -3243,6 +3540,7 @@ class FinanceProvider extends ChangeNotifier {
     if (newGroups.isNotEmpty || assignmentsChanged) sanitizeAssignments();
     _budgets.addAll(newBudgets);
     _merchantAliases.addAll(newAliases);
+    _reminders.addAll(newReminders);
     if (newRules.isNotEmpty) {
       final firstBuiltin = _rules.indexWhere((r) => r.isBuiltIn);
       final userEnd = firstBuiltin == -1 ? _rules.length : firstBuiltin;
@@ -3259,11 +3557,14 @@ class FinanceProvider extends ChangeNotifier {
         groupsChanged ||
         newBudgets.isNotEmpty ||
         newAliases.isNotEmpty ||
+        newReminders.isNotEmpty ||
         newRules.isNotEmpty ||
         newImportRules.isNotEmpty) {
       // Merged categories are registered above, so the invariant check sees
       // the final registry; only the appended rows are sanitized.
       sanitizeTail(newTxs.length);
+      _clearOrphanPairs();
+      _sanitizeReminders();
       _rebuildKeyIndex();
       _acctKindHints = kindHints;
       _ensureAccountsForTransactions();
@@ -3277,6 +3578,7 @@ class FinanceProvider extends ChangeNotifier {
         groups: groupsChanged,
         budgets: newBudgets.isNotEmpty,
         aliases: newAliases.isNotEmpty,
+        reminders: newReminders.isNotEmpty,
         rules: newRules.isNotEmpty,
         importRules: newImportRules.isNotEmpty,
       );
@@ -3307,6 +3609,7 @@ class FinanceProvider extends ChangeNotifier {
     ];
     if (removed.isEmpty) return removed;
     _transactions.removeWhere((t) => t.pending && !t.suspectedSpam);
+    _clearOrphanPairs();
     notifyListeners();
     await _persist(tx: true);
     return removed;

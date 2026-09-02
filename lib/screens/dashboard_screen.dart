@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/reminder.dart';
 import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
@@ -8,6 +9,7 @@ import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
 import '../services/merchant_stats.dart';
 import '../services/recurring_detector.dart';
+import '../services/reminder_schedule.dart';
 import '../utils/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
@@ -16,6 +18,8 @@ import '../widgets/balance_breakdown.dart';
 import '../widgets/budget_detail_sheet.dart';
 import '../widgets/budget_dialog.dart';
 import '../widgets/dispose_scope.dart';
+import '../widgets/reminder_editor_dialog.dart';
+import '../widgets/undo_snackbar.dart';
 import '../widgets/spending_heatmap.dart';
 import '../widgets/glossy.dart';
 import '../widgets/motion.dart';
@@ -359,32 +363,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   : null,
               icon: const Icon(Icons.chevron_right),
             ),
-          ],
-        ),
-        // Month / Year scope, plus the year report export while in Year view.
-        Row(
-          children: [
-            Expanded(
-              child: GlassSegmented<bool>(
-                options: const [(false, 'Month'), (true, 'Year')],
-                selected: _yearMode,
-                onChanged: (v) => setState(() => _yearMode = v),
-              ),
-            ),
-            if (_yearMode) ...[
-              const SizedBox(width: 8),
-              FrostedPanel(
-                radius: BorderRadius.circular(AppRadius.section),
-                child: IconButton(
-                  tooltip: 'Export year report (PDF)',
-                  icon: const Icon(Icons.picture_as_pdf_outlined, size: 20),
-                  onPressed: () => _exportYearPdf(context, finance),
+            // Scope switch as a quiet text button: a full-width segmented
+            // control here read as a primary action and drew the eye away
+            // from the figures. Month is the default; nothing is persisted.
+            if (_yearMode)
+              IconButton(
+                tooltip: 'Export year report (PDF)',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(
+                  Icons.picture_as_pdf_outlined,
+                  size: 20,
+                  color: scheme.onSurfaceVariant,
                 ),
+                onPressed: () => _exportYearPdf(context, finance),
               ),
-            ],
+            TextButton(
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                foregroundColor: scheme.onSurfaceVariant,
+                textStyle: Theme.of(context).textTheme.labelMedium,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: () => setState(() => _yearMode = !_yearMode),
+              child: Text(_yearMode ? 'Month' : 'Year'),
+            ),
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 4),
         // Horizontally scrollable so each card is wide enough to show its
         // amount on one line, however large the number. The height follows
         // the system font scale — fixed 88dp clips at "Large" text size.
@@ -798,9 +803,10 @@ class _UpcomingCard extends StatelessWidget {
             Color color,
             String label,
             String sub,
-            double amount,
+            double? amount,
             bool urgent,
             String? hideKey,
+            Reminder? reminder,
           })
         >[];
 
@@ -819,6 +825,7 @@ class _UpcomingCard extends StatelessWidget {
         amount: out,
         urgent: days <= 3,
         hideKey: null,
+        reminder: null,
       ));
     }
 
@@ -837,9 +844,33 @@ class _UpcomingCard extends StatelessWidget {
         amount: h.expectedAmount,
         urgent: days < 0,
         hideKey: h.key,
+        reminder: null,
       ));
     }
-    if (entries.isEmpty) return const SizedBox.shrink();
+    // Manual reminders: shown from a week before the due day (the schedule
+    // already skips a month marked paid).
+    for (final r in finance.reminders) {
+      final due = reminderNextDue(r, now);
+      final days = reminderDaysUntil(r, now);
+      if (days > 7) continue;
+      final c = categoryById(r.categoryId, fallbackType: TxType.expense);
+      entries.add((
+        due: due,
+        icon: c.icon,
+        color: c.color,
+        label: r.name,
+        sub: days < 0
+            ? 'Overdue · was due ${fmtDateCompact(due)}'
+            : 'Due ${fmtDateCompact(due)} · ${_inDays(days)}',
+        amount: r.expectedAmount,
+        urgent: days <= 0,
+        hideKey: null,
+        reminder: r,
+      ));
+    }
+    if (entries.isEmpty && finance.reminders.isEmpty) {
+      return const SizedBox.shrink();
+    }
     entries.sort((a, b) => a.due.compareTo(b.due));
     final collapsed = settings.isSectionCollapsed('upcoming');
 
@@ -871,6 +902,16 @@ class _UpcomingCard extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
+                IconButton(
+                  tooltip: 'Add reminder',
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(
+                    Icons.add_alert_outlined,
+                    size: 20,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  onPressed: () => showReminderEditor(context),
+                ),
                 AnimatedRotation(
                   turns: collapsed ? 0.5 : 0,
                   duration: _foldDuration,
@@ -897,11 +938,26 @@ class _UpcomingCard extends StatelessWidget {
                   padding: const EdgeInsets.all(16),
                   child: Column(
                     children: [
+                      if (entries.isEmpty)
+                        Text(
+                          'Nothing due in the next week.',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: scheme.onSurfaceVariant),
+                        ),
                       for (final e in entries.take(6))
                         InkWell(
                           borderRadius: BorderRadius.circular(
                             AppRadius.control,
                           ),
+                          // Manual reminders: tap for mark paid / edit /
+                          // delete.
+                          onTap: e.reminder == null
+                              ? null
+                              : () => _showReminderActions(
+                                  context,
+                                  e.reminder!,
+                                  e.due,
+                                ),
                           // Detected patterns can be wrong — long-press hides one.
                           // Card bills aren't hideable; clear the card's due day
                           // instead.
@@ -949,7 +1005,9 @@ class _UpcomingCard extends StatelessWidget {
                                   child: FittedBox(
                                     fit: BoxFit.scaleDown,
                                     child: Text(
-                                      fmtMoney(e.amount),
+                                      e.amount == null
+                                          ? ''
+                                          : fmtMoney(e.amount!),
                                       style: const TextStyle(
                                         fontWeight: FontWeight.w700,
                                       ),
@@ -969,6 +1027,67 @@ class _UpcomingCard extends StatelessWidget {
         ),
         const SizedBox(height: 16),
       ],
+    );
+  }
+
+  /// Three plain actions for a manual reminder row. (showPickerSheet was
+  /// rejected here: its always-on search field is wrong for a 3-item menu.)
+  void _showReminderActions(BuildContext context, Reminder r, DateTime due) {
+    final finance = context.read<FinanceProvider>();
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(r.name, style: Theme.of(ctx).textTheme.titleMedium),
+              subtitle: Text('Due ${fmtDate(due)}'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.check_circle_outline),
+              title: const Text('Mark paid this month'),
+              onTap: () {
+                Navigator.pop(ctx);
+                final before = r;
+                finance.markReminderPaid(r.id, due);
+                showUndoSnackBar(
+                  context,
+                  '${r.name} marked paid',
+                  () => finance.updateReminder(before),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Edit'),
+              onTap: () {
+                Navigator.pop(ctx);
+                showReminderEditor(context, existing: r);
+              },
+            ),
+            ListTile(
+              leading: Icon(
+                Icons.delete_outline,
+                color: Theme.of(ctx).colorScheme.error,
+              ),
+              title: const Text('Delete'),
+              onTap: () {
+                Navigator.pop(ctx);
+                final before = r;
+                finance.deleteReminder(r.id);
+                showUndoSnackBar(
+                  context,
+                  'Deleted reminder "${r.name}"',
+                  () => finance.restoreReminder(before),
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
     );
   }
 

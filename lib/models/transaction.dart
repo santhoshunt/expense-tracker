@@ -401,6 +401,14 @@ class Tx {
   /// inert (ignored) anywhere else.
   final double? myShare;
 
+  /// Transfer pairing: the two legs of one own-account move (bank debit +
+  /// savings/card credit) share this id. Both legs also sit in transfer
+  /// categories, so every category-based aggregate is already correct; the
+  /// link exists for display, for delete/unpair bookkeeping, and to stop the
+  /// savings-account sign inversion (see FinanceProvider._computeFigures).
+  /// Null for the ordinary single-row case.
+  final String? pairId;
+
   const Tx({
     required this.id,
     required this.type,
@@ -418,6 +426,7 @@ class Tx {
     this.acctKey,
     this.balanceAfter,
     this.myShare,
+    this.pairId,
   });
 
   TxCategory get category => categoryById(categoryId, fallbackType: type);
@@ -462,6 +471,7 @@ class Tx {
       acctKey: acctKey,
       balanceAfter: balanceAfter,
       myShare: myShare,
+      pairId: pairId,
     );
   }
 
@@ -484,6 +494,8 @@ class Tx {
     bool clearBalanceAfter = false,
     double? myShare,
     bool clearMyShare = false,
+    String? pairId,
+    bool clearPairId = false,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -504,6 +516,7 @@ class Tx {
         ? null
         : (balanceAfter ?? this.balanceAfter),
     myShare: clearMyShare ? null : (myShare ?? this.myShare),
+    pairId: clearPairId ? null : (pairId ?? this.pairId),
   );
 
   Map<String, dynamic> toJson() => {
@@ -523,6 +536,7 @@ class Tx {
     if (acctKey != null) 'acctKey': acctKey,
     if (balanceAfter != null) 'balanceAfter': balanceAfter,
     if (myShare != null) 'myShare': myShare,
+    if (pairId != null) 'pairId': pairId,
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) => Tx(
@@ -542,6 +556,7 @@ class Tx {
     acctKey: json['acctKey'] as String?,
     balanceAfter: (json['balanceAfter'] as num?)?.toDouble(),
     myShare: (json['myShare'] as num?)?.toDouble(),
+    pairId: json['pairId'] as String?,
   );
 }
 
