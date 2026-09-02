@@ -685,3 +685,38 @@ class ClassifierRule {
     categoryId: json['categoryId'] as String,
   );
 }
+
+/// Order- and case-insensitive form of a rule's OR-conditions, so two rules
+/// typed as "amma | family" and "Family | AMMA" count as the same pattern.
+String normalizedRulePattern(String pattern) {
+  final parts = [
+    for (final p in pattern.split('|'))
+      if (p.trim().isNotEmpty) p.trim().toLowerCase(),
+  ]..sort();
+  return parts.join(' | ');
+}
+
+/// The rule that classifies the SAME pattern for the opposite money
+/// direction, or null.
+///
+/// The matcher only applies a rule whose category direction agrees with the
+/// parsed direction of the alert, so "amma → Family support (expense)" and
+/// "amma → From family (income)" together classify both ways. The Rules UI
+/// creates and shows such twins as one "rule pair"; nothing is stored, the
+/// pair is recognised from the two rows. Spam rules have no direction and
+/// never pair.
+ClassifierRule? directionSiblingOf(
+  ClassifierRule rule,
+  List<ClassifierRule> rules,
+) {
+  if (rule.isSpamRule) return null;
+  final key = normalizedRulePattern(rule.pattern);
+  if (key.isEmpty) return null;
+  final type = categoryById(rule.categoryId).type;
+  for (final r in rules) {
+    if (r.id == rule.id || r.isSpamRule) continue;
+    if (categoryById(r.categoryId).type == type) continue;
+    if (normalizedRulePattern(r.pattern) == key) return r;
+  }
+  return null;
+}
