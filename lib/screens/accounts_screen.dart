@@ -3,11 +3,11 @@ import 'package:provider/provider.dart';
 
 import '../models/account.dart';
 import '../providers/finance_provider.dart';
+import '../services/card_bill.dart';
 import '../services/savings_goal.dart';
 import '../services/sms_parser.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
-import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/balance_breakdown.dart';
@@ -687,31 +687,27 @@ class _CardFigures extends StatelessWidget {
                   ),
                 );
               }
-              final due = nextMonthlyOccurrence(
-                account.dueDay!,
-                DateTime.now(),
-              );
-              final days = due
-                  .difference(
-                    DateTime(
-                      DateTime.now().year,
-                      DateTime.now().month,
-                      DateTime.now().day,
-                    ),
-                  )
-                  .inDays;
-              final when = days == 0
+              final s = cardBillStatus(account, DateTime.now())!;
+              if (s.paidThisCycle) {
+                return Text(
+                  'Paid · next bill ${fmtDateCompact(s.due)}',
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                );
+              }
+              final when = s.daysUntil == 0
                   ? 'today'
-                  : days == 1
+                  : s.daysUntil == 1
                   ? 'tomorrow'
-                  : 'in $days days';
-              // Imminent dues stand out; a comfortable gap stays muted.
-              final urgent = days <= 3;
+                  : 'in ${s.daysUntil} days';
               return Text(
-                'Bill due ${fmtDateCompact(due)} · $when',
+                'Bill due ${fmtDateCompact(s.due)} · $when',
                 style: TextStyle(
-                  color: urgent ? scheme.error : scheme.onSurfaceVariant,
-                  fontWeight: urgent ? FontWeight.w600 : null,
+                  // Imminent dues stand out; a comfortable gap stays muted.
+                  color: s.urgent ? scheme.error : scheme.onSurfaceVariant,
+                  fontWeight: s.urgent ? FontWeight.w600 : null,
                   fontSize: 12,
                 ),
               );

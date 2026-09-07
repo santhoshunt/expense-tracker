@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/account.dart';
 import '../models/reminder.dart';
 import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
+import '../services/card_bill.dart';
 import '../services/merchant_stats.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
@@ -273,6 +275,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final topMerchantsList = _topMerchants(finance);
     final colors = AppColors.of(context);
     final scheme = Theme.of(context).colorScheme;
+    final hideIncome = context.select<SettingsProvider, bool>(
+      (s) => s.hideIncome,
+    );
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -401,18 +406,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
             children: [
               // Year-view taps stay month-scoped deep links (the Transactions
               // filter has no year), so they are disabled there.
-              _StatCard(
-                label: 'Income',
-                value: _yearMode
-                    ? finance.incomeInYear(year)
-                    : finance.incomeInMonth(_month),
-                icon: Icons.arrow_downward,
-                color: colors.green,
-                onTap: widget.onViewTransactions == null || _yearMode
-                    ? null
-                    : () => widget.onViewTransactions!(TxType.income, _month),
-              ),
-              const SizedBox(width: 12),
+              if (!hideIncome) ...[
+                _StatCard(
+                  label: 'Income',
+                  value: _yearMode
+                      ? finance.incomeInYear(year)
+                      : finance.incomeInMonth(_month),
+                  icon: Icons.arrow_downward,
+                  color: colors.green,
+                  onTap: widget.onViewTransactions == null || _yearMode
+                      ? null
+                      : () => widget.onViewTransactions!(TxType.income, _month),
+                ),
+                const SizedBox(width: 12),
+              ],
               _StatCard(
                 label: 'Spent',
                 value: monthExpense,
@@ -737,13 +744,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   months: _yearMode
                       ? [for (var m = 1; m <= 12; m++) DateTime(year, m)]
                       : null,
+                  showIncome: !hideIncome,
                 ),
                 const SizedBox(height: 8),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    _LegendDot(color: colors.green, label: 'Income'),
-                    const SizedBox(width: 16),
+                    if (!hideIncome) ...[
+                      _LegendDot(color: colors.green, label: 'Income'),
+                      const SizedBox(width: 16),
+                    ],
                     _LegendDot(color: scheme.error, label: 'Expense'),
                   ],
                 ),
@@ -793,7 +803,6 @@ class _UpcomingCard extends StatelessWidget {
     final settings = context.watch<SettingsProvider>();
     final scheme = Theme.of(context).colorScheme;
     final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
 
     final entries =
         <
@@ -807,25 +816,30 @@ class _UpcomingCard extends StatelessWidget {
             bool urgent,
             String? hideKey,
             Reminder? reminder,
+            Account? card,
           })
         >[];
 
     for (final a in finance.openAccounts) {
-      if (!a.isCard || a.dueDay == null) continue;
+      final s = cardBillStatus(a, now);
+      if (s == null) continue;
       final out = finance.accountOutstanding(a);
       if (out == null || out <= 0) continue;
-      final due = nextMonthlyOccurrence(a.dueDay!, now);
-      final days = due.difference(today).inDays;
       entries.add((
-        due: due,
+        due: s.due,
         icon: Icons.credit_card,
         color: scheme.error,
         label: '${a.name} bill',
-        sub: 'Due ${fmtDateCompact(due)} · ${_inDays(days)}',
+        // A paid cycle keeps its row (the amount is live post-payment
+        // spend, i.e. next cycle's bill so far), just without the urgency.
+        sub: s.paidThisCycle
+            ? 'Paid · next bill ${fmtDateCompact(s.due)}'
+            : 'Due ${fmtDateCompact(s.due)} · ${_inDays(s.daysUntil)}',
         amount: out,
-        urgent: days <= 3,
+        urgent: s.urgent,
         hideKey: null,
         reminder: null,
+        card: a,
       ));
     }
 
@@ -845,6 +859,7 @@ class _UpcomingCard extends StatelessWidget {
         urgent: days < 0,
         hideKey: h.key,
         reminder: null,
+        card: null,
       ));
     }
     // Manual reminders: shown from a week before the due day (the schedule
@@ -866,6 +881,7 @@ class _UpcomingCard extends StatelessWidget {
         urgent: days <= 0,
         hideKey: null,
         reminder: r,
+        card: null,
       ));
     }
     if (entries.isEmpty && finance.reminders.isEmpty) {
@@ -950,14 +966,16 @@ class _UpcomingCard extends StatelessWidget {
                             AppRadius.control,
                           ),
                           // Manual reminders: tap for mark paid / edit /
-                          // delete.
-                          onTap: e.reminder == null
-                              ? null
-                              : () => _showReminderActions(
+                          // delete. Card bills: mark paid / record payment.
+                          onTap: e.reminder != null
+                              ? () => _showReminderActions(
                                   context,
                                   e.reminder!,
                                   e.due,
-                                ),
+                                )
+                              : e.card != null
+                              ? () => _showCardBillActions(context, e.card!)
+                              : null,
                           // Detected patterns can be wrong — long-press hides one.
                           // Card bills aren't hideable; clear the card's due day
                           // instead.
@@ -1086,6 +1104,184 @@ class _UpcomingCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Mark paid / record payment for a card bill row. The natural due (this
+  /// cycle's, ignoring the paid flag) is recomputed here: a paid row already
+  /// DISPLAYS next cycle's date, but un-marking and the paid flag itself are
+  /// about the current cycle.
+  void _showCardBillActions(BuildContext context, Account a) {
+    final finance = context.read<FinanceProvider>();
+    final now = DateTime.now();
+    final natural = nextMonthlyOccurrence(a.dueDay!, now);
+    final paid = a.billPaidMonth == monthKey(natural);
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text(
+                '${a.name} bill',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
+              subtitle: Text(
+                paid
+                    ? 'Paid · next bill ${fmtDate(nextMonthlyOccurrence(a.dueDay!, natural.add(const Duration(days: 1))))}'
+                    : 'Due ${fmtDate(natural)}',
+              ),
+            ),
+            if (paid)
+              ListTile(
+                leading: const Icon(Icons.undo),
+                title: const Text('Undo mark paid'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  finance.clearCardBillPaid(a.id);
+                },
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.check_circle_outline),
+                title: const Text('Mark paid for this cycle'),
+                subtitle: const Text(
+                  'The amount keeps showing what has built up since — '
+                  'that belongs to the next bill.',
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  final prev = a.billPaidMonth;
+                  finance.markCardBillPaid(a.id, natural);
+                  showUndoSnackBar(
+                    context,
+                    '${a.name} bill marked paid',
+                    () => finance.setCardBillPaidMonth(a.id, prev),
+                  );
+                },
+              ),
+            ListTile(
+              leading: const Icon(Icons.payments_outlined),
+              title: const Text('Record a payment…'),
+              subtitle: const Text(
+                'For a payment the app never saw — the amount drops by '
+                'what you paid.',
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _showRecordPaymentDialog(context, a, natural);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showRecordPaymentDialog(
+    BuildContext context,
+    Account a,
+    DateTime due,
+  ) async {
+    final finance = context.read<FinanceProvider>();
+    final ctrl = TextEditingController();
+    var paidOn = DateTime.now();
+    String? error;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => DisposeScope(
+        disposables: [ctrl],
+        child: StatefulBuilder(
+          builder: (ctx, setState) => AlertDialog(
+            scrollable: true,
+            title: const Text('Record a payment'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: ctrl,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: 'Amount paid',
+                    prefixText: '₹ ',
+                    helperText:
+                        'The bill amount you paid — this cycle is marked '
+                        'paid and the outstanding drops by it.',
+                    helperMaxLines: 4,
+                    border: const OutlineInputBorder(),
+                    errorText: error,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.event_outlined),
+                  title: const Text('Paid on'),
+                  subtitle: Text(fmtDate(paidOn)),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: ctx,
+                      initialDate: paidOn,
+                      firstDate: DateTime.now().subtract(
+                        const Duration(days: 30),
+                      ),
+                      lastDate: DateTime.now(),
+                    );
+                    if (picked != null) setState(() => paidOn = picked);
+                  },
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final v = parseAmount(ctrl.text.trim());
+                  if (v == null || v <= 0) {
+                    setState(() => error = 'Enter the amount you paid');
+                    return;
+                  }
+                  Navigator.pop(ctx);
+                  final result = await finance.recordCardPayment(
+                    accountId: a.id,
+                    amount: v,
+                    paidOn: paidOn,
+                    due: due,
+                  );
+                  if (result == null || !context.mounted) return;
+                  showUndoSnackBar(
+                    context,
+                    'Recorded ${fmtMoney(v)} payment'
+                    '${result.pairId != null ? ' · matched a bank debit' : ''}',
+                    () async {
+                      await finance.deleteTransaction(result.txId);
+                      if (result.bankLegBefore != null) {
+                        await finance.restoreEditedTransactions([
+                          result.bankLegBefore!,
+                        ]);
+                      }
+                      await finance.setCardBillPaidMonth(
+                        a.id,
+                        result.prevPaidMonth,
+                      );
+                    },
+                  );
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
         ),
       ),
     );

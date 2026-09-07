@@ -97,4 +97,60 @@ void main() {
       await p.setCardCycle('nope', dueDay: 10); // must not throw
     });
   });
+
+  group('billPaidMonth', () {
+    test('JSON round-trip; absent key reads back null', () {
+      final a = Account(
+        id: 'a1',
+        name: 'Card',
+        type: AccountType.creditCard,
+        keys: const {},
+        billPaidMonth: '2026-09',
+      );
+      expect(Account.fromJson(a.toJson()).billPaidMonth, '2026-09');
+      final old = Account.fromJson({
+        'id': 'a1',
+        'name': 'Card',
+        'type': 'creditCard',
+        'keys': <String>[],
+      });
+      expect(old.billPaidMonth, isNull);
+    });
+
+    test('copyWith sets and clears independently of the cycle days', () {
+      final a = Account(
+        id: 'a1',
+        name: 'Card',
+        type: AccountType.creditCard,
+        keys: const {},
+        dueDay: 10,
+        billPaidMonth: '2026-09',
+      );
+      final cleared = a.copyWith(clearBillPaidMonth: true);
+      expect(cleared.billPaidMonth, isNull);
+      expect(cleared.dueDay, 10);
+      expect(a.copyWith(dueDay: 12).billPaidMonth, '2026-09');
+    });
+
+    test('mark / clear / raw set persist across reload', () async {
+      final p = FinanceProvider();
+      await p.load();
+      final id = await p.addAccount(name: 'Card', type: AccountType.creditCard);
+
+      await p.markCardBillPaid(id, DateTime(2026, 9, 10));
+      expect(p.accountById(id)!.billPaidMonth, '2026-09');
+
+      final p2 = FinanceProvider();
+      await p2.load();
+      expect(p2.accountById(id)!.billPaidMonth, '2026-09');
+
+      await p.clearCardBillPaid(id);
+      expect(p.accountById(id)!.billPaidMonth, isNull);
+
+      // The raw primitive restores an arbitrary previous value (Undo path).
+      await p.setCardBillPaidMonth(id, '2026-08');
+      expect(p.accountById(id)!.billPaidMonth, '2026-08');
+      await p.setCardBillPaidMonth('nope', '2026-08'); // no-op, must not throw
+    });
+  });
 }

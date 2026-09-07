@@ -1719,7 +1719,11 @@ class _MonthHeader extends StatelessWidget {
                     // AA contrast on the light surface.
                     if (income > 0)
                       Text(
-                        '+${fmtMoneyCompact(income)}',
+                        context.select<SettingsProvider, bool>(
+                              (s) => s.hideIncome,
+                            )
+                            ? '+$kMaskedAmount'
+                            : '+${fmtMoneyCompact(income)}',
                         style: TextStyle(
                           color: AppColors.of(context).green,
                           fontWeight: FontWeight.w700,
