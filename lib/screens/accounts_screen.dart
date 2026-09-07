@@ -237,6 +237,29 @@ class _AccountCard extends StatelessWidget {
   }
 }
 
+/// One line saying how the displayed figure was calculated — shared by the
+/// bank/savings Balance block and the card Outstanding block. The "+ N txns
+/// since" suffix is a delta count (rows applied on top of the stated
+/// figure), deliberately not the header's total transaction count.
+String provenanceLine(
+  ({
+    BalanceSource source,
+    DateTime? asOf,
+    int rowsSince,
+    OutstandingBlocker? blocker,
+  })
+  p,
+) {
+  final n = p.rowsSince;
+  final since = n == 0 ? '' : ' + $n txn${n == 1 ? '' : 's'} since';
+  final at = p.asOf == null ? '' : ' · ${fmtDateMaybeTime(p.asOf!)}';
+  return switch (p.source) {
+    BalanceSource.manual => 'Set by you$at$since',
+    BalanceSource.alert => 'From bank alert$at$since',
+    BalanceSource.ledger => 'Sum of $n recorded txn${n == 1 ? '' : 's'}',
+  };
+}
+
 class _BankBalance extends StatelessWidget {
   final Account account;
   const _BankBalance({required this.account});
@@ -245,16 +268,10 @@ class _BankBalance extends StatelessWidget {
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
     final scheme = Theme.of(context).colorScheme;
-    final (source, asOf) = finance.accountBalanceProvenance(account);
+    final p = finance.accountProvenance(account);
     // Say where the figure comes from — "why is it showing this number"
     // should be readable off the tile, not reverse-engineered.
-    final provenance = switch (source) {
-      BalanceSource.manual =>
-        'Set by you${asOf == null ? '' : ' · ${fmtDateMaybeTime(asOf)}'}',
-      BalanceSource.alert =>
-        'From bank alert${asOf == null ? '' : ' · ${fmtDateMaybeTime(asOf)}'}',
-      BalanceSource.ledger => 'From transaction history',
-    };
+    final provenance = provenanceLine(p);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -354,6 +371,77 @@ class _GoalProgress extends StatelessWidget {
 ///
 /// Same input contract as the set-balance dialog: empty clears, an
 /// unreadable entry errors instead of silently clearing the limit.
+/// Manual balance (banks) / outstanding (cards). The entered figure wins
+/// until a newer SMS-reported one arrives. Shared by the account menu's
+/// "Set balance… / Set outstanding…" and the card tile's no-alert affordance.
+///
+/// Only an explicitly empty field clears the value. An unreadable entry
+/// shows an error — it used to fall through `double.tryParse` as null and
+/// silently *clear* the balance, so typing "45,000" wiped the very figure
+/// being set and the tile snapped back to the SMS-derived number.
+Future<void> showSetBalanceDialog(BuildContext context, Account account) async {
+  final isCard = account.isCard;
+  final ctrl = TextEditingController(
+    text: account.manualBalance?.toStringAsFixed(2) ?? '',
+  );
+  String? error;
+  await showDialog(
+    context: context,
+    builder: (ctx) => DisposeScope(
+      disposables: [ctrl],
+      child: StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          // Keyboard + multi-line helper text overflow a small landscape
+          // viewport without this.
+          scrollable: true,
+          title: Text(isCard ? 'Set outstanding' : 'Set balance'),
+          content: TextField(
+            controller: ctrl,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: isCard ? 'Current outstanding' : 'Current balance',
+              prefixText: '₹ ',
+              helperText:
+                  'A newer bank alert takes over automatically. '
+                  'Leave blank to go back to SMS figures only.',
+              border: const OutlineInputBorder(),
+              errorText: error,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final text = ctrl.text.trim();
+                if (text.isEmpty) {
+                  ctx.read<FinanceProvider>().setManualBalance(
+                    account.id,
+                    null,
+                  );
+                  Navigator.pop(ctx);
+                  return;
+                }
+                final v = parseAmount(text);
+                if (v == null) {
+                  setState(() => error = 'Enter a number, e.g. 45000');
+                  return;
+                }
+                ctx.read<FinanceProvider>().setManualBalance(account.id, v);
+                Navigator.pop(ctx);
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
 Future<void> showCreditLimitDialog(
   BuildContext context,
   Account account,
@@ -604,6 +692,7 @@ class _CardFigures extends StatelessWidget {
     final available = finance.accountAvailable(account);
     final limit = finance.accountCreditLimit(account);
     final spent = finance.accountSpentThisMonth(account);
+    final p = finance.accountProvenance(account);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -631,18 +720,31 @@ class _CardFigures extends StatelessWidget {
             ),
           ],
         ),
-        // No outstanding figure means the total limit is unknown: alerts state
-        // only what is still available, and paying a bill raises that — so the
-        // "largest ever seen" estimate tracks the newest figure and the
-        // subtraction collapses to zero. Ask for the real limit instead of
-        // reporting a confident ₹0.
-        if (outstanding == null)
+        // No outstanding figure has two distinct causes, each with its own
+        // remedy — name the right one instead of always asking for the
+        // credit limit (which does nothing when no alert ever stated a
+        // balance).
+        if (outstanding == null) ...[
+          const SizedBox(height: 4),
+          Text(
+            p.blocker == OutstandingBlocker.noAlert
+                ? "No bank alert has stated this card's balance yet."
+                : 'Bank alerts state only the available limit; the total '
+                      'limit is needed.',
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+          ),
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
-              onPressed: () => showCreditLimitDialog(context, account),
+              onPressed: () => p.blocker == OutstandingBlocker.noAlert
+                  ? showSetBalanceDialog(context, account)
+                  : showCreditLimitDialog(context, account),
               icon: const Icon(Icons.arrow_forward, size: 16),
-              label: const Text("Set credit limit to see what's owed"),
+              label: Text(
+                p.blocker == OutstandingBlocker.noAlert
+                    ? 'Set outstanding…'
+                    : "Set credit limit to see what's owed",
+              ),
               // Keep the small text, not the small target: Size.zero +
               // shrinkWrap left ~24dp of tap height on the one control that
               // unblocks "Outstanding —".
@@ -651,8 +753,16 @@ class _CardFigures extends StatelessWidget {
                 textStyle: const TextStyle(fontSize: 12),
               ),
             ),
-          )
-        else if (limit != null && available != null) ...[
+          ),
+        ] else ...[
+          const SizedBox(height: 4),
+          // Same "how was this calculated" line the bank tiles carry.
+          Text(
+            provenanceLine(p),
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+          ),
+        ],
+        if (outstanding != null && limit != null && available != null) ...[
           const SizedBox(height: 10),
           AnimatedProgress(
             value: (limit == 0) ? 0 : (1 - available / limit).clamp(0.0, 1.0),
@@ -749,7 +859,7 @@ class _AccountMenu extends StatelessWidget {
           case 'cycle':
             showCardCycleDialog(context, account);
           case 'balance':
-            _setBalance(context);
+            showSetBalanceDialog(context, account);
           case 'merge':
             _merge(context);
           case 'close':
@@ -1007,78 +1117,6 @@ class _AccountMenu extends StatelessWidget {
                     ctrl.text,
                     kindIcon: kindIcon,
                   );
-                  Navigator.pop(ctx);
-                },
-                child: const Text('Save'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Manual balance (banks) / outstanding (cards). The entered figure wins
-  /// until a newer SMS-reported one arrives.
-  ///
-  /// Only an explicitly empty field clears the value. An unreadable entry
-  /// shows an error — it used to fall through `double.tryParse` as null and
-  /// silently *clear* the balance, so typing "45,000" wiped the very figure
-  /// being set and the tile snapped back to the SMS-derived number.
-  Future<void> _setBalance(BuildContext context) async {
-    final isCard = account.isCard;
-    final ctrl = TextEditingController(
-      text: account.manualBalance?.toStringAsFixed(2) ?? '',
-    );
-    String? error;
-    await showDialog(
-      context: context,
-      builder: (ctx) => DisposeScope(
-        disposables: [ctrl],
-        child: StatefulBuilder(
-          builder: (ctx, setState) => AlertDialog(
-            // Keyboard + multi-line helper text overflow a small landscape
-            // viewport without this.
-            scrollable: true,
-            title: Text(isCard ? 'Set outstanding' : 'Set balance'),
-            content: TextField(
-              controller: ctrl,
-              autofocus: true,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: InputDecoration(
-                labelText: isCard ? 'Current outstanding' : 'Current balance',
-                prefixText: '₹ ',
-                helperText:
-                    'A newer bank alert takes over automatically. '
-                    'Leave blank to go back to SMS figures only.',
-                border: const OutlineInputBorder(),
-                errorText: error,
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final text = ctrl.text.trim();
-                  if (text.isEmpty) {
-                    ctx.read<FinanceProvider>().setManualBalance(
-                      account.id,
-                      null,
-                    );
-                    Navigator.pop(ctx);
-                    return;
-                  }
-                  final v = parseAmount(text);
-                  if (v == null) {
-                    setState(() => error = 'Enter a number, e.g. 45000');
-                    return;
-                  }
-                  ctx.read<FinanceProvider>().setManualBalance(account.id, v);
                   Navigator.pop(ctx);
                 },
                 child: const Text('Save'),

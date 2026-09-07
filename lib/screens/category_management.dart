@@ -11,7 +11,7 @@ import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
 import '../widgets/section_header.dart';
 
-/// Category & group management — the Categories tab in Classifiers.
+/// Category & group management — the Categories tab in the Cockpit.
 ///
 /// Moved here from Settings: creating categories is classification work, so
 /// it lives next to the rules that use them. Groups (Needs/Wants/…) are the
@@ -501,7 +501,7 @@ class _CategoriesTabState extends State<CategoriesTab> {
 }
 
 /// Add/edit dialog for categories, including the parent-group picker.
-/// Public so the Classifiers FAB can open it.
+/// Public so the Cockpit FAB can open it.
 ///
 /// Built-in categories are fully editable too — name, icon, colour,
 /// direction and transfer-ness — except the two fallback "Other"
