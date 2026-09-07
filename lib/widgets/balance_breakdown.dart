@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../providers/finance_provider.dart';
+import '../providers/settings_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import 'glossy.dart';
@@ -90,7 +92,12 @@ Future<void> showBalanceBreakdownSheet(
                       icon: Icons.arrow_downward,
                       color: AppColors.of(ctx).green,
                       label: 'Income (all time)',
-                      amount: '+${fmtMoney(finance.totalIncome)}',
+                      amount:
+                          ctx.select<SettingsProvider, bool>(
+                            (s) => s.hideIncome,
+                          )
+                          ? '+$kMaskedAmount'
+                          : '+${fmtMoney(finance.totalIncome)}',
                     ),
                     BreakdownRow(
                       icon: Icons.arrow_upward,

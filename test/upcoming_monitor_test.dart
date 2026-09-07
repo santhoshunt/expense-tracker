@@ -109,6 +109,48 @@ void main() {
     expect(notifications.shown, isEmpty);
   });
 
+  test('bill marked paid stays silent, with no marker written', () async {
+    final (finance, settings, id) = await cardFixture();
+    final due = nextMonthlyOccurrence(DateTime.now().day, DateTime.now());
+    await finance.markCardBillPaid(id, due);
+
+    await monitor.check(finance, settings);
+    expect(notifications.shown, isEmpty);
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getBool(UpcomingMonitor.cardDueKey(id, due)),
+      isNull,
+      reason: 'the paid cycle never enters the checks list',
+    );
+  });
+
+  test('a stale paid flag from last cycle still fires this cycle', () async {
+    final (finance, settings, id) = await cardFixture();
+    final now = DateTime.now();
+    await finance.setCardBillPaidMonth(
+      id,
+      monthKey(DateTime(now.year, now.month - 1, 1)),
+    );
+    await monitor.check(finance, settings);
+    expect(notifications.shown, hasLength(1));
+  });
+
+  test('sweep keeps a current-month marker intact', () async {
+    final (finance, settings, id) = await cardFixture();
+    final due = nextMonthlyOccurrence(DateTime.now().day, DateTime.now());
+    SharedPreferences.setMockInitialValues({
+      UpcomingMonitor.cardDueKey(id, due): true,
+      'card_due_fired_${id}_2020-01': true,
+    });
+    await UpcomingMonitor(
+      notifications: notifications,
+    ).check(finance, settings);
+    expect(notifications.shown, isEmpty, reason: 'marker already set');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool(UpcomingMonitor.cardDueKey(id, due)), isTrue);
+    expect(prefs.getBool('card_due_fired_${id}_2020-01'), isNull);
+  });
+
   test('recurring payment due today fires once, hidden key never', () async {
     final finance = FinanceProvider();
     await finance.load();

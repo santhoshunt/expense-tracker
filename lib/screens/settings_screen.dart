@@ -1846,17 +1846,35 @@ class _PrivacySectionState extends State<_PrivacySection> {
   @override
   Widget build(BuildContext context) {
     final enabled = context.select<SettingsProvider, bool>((s) => s.appLock);
+    final hideIncome = context.select<SettingsProvider, bool>(
+      (s) => s.hideIncome,
+    );
     return FrostedPanel(
       radius: BorderRadius.circular(20),
-      child: SwitchListTile(
-        secondary: const Icon(Icons.lock_outline),
-        title: const Text('App lock'),
-        subtitle: Text(
-          'Require fingerprint or device PIN when opening the app',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        value: enabled,
-        onChanged: _busy ? null : _toggle,
+      child: Column(
+        children: [
+          SwitchListTile(
+            secondary: const Icon(Icons.lock_outline),
+            title: const Text('App lock'),
+            subtitle: Text(
+              'Require fingerprint or device PIN when opening the app',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            value: enabled,
+            onChanged: _busy ? null : _toggle,
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.visibility_off_outlined),
+            title: const Text('Hide income'),
+            subtitle: Text(
+              'Hide income totals on the dashboard and in monthly '
+              'summaries. Individual transactions still show their amounts.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            value: hideIncome,
+            onChanged: (v) => context.read<SettingsProvider>().setHideIncome(v),
+          ),
+        ],
       ),
     );
   }

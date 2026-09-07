@@ -71,6 +71,13 @@ class Account {
   /// Days past a month's end clamp to its last day. Null = not set.
   final int? dueDay;
 
+  /// `yyyy-MM` ([monthKey]) of the natural due date the user marked paid,
+  /// cards only — mirrors `Reminder.lastPaidMonth`. While it matches the
+  /// current cycle's due month, the bill line shows "Paid · next bill …" and
+  /// the due notification stays silent; a stale value simply never matches
+  /// again, so it self-expires with no cleanup.
+  final String? billPaidMonth;
+
   /// User-defined kind of a savings/asset account ("RD", "Stocks", "Gold"…).
   /// Shown instead of the generic "Savings" label.
   final String? kind;
@@ -98,6 +105,7 @@ class Account {
     this.manualBalanceAt,
     this.statementDay,
     this.dueDay,
+    this.billPaidMonth,
     this.kind,
     this.kindIcon,
     this.goalAmount,
@@ -132,6 +140,8 @@ class Account {
     bool clearStatementDay = false,
     int? dueDay,
     bool clearDueDay = false,
+    String? billPaidMonth,
+    bool clearBillPaidMonth = false,
     String? kind,
     String? kindIcon,
     bool clearKind = false,
@@ -155,6 +165,9 @@ class Account {
         ? null
         : (statementDay ?? this.statementDay),
     dueDay: clearDueDay ? null : (dueDay ?? this.dueDay),
+    billPaidMonth: clearBillPaidMonth
+        ? null
+        : (billPaidMonth ?? this.billPaidMonth),
     kind: clearKind ? null : (kind ?? this.kind),
     kindIcon: clearKind ? null : (kindIcon ?? this.kindIcon),
     goalAmount: clearGoalAmount ? null : (goalAmount ?? this.goalAmount),
@@ -172,6 +185,7 @@ class Account {
       'manualBalanceAt': manualBalanceAt!.toIso8601String(),
     if (statementDay != null) 'statementDay': statementDay,
     if (dueDay != null) 'dueDay': dueDay,
+    if (billPaidMonth != null) 'billPaidMonth': billPaidMonth,
     if (kind != null) 'kind': kind,
     if (kindIcon != null) 'kindIcon': kindIcon,
     if (goalAmount != null) 'goalAmount': goalAmount,
@@ -202,6 +216,7 @@ class Account {
       manualBalanceAt: manualBalanceAt,
       statementDay: (json['statementDay'] as num?)?.toInt(),
       dueDay: (json['dueDay'] as num?)?.toInt(),
+      billPaidMonth: json['billPaidMonth'] as String?,
       kind: json['kind'] as String?,
       kindIcon: json['kindIcon'] as String?,
       goalAmount: (json['goalAmount'] as num?)?.toDouble(),

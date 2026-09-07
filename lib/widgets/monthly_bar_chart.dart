@@ -13,7 +13,11 @@ import '../utils/format.dart';
 class MonthlyBarChart extends StatelessWidget {
   final List<DateTime>? months;
 
-  const MonthlyBarChart({super.key, this.months});
+  /// False removes the income series entirely (Settings → Hide income):
+  /// no income bars, and the scale and peak labels derive from expenses.
+  final bool showIncome;
+
+  const MonthlyBarChart({super.key, this.months, this.showIncome = true});
 
   @override
   Widget build(BuildContext context) {
@@ -26,7 +30,7 @@ class MonthlyBarChart extends StatelessWidget {
         .map(
           (m) => _MonthData(
             label: DateFormat('MMM').format(m),
-            income: finance.incomeInMonth(m),
+            income: showIncome ? finance.incomeInMonth(m) : 0,
             expense: finance.expenseInMonth(m),
           ),
         )
@@ -123,6 +127,7 @@ class _BarChartPainter extends CustomPainter {
       final cx = groupWidth * i + groupWidth / 2;
 
       void bar(double value, double xOffset, Color color) {
+        if (value <= 0) return; // no zero-height rounded-rect sliver
         final h = (value / maxVal) * (chartHeight - 8);
         final rect = RRect.fromRectAndRadius(
           Rect.fromLTWH(cx + xOffset, chartHeight - h, barWidth, h),

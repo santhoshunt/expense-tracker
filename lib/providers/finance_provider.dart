@@ -19,6 +19,17 @@ import '../services/transfer_pairing.dart';
 import '../utils/dates.dart';
 import '../utils/figma_palette.dart';
 
+/// What [FinanceProvider.recordCardPayment] did, so a snackbar Undo can
+/// reverse all of it: delete [txId] (which unlinks the pair), restore
+/// [bankLegBefore]'s pre-pair copy when non-null, and put [prevPaidMonth]
+/// back via setCardBillPaidMonth.
+typedef CardPaymentResult = ({
+  String txId,
+  String? pairId,
+  Tx? bankLegBefore,
+  String? prevPaidMonth,
+});
+
 /// Income / expense / savings totals for one month, plus the per-category
 /// expense breakdown and the transfer flows — all produced in a single pass.
 class _MonthTotals {
@@ -2642,6 +2653,93 @@ class FinanceProvider extends ChangeNotifier {
     );
     notifyListeners();
     await _persist(accounts: true);
+  }
+
+  /// Raw bill-paid marker (`yyyy-MM` of the natural due date, or null to
+  /// clear). The primitive exists so an Undo can restore whatever value was
+  /// there before — [markCardBillPaid]/[clearCardBillPaid] are the intents.
+  Future<void> setCardBillPaidMonth(String id, String? ym) async {
+    final i = _accounts.indexWhere((a) => a.id == id);
+    if (i == -1) return;
+    _accounts[i] = ym == null
+        ? _accounts[i].copyWith(clearBillPaidMonth: true)
+        : _accounts[i].copyWith(billPaidMonth: ym);
+    notifyListeners();
+    await _persist(accounts: true);
+  }
+
+  /// Marks the cycle whose natural due date is [due] as paid — the Upcoming
+  /// row moves to the next cycle and its notification stays silent. The
+  /// outstanding figure is untouched: it keeps showing live spends.
+  Future<void> markCardBillPaid(String id, DateTime due) =>
+      setCardBillPaidMonth(id, monthKey(due));
+
+  Future<void> clearCardBillPaid(String id) => setCardBillPaidMonth(id, null);
+
+  /// Records a card bill payment the app never saw (paid from an account
+  /// without SMS import, or the card's confirmation never arrived): a manual
+  /// income row on the card, categorised [kCardPaymentCategoryId], dated
+  /// [paidOn] — so outstanding drops by [amount], leaving only later spends.
+  /// Also marks the cycle due on [due] paid. When exactly one existing bank
+  /// debit matches (same amount to the paise, within [kPairDateWindow] of
+  /// [paidOn], not on a card, unpaired, non-spam) the two legs are paired so
+  /// the debit stops counting as spend; ambiguity skips the pairing.
+  ///
+  /// A payment dated before the newest SMS-stated card balance changes
+  /// outstanding by nothing — that anchor already reflected it (the
+  /// "already registered" case). The returned record carries everything an
+  /// Undo needs; null when [accountId] is not a card or [amount] invalid.
+  Future<CardPaymentResult?> recordCardPayment({
+    required String accountId,
+    required double amount,
+    required DateTime paidOn,
+    required DateTime due,
+  }) async {
+    final acct = accountById(accountId);
+    if (acct == null || !acct.isCard || !amount.isFinite || amount <= 0) {
+      return null;
+    }
+    final prevPaidMonth = acct.billPaidMonth;
+
+    final txId = await addTransaction(
+      type: TxType.income,
+      categoryId: kCardPaymentCategoryId,
+      amount: amount,
+      note: 'Card bill payment',
+      date: paidOn,
+    );
+    await assignAccount(txId, accountId);
+    await markCardBillPaid(accountId, due);
+
+    // Pending rows are eligible — pairing confirms them, same as the
+    // review-card suggestions.
+    final cents = (amount * 100).round();
+    final candidates = [
+      for (final t in _transactions)
+        if (t.id != txId &&
+            t.type == TxType.expense &&
+            t.pairId == null &&
+            !t.suspectedSpam &&
+            (t.amount * 100).round() == cents &&
+            t.date.difference(paidOn).abs() <= kPairDateWindow &&
+            switch (accountForKey(t.acctKey)) {
+              final Account a => !a.isCard,
+              null => false,
+            })
+          t,
+    ];
+    Tx? bankLegBefore;
+    String? pairId;
+    if (candidates.length == 1) {
+      bankLegBefore = candidates.single;
+      pairId = await pairTransactions(bankLegBefore.id, txId);
+    }
+    return (
+      txId: txId,
+      pairId: pairId,
+      bankLegBefore: bankLegBefore,
+      prevPaidMonth: prevPaidMonth,
+    );
   }
 
   /// User-entered balance (banks) / outstanding (cards). Stamped with "now"

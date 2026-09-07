@@ -37,6 +37,7 @@ class SettingsProvider extends ChangeNotifier {
   /// into [_kCollapsedSections] on load.
   static const _kLegacyUpcomingCollapsed = 'upcoming_collapsed_v1';
   static const _kAppLock = 'app_lock_enabled_v1';
+  static const _kHideIncome = 'hide_income_v1';
   static const _kDismissedPairs = 'pair_dismissed_v1';
 
   ThemeMode _mode = ThemeMode.dark; // the app's native look
@@ -52,6 +53,7 @@ class SettingsProvider extends ChangeNotifier {
   Set<String> _collapsedSections = {};
   Set<String> _dismissedPairs = {};
   bool _appLock = false;
+  bool _hideIncome = false;
   bool _loaded = false;
 
   ThemeMode get mode => _mode;
@@ -78,6 +80,11 @@ class SettingsProvider extends ChangeNotifier {
 
   /// Biometric/device-credential gate on the whole app.
   bool get appLock => _appLock;
+
+  /// Hide income TOTALS: the dashboard Income tile and chart bars disappear,
+  /// month-header and breakdown totals show a mask. Individual transaction
+  /// rows keep their amounts.
+  bool get hideIncome => _hideIncome;
 
   /// Transfer-pair suggestions the user rejected ("Not a transfer"), keyed
   /// by pairSuggestionKey (two row ids). Backed up: the judgement is about
@@ -144,6 +151,7 @@ class SettingsProvider extends ChangeNotifier {
       });
     }
     _appLock = tryRead(() => prefs.getBool(_kAppLock) ?? false, false);
+    _hideIncome = tryRead(() => prefs.getBool(_kHideIncome) ?? false, false);
     _dismissedPairs = tryRead(
       () => (prefs.getStringList(_kDismissedPairs) ?? const []).toSet(),
       <String>{},
@@ -292,6 +300,13 @@ class SettingsProvider extends ChangeNotifier {
     await _persistPref(_kAppLock, (p) => p.setBool(_kAppLock, enabled));
   }
 
+  Future<void> setHideIncome(bool enabled) async {
+    if (enabled == _hideIncome) return;
+    _hideIncome = enabled;
+    notifyListeners();
+    await _persistPref(_kHideIncome, (p) => p.setBool(_kHideIncome, enabled));
+  }
+
   Future<void> setAutoImport(AutoImportFrequency frequency) async {
     if (frequency == _autoImport) return;
     _autoImport = frequency;
@@ -317,6 +332,7 @@ class SettingsProvider extends ChangeNotifier {
     'alertOver': _alertOver,
     'upcomingReminders': _upcomingReminders,
     'upcomingHidden': _upcomingHidden.toList(),
+    'hideIncome': _hideIncome,
     'dismissedPairs': _dismissedPairs.toList(),
     // appLock is intentionally absent — see setAppLock.
   };
@@ -351,6 +367,9 @@ class SettingsProvider extends ChangeNotifier {
           if (k is String) k,
       };
     }
+    if (map['hideIncome'] is bool) {
+      _hideIncome = map['hideIncome'] as bool;
+    }
     if (map['dismissedPairs'] is List) {
       _dismissedPairs = {
         for (final k in map['dismissedPairs'] as List)
@@ -369,6 +388,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setBool(_kAlertOver, _alertOver);
       await p.setBool(_kUpcomingReminders, _upcomingReminders);
       await p.setStringList(_kUpcomingHidden, _upcomingHidden.toList());
+      await p.setBool(_kHideIncome, _hideIncome);
       await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());
     });
     notifyListeners();

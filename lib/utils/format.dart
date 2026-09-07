@@ -15,6 +15,10 @@ final DateFormat _dayMonth = DateFormat('d MMM');
 final DateFormat _time = DateFormat('h:mm a');
 final DateFormat _monthYear = DateFormat('MMMM yyyy');
 
+/// Stand-in for an amount the user chose to hide (Settings → Privacy →
+/// Hide income). Totals render this; the underlying value never changes.
+const String kMaskedAmount = '₹••••';
+
 String fmtMoney(double v) => _currency.format(v);
 String fmtMoneyCompact(double v) => _currencyCompact.format(v);
 String fmtDate(DateTime d) => _date.format(d);

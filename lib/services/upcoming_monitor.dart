@@ -4,6 +4,7 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
+import 'card_bill.dart';
 import 'notification_service.dart';
 import 'recurring_detector.dart';
 import 'reminder_schedule.dart';
@@ -65,7 +66,6 @@ class UpcomingMonitor {
     _busy = true;
     try {
       final now = DateTime.now();
-      final today = DateTime(now.year, now.month, now.day);
       final prefs = await SharedPreferences.getInstance();
 
       if (!_sweptOldMarkers) {
@@ -89,19 +89,20 @@ class UpcomingMonitor {
       final checks = <({String key, int id, String title, String body})>[];
 
       for (final a in finance.openAccounts) {
-        if (!a.isCard || a.dueDay == null) continue;
+        // Paid cycle: the status moves due to next month (always beyond the
+        // window), so this cycle stays silent and next cycle's key is new.
+        final s = cardBillStatus(a, now);
+        if (s == null || s.paidThisCycle) continue;
         final out = finance.accountOutstanding(a);
         if (out == null || out <= 0) continue;
-        final due = nextMonthlyOccurrence(a.dueDay!, now);
-        final days = due.difference(today).inDays;
-        if (days > cardWindowDays) continue;
+        if (s.daysUntil > cardWindowDays) continue;
         checks.add((
-          key: cardDueKey(a.id, due),
+          key: cardDueKey(a.id, s.due),
           // Masked hash, same scheme as BudgetMonitor's custom-budget ids;
           // the 94xxx range is distinct from budget alerts (90xxx/92xxx).
           id: 94000 + ((a.id.hashCode & 0x7fffffff) % 1000),
-          title: '${a.name} bill due ${_inDays(days)}',
-          body: '${fmtMoney(out)} due on ${fmtDate(due)}',
+          title: '${a.name} bill due ${_inDays(s.daysUntil)}',
+          body: '${fmtMoney(out)} due on ${fmtDate(s.due)}',
         ));
       }
 
