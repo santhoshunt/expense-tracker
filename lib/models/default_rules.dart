@@ -1,7 +1,7 @@
 /// Built-in keyword → category mappings, seeded into the user's classifier
 /// rules on first launch (ids prefixed `builtin_`). They used to be
 /// hard-coded inside the SMS parser; as real rules they are visible,
-/// editable and deletable in the Classifiers page, and user-created rules
+/// editable and deletable in the Cockpit's Rules tab, and user-created rules
 /// always outrank them (rules are matched first-in-list).
 const Map<String, String> kDefaultKeywordCategories = {
   'swiggy': 'food',

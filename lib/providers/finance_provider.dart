@@ -75,6 +75,15 @@ class _MonthTotals {
 /// the tile so "why is it showing this number" never has to be guessed.
 enum BalanceSource { manual, alert, ledger }
 
+/// Why a card's outstanding is unknowable, so the tile can offer the remedy
+/// that actually works:
+/// - [noAlert]: no row has ever stated a balance ("Avl Lmt") — only setting
+///   the outstanding manually can help; a credit limit alone changes nothing.
+/// - [limitUnknown]: alerts exist but state only the AVAILABLE limit, and the
+///   estimated total collapsed to it — entering the real credit limit fixes
+///   it.
+enum OutstandingBlocker { noAlert, limitUnknown }
+
 /// Every figure the UI shows for one account, produced in a single pass over
 /// that account's transactions instead of one pass per figure.
 class _AccountFigures {
@@ -88,6 +97,14 @@ class _AccountFigures {
   final double spentThisMonth;
   final int txCount;
 
+  /// Rows that contribute on top of the figure's source: after the anchor
+  /// (alert), strictly after the manual timestamp (manual), or every counted
+  /// row (ledger). Powers the "+ N txns since" provenance suffix.
+  final int rowsSinceSource;
+
+  /// Non-null exactly when [outstanding] is null on a card.
+  final OutstandingBlocker? outstandingBlocker;
+
   const _AccountFigures({
     required this.balance,
     required this.balanceSource,
@@ -98,6 +115,8 @@ class _AccountFigures {
     required this.available,
     required this.spentThisMonth,
     required this.txCount,
+    required this.rowsSinceSource,
+    required this.outstandingBlocker,
   });
 }
 
@@ -2387,10 +2406,12 @@ class FinanceProvider extends ChangeNotifier {
         (anchor == null || manualAt.isAfter(anchor.date));
 
     var deltaAfterManual = 0.0;
+    var rowsAfterManual = 0;
     if (manualIsNewer) {
       for (final t in txs) {
         if (!t.date.isAfter(manualAt)) continue;
         deltaAfterManual += signed(t);
+        rowsAfterManual++;
       }
     }
 
@@ -2400,18 +2421,22 @@ class FinanceProvider extends ChangeNotifier {
     final double balance;
     final BalanceSource balanceSource;
     final DateTime? balanceAsOf;
+    final int rowsSinceSource;
     if (manualIsNewer) {
       balance = acc.manualBalance! + deltaAfterManual;
       balanceSource = BalanceSource.manual;
       balanceAsOf = manualAt;
+      rowsSinceSource = rowsAfterManual;
     } else if (anchor != null) {
       balance = anchor.balanceAfter! + deltaAfterAnchor;
       balanceSource = BalanceSource.alert;
       balanceAsOf = anchor.date;
+      rowsSinceSource = txs.length - 1 - anchorIndex;
     } else {
       balance = ledgerTotal;
       balanceSource = BalanceSource.ledger;
       balanceAsOf = null;
+      rowsSinceSource = txs.length;
     }
 
     // An SMS states the *available* limit, never the total. Without a
@@ -2426,6 +2451,7 @@ class FinanceProvider extends ChangeNotifier {
         limitIsEstimated && anchor != null && anchor.balanceAfter == maxSeen;
 
     final double? outstanding;
+    OutstandingBlocker? outstandingBlocker;
     if (manualIsNewer) {
       outstanding = (acc.manualBalance! - deltaAfterManual).clamp(
         0,
@@ -2433,6 +2459,14 @@ class FinanceProvider extends ChangeNotifier {
       );
     } else if (limit == null || anchor == null || limitCollapsed) {
       outstanding = null;
+      // Cards only — a bank reaching this branch is normal, not blocked.
+      // `anchor != null` implies `limit != null` (any anchor feeds maxSeen),
+      // so the two blockers partition the null branch cleanly.
+      if (acc.isCard) {
+        outstandingBlocker = anchor == null
+            ? OutstandingBlocker.noAlert
+            : OutstandingBlocker.limitUnknown;
+      }
     } else {
       outstanding = (limit - anchor.balanceAfter! - deltaAfterAnchor).clamp(
         0,
@@ -2456,6 +2490,8 @@ class FinanceProvider extends ChangeNotifier {
       // The full count, mis-dated rows included — the tile's "N txns" must
       // match what the transaction list shows.
       txCount: all.length,
+      rowsSinceSource: rowsSinceSource,
+      outstandingBlocker: outstandingBlocker,
     );
   }
 
@@ -2465,6 +2501,27 @@ class FinanceProvider extends ChangeNotifier {
   (BalanceSource, DateTime?) accountBalanceProvenance(Account account) {
     final f = _figures(account);
     return (f.balanceSource, f.balanceAsOf);
+  }
+
+  /// [accountBalanceProvenance] plus everything the one-line explanation
+  /// needs: how many rows contribute on top of the source (after the alert,
+  /// strictly after the manual timestamp, or all counted rows for a pure
+  /// ledger sum — pending and future-dated rows never count), and, for a card
+  /// whose outstanding is null, WHICH remedy applies.
+  ({
+    BalanceSource source,
+    DateTime? asOf,
+    int rowsSince,
+    OutstandingBlocker? blocker,
+  })
+  accountProvenance(Account account) {
+    final f = _figures(account);
+    return (
+      source: f.balanceSource,
+      asOf: f.balanceAsOf,
+      rowsSince: f.rowsSinceSource,
+      blocker: f.outstandingBlocker,
+    );
   }
 
   /// Bank / savings balance. See [_computeFigures] for the model.
@@ -3267,7 +3324,7 @@ class FinanceProvider extends ChangeNotifier {
     // v7 addition: cosmetic edits to built-in categories.
     'builtinOverrides': builtinOverrides.values.map((c) => c.toJson()).toList(),
     // v8 additions: classifier and import rules — a restore used to lose
-    // every user rule silently (built-ins reseed, so the Classifiers page
+    // every user rule silently (built-ins reseed, so the Cockpit Rules tab
     // looked populated and the loss was invisible).
     'rules': _rules.map((r) => r.toJson()).toList(),
     'importRules': _importRules.map((r) => r.toJson()).toList(),

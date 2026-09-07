@@ -476,7 +476,7 @@ class SmsTxnParser {
   }
 
   /// Step-by-step diagnosis of how [parse] treats one message — backs the
-  /// "Test a message" tool in the Classifiers → Import tab. Mirrors the real
+  /// "Test a message" tool in the Cockpit → Import tab. Mirrors the real
   /// pipeline (dedup against existing transactions is not simulated).
   static String explain(
     String sender,

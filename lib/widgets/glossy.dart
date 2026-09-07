@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// Flat backdrop behind screen content. The Scaffold already paints this
-/// colour; the widget stays for standalone call sites (Classifiers,
+/// colour; the widget stays for standalone call sites (Cockpit,
 /// Settings) so every screen shares one background source.
 class AmbientBackground extends StatelessWidget {
   final Widget child;

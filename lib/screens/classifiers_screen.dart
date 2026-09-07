@@ -15,11 +15,26 @@ import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
 import '../widgets/keyboard_unfocus.dart';
 import '../widgets/section_header.dart';
+import '../widgets/budget_dialog.dart';
+import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/undo_snackbar.dart';
 import 'category_management.dart';
+import 'cockpit_tabs.dart';
 
+/// Cockpit tab indices, for callers that deep-link into a tab.
+const int kCockpitTabRules = 0;
+const int kCockpitTabImport = 1;
+const int kCockpitTabTransactions = 2;
+const int kCockpitTabCategories = 3;
+const int kCockpitTabBudgets = 4;
+const int kCockpitTabReminders = 5;
+
+/// The Cockpit: everything that steers the app — rules, import checks, the
+/// ledger as a classification tool, categories, budgets and reminders.
+/// (File and class keep the historical Classifiers name; only the
+/// user-visible copy changed.)
 class ClassifiersScreen extends StatefulWidget {
-  /// Which tab to open on: 0 Rules, 1 Import, 2 Transactions, 3 Categories.
+  /// Which tab to open on — see the kCockpitTab* constants.
   final int initialTab;
   const ClassifiersScreen({super.key, this.initialTab = 0});
 
@@ -35,7 +50,7 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
   void initState() {
     super.initState();
     _tab = TabController(
-      length: 4,
+      length: 6,
       vsync: this,
       initialIndex: widget.initialTab,
     );
@@ -52,12 +67,12 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Classifiers'),
+        title: const Text('Cockpit'),
         bottom: TabBar(
           controller: _tab,
           isScrollable: true,
           tabAlignment: TabAlignment.start,
-          // Roomier labels: four tabs packed edge-to-edge read as cramped —
+          // Roomier labels: tabs packed edge-to-edge read as cramped —
           // let the bar scroll instead.
           labelPadding: const EdgeInsets.symmetric(horizontal: 20),
           tabs: const [
@@ -65,25 +80,37 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
             Tab(text: 'Import'),
             Tab(text: 'Transactions'),
             Tab(text: 'Categories'),
+            Tab(text: 'Budgets'),
+            Tab(text: 'Reminders'),
           ],
         ),
       ),
-      // FAB only on the tabs that create rules.
+      // FAB only on the tabs with an add flow.
       floatingActionButton: switch (_tab.index) {
-        0 => GlassButton(
+        kCockpitTabRules => GlassButton(
           icon: Icons.add,
           label: 'New rule',
           onPressed: () => _showRuleDialog(context),
         ),
-        1 => GlassButton(
+        kCockpitTabImport => GlassButton(
           icon: Icons.add,
           label: 'New import rule',
           onPressed: () => _showImportRuleDialog(context),
         ),
-        3 => GlassButton(
+        kCockpitTabCategories => GlassButton(
           icon: Icons.add,
           label: 'New category',
           onPressed: () => showCategoryDialog(context),
+        ),
+        kCockpitTabBudgets => GlassButton(
+          icon: Icons.add,
+          label: 'New budget',
+          onPressed: () => showBudgetDialog(context),
+        ),
+        kCockpitTabReminders => GlassButton(
+          icon: Icons.add,
+          label: 'New reminder',
+          onPressed: () => showReminderEditor(context),
         ),
         _ => null,
       },
@@ -100,6 +127,8 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
               _ImportTab(),
               _TransactionsTab(),
               const CategoriesTab(),
+              const BudgetsTab(),
+              const RemindersTab(),
             ],
           ),
         ),

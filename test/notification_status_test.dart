@@ -97,6 +97,23 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
   }
 
+  /// Home → Cockpit → Budgets tab (the section moved out of Settings).
+  Future<void> openBudgetsTab(WidgetTester tester) async {
+    await tester.tap(find.byTooltip('Cockpit'));
+    await pumpThrough(tester);
+    await tester.tap(find.text('Budgets'));
+    await pumpThrough(tester);
+  }
+
+  /// The Budgets tab's own list — `Scrollable.first` would hit the
+  /// scrollable TabBar instead.
+  Finder tabScrollable() => find
+      .descendant(
+        of: find.byType(TabBarView),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+
   Future<FinanceProvider> withBudget() async {
     final p = FinanceProvider();
     await p.load();
@@ -117,14 +134,9 @@ void main() {
         NotificationStatus.appBlocked;
     final p = await withBudget();
     await tester.pumpWidget(app(p));
-    await tester.tap(find.byTooltip('Settings'));
-    await pumpThrough(tester);
+    await openBudgetsTab(tester);
     final hint = find.textContaining('turned off for this app');
-    await tester.scrollUntilVisible(
-      hint,
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
+    await tester.scrollUntilVisible(hint, 300, scrollable: tabScrollable());
     expect(hint, findsOneWidget);
     expect(find.text('Request'), findsOneWidget);
     expect(find.text('Allow'), findsNothing);
@@ -137,14 +149,9 @@ void main() {
         NotificationStatus.unavailable;
     final p = await withBudget();
     await tester.pumpWidget(app(p));
-    await tester.tap(find.byTooltip('Settings'));
-    await pumpThrough(tester);
+    await openBudgetsTab(tester);
     final hint = find.textContaining('could not be initialised');
-    await tester.scrollUntilVisible(
-      hint,
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
+    await tester.scrollUntilVisible(hint, 300, scrollable: tabScrollable());
     expect(hint, findsOneWidget);
     expect(find.text('Request'), findsNothing);
   });
@@ -153,12 +160,11 @@ void main() {
     NotificationService.statusOverride = () async => NotificationStatus.enabled;
     final p = await withBudget();
     await tester.pumpWidget(app(p));
-    await tester.tap(find.byTooltip('Settings'));
-    await pumpThrough(tester);
+    await openBudgetsTab(tester);
     await tester.scrollUntilVisible(
       find.text('Budget alerts'),
       300,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: tabScrollable(),
     );
     await pumpThrough(tester);
     expect(find.byIcon(Icons.notifications_off_outlined), findsNothing);

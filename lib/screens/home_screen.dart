@@ -464,8 +464,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         title: Text(_titles[_index]),
         actions: [
           IconButton(
-            tooltip: 'Classifiers',
-            icon: const Icon(Icons.rule),
+            tooltip: 'Cockpit',
+            icon: const Icon(Icons.tune),
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
