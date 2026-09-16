@@ -17,6 +17,16 @@ enum AutoImportFrequency {
   const AutoImportFrequency(this.label);
 }
 
+/// How the category picker in the add/edit sheet orders its options.
+enum CategoryOrder {
+  /// Highest gross amount over the last three months first.
+  mostUsed('Most used'),
+  alphabetical('A to Z');
+
+  final String label;
+  const CategoryOrder(this.label);
+}
+
 /// App preferences: theme mode + accent colour, SMS auto-import cadence and
 /// monthly budget alerts. (The old seed/background/glass customization is
 /// gone — the Figma structure is fixed; only mode and accent vary.)
@@ -39,6 +49,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kAppLock = 'app_lock_enabled_v1';
   static const _kHideIncome = 'hide_income_v1';
   static const _kDismissedPairs = 'pair_dismissed_v1';
+  static const _kCategoryOrder = 'category_order_v1';
 
   ThemeMode _mode = ThemeMode.dark; // the app's native look
   Color _accent = FigmaPalette.primary;
@@ -54,6 +65,7 @@ class SettingsProvider extends ChangeNotifier {
   Set<String> _dismissedPairs = {};
   bool _appLock = false;
   bool _hideIncome = false;
+  CategoryOrder _categoryOrder = CategoryOrder.mostUsed;
   bool _loaded = false;
 
   ThemeMode get mode => _mode;
@@ -90,6 +102,9 @@ class SettingsProvider extends ChangeNotifier {
   /// by pairSuggestionKey (two row ids). Backed up: the judgement is about
   /// the data, not the device.
   Set<String> get dismissedPairSuggestions => Set.unmodifiable(_dismissedPairs);
+
+  /// Ordering of the add/edit sheet's category picker.
+  CategoryOrder get categoryOrder => _categoryOrder;
 
   bool get loaded => _loaded;
 
@@ -155,6 +170,12 @@ class SettingsProvider extends ChangeNotifier {
     _dismissedPairs = tryRead(
       () => (prefs.getStringList(_kDismissedPairs) ?? const []).toSet(),
       <String>{},
+    );
+    _categoryOrder = tryRead(
+      () =>
+          CategoryOrder.values.asNameMap()[prefs.getString(_kCategoryOrder)] ??
+          CategoryOrder.mostUsed,
+      CategoryOrder.mostUsed,
     );
     _loaded = true;
     notifyListeners();
@@ -317,6 +338,16 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  Future<void> setCategoryOrder(CategoryOrder order) async {
+    if (order == _categoryOrder) return;
+    _categoryOrder = order;
+    notifyListeners();
+    await _persistPref(
+      _kCategoryOrder,
+      (p) => p.setString(_kCategoryOrder, order.name),
+    );
+  }
+
   /// The preference block carried inside JSON backups (the 'settings' key)
   /// — the backup doc used to claim "full snapshot" while every value here
   /// was silently absent, so a fresh-device restore lost the monthly cap,
@@ -334,6 +365,7 @@ class SettingsProvider extends ChangeNotifier {
     'upcomingHidden': _upcomingHidden.toList(),
     'hideIncome': _hideIncome,
     'dismissedPairs': _dismissedPairs.toList(),
+    'categoryOrder': _categoryOrder.name,
     // appLock is intentionally absent — see setAppLock.
   };
 
@@ -376,6 +408,9 @@ class SettingsProvider extends ChangeNotifier {
           if (k is String) k,
       };
     }
+    _categoryOrder =
+        CategoryOrder.values.asNameMap()[map['categoryOrder']] ??
+        _categoryOrder;
     await _persistPref('backup restore', (p) async {
       await p.remove(budgetAlertMonthKey(DateTime.now()));
       await p.setString(_kThemeMode, _mode.name);
@@ -390,6 +425,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setStringList(_kUpcomingHidden, _upcomingHidden.toList());
       await p.setBool(_kHideIncome, _hideIncome);
       await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());
+      await p.setString(_kCategoryOrder, _categoryOrder.name);
     });
     notifyListeners();
   }

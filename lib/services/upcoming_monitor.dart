@@ -18,8 +18,9 @@ import 'reminder_schedule.dart';
 ///   `card_due_fired_<accountId>_<yyyy-MM>`
 ///   `recurring_due_fired_<hit key>_<yyyy-MM>`
 class UpcomingMonitor {
-  /// Card bills notify when due within this many days.
-  static const cardWindowDays = 3;
+  /// Card bills notify when due within this many days — the same window
+  /// that turns the dashboard row red.
+  static const cardWindowDays = kCardUrgentWindowDays;
 
   /// Recurring payments notify when expected within this many days (overdue
   /// ones — negative day counts — are included until the detector drops
@@ -89,10 +90,12 @@ class UpcomingMonitor {
       final checks = <({String key, int id, String title, String body})>[];
 
       for (final a in finance.openAccounts) {
-        // Paid cycle: the status moves due to next month (always beyond the
-        // window), so this cycle stays silent and next cycle's key is new.
+        // Only a billed, unpaid cycle notifies. Paid: due moves to next
+        // month (beyond the window) and next cycle's key is new. Not yet
+        // billed: nothing is owed until the statement generates, however
+        // close the due date sits.
         final s = cardBillStatus(a, now);
-        if (s == null || s.paidThisCycle) continue;
+        if (s == null || s.phase != CardBillPhase.billed) continue;
         final out = finance.accountOutstanding(a);
         if (out == null || out <= 0) continue;
         if (s.daysUntil > cardWindowDays) continue;

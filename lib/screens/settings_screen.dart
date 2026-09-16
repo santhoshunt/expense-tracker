@@ -189,6 +189,25 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 12),
             const _PrivacySection(),
             const SizedBox(height: 24),
+            Text(
+              'Category order',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'How the category list is ordered when adding or editing a '
+              'transaction. "Most used" ranks by the amounts of the last '
+              'three months.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            GlassSegmented<CategoryOrder>(
+              options: [for (final o in CategoryOrder.values) (o, o.label)],
+              selected: settings.categoryOrder,
+              onChanged: (o) =>
+                  context.read<SettingsProvider>().setCategoryOrder(o),
+            ),
+            const SizedBox(height: 24),
             Text('Cockpit', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             FrostedPanel(
@@ -942,6 +961,37 @@ class _DataSectionState extends State<_DataSection> {
     }
   }
 
+  /// Which dates a CSV/PDF export should cover. `cancelled` aborts the
+  /// export; a null range with cancelled=false means everything.
+  Future<({bool cancelled, DateTimeRange? range})> _askExportRange() async {
+    final choice = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Export which dates?'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'all'),
+            child: const Text('All transactions'),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'range'),
+            child: const Text('Choose dates…'),
+          ),
+        ],
+      ),
+    );
+    if (choice == null || !mounted) return (cancelled: true, range: null);
+    if (choice == 'all') return (cancelled: false, range: null);
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(now.year, now.month, now.day),
+    );
+    if (picked == null) return (cancelled: true, range: null);
+    return (cancelled: false, range: picked);
+  }
+
   Future<void> _handleBackupAction(String action) async {
     final messenger = ScaffoldMessenger.of(context);
     final finance = context.read<FinanceProvider>();
@@ -959,9 +1009,11 @@ class _DataSectionState extends State<_DataSection> {
             messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
           }
         case 'export_pdf':
+          final sel = await _askExportRange();
+          if (sel.cancelled) return;
           final path = await _withBusy(
             'Building PDF report…',
-            () => BackupService.exportPdf(finance),
+            () => BackupService.exportPdf(finance, range: sel.range),
           );
           if (path != null && path.isNotEmpty) {
             messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
@@ -987,9 +1039,11 @@ class _DataSectionState extends State<_DataSection> {
             ),
           );
         case 'export_csv':
+          final sel = await _askExportRange();
+          if (sel.cancelled) return;
           final path = await _withBusy(
             'Building CSV…',
-            () => BackupService.exportCsv(finance),
+            () => BackupService.exportCsv(finance, range: sel.range),
           );
           if (path != null && path.isNotEmpty) {
             messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));

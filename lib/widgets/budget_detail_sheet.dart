@@ -9,9 +9,10 @@ import '../utils/format.dart';
 import 'category_donut_chart.dart';
 import 'motion.dart';
 
-/// Visual detail for one custom budget in [month]: progress ring, category
-/// pie, 6-month trend, and the jump into the budget-filtered transaction
-/// list. Opened by tapping a budget row on the dashboard.
+/// Visual detail for one custom budget, starting at [month]: progress ring,
+/// category pie, 6-month trend, and the jump into the budget-filtered
+/// transaction list. Opened by tapping a budget row on the dashboard.
+/// Chevrons in the sheet step through months without leaving it.
 Future<void> showBudgetDetailSheet(
   BuildContext context,
   SpendBudget budget,
@@ -24,124 +25,168 @@ Future<void> showBudgetDetailSheet(
     isScrollControlled: true,
     useSafeArea: true,
     showDragHandle: true,
-    builder: (ctx) {
-      final finance = ctx.watch<FinanceProvider>();
-      final colors = AppColors.of(ctx);
-      final scheme = Theme.of(ctx).colorScheme;
-      final spent = finance.budgetSpentFor(budget, month);
-      final limit = budget.limit;
-      final pct = limit == 0 ? 0.0 : spent / limit;
-      final over = spent > limit;
-      final color = pct >= 1.0
-          ? scheme.error
-          : pct >= 0.8
-          ? colors.orange
-          : colors.green;
-      final breakdown = finance.budgetBreakdownFor(budget, month);
-      final months = List.generate(
-        6,
-        (i) => DateTime(month.year, month.month - (5 - i)),
-      );
-      final trend = [for (final m in months) finance.budgetSpentFor(budget, m)];
+    builder: (sheetCtx) {
+      // The shown month is sheet-local state: switching months here must
+      // not move the dashboard behind the sheet.
+      var shown = DateTime(month.year, month.month);
+      return StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final finance = ctx.watch<FinanceProvider>();
+          final colors = AppColors.of(ctx);
+          final scheme = Theme.of(ctx).colorScheme;
+          final now = DateTime.now();
+          final latest = DateTime(now.year, now.month);
+          final spent = finance.budgetSpentFor(budget, shown);
+          final limit = budget.limit;
+          final pct = limit == 0 ? 0.0 : spent / limit;
+          final over = spent > limit;
+          final color = pct >= 1.0
+              ? scheme.error
+              : pct >= 0.8
+              ? colors.orange
+              : colors.green;
+          final breakdown = finance.budgetBreakdownFor(budget, shown);
+          final months = List.generate(
+            6,
+            (i) => DateTime(shown.year, shown.month - (5 - i)),
+          );
+          final trend = [
+            for (final m in months) finance.budgetSpentFor(budget, m),
+          ];
 
-      return SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                budget.name,
-                style: Theme.of(ctx).textTheme.titleLarge,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 2),
-              Text(fmtMonth(month), style: Theme.of(ctx).textTheme.bodySmall),
-              const SizedBox(height: 16),
-              Row(
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  RingProgress(
-                    value: pct,
-                    color: color,
-                    trackColor: color.withValues(alpha: 0.25),
-                    labelStyle: Theme.of(ctx).textTheme.titleSmall,
+                  Text(
+                    budget.name,
+                    style: Theme.of(ctx).textTheme.titleLarge,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // FittedBox, not Flexible: keeps its intrinsic
-                        // right edge (transaction-tile pattern).
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            '${fmtMoney(spent)} / ${fmtMoney(limit)}',
-                            style: Theme.of(ctx).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      IconButton(
+                        tooltip: 'Previous month',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.chevron_left, size: 20),
+                        onPressed: () => setSheetState(
+                          () => shown = DateTime(shown.year, shown.month - 1),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          over
-                              ? '${fmtMoneyCompact(spent - limit)} over the '
-                                    'limit'
-                              : '${fmtMoneyCompact(limit - spent)} left this '
-                                    'month',
-                          style: Theme.of(
-                            ctx,
-                          ).textTheme.bodySmall?.copyWith(color: color),
+                      ),
+                      Text(
+                        fmtMonth(shown),
+                        style: Theme.of(ctx).textTheme.bodyMedium,
+                      ),
+                      IconButton(
+                        tooltip: 'Next month',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.chevron_right, size: 20),
+                        // The current month is the end of the road — the
+                        // dashboard's own switcher stops there too.
+                        onPressed: shown.isBefore(latest)
+                            ? () => setSheetState(
+                                () => shown = DateTime(
+                                  shown.year,
+                                  shown.month + 1,
+                                ),
+                              )
+                            : null,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      RingProgress(
+                        value: pct,
+                        color: color,
+                        trackColor: color.withValues(alpha: 0.25),
+                        labelStyle: Theme.of(ctx).textTheme.titleSmall,
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // FittedBox, not Flexible: keeps its intrinsic
+                            // right edge (transaction-tile pattern).
+                            FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                '${fmtMoney(spent)} / ${fmtMoney(limit)}',
+                                style: Theme.of(ctx).textTheme.titleMedium
+                                    ?.copyWith(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              over
+                                  ? '${fmtMoneyCompact(spent - limit)} over the '
+                                        'limit'
+                                  : '${fmtMoneyCompact(limit - spent)} left this '
+                                        'month',
+                              style: Theme.of(
+                                ctx,
+                              ).textTheme.bodySmall?.copyWith(color: color),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  if (breakdown.isNotEmpty) ...[
+                    Text(
+                      'Where it went',
+                      style: Theme.of(ctx).textTheme.titleSmall,
                     ),
+                    const SizedBox(height: 12),
+                    CategoryDonutChart(
+                      data: breakdown,
+                      onCategoryTap: onViewCategory == null
+                          ? null
+                          : (id) {
+                              Navigator.pop(ctx);
+                              onViewCategory(id, shown);
+                            },
+                    ),
+                    const SizedBox(height: 20),
+                  ] else ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                        'No spending counted toward this budget in '
+                        '${fmtMonth(shown)}.',
+                        style: Theme.of(ctx).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                  Text(
+                    'Last 6 months',
+                    style: Theme.of(ctx).textTheme.titleSmall,
                   ),
+                  const SizedBox(height: 8),
+                  _BudgetTrendBars(months: months, spent: trend, limit: limit),
+                  const SizedBox(height: 20),
+                  if (onViewTransactions != null)
+                    FilledButton.icon(
+                      icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                      label: const Text('View transactions'),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        onViewTransactions(budget.id, shown);
+                      },
+                    ),
                 ],
               ),
-              const SizedBox(height: 20),
-              if (breakdown.isNotEmpty) ...[
-                Text(
-                  'Where it went',
-                  style: Theme.of(ctx).textTheme.titleSmall,
-                ),
-                const SizedBox(height: 12),
-                CategoryDonutChart(
-                  data: breakdown,
-                  onCategoryTap: onViewCategory == null
-                      ? null
-                      : (id) {
-                          Navigator.pop(ctx);
-                          onViewCategory(id, month);
-                        },
-                ),
-                const SizedBox(height: 20),
-              ] else ...[
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12),
-                  child: Text(
-                    'No spending counted toward this budget in '
-                    '${fmtMonth(month)}.',
-                    style: Theme.of(ctx).textTheme.bodySmall,
-                  ),
-                ),
-              ],
-              Text('Last 6 months', style: Theme.of(ctx).textTheme.titleSmall),
-              const SizedBox(height: 8),
-              _BudgetTrendBars(months: months, spent: trend, limit: limit),
-              const SizedBox(height: 20),
-              if (onViewTransactions != null)
-                FilledButton.icon(
-                  icon: const Icon(Icons.receipt_long_outlined, size: 18),
-                  label: const Text('View transactions'),
-                  onPressed: () {
-                    Navigator.pop(ctx);
-                    onViewTransactions(budget.id, month);
-                  },
-                ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       );
     },
   );

@@ -126,10 +126,35 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   builder: (context) {
                     // Flat heterogeneous list (Rules-tab pattern): open
                     // cards, then a muted closed section. Closed cards keep
-                    // full tap/menu behavior — only dimmed.
+                    // full tap/menu behavior — only dimmed. The All view
+                    // groups open accounts by type under section headers;
+                    // a filtered view IS one type, so it stays flat.
                     final items = <Widget>[
-                      for (final a in accounts)
-                        _AccountCard(account: a, onView: widget.onViewAccount),
+                      if (_typeFilter == null)
+                        for (final (type, header) in const [
+                          (AccountType.bank, 'Banks'),
+                          (AccountType.creditCard, 'Credit cards'),
+                          (AccountType.savings, 'Savings & assets'),
+                        ]) ...[
+                          if (accounts.any((a) => a.type == type)) ...[
+                            UppercaseSectionHeader(
+                              header,
+                              color: scheme.onSurfaceVariant,
+                            ),
+                            for (final a in accounts)
+                              if (a.type == type)
+                                _AccountCard(
+                                  account: a,
+                                  onView: widget.onViewAccount,
+                                ),
+                          ],
+                        ]
+                      else
+                        for (final a in accounts)
+                          _AccountCard(
+                            account: a,
+                            onView: widget.onViewAccount,
+                          ),
                       if (closed.isNotEmpty) ...[
                         UppercaseSectionHeader(
                           'Closed accounts',
@@ -798,24 +823,11 @@ class _CardFigures extends StatelessWidget {
                 );
               }
               final s = cardBillStatus(account, DateTime.now())!;
-              if (s.paidThisCycle) {
-                return Text(
-                  'Paid · next bill ${fmtDateCompact(s.due)}',
-                  style: TextStyle(
-                    color: scheme.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
-                );
-              }
-              final when = s.daysUntil == 0
-                  ? 'today'
-                  : s.daysUntil == 1
-                  ? 'tomorrow'
-                  : 'in ${s.daysUntil} days';
               return Text(
-                'Bill due ${fmtDateCompact(s.due)} · $when',
+                cardBillSubtitle(s),
                 style: TextStyle(
-                  // Imminent dues stand out; a comfortable gap stays muted.
+                  // Imminent dues stand out; a comfortable gap — and a paid
+                  // or not-yet-billed cycle — stays muted.
                   color: s.urgent ? scheme.error : scheme.onSurfaceVariant,
                   fontWeight: s.urgent ? FontWeight.w600 : null,
                   fontSize: 12,

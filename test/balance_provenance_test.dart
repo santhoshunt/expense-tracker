@@ -241,6 +241,49 @@ void main() {
       expect(find.text('Current outstanding'), findsOneWidget);
     });
 
+    testWidgets('the All view groups accounts by type under headers', (
+      tester,
+    ) async {
+      final p = await load(
+        txs: const [],
+        accounts: [
+          Account(
+            id: 'b1',
+            name: 'My Bank',
+            type: AccountType.bank,
+            keys: const {'HDFC:1111'},
+          ),
+          Account(
+            id: 'c1',
+            name: 'My Card',
+            type: AccountType.creditCard,
+            keys: const {'HDFC:2222'},
+          ),
+          Account(
+            id: 's1',
+            name: 'My RD',
+            type: AccountType.savings,
+            keys: const {'HDFC:3333'},
+          ),
+        ],
+      );
+      await tester.pumpWidget(app(p));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.text('BANKS', skipOffstage: false), findsOneWidget);
+      expect(find.text('CREDIT CARDS', skipOffstage: false), findsOneWidget);
+      expect(
+        find.text('SAVINGS & ASSETS', skipOffstage: false),
+        findsOneWidget,
+      );
+
+      // A filtered view IS one type — no headers there.
+      await tester.tap(find.text('Banks'));
+      await tester.pump();
+      expect(find.text('BANKS', skipOffstage: false), findsNothing);
+      expect(find.text('My Bank'), findsOneWidget);
+    });
+
     testWidgets('a long provenance line wraps on a narrow screen', (
       tester,
     ) async {
