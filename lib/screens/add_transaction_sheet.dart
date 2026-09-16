@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../providers/settings_provider.dart';
 import '../utils/format.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/undo_snackbar.dart';
@@ -125,7 +126,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     super.dispose();
   }
 
-  List<TxCategory> _categoriesFor(_EntryKind kind) => switch (kind) {
+  List<TxCategory> _categoriesFor(_EntryKind kind) => _ordered(switch (kind) {
     _EntryKind.expense => [
       for (final c in allCategories)
         if (c.type == TxType.expense && !c.isTransfer) c,
@@ -138,7 +139,28 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       for (final c in allCategories)
         if (c.isTransfer) c,
     ],
-  };
+  });
+
+  /// Orders the picker per the Settings preference. "Most used" ranks by
+  /// gross over the last three months (ties fall back to A to Z), which
+  /// also makes `.first` — the default selection — the likeliest category.
+  List<TxCategory> _ordered(List<TxCategory> list) {
+    CategoryOrder order;
+    try {
+      order = context.read<SettingsProvider>().categoryOrder;
+    } on ProviderNotFoundException {
+      // Bare test trees carry no SettingsProvider; the default stands.
+      order = CategoryOrder.mostUsed;
+    }
+    int byName(TxCategory a, TxCategory b) =>
+        a.label.toLowerCase().compareTo(b.label.toLowerCase());
+    if (order == CategoryOrder.alphabetical) return list..sort(byName);
+    final gross = context.read<FinanceProvider>().categoryGrossRecent();
+    return list..sort((a, b) {
+      final byGross = (gross[b.id] ?? 0).compareTo(gross[a.id] ?? 0);
+      return byGross != 0 ? byGross : byName(a, b);
+    });
+  }
 
   /// The saved type always mirrors the chosen category — the app-wide
   /// invariant `tx.type == category.type` must hold for transfer categories

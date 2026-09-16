@@ -169,6 +169,53 @@ void main() {
     expect(y2024.length, lessThan(y2025.length));
   });
 
+  group('date-range exports', () {
+    test('rowsInRange keeps whole days, both ends inclusive', () {
+      Tx row(String id, DateTime date) => Tx(
+        id: id,
+        type: TxType.expense,
+        categoryId: 'other_expense',
+        amount: 10,
+        note: '',
+        smsBody: '',
+        date: date,
+        source: TxSource.manual,
+        sender: '',
+      );
+      final rows = [
+        row('before', DateTime(2026, 9, 4, 23, 59)),
+        row('startEdge', DateTime(2026, 9, 5)),
+        row('mid', DateTime(2026, 9, 6, 12)),
+        row('endEdge', DateTime(2026, 9, 7, 23, 59)),
+        row('after', DateTime(2026, 9, 8)),
+      ];
+      final kept = BackupService.rowsInRange(
+        rows,
+        DateTimeRange(
+          // Times on the picked endpoints are ignored: days count whole.
+          start: DateTime(2026, 9, 5, 18),
+          end: DateTime(2026, 9, 7, 6),
+        ),
+      );
+      expect(kept.map((t) => t.id), ['startEdge', 'mid', 'endEdge']);
+      expect(BackupService.rowsInRange(rows, null), rows);
+    });
+
+    test('ranged PDF renders and is smaller than the full statement', () async {
+      final p = await seededProvider();
+      final all = await BackupService.buildPdf(p);
+      final ranged = await BackupService.buildPdf(
+        p,
+        range: DateTimeRange(
+          start: DateTime(2026, 7, 1),
+          end: DateTime(2026, 7, 1),
+        ),
+      );
+      expect(ranged.sublist(0, 4), [0x25, 0x50, 0x44, 0x46]);
+      expect(ranged.length, lessThan(all.length));
+    });
+  });
+
   group('CSV', () {
     test('export → import round-trips all transactions', () async {
       final source = await seededProvider();

@@ -154,6 +154,10 @@ class _Derived {
   /// every rebuild (scroll re-entry recreates the element), and it was the
   /// one full-ledger fold without a slot here.
   List<double>? weekdayAvg;
+
+  /// Gross per category over the last ~3 months — the "Most used" category
+  /// picker ordering asks for this on every add-sheet open.
+  Map<String, double>? categoryGross;
 }
 
 class FinanceProvider extends ChangeNotifier {
@@ -294,6 +298,19 @@ class FinanceProvider extends ChangeNotifier {
 
   _MonthTotals get _allTime =>
       _d.allTime ??= _totals([for (final (t, _) in _ordered) t]);
+
+  /// Gross amount moved per category over the last 90 days of confirmed
+  /// rows, every type included — feeds the "Most used" ordering of the
+  /// add/edit sheet's category picker.
+  Map<String, double> categoryGrossRecent() => _d.categoryGross ??= () {
+    final cutoff = DateTime.now().subtract(const Duration(days: 90));
+    final gross = <String, double>{};
+    for (final (t, _) in _ordered) {
+      if (t.date.isBefore(cutoff)) continue;
+      gross[t.categoryId] = (gross[t.categoryId] ?? 0) + t.amount;
+    }
+    return gross;
+  }();
 
   /// Confirmed transactions bucketed by month — see [_Derived.byMonth].
   Map<int, List<Tx>> get _byMonth => _d.byMonth ??= () {

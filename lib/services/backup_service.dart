@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:file_picker/file_picker.dart';
 import 'package:file_saver/file_saver.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show DateTimeRange;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:pdf/pdf.dart';
@@ -180,6 +181,29 @@ class BackupService {
       [...finance.transactions, ...finance.pendingTransactions]
         ..sort((a, b) => b.date.compareTo(a.date));
 
+  /// Rows dated inside [range] (whole days, both ends inclusive); all of
+  /// them when the range is null.
+  @visibleForTesting
+  static List<Tx> rowsInRange(List<Tx> rows, DateTimeRange? range) {
+    if (range == null) return rows;
+    final start = DateTime(
+      range.start.year,
+      range.start.month,
+      range.start.day,
+    );
+    final end = DateTime(range.end.year, range.end.month, range.end.day + 1);
+    return [
+      for (final t in rows)
+        if (!t.date.isBefore(start) && t.date.isBefore(end)) t,
+    ];
+  }
+
+  /// Filesystem-safe range suffix for export filenames.
+  static String _rangeStamp(DateTimeRange r) {
+    final f = DateFormat('yyyyMMdd');
+    return '${f.format(r.start)}-${f.format(r.end)}';
+  }
+
   /// Transactions (confirmed + pending) as CSV text.
   static String buildCsv(FinanceProvider finance) =>
       buildCsvOf(_allRows(finance));
@@ -236,16 +260,25 @@ class BackupService {
   static Future<Uint8List> csvBytesOf(List<Tx> rows) =>
       compute(_csvBytesOfTxs, (rows, _labelsFor(rows)), debugLabel: 'buildCsv');
 
-  /// Saves a CSV of all transactions. Returns the path, or null if cancelled.
-  static Future<String?> exportCsv(FinanceProvider finance) =>
-      exportCsvRows(_allRows(finance));
+  /// Saves a CSV of all transactions, optionally only those dated inside
+  /// [range]. Returns the path, or null if cancelled.
+  static Future<String?> exportCsv(
+    FinanceProvider finance, {
+    DateTimeRange? range,
+  }) => exportCsvRows(rowsInRange(_allRows(finance), range), range: range);
 
   /// Saves a CSV of exactly [rows] (e.g. the Transactions tab's filtered
-  /// list), in the given order. Returns the path, or null if cancelled.
-  static Future<String?> exportCsvRows(List<Tx> rows) async {
+  /// list), in the given order. [range] only decorates the filename.
+  /// Returns the path, or null if cancelled.
+  static Future<String?> exportCsvRows(
+    List<Tx> rows, {
+    DateTimeRange? range,
+  }) async {
     final bytes = await csvBytesOf(rows);
     return _save(
-      'expense_tracker_transactions_${_stamp()}',
+      range == null
+          ? 'expense_tracker_transactions_${_stamp()}'
+          : 'expense_tracker_transactions_${_rangeStamp(range)}_${_stamp()}',
       bytes,
       'csv',
       MimeType.csv,
@@ -462,14 +495,20 @@ class BackupService {
   static const PdfColor _red = PdfColor.fromInt(0xFFC62828);
   static const PdfColor _greenText = PdfColor.fromInt(0xFF1B5E20);
 
-  /// Saves a PDF statement — the whole ledger, or one [year] of it.
-  /// Returns the saved path, or null if cancelled.
-  static Future<String?> exportPdf(FinanceProvider finance, {int? year}) async {
-    final bytes = await buildPdf(finance, year: year);
+  /// Saves a PDF statement — the whole ledger, one [year] of it, or the
+  /// rows inside [range]. Returns the saved path, or null if cancelled.
+  static Future<String?> exportPdf(
+    FinanceProvider finance, {
+    int? year,
+    DateTimeRange? range,
+  }) async {
+    final bytes = await buildPdf(finance, year: year, range: range);
     return _save(
-      year == null
-          ? 'expense_tracker_report_${_stamp()}'
-          : 'expense_tracker_report_${year}_${_stamp()}',
+      year != null
+          ? 'expense_tracker_report_${year}_${_stamp()}'
+          : range != null
+          ? 'expense_tracker_report_${_rangeStamp(range)}_${_stamp()}'
+          : 'expense_tracker_report_${_stamp()}',
       bytes,
       'pdf',
       MimeType.pdf,
@@ -509,12 +548,34 @@ class BackupService {
         ),
       );
 
+  /// One roll-up line under the PDF accounts table (label left, figure
+  /// right) — the print counterpart of the in-app balance breakdown rows.
+  static pw.Widget _netLine(String label, String value, {bool bold = false}) {
+    final style = pw.TextStyle(
+      fontSize: 8.5,
+      fontWeight: bold ? pw.FontWeight.bold : pw.FontWeight.normal,
+    );
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 1),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(label, style: style),
+          pw.Text(value, style: style),
+        ],
+      ),
+    );
+  }
+
   /// Builds the report bytes. Exposed separately so tests can render it
-  /// without touching the platform save dialog.
+  /// without touching the platform save dialog. [year] and [range] are
+  /// alternatives; when both are given the range wins.
   static Future<Uint8List> buildPdf(
     FinanceProvider finance, {
     int? year,
+    DateTimeRange? range,
   }) async {
+    if (range != null) year = null;
     final baseFont = pw.Font.ttf(
       await rootBundle.load('assets/fonts/NotoSans-Regular.ttf'),
     );
@@ -525,23 +586,47 @@ class BackupService {
     final doc = pw.Document(
       theme: pw.ThemeData.withFont(base: baseFont, bold: boldFont),
     );
-    final txs = year == null
-        ? finance.transactions
-        : [
+    final txs = year != null
+        ? [
             for (final t in finance.transactions)
               if (t.date.year == year) t,
-          ];
+          ]
+        : rowsInRange(finance.transactions, range);
     // Summary figures follow the same population as the table: whole-ledger
-    // provider totals, or the year's own sums.
-    final sumIncome = year == null
-        ? finance.totalIncome
-        : finance.incomeInYear(year);
-    final sumExpense = year == null
-        ? finance.totalExpense
-        : finance.expenseInYear(year);
-    final sumSavings = year == null
-        ? finance.totalSavingsTransfers
-        : finance.savingsOutflowInYear(year);
+    // provider totals, the year's own sums, or (for a range) sums folded
+    // from the filtered rows with the provider's rules — transfers excluded,
+    // splits counting only the user's own share.
+    final double sumIncome;
+    final double sumExpense;
+    final double sumSavings;
+    if (range != null) {
+      sumIncome = txs
+          .where(
+            (t) => t.type == TxType.income && !isTransferCategory(t.categoryId),
+          )
+          .fold(0.0, (s, t) => s + t.amount);
+      sumExpense = txs
+          .where(
+            (t) =>
+                t.type == TxType.expense && !isTransferCategory(t.categoryId),
+          )
+          .fold(0.0, (s, t) => s + t.spendAmount);
+      sumSavings = txs
+          .where(
+            (t) =>
+                t.type == TxType.expense &&
+                t.categoryId == kSavingsTransferCategoryId,
+          )
+          .fold(0.0, (s, t) => s + t.amount);
+    } else if (year != null) {
+      sumIncome = finance.incomeInYear(year);
+      sumExpense = finance.expenseInYear(year);
+      sumSavings = finance.savingsOutflowInYear(year);
+    } else {
+      sumIncome = finance.totalIncome;
+      sumExpense = finance.totalExpense;
+      sumSavings = finance.totalSavingsTransfers;
+    }
 
     // Group transactions by month, newest first.
     final byMonth = <DateTime, List<Tx>>{};
@@ -604,15 +689,30 @@ class BackupService {
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               crossAxisAlignment: pw.CrossAxisAlignment.end,
               children: [
-                pw.Text(
-                  year == null
-                      ? 'Expense Tracker — Statement'
-                      : 'Expense Tracker — Report $year',
-                  style: pw.TextStyle(
-                    fontSize: 16,
-                    fontWeight: pw.FontWeight.bold,
-                    color: PdfColors.white,
-                  ),
+                pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      year == null
+                          ? 'Expense Tracker — Statement'
+                          : 'Expense Tracker — Report $year',
+                      style: pw.TextStyle(
+                        fontSize: 16,
+                        fontWeight: pw.FontWeight.bold,
+                        color: PdfColors.white,
+                      ),
+                    ),
+                    if (range != null)
+                      pw.Text(
+                        'Period: '
+                        '${DateFormat('dd MMM yyyy').format(range.start)}'
+                        ' – ${DateFormat('dd MMM yyyy').format(range.end)}',
+                        style: const pw.TextStyle(
+                          fontSize: 9,
+                          color: PdfColors.grey200,
+                        ),
+                      ),
+                  ],
                 ),
                 pw.Text(
                   DateFormat('dd MMM yyyy, HH:mm').format(DateTime.now()),
@@ -630,18 +730,96 @@ class BackupService {
               _summaryBox('TOTAL INCOME', sumIncome, _greenText),
               _summaryBox('TOTAL EXPENSES', sumExpense, _red),
               _summaryBox('TO SAVINGS', sumSavings, _green),
-              // Balance is a running figure; a single year has a net
-              // instead.
-              if (year == null)
+              // Balance is a running figure; a bounded slice (year or
+              // range) has a net instead.
+              if (year == null && range == null)
                 _summaryBox('AVAILABLE BALANCE', finance.balance, _green)
               else
                 _summaryBox(
-                  'NET FOR $year',
+                  year == null ? 'NET FOR PERIOD' : 'NET FOR $year',
                   sumIncome - sumExpense - sumSavings,
                   _green,
                 ),
             ],
           ),
+          if (finance.openAccounts.isNotEmpty) ...[
+            pw.SizedBox(height: 16),
+            pw.Text(
+              'Accounts',
+              style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.Text(
+              'Live balances at export time — not scoped to the report '
+              'period.',
+              style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
+            ),
+            pw.SizedBox(height: 6),
+            pw.TableHelper.fromTextArray(
+              columnWidths: {
+                0: const pw.FlexColumnWidth(),
+                1: const pw.FixedColumnWidth(75),
+                2: const pw.FixedColumnWidth(130),
+                3: const pw.FixedColumnWidth(95),
+              },
+              headers: ['Account', 'Type', 'Numbers', 'Balance'],
+              headerStyle: pw.TextStyle(
+                fontSize: 8.5,
+                fontWeight: pw.FontWeight.bold,
+              ),
+              headerDecoration: const pw.BoxDecoration(color: _greenLight),
+              cellStyle: const pw.TextStyle(fontSize: 8.5),
+              cellAlignments: {3: pw.Alignment.centerRight},
+              oddRowDecoration: const pw.BoxDecoration(color: _zebra),
+              cellPadding: const pw.EdgeInsets.symmetric(
+                horizontal: 6,
+                vertical: 3,
+              ),
+              data: [
+                for (final a in finance.openAccounts)
+                  [
+                    a.name,
+                    a.typeLabel,
+                    a.keys.isEmpty
+                        ? '—'
+                        : [
+                            for (final k in a.keys) k.replaceFirst(':', ' ••'),
+                          ].join(', '),
+                    a.isCard
+                        ? switch (finance.accountOutstanding(a)) {
+                            null => 'owed —',
+                            final o => '${_money.format(o)} owed',
+                          }
+                        : _money.format(finance.accountBalance(a)),
+                  ],
+              ],
+            ),
+            pw.SizedBox(height: 6),
+            // The same roll-up the in-app balance breakdown shows.
+            _netLine('Bank balances', _money.format(finance.bankBalanceTotal)),
+            _netLine(
+              'Credit card outstanding',
+              '− ${_money.format(finance.cardOutstandingTotal)}',
+            ),
+            if (finance.cardsMissingLimit > 0)
+              pw.Text(
+                '${finance.cardsMissingLimit} card(s) with unknown '
+                'outstanding are not counted.',
+                style: const pw.TextStyle(
+                  fontSize: 7.5,
+                  color: PdfColors.grey700,
+                ),
+              ),
+            _netLine(
+              'Net balance (liquid)',
+              _money.format(finance.netWorth),
+              bold: true,
+            ),
+            if (finance.savingsBalanceTotal > 0)
+              _netLine(
+                'In savings & assets (not liquid)',
+                _money.format(finance.savingsBalanceTotal),
+              ),
+          ],
           if (catEntries.isNotEmpty) ...[
             pw.SizedBox(height: 16),
             pw.Text(

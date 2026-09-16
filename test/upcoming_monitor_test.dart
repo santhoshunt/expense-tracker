@@ -124,6 +124,32 @@ void main() {
     );
   });
 
+  test('not-yet-billed cycle stays silent even inside the window', () async {
+    final (finance, settings, id) = await cardFixture();
+    final now = DateTime.now();
+    // Due in 3 days (inside the window), statement generates tomorrow: no
+    // bill exists yet, so nothing fires and no marker is written.
+    final due = now.add(const Duration(days: 3));
+    final stmt = now.add(const Duration(days: 1));
+    await finance.setCardCycle(id, statementDay: stmt.day, dueDay: due.day);
+
+    await monitor.check(finance, settings);
+    expect(notifications.shown, isEmpty);
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getBool(
+        UpcomingMonitor.cardDueKey(id, nextMonthlyOccurrence(due.day, now)),
+      ),
+      isNull,
+      reason: 'a not-billed cycle never enters the checks list',
+    );
+
+    // Statement day reached (set to today): the bill exists, so it fires.
+    await finance.setCardCycle(id, statementDay: now.day, dueDay: due.day);
+    await monitor.check(finance, settings);
+    expect(notifications.shown, hasLength(1));
+  });
+
   test('a stale paid flag from last cycle still fires this cycle', () async {
     final (finance, settings, id) = await cardFixture();
     final now = DateTime.now();

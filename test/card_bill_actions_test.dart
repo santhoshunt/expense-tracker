@@ -10,6 +10,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
+import 'package:expense_tracker/utils/app_theme.dart';
 import 'package:expense_tracker/utils/format.dart';
 
 void main() {
@@ -31,7 +32,11 @@ void main() {
 
   /// A card due today with ₹5,000 outstanding (manual figure, stamped well
   /// in the past so a recorded payment dated "now" is strictly newer).
-  Future<(FinanceProvider, String)> seeded() async {
+  /// [dueInDays] shifts the due day; [stmtDay] sets a statement day.
+  Future<(FinanceProvider, String)> seeded({
+    int? stmtDay,
+    int dueInDays = 0,
+  }) async {
     final past = DateTime.now().subtract(const Duration(days: 10));
     SharedPreferences.setMockInitialValues({
       'accounts_v1': jsonEncode([
@@ -42,7 +47,8 @@ void main() {
           keys: const {'HDFC:3010'},
           manualBalance: 5000,
           manualBalanceAt: past,
-          dueDay: DateTime.now().day,
+          statementDay: stmtDay,
+          dueDay: DateTime.now().add(Duration(days: dueInDays)).day,
         ).toJson(),
       ]),
     });
@@ -132,5 +138,92 @@ void main() {
     await tester.tap(find.text('Save'));
     await tester.pump();
     expect(find.text('Enter the amount you paid'), findsOneWidget);
+  });
+
+  testWidgets('actions sheet opens the statement & due dates dialog', (
+    tester,
+  ) async {
+    final (finance, _) = await seeded();
+    await tester.pumpWidget(app(finance));
+    await pumpThrough(tester);
+
+    await tester.tap(find.text('HDFC Card bill'));
+    await pumpThrough(tester);
+    expect(find.text('Statement & due dates…'), findsOneWidget);
+
+    await tester.tap(find.text('Statement & due dates…'));
+    await pumpThrough(tester);
+    expect(find.text('Statement & due dates'), findsOneWidget);
+    expect(find.text('Statement day'), findsOneWidget);
+    expect(find.text('Payment due day'), findsOneWidget);
+  });
+
+  testWidgets('not-yet-billed row: both dates shown, muted, not urgent', (
+    tester,
+  ) async {
+    // Due in 3 days (inside the urgency window), statement generates
+    // tomorrow — the row must read as "nothing to do yet".
+    final now = DateTime.now();
+    final (finance, _) = await seeded(
+      stmtDay: now.add(const Duration(days: 1)).day,
+      dueInDays: 3,
+    );
+    await tester.pumpWidget(app(finance));
+    await pumpThrough(tester);
+
+    expect(
+      find.text(
+        'Bill generates ${fmtDateCompact(DateTime(now.year, now.month, now.day).add(const Duration(days: 1)))}'
+        ' · due ${fmtDateCompact(DateTime(now.year, now.month, now.day).add(const Duration(days: 3)))}',
+      ),
+      findsOneWidget,
+    );
+    final ctx = tester.element(find.byIcon(Icons.credit_card));
+    final icon = tester.widget<Icon>(find.byIcon(Icons.credit_card));
+    expect(
+      icon.color,
+      AppColors.of(ctx).green,
+      reason: 'no bill exists yet — green, not the error red',
+    );
+    final amount = tester.widget<Text>(find.text(fmtMoney(5000)));
+    expect(amount.style?.color, Theme.of(ctx).colorScheme.onSurfaceVariant);
+  });
+
+  testWidgets('billed with time to spare renders orange', (tester) async {
+    // Statement well in the past, due in 8 days: billed, outside the
+    // 5-day urgent window.
+    final now = DateTime.now();
+    final (finance, _) = await seeded(
+      stmtDay: now.subtract(const Duration(days: 15)).day,
+      dueInDays: 8,
+    );
+    await tester.pumpWidget(app(finance));
+    await pumpThrough(tester);
+
+    final ctx = tester.element(find.byIcon(Icons.credit_card));
+    final icon = tester.widget<Icon>(find.byIcon(Icons.credit_card));
+    expect(icon.color, AppColors.of(ctx).orange);
+  });
+
+  testWidgets('billed row: statement date joins the due line, bold look', (
+    tester,
+  ) async {
+    // Statement 15 days back, due today: billed and urgent.
+    final now = DateTime.now();
+    final (finance, _) = await seeded(
+      stmtDay: now.subtract(const Duration(days: 15)).day,
+    );
+    await tester.pumpWidget(app(finance));
+    await pumpThrough(tester);
+
+    expect(find.textContaining('Billed '), findsOneWidget);
+    expect(find.textContaining(' · due '), findsOneWidget);
+    final icon = tester.widget<Icon>(find.byIcon(Icons.credit_card));
+    final scheme = Theme.of(
+      tester.element(find.byIcon(Icons.credit_card)),
+    ).colorScheme;
+    expect(icon.color, scheme.error, reason: 'due today is inside the window');
+    final amount = tester.widget<Text>(find.text(fmtMoney(5000)));
+    expect(amount.style?.color, isNull, reason: 'amount stays default-bold');
   });
 }

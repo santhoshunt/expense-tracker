@@ -346,6 +346,11 @@ ThemeData _buildAppTheme({
       ),
     ),
     dividerTheme: DividerThemeData(color: border),
+    // Snackbars clear with a sideways swipe (the Android-notification
+    // gesture people expect); the default only accepted a swipe down.
+    snackBarTheme: const SnackBarThemeData(
+      dismissDirection: DismissDirection.horizontal,
+    ),
   );
   // Helper/description text renders muted by default: bare `bodySmall` used
   // to inherit full-contrast onSurface, so identical helper copy showed at

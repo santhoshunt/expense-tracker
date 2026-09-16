@@ -28,6 +28,7 @@ import '../widgets/motion.dart';
 import '../widgets/category_donut_chart.dart';
 import '../widgets/monthly_bar_chart.dart';
 import '../widgets/transaction_tile.dart';
+import 'accounts_screen.dart' show showCardCycleDialog;
 
 class DashboardScreen extends StatefulWidget {
   /// Called when a stat card is tapped, to open the Transactions tab
@@ -814,6 +815,7 @@ class _UpcomingCard extends StatelessWidget {
             String sub,
             double? amount,
             bool urgent,
+            bool muted,
             String? hideKey,
             Reminder? reminder,
             Account? card,
@@ -828,15 +830,23 @@ class _UpcomingCard extends StatelessWidget {
       entries.add((
         due: s.due,
         icon: Icons.credit_card,
-        color: scheme.error,
+        // Traffic-light phases: green = nothing owed right now (not billed /
+        // paid), orange = billed, red = due within the urgent window or
+        // overdue.
+        color: cardBillColor(
+          s,
+          green: AppColors.of(context).green,
+          orange: AppColors.of(context).orange,
+          red: scheme.error,
+        ),
         label: '${a.name} bill',
-        // A paid cycle keeps its row (the amount is live post-payment
-        // spend, i.e. next cycle's bill so far), just without the urgency.
-        sub: s.paidThisCycle
-            ? 'Paid · next bill ${fmtDateCompact(s.due)}'
-            : 'Due ${fmtDateCompact(s.due)} · ${_inDays(s.daysUntil)}',
+        // Paid and not-yet-billed cycles keep their row (the amount is the
+        // live figure building toward the next/current statement) with the
+        // amount muted — only a billed, unpaid cycle asks for attention.
+        sub: cardBillSubtitle(s),
         amount: out,
         urgent: s.urgent,
+        muted: s.phase != CardBillPhase.billed,
         hideKey: null,
         reminder: null,
         card: a,
@@ -857,6 +867,7 @@ class _UpcomingCard extends StatelessWidget {
             : 'Expected ${fmtDateCompact(h.nextDue)} · ${_inDays(days)}',
         amount: h.expectedAmount,
         urgent: days < 0,
+        muted: false,
         hideKey: h.key,
         reminder: null,
         card: null,
@@ -879,6 +890,7 @@ class _UpcomingCard extends StatelessWidget {
             : 'Due ${fmtDateCompact(due)} · ${_inDays(days)}',
         amount: r.expectedAmount,
         urgent: days <= 0,
+        muted: false,
         hideKey: null,
         reminder: r,
         card: null,
@@ -987,6 +999,9 @@ class _UpcomingCard extends StatelessWidget {
                             padding: const EdgeInsets.symmetric(vertical: 6),
                             child: Row(
                               children: [
+                                // The icon keeps its color even on muted
+                                // rows — for card bills the color itself
+                                // carries the state (green/orange/red).
                                 Icon(e.icon, size: 20, color: e.color),
                                 const SizedBox(width: 12),
                                 Expanded(
@@ -1026,8 +1041,11 @@ class _UpcomingCard extends StatelessWidget {
                                       e.amount == null
                                           ? ''
                                           : fmtMoney(e.amount!),
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontWeight: FontWeight.w700,
+                                        color: e.muted
+                                            ? scheme.onSurfaceVariant
+                                            : null,
                                       ),
                                     ),
                                   ),
@@ -1118,66 +1136,78 @@ class _UpcomingCard extends StatelessWidget {
     final now = DateTime.now();
     final natural = nextMonthlyOccurrence(a.dueDay!, now);
     final paid = a.billPaidMonth == monthKey(natural);
+    final status = cardBillStatus(a, now)!;
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      // Four tiles can outgrow the sheet's default max height on short
+      // screens — scroll instead of clipping.
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              title: Text(
-                '${a.name} bill',
-                style: Theme.of(ctx).textTheme.titleMedium,
-              ),
-              subtitle: Text(
-                paid
-                    ? 'Paid · next bill ${fmtDate(nextMonthlyOccurrence(a.dueDay!, natural.add(const Duration(days: 1))))}'
-                    : 'Due ${fmtDate(natural)}',
-              ),
-            ),
-            if (paid)
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
               ListTile(
-                leading: const Icon(Icons.undo),
-                title: const Text('Undo mark paid'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  finance.clearCardBillPaid(a.id);
-                },
-              )
-            else
+                title: Text(
+                  '${a.name} bill',
+                  style: Theme.of(ctx).textTheme.titleMedium,
+                ),
+                subtitle: Text(cardBillSubtitle(status)),
+              ),
+              if (paid)
+                ListTile(
+                  leading: const Icon(Icons.undo),
+                  title: const Text('Undo mark paid'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    finance.clearCardBillPaid(a.id);
+                  },
+                )
+              else
+                ListTile(
+                  leading: const Icon(Icons.check_circle_outline),
+                  title: const Text('Mark paid for this cycle'),
+                  subtitle: const Text(
+                    'The amount keeps showing what has built up since — '
+                    'that belongs to the next bill.',
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    final prev = a.billPaidMonth;
+                    finance.markCardBillPaid(a.id, natural);
+                    showUndoSnackBar(
+                      context,
+                      '${a.name} bill marked paid',
+                      () => finance.setCardBillPaidMonth(a.id, prev),
+                    );
+                  },
+                ),
               ListTile(
-                leading: const Icon(Icons.check_circle_outline),
-                title: const Text('Mark paid for this cycle'),
+                leading: const Icon(Icons.payments_outlined),
+                title: const Text('Record a payment…'),
                 subtitle: const Text(
-                  'The amount keeps showing what has built up since — '
-                  'that belongs to the next bill.',
+                  'For a payment the app never saw — the amount drops by '
+                  'what you paid.',
                 ),
                 onTap: () {
                   Navigator.pop(ctx);
-                  final prev = a.billPaidMonth;
-                  finance.markCardBillPaid(a.id, natural);
-                  showUndoSnackBar(
-                    context,
-                    '${a.name} bill marked paid',
-                    () => finance.setCardBillPaidMonth(a.id, prev),
-                  );
+                  _showRecordPaymentDialog(context, a, natural);
                 },
               ),
-            ListTile(
-              leading: const Icon(Icons.payments_outlined),
-              title: const Text('Record a payment…'),
-              subtitle: const Text(
-                'For a payment the app never saw — the amount drops by '
-                'what you paid.',
+              // The phase logic is only as good as the cycle dates — surface
+              // the editor here so the statement day can be set where its
+              // absence shows.
+              ListTile(
+                leading: const Icon(Icons.edit_calendar_outlined),
+                title: const Text('Statement & due dates…'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  showCardCycleDialog(context, a);
+                },
               ),
-              onTap: () {
-                Navigator.pop(ctx);
-                _showRecordPaymentDialog(context, a, natural);
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
       ),
     );

@@ -599,6 +599,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             onCategory: () => _bulkCategory(filtered),
             onAccount: _bulkAccount,
             onDateTime: _bulkDateTime,
+            // Pairing is a two-row concept — the button only exists at
+            // exactly two selected.
+            onPair: _selected.length == 2 ? _bulkPair : null,
             onDelete: _bulkDelete,
             onClose: () => setState(_selected.clear),
           ),
@@ -976,6 +979,34 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       context,
       'Deleted ${removed.length} transaction${removed.length == 1 ? '' : 's'}',
       () => finance.restoreTransactions(removed),
+    );
+  }
+
+  /// Links the two selected rows as one transfer (bank debit ↔ card credit,
+  /// bank ↔ savings, …). The provider enforces the real rules — one money-in
+  /// plus one money-out, neither already paired — so this only relays them.
+  Future<void> _bulkPair() async {
+    final finance = context.read<FinanceProvider>();
+    final ids = _selected.toList();
+    if (ids.length != 2) return;
+    final pairId = await finance.pairTransactions(ids[0], ids[1]);
+    if (!mounted) return;
+    if (pairId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Pick one money-in and one money-out row; neither can already '
+            'be part of a pair.',
+          ),
+        ),
+      );
+      return;
+    }
+    setState(_selected.clear);
+    showUndoSnackBar(
+      context,
+      'Paired as transfer',
+      () => finance.unpair(pairId),
     );
   }
 
@@ -1429,6 +1460,9 @@ class _SelectionBar extends StatelessWidget {
   final VoidCallback onCategory;
   final VoidCallback onAccount;
   final VoidCallback onDateTime;
+
+  /// Null hides the button (shown only with exactly two rows selected).
+  final VoidCallback? onPair;
   final VoidCallback onDelete;
   final VoidCallback onClose;
 
@@ -1438,6 +1472,7 @@ class _SelectionBar extends StatelessWidget {
     required this.onCategory,
     required this.onAccount,
     required this.onDateTime,
+    required this.onPair,
     required this.onDelete,
     required this.onClose,
   });
@@ -1491,6 +1526,13 @@ class _SelectionBar extends StatelessWidget {
                 icon: const Icon(Icons.schedule, size: 20),
                 onPressed: onDateTime,
               ),
+              if (onPair != null)
+                IconButton(
+                  tooltip: 'Pair as transfer',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.link, size: 20),
+                  onPressed: onPair,
+                ),
               IconButton(
                 tooltip: 'Delete',
                 visualDensity: VisualDensity.compact,
