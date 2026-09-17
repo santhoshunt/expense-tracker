@@ -12,6 +12,7 @@ import '../services/card_bill.dart';
 import '../services/merchant_stats.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
+import '../services/spend_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
@@ -27,8 +28,22 @@ import '../widgets/glossy.dart';
 import '../widgets/motion.dart';
 import '../widgets/category_donut_chart.dart';
 import '../widgets/monthly_bar_chart.dart';
+import '../widgets/spend_comparison_cards.dart';
 import '../widgets/transaction_tile.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
+
+/// Which slice of the dashboard is on screen. The page grew to fifteen
+/// sections in one scroll; splitting it into sub-tabs (rather than a second
+/// route) keeps the month selector, the year toggle and every deep-link
+/// callback in this one State.
+enum DashboardView {
+  overview('Overview'),
+  trends('Trends'),
+  breakdown('Breakdown');
+
+  final String label;
+  const DashboardView(this.label);
+}
 
 class DashboardScreen extends StatefulWidget {
   /// Called when a stat card is tapped, to open the Transactions tab
@@ -69,6 +84,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// transfers) step aside.
   bool _yearMode = false;
 
+  /// Not persisted, matching `_month` and `_yearMode`.
+  DashboardView _view = DashboardView.overview;
+
   /// Recurring detection scans the whole ledger — memoized on the provider's
   /// revision token so it reruns only when data actually changes.
   Object? _recurringRev;
@@ -104,6 +122,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
     return _merchants;
+  }
+
+  /// The spending comparisons walk the shown month plus six reference
+  /// months — memoized on (revision, month, day) like the merchant totals.
+  ///
+  /// The day belongs in the key: Android keeps the process alive across days,
+  /// so a session opened on the 17th and resumed on the 18th would otherwise
+  /// keep reporting "Through 17 Sep" until something wrote to the ledger —
+  /// the stale-by-a-day figure this whole comparison exists to avoid.
+  Object? _compareRev;
+  DateTime? _compareMonth;
+  int _compareDay = 0;
+  MonthComparison? _compare;
+
+  MonthComparison _comparison(FinanceProvider finance) {
+    final now = DateTime.now();
+    if (!identical(_compareRev, finance.revision) ||
+        _compareMonth != _month ||
+        _compareDay != now.day) {
+      _compareRev = finance.revision;
+      _compareMonth = _month;
+      _compareDay = now.day;
+      _compare = buildMonthComparison(finance, _month, now: now);
+    }
+    return _compare!;
   }
 
   /// Long-press on a Top-merchants row: give the payee a readable name.
@@ -248,6 +291,90 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  /// Chevrons, the tappable month label, the year PDF shortcut and the
+  /// Month/Year switch. Shared by all three views rather than duplicated:
+  /// `_month` and `_yearMode` live in this one State.
+  Widget _monthSelector(
+    BuildContext context,
+    FinanceProvider finance,
+    DateTime latestMonth,
+  ) {
+    final scheme = Theme.of(context).colorScheme;
+    final year = _month.year;
+    return Row(
+      children: [
+        IconButton(
+          tooltip: _yearMode ? 'Previous year' : 'Previous month',
+          onPressed: () => _shiftMonth(-1),
+          icon: const Icon(Icons.chevron_left),
+        ),
+        // Tappable: browsing back a year used to take 12 arrow taps.
+        Expanded(
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => _pickMonth(context, finance),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      _yearMode ? '$year' : fmtMonth(_month),
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.arrow_drop_down,
+                    size: 20,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        IconButton(
+          tooltip: _yearMode ? 'Next year' : 'Next month',
+          onPressed:
+              (_yearMode
+                  ? year < latestMonth.year
+                  : _month.isBefore(latestMonth))
+              ? () => _shiftMonth(1)
+              : null,
+          icon: const Icon(Icons.chevron_right),
+        ),
+        // Scope switch as a quiet text button: a full-width segmented
+        // control here read as a primary action and drew the eye away
+        // from the figures. Month is the default; nothing is persisted.
+        if (_yearMode)
+          IconButton(
+            tooltip: 'Export year report (PDF)',
+            visualDensity: VisualDensity.compact,
+            icon: Icon(
+              Icons.picture_as_pdf_outlined,
+              size: 20,
+              color: scheme.onSurfaceVariant,
+            ),
+            onPressed: () => _exportYearPdf(context, finance),
+          ),
+        TextButton(
+          style: TextButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            foregroundColor: scheme.onSurfaceVariant,
+            textStyle: Theme.of(context).textTheme.labelMedium,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+          ),
+          onPressed: () => setState(() => _yearMode = !_yearMode),
+          child: Text(_yearMode ? 'Month' : 'Year'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
@@ -279,490 +406,471 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final hideIncome = context.select<SettingsProvider, bool>(
       (s) => s.hideIncome,
     );
+    final overview = _view == DashboardView.overview;
+    final trends = _view == DashboardView.trends;
+    final breakdown = _view == DashboardView.breakdown;
 
     return ListView(
+      // Each view keeps its own scroll offset: switching from a long view to
+      // a short one otherwise lands mid-page.
+      key: PageStorageKey(_view),
       padding: const EdgeInsets.all(16),
       children: [
-        _BalanceCard(finance: finance),
+        GlassSegmented<DashboardView>(
+          options: [for (final v in DashboardView.values) (v, v.label)],
+          selected: _view,
+          onChanged: (v) => setState(() => _view = v),
+        ),
         const SizedBox(height: 16),
-        // First-run: the landing tab used to greet a new user with ₹0.00
-        // everywhere and no hint of what to do next.
-        if (!finance.hasTransactions) ...[
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.auto_awesome, size: 20, color: scheme.primary),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Get started',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'No transactions yet. Import your bank SMS with the '
-                    'message icon in the top bar, or add one by hand with '
-                    'the + button below.',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+        if (overview) ...[
+          _BalanceCard(finance: finance),
           const SizedBox(height: 16),
-        ],
-        // Card bills coming due + detected recurring payments. Not
-        // month-scoped, so it sits above the month selector.
-        _UpcomingCard(finance: finance, hits: _recurring(finance)),
-        // Month selector governs the stat cards and category breakdown.
-        Row(
-          children: [
-            IconButton(
-              tooltip: _yearMode ? 'Previous year' : 'Previous month',
-              onPressed: () => _shiftMonth(-1),
-              icon: const Icon(Icons.chevron_left),
-            ),
-            // Tappable: browsing back a year used to take 12 arrow taps.
-            Expanded(
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                onTap: () => _pickMonth(context, finance),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Flexible(
-                        child: Text(
-                          _yearMode ? '$year' : fmtMonth(_month),
-                          overflow: TextOverflow.ellipsis,
+          // First-run: the landing tab used to greet a new user with ₹0.00
+          // everywhere and no hint of what to do next.
+          if (!finance.hasTransactions) ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.auto_awesome,
+                          size: 20,
+                          color: scheme.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Get started',
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
-                      ),
-                      const SizedBox(width: 4),
-                      Icon(
-                        Icons.arrow_drop_down,
-                        size: 20,
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'No transactions yet. Import your bank SMS with the '
+                      'message icon in the top bar, or add one by hand with '
+                      'the + button below.',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: scheme.onSurfaceVariant,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
-            IconButton(
-              tooltip: _yearMode ? 'Next year' : 'Next month',
-              onPressed:
-                  (_yearMode
-                      ? year < latestMonth.year
-                      : _month.isBefore(latestMonth))
-                  ? () => _shiftMonth(1)
-                  : null,
-              icon: const Icon(Icons.chevron_right),
-            ),
-            // Scope switch as a quiet text button: a full-width segmented
-            // control here read as a primary action and drew the eye away
-            // from the figures. Month is the default; nothing is persisted.
-            if (_yearMode)
-              IconButton(
-                tooltip: 'Export year report (PDF)',
-                visualDensity: VisualDensity.compact,
-                icon: Icon(
-                  Icons.picture_as_pdf_outlined,
-                  size: 20,
-                  color: scheme.onSurfaceVariant,
-                ),
-                onPressed: () => _exportYearPdf(context, finance),
-              ),
-            TextButton(
-              style: TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                foregroundColor: scheme.onSurfaceVariant,
-                textStyle: Theme.of(context).textTheme.labelMedium,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              onPressed: () => setState(() => _yearMode = !_yearMode),
-              child: Text(_yearMode ? 'Month' : 'Year'),
-            ),
+            const SizedBox(height: 16),
           ],
-        ),
+          // Card bills coming due + detected recurring payments. Not
+          // month-scoped, so it sits above the month selector.
+          _UpcomingCard(finance: finance, hits: _recurring(finance)),
+        ],
+        // Every view is month-scoped, the comparisons included, so the
+        // selector is never left showing a month the content ignores.
+        _monthSelector(context, finance, latestMonth),
         const SizedBox(height: 4),
-        // Horizontally scrollable so each card is wide enough to show its
-        // amount on one line, however large the number. The height follows
-        // the system font scale — fixed 88dp clips at "Large" text size.
-        SizedBox(
-          height: MediaQuery.textScalerOf(context).scale(88),
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.zero,
-            children: [
-              // Year-view taps stay month-scoped deep links (the Transactions
-              // filter has no year), so they are disabled there.
-              if (!hideIncome) ...[
+        if (overview) ...[
+          // Horizontally scrollable so each card is wide enough to show its
+          // amount on one line, however large the number. The height follows
+          // the system font scale — fixed 88dp clips at "Large" text size.
+          SizedBox(
+            height: MediaQuery.textScalerOf(context).scale(88),
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: EdgeInsets.zero,
+              children: [
+                // Year-view taps stay month-scoped deep links (the Transactions
+                // filter has no year), so they are disabled there.
+                if (!hideIncome) ...[
+                  _StatCard(
+                    label: 'Income',
+                    value: _yearMode
+                        ? finance.incomeInYear(year)
+                        : finance.incomeInMonth(_month),
+                    icon: Icons.arrow_downward,
+                    color: colors.green,
+                    onTap: widget.onViewTransactions == null || _yearMode
+                        ? null
+                        : () =>
+                              widget.onViewTransactions!(TxType.income, _month),
+                  ),
+                  const SizedBox(width: 12),
+                ],
                 _StatCard(
-                  label: 'Income',
-                  value: _yearMode
-                      ? finance.incomeInYear(year)
-                      : finance.incomeInMonth(_month),
-                  icon: Icons.arrow_downward,
-                  color: colors.green,
+                  label: 'Spent',
+                  value: monthExpense,
+                  icon: Icons.arrow_upward,
+                  color: scheme.error,
                   onTap: widget.onViewTransactions == null || _yearMode
                       ? null
-                      : () => widget.onViewTransactions!(TxType.income, _month),
+                      : () =>
+                            widget.onViewTransactions!(TxType.expense, _month),
                 ),
                 const SizedBox(width: 12),
+                // Savings outflow — the DISPLAY figure, which keeps reporting
+                // even when the user un-transferred the savings category (the
+                // money then also sits inside Spent; the balance math uses the
+                // gated figure separately).
+                _StatCard(
+                  label: 'Saved',
+                  value: _yearMode
+                      ? finance.savingsOutflowInYear(year)
+                      : finance.savingsOutflowInMonth(_month),
+                  icon: Icons.savings_outlined,
+                  color: colors.orange,
+                  onTap: widget.onViewCategory == null || _yearMode
+                      ? null
+                      : () => widget.onViewCategory!(
+                          kSavingsTransferCategoryId,
+                          _month,
+                        ),
+                ),
               ],
-              _StatCard(
-                label: 'Spent',
-                value: monthExpense,
-                icon: Icons.arrow_upward,
-                color: scheme.error,
-                onTap: widget.onViewTransactions == null || _yearMode
-                    ? null
-                    : () => widget.onViewTransactions!(TxType.expense, _month),
-              ),
-              const SizedBox(width: 12),
-              // Savings outflow — the DISPLAY figure, which keeps reporting
-              // even when the user un-transferred the savings category (the
-              // money then also sits inside Spent; the balance math uses the
-              // gated figure separately).
-              _StatCard(
-                label: 'Saved',
-                value: _yearMode
-                    ? finance.savingsOutflowInYear(year)
-                    : finance.savingsOutflowInMonth(_month),
-                icon: Icons.savings_outlined,
-                color: colors.orange,
-                onTap: widget.onViewCategory == null || _yearMode
-                    ? null
-                    : () => widget.onViewCategory!(
-                        kSavingsTransferCategoryId,
-                        _month,
-                      ),
-              ),
-            ],
+            ),
           ),
-        ),
-        // Monthly budget progress — only when a cap is set. Uses the selected
-        // month's spend so browsing past months shows their usage too.
-        Builder(
-          builder: (context) {
-            final budget = context.select<SettingsProvider, double>(
-              (s) => s.monthlyBudget,
-            );
-            if (budget <= 0 || _yearMode) return const SizedBox.shrink();
-            return Padding(
-              padding: const EdgeInsets.only(top: 16),
-              child: _BudgetCard(
-                spent: finance.budgetSpentInMonth(_month),
-                cap: budget,
-              ),
-            );
-          },
-        ),
-        // Custom spend limits, one compact progress row each — full ring
-        // cards would dominate the page with several budgets. Budgets are
-        // monthly, so the Year view skips them.
-        if (finance.budgets.isNotEmpty && !_yearMode) ...[
-          const SizedBox(height: 24),
-          Text('Budgets', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Card(
-            child: Padding(
-              // all(16): the dashboard's section cards had six different
-              // inner paddings — edges never lined up while scrolling.
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  for (final b in finance.budgets)
-                    _SpendBudgetRow(
-                      name: b.name,
-                      spent: finance.budgetSpentFor(b, _month),
-                      limit: b.limit,
-                      // Detail sheet (ring + pie + trend); the transactions
-                      // deep-link lives on a button inside it.
-                      onTap: () => showBudgetDetailSheet(
-                        context,
-                        b,
-                        _month,
-                        onViewTransactions: widget.onViewBudget,
-                        onViewCategory: widget.onViewCategory,
+          // Monthly budget progress — only when a cap is set. Uses the selected
+          // month's spend so browsing past months shows their usage too.
+          Builder(
+            builder: (context) {
+              final budget = context.select<SettingsProvider, double>(
+                (s) => s.monthlyBudget,
+              );
+              if (budget <= 0 || _yearMode) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(top: 16),
+                child: _BudgetCard(
+                  spent: finance.budgetSpentInMonth(_month),
+                  cap: budget,
+                ),
+              );
+            },
+          ),
+          // Custom spend limits, one compact progress row each — full ring
+          // cards would dominate the page with several budgets. Budgets are
+          // monthly, so the Year view skips them.
+          if (finance.budgets.isNotEmpty && !_yearMode) ...[
+            const SizedBox(height: 24),
+            Text('Budgets', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                // all(16): the dashboard's section cards had six different
+                // inner paddings — edges never lined up while scrolling.
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    for (final b in finance.budgets)
+                      _SpendBudgetRow(
+                        name: b.name,
+                        spent: finance.budgetSpentFor(b, _month),
+                        limit: b.limit,
+                        // Detail sheet (ring + pie + trend); the transactions
+                        // deep-link lives on a button inside it.
+                        onTap: () => showBudgetDetailSheet(
+                          context,
+                          b,
+                          _month,
+                          onViewTransactions: widget.onViewBudget,
+                          onViewCategory: widget.onViewCategory,
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
+          ],
+        ],
+        // Now vs then. Month concepts, so the Year view steps aside the way
+        // budgets and the heatmap already do.
+        if (trends && !_yearMode) ...[
+          PreviousMonthCard(comparison: _comparison(finance)),
+          UsualSpendCard(comparison: _comparison(finance)),
+          CategoryComparisonCard(
+            comparison: _comparison(finance),
+            onViewCategory: widget.onViewCategory == null
+                ? null
+                : (id) => widget.onViewCategory!(id, _month),
           ),
         ],
-        const SizedBox(height: 16),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: CategoryDonutChart(
-              data: byCategory,
-              onCategoryTap: widget.onViewCategory == null || _yearMode
-                  ? null
-                  : (id) => widget.onViewCategory!(id, _month),
-            ),
-          ),
-        ),
-        if (byCategory.isNotEmpty) ...[
-          const SizedBox(height: 12),
+        if (breakdown) ...[
+          const SizedBox(height: 16),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  for (final entry in byCategory)
-                    _CategoryRow(
-                      icon: entry.key.icon,
-                      color: entry.key.color,
-                      label: entry.key.label,
-                      amount: entry.value,
-                      fraction: monthExpense == 0
-                          ? 0
-                          : entry.value / monthExpense,
-                      budgetLimit: _yearMode
-                          ? null
-                          : _singleCategoryBudget(finance, entry.key.id)?.limit,
-                      onTap: widget.onViewCategory == null || _yearMode
-                          ? null
-                          : () => widget.onViewCategory!(entry.key.id, _month),
-                      // Shortcut to a per-category cap: opens the shared
-                      // budget dialog pre-filled (or the existing one).
-                      onLongPress: () => showBudgetDialog(
-                        context,
-                        existing: _singleCategoryBudget(finance, entry.key.id),
-                        presetName: entry.key.label,
-                        presetMode: BudgetMode.include,
-                        presetCategoryIds: {entry.key.id},
-                      ),
-                    ),
-                ],
+              child: CategoryDonutChart(
+                data: byCategory,
+                onCategoryTap: widget.onViewCategory == null || _yearMode
+                    ? null
+                    : (id) => widget.onViewCategory!(id, _month),
               ),
             ),
           ),
-        ],
-        // Where the money actually went: per-payee totals for the month,
-        // re-derived from SMS bodies / manual notes. Display-only — the
-        // transactions filter can't express a free-text payee (yet).
-        // Shown whenever the month has spending: an empty month-start used to
-        // make the whole section vanish, which read as a bug rather than
-        // "nothing identifiable yet".
-        if (!_yearMode &&
-            (topMerchantsList.isNotEmpty || monthExpense > 0)) ...[
-          const SizedBox(height: 24),
-          Text('Top merchants', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  if (topMerchantsList.isEmpty)
-                    Text(
-                      'No identifiable merchants in ${fmtMonth(_month)} yet. '
-                      'Payments to phone numbers, VPAs without a name and '
-                      'bank references are left out; add a note to a '
-                      'transaction to name it.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
+          if (byCategory.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    for (final entry in byCategory)
+                      _CategoryRow(
+                        icon: entry.key.icon,
+                        color: entry.key.color,
+                        label: entry.key.label,
+                        amount: entry.value,
+                        fraction: monthExpense == 0
+                            ? 0
+                            : entry.value / monthExpense,
+                        budgetLimit: _yearMode
+                            ? null
+                            : _singleCategoryBudget(
+                                finance,
+                                entry.key.id,
+                              )?.limit,
+                        onTap: widget.onViewCategory == null || _yearMode
+                            ? null
+                            : () =>
+                                  widget.onViewCategory!(entry.key.id, _month),
+                        // Shortcut to a per-category cap: opens the shared
+                        // budget dialog pre-filled (or the existing one).
+                        onLongPress: () => showBudgetDialog(
+                          context,
+                          existing: _singleCategoryBudget(
+                            finance,
+                            entry.key.id,
+                          ),
+                          presetName: entry.key.label,
+                          presetMode: BudgetMode.include,
+                          presetCategoryIds: {entry.key.id},
+                        ),
                       ),
-                    ),
-                  for (final m in topMerchantsList)
-                    InkWell(
-                      borderRadius: BorderRadius.circular(AppRadius.control),
-                      onTap: widget.onViewMerchant == null
-                          ? null
-                          // The search matches notes/bodies, so the query is
-                          // the normalized identity, not the cased label.
-                          : () => widget.onViewMerchant!(
-                              m.key.substring(m.key.indexOf('|') + 1),
-                              _month,
-                            ),
-                      onLongPress: () => _renameMerchant(context, finance, m),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.storefront_outlined,
-                              size: 20,
-                              color: scheme.onSurfaceVariant,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    m.label,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  Text(
-                                    m.count == 1
-                                        ? '1 payment'
-                                        : '${m.count} payments',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.bodySmall,
-                                  ),
-                                ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+          // Where the money actually went: per-payee totals for the month,
+          // re-derived from SMS bodies / manual notes. Display-only — the
+          // transactions filter can't express a free-text payee (yet).
+          // Shown whenever the month has spending: an empty month-start used to
+          // make the whole section vanish, which read as a bug rather than
+          // "nothing identifiable yet".
+          if (!_yearMode &&
+              (topMerchantsList.isNotEmpty || monthExpense > 0)) ...[
+            const SizedBox(height: 24),
+            Text(
+              'Top merchants',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    if (topMerchantsList.isEmpty)
+                      Text(
+                        'No identifiable merchants in ${fmtMonth(_month)} yet. '
+                        'Payments to phone numbers, VPAs without a name and '
+                        'bank references are left out; add a note to a '
+                        'transaction to name it.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    for (final m in topMerchantsList)
+                      InkWell(
+                        borderRadius: BorderRadius.circular(AppRadius.control),
+                        onTap: widget.onViewMerchant == null
+                            ? null
+                            // The search matches notes/bodies, so the query is
+                            // the normalized identity, not the cased label.
+                            : () => widget.onViewMerchant!(
+                                m.key.substring(m.key.indexOf('|') + 1),
+                                _month,
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 120),
-                              child: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(
-                                  fmtMoney(m.total),
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w700,
+                        onLongPress: () => _renameMerchant(context, finance, m),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.storefront_outlined,
+                                size: 20,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      m.label,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    Text(
+                                      m.count == 1
+                                          ? '1 payment'
+                                          : '${m.count} payments',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 120,
+                                ),
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    fmtMoney(m.total),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
-        // Spending per parent group (Needs/Wants/…). Grouped transfer
-        // outflows are included in their group's sum; "Other" collects
-        // ungrouped categories.
-        if (finance.groups.isNotEmpty && groupTotal > 0 && !_yearMode) ...[
-          const SizedBox(height: 24),
-          Text('By group', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  for (final (group, amount) in groupSpend)
-                    _CategoryRow(
-                      icon: group == null
-                          ? Icons.category
-                          : Icons.workspaces_outlined,
-                      color: group?.color ?? scheme.onSurfaceVariant,
-                      label: group?.label ?? 'Other',
-                      amount: amount,
-                      fraction: groupTotal == 0 ? 0 : amount / groupTotal,
-                      // null group = the "Other" (ungrouped) bucket — the
-                      // callback owner maps it to the ungrouped filter key.
-                      onTap: widget.onViewGroup == null
-                          ? null
-                          : () => widget.onViewGroup!(group?.id, _month),
-                    ),
-                ],
+          ],
+          // Spending per parent group (Needs/Wants/…). Grouped transfer
+          // outflows are included in their group's sum; "Other" collects
+          // ungrouped categories.
+          if (finance.groups.isNotEmpty && groupTotal > 0 && !_yearMode) ...[
+            const SizedBox(height: 24),
+            Text('By group', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    for (final (group, amount) in groupSpend)
+                      _CategoryRow(
+                        icon: group == null
+                            ? Icons.category
+                            : Icons.workspaces_outlined,
+                        color: group?.color ?? scheme.onSurfaceVariant,
+                        label: group?.label ?? 'Other',
+                        amount: amount,
+                        fraction: groupTotal == 0 ? 0 : amount / groupTotal,
+                        // null group = the "Other" (ungrouped) bucket — the
+                        // callback owner maps it to the ungrouped filter key.
+                        onTap: widget.onViewGroup == null
+                            ? null
+                            : () => widget.onViewGroup!(group?.id, _month),
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
+          ],
+          // Spending hotspots: which DATES were hot this month, and which
+          // weekdays are usually hot across history.
+          if (monthExpense > 0 && !_yearMode) ...[
+            const SizedBox(height: 24),
+            Text(
+              'Spending heatmap',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: SpendingHeatmap(month: _month),
+              ),
+            ),
+          ],
+          // Transfers: own-account moves for the month. Not income or expense —
+          // shown separately so the flows are still visible.
+          if (transfersBy.isNotEmpty && !_yearMode) ...[
+            const SizedBox(height: 24),
+            Text('Transfers', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                // all(16): the dashboard's section cards had six different
+                // inner paddings — edges never lined up while scrolling.
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    BreakdownRow(
+                      icon: Icons.arrow_downward,
+                      color: colors.green,
+                      label: 'In',
+                      amount: '+${fmtMoney(finance.transferInInMonth(_month))}',
+                    ),
+                    BreakdownRow(
+                      icon: Icons.arrow_upward,
+                      color: scheme.error,
+                      label: 'Out',
+                      amount:
+                          '−${fmtMoney(finance.transferOutInMonth(_month))}',
+                    ),
+                    const Divider(height: 20),
+                    for (final entry in transfersBy)
+                      BreakdownRow(
+                        icon: entry.key.icon,
+                        color: entry.key.color,
+                        label: entry.key.label,
+                        amount:
+                            '${entry.key.type == TxType.income ? '+' : '−'}'
+                            '${fmtMoney(entry.value)}',
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
-        // Spending hotspots: which DATES were hot this month, and which
-        // weekdays are usually hot across history.
-        if (monthExpense > 0 && !_yearMode) ...[
+        if (trends) ...[
           const SizedBox(height: 24),
           Text(
-            'Spending heatmap',
+            _yearMode ? 'Months of $year' : 'Last 6 months',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           const SizedBox(height: 8),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: SpendingHeatmap(month: _month),
-            ),
-          ),
-        ],
-        // Transfers: own-account moves for the month. Not income or expense —
-        // shown separately so the flows are still visible.
-        if (transfersBy.isNotEmpty && !_yearMode) ...[
-          const SizedBox(height: 24),
-          Text('Transfers', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          Card(
-            child: Padding(
-              // all(16): the dashboard's section cards had six different
-              // inner paddings — edges never lined up while scrolling.
-              padding: const EdgeInsets.all(16),
               child: Column(
                 children: [
-                  BreakdownRow(
-                    icon: Icons.arrow_downward,
-                    color: colors.green,
-                    label: 'In',
-                    amount: '+${fmtMoney(finance.transferInInMonth(_month))}',
+                  MonthlyBarChart(
+                    months: _yearMode
+                        ? [for (var m = 1; m <= 12; m++) DateTime(year, m)]
+                        : null,
+                    showIncome: !hideIncome,
                   ),
-                  BreakdownRow(
-                    icon: Icons.arrow_upward,
-                    color: scheme.error,
-                    label: 'Out',
-                    amount: '−${fmtMoney(finance.transferOutInMonth(_month))}',
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (!hideIncome) ...[
+                        _LegendDot(color: colors.green, label: 'Income'),
+                        const SizedBox(width: 16),
+                      ],
+                      _LegendDot(color: scheme.error, label: 'Expense'),
+                    ],
                   ),
-                  const Divider(height: 20),
-                  for (final entry in transfersBy)
-                    BreakdownRow(
-                      icon: entry.key.icon,
-                      color: entry.key.color,
-                      label: entry.key.label,
-                      amount:
-                          '${entry.key.type == TxType.income ? '+' : '−'}'
-                          '${fmtMoney(entry.value)}',
-                    ),
                 ],
               ),
             ),
           ),
         ],
-        const SizedBox(height: 24),
-        Text(
-          _yearMode ? 'Months of $year' : 'Last 6 months',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                MonthlyBarChart(
-                  months: _yearMode
-                      ? [for (var m = 1; m <= 12; m++) DateTime(year, m)]
-                      : null,
-                  showIncome: !hideIncome,
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (!hideIncome) ...[
-                      _LegendDot(color: colors.green, label: 'Income'),
-                      const SizedBox(width: 16),
-                    ],
-                    _LegendDot(color: scheme.error, label: 'Expense'),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (recent.isNotEmpty) ...[
+        if (overview && recent.isNotEmpty) ...[
           const SizedBox(height: 24),
           Text(
             'Recent transactions',

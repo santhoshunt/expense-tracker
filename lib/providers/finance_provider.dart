@@ -147,6 +147,12 @@ class _Derived {
   /// the budget monitor together ask for ~8 months per change.
   Map<int, List<Tx>>? byMonth;
   final Map<int, _MonthTotals> months = {};
+
+  /// Totals for part of a month, keyed `'<monthKey>|<throughDay>'` — the
+  /// day-aligned spending comparisons ask for "August as far as the 17th".
+  /// Only the live month's window lands here; a complete month short-circuits
+  /// to [months], so this stays small however far back the user browses.
+  final Map<String, _MonthTotals> partialMonths = {};
   final Map<String, _AccountFigures> accountFigures = {};
   _MonthTotals? allTime;
 
@@ -337,6 +343,41 @@ class FinanceProvider extends ChangeNotifier {
       _d.months[month.year * 12 + month.month] ??= _totals(
         _byMonth[month.year * 12 + month.month] ?? const [],
       );
+
+  /// Totals for [month] counting only days 1..[day].
+  ///
+  /// Comparing a part-elapsed month against full ones makes the current month
+  /// look cheap every time, so the comparisons line months up by day. A [day]
+  /// covering the whole month delegates to [_monthTotals]: same cache, same
+  /// figures, so a partial reading can never drift from the full one.
+  _MonthTotals _monthTotalsThrough(DateTime month, int day) {
+    if (day >= daysInMonth(month.year, month.month)) return _monthTotals(month);
+    final key = month.year * 12 + month.month;
+    return _d.partialMonths['$key|$day'] ??= _totals([
+      for (final t in _byMonth[key] ?? const <Tx>[])
+        if (t.date.day <= day) t,
+    ]);
+  }
+
+  /// Spend in [month] up to and including day-of-month [day].
+  double expenseInMonthThrough(DateTime month, int day) =>
+      _monthTotalsThrough(month, day).expense;
+
+  /// Per-category spend in [month] up to and including [day], largest first.
+  /// Transfer-free and raw-id keyed, exactly like [expenseByCategory].
+  List<MapEntry<TxCategory, double>> expenseByCategoryThrough(
+    DateTime month,
+    int day,
+  ) => _monthTotalsThrough(month, day).byCategory;
+
+  /// Date of the earliest confirmed transaction, or null on an empty ledger.
+  /// No cache slot: `_ordered` is memoised and sorted by date.
+  DateTime? get firstTransactionDate =>
+      _ordered.isEmpty ? null : _ordered.first.$1.date;
+
+  /// Guards the bound stated on [_Derived.partialMonths].
+  @visibleForTesting
+  int get partialMonthCacheSize => _d.partialMonths.length;
 
   /// One pass producing every income/expense/savings figure for [rows].
   ///
