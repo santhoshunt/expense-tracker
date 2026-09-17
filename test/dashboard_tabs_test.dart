@@ -12,6 +12,8 @@ import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
 import 'package:expense_tracker/widgets/spend_comparison_cards.dart';
 
+import 'dashboard_test_utils.dart';
+
 /// The dashboard's three sub-tabs, and the comparison cards' states.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -58,24 +60,62 @@ void main() {
       tester,
     ) async {
       await pump(tester);
+      final list = find.byType(Scrollable).first;
 
-      // Overview is the landing view.
+      // Overview is the landing view. It carries copies of the
+      // highest-signal sections (categories vs usual, the heatmap) so a
+      // glance there needs no tab switch — but not the rest.
       expect(find.text('Spent'), findsOneWidget);
       expect(find.text('This month vs last month'), findsNothing);
       expect(find.byType(CategoryDonutChart), findsNothing);
+      await tester.scrollUntilVisible(
+        find.text('Categories vs usual'),
+        300,
+        scrollable: list,
+      );
+      expect(find.text('Categories vs usual'), findsOneWidget);
+      await tester.scrollUntilVisible(
+        find.text('Spending heatmap'),
+        300,
+        scrollable: list,
+      );
+      expect(find.text('Spending heatmap'), findsOneWidget);
 
-      await tester.tap(find.text('Trends'));
-      await tester.pumpAndSettle();
+      await openDashboardView(tester, 'Trends');
       expect(find.text('This month vs last month'), findsOneWidget);
-      expect(find.text('Usual vs this month'), findsOneWidget);
+      expect(find.text('This month vs usual'), findsOneWidget);
       expect(find.text('Spent'), findsNothing);
       expect(find.byType(CategoryDonutChart), findsNothing);
 
-      await tester.tap(find.text('Breakdown'));
-      await tester.pumpAndSettle();
+      await openDashboardView(tester, 'Breakdown');
       expect(find.byType(CategoryDonutChart), findsOneWidget);
       expect(find.text('This month vs last month'), findsNothing);
       expect(find.text('Spent'), findsNothing);
+    });
+
+    testWidgets('a horizontal swipe steps through the views', (tester) async {
+      await pump(tester);
+      expect(find.text('Spent'), findsOneWidget);
+
+      // Swipe left from the segmented control's own row: plain labels there
+      // claim only taps, so the page-level swipe detector receives the drag.
+      await tester.fling(find.text('Overview'), const Offset(-300, 0), 1000);
+      await tester.pumpAndSettle();
+      expect(find.text('This month vs last month'), findsOneWidget);
+
+      await tester.fling(find.text('Trends'), const Offset(-300, 0), 1000);
+      await tester.pumpAndSettle();
+      expect(find.byType(CategoryDonutChart), findsOneWidget);
+
+      // The ends stop: another swipe left stays on Breakdown.
+      await tester.fling(find.text('Breakdown'), const Offset(-300, 0), 1000);
+      await tester.pumpAndSettle();
+      expect(find.byType(CategoryDonutChart), findsOneWidget);
+
+      // And right goes back.
+      await tester.fling(find.text('Breakdown'), const Offset(300, 0), 1000);
+      await tester.pumpAndSettle();
+      expect(find.text('This month vs last month'), findsOneWidget);
     });
 
     testWidgets('the month selector follows every view', (tester) async {
@@ -218,6 +258,55 @@ void main() {
       await tester.tap(find.text(categoryById('food').label));
       await tester.pump();
       expect(tapped, ['food']);
+    });
+
+    testWidgets('the sort menu reorders the rows', (tester) async {
+      final cats = [
+        CategoryCompare(
+          category: categoryById('food'),
+          actual: 1400,
+          usual: 1000,
+          state: CompareState.ok,
+        ),
+        CategoryCompare(
+          category: categoryById('transport'),
+          actual: 300,
+          usual: 100,
+          state: CompareState.ok,
+        ),
+        CategoryCompare(
+          category: categoryById('shopping'),
+          actual: 50,
+          usual: 0,
+          state: CompareState.newThisMonth,
+        ),
+      ];
+      await show(
+        tester,
+        CategoryComparisonCard(comparison: made(categories: cats)),
+      );
+
+      double rowY(String id) =>
+          tester.getTopLeft(find.text(categoryById(id).label)).dy;
+
+      // Default: the order handed in (biggest absolute change first).
+      expect(rowY('food'), lessThan(rowY('transport')));
+
+      await tester.tap(find.byIcon(Icons.sort));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Most unusual'));
+      await tester.pumpAndSettle();
+      // No usual to divide by pins shopping first; then transport's +200%
+      // outranks food's +40% despite the smaller rupee change.
+      expect(rowY('shopping'), lessThan(rowY('transport')));
+      expect(rowY('transport'), lessThan(rowY('food')));
+
+      await tester.tap(find.byIcon(Icons.sort));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Highest spend'));
+      await tester.pumpAndSettle();
+      expect(rowY('food'), lessThan(rowY('transport')));
+      expect(rowY('transport'), lessThan(rowY('shopping')));
     });
 
     testWidgets('a long list collapses to the top movers', (tester) async {

@@ -102,6 +102,9 @@ class CategoryCompare {
 
   double get delta => actual - usual;
 
+  /// Null when there is no usual to divide by (a new-this-month category).
+  double? get deltaPct => usual <= 0 ? null : delta / usual;
+
   /// Too small a difference to colour, arrow or phrase as a change.
   bool get negligible => negligibleDelta(delta);
 }
