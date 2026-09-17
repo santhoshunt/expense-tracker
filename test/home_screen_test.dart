@@ -18,6 +18,8 @@ import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/animated_fold.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
 
+import 'dashboard_test_utils.dart';
+
 Widget app(FinanceProvider provider) => MultiProvider(
   providers: [
     ChangeNotifierProvider.value(value: provider),
@@ -294,6 +296,7 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Breakdown');
 
     // The dashboard list inflates lazily — scroll until the donut chart
     // (which sits right above the spending card) is built, then a bit more.
@@ -348,6 +351,7 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Breakdown');
 
     final scrollable = find.byType(Scrollable).first;
     await tester.scrollUntilVisible(
@@ -724,6 +728,7 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Breakdown');
 
     // Only the category rows carry a long-press (the donut legend above
     // them shows the same label without one). The list is lazy, so scroll
@@ -806,7 +811,9 @@ void main() {
     expect(monthLabel, findsNothing);
     expect(find.byTooltip('Export year report (PDF)'), findsOneWidget);
 
-    // The dashboard list is lazy: scroll the chart section into view.
+    // The chart lives on Trends; the dashboard list is lazy, so scroll the
+    // section into view.
+    await openDashboardView(tester, 'Trends');
     await tester.scrollUntilVisible(
       find.text('Months of $year'),
       300,
@@ -814,6 +821,15 @@ void main() {
     );
     expect(find.text('Months of $year'), findsOneWidget);
     expect(find.text('Last 6 months'), findsNothing);
+    expect(
+      find.text('This month vs last month'),
+      findsNothing,
+      reason: 'a month comparison has no meaning over a year',
+    );
+
+    // The heatmap is a month-only Breakdown section, so the year view drops
+    // it there too.
+    await openDashboardView(tester, 'Breakdown');
     expect(find.text('Spending heatmap'), findsNothing);
 
     // Back to Month: the month-only sections return.
@@ -831,6 +847,8 @@ void main() {
       scrollable: list,
     );
     expect(find.text('Spending heatmap'), findsOneWidget);
+
+    await openDashboardView(tester, 'Trends');
     await tester.scrollUntilVisible(
       find.text('Last 6 months'),
       300,
@@ -863,6 +881,7 @@ void main() {
     await p.load();
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Breakdown');
 
     final row = find
         .ancestor(
@@ -909,6 +928,7 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Breakdown');
 
     // Scroll until the hint itself is on screen (the header alone can be
     // visible while the card below it is still off-stage).

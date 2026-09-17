@@ -10,6 +10,8 @@ import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 
+import 'dashboard_test_utils.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -100,7 +102,9 @@ void main() {
     expect(find.text('Spent'), findsOneWidget);
     expect(find.textContaining(kMaskedAmount), findsNothing);
 
-    // The chart legend also loses its Income entry.
+    // The chart legend also loses its Income entry. It lives on the Trends
+    // sub-tab, alongside the bar chart it labels.
+    await openDashboardView(tester, 'Trends');
     await tester.scrollUntilVisible(
       find.text('Expense'),
       300,
@@ -112,8 +116,12 @@ void main() {
 
     await settings.setHideIncome(false);
     await tester.pump(const Duration(milliseconds: 700));
-    // Legend (and possibly the cached stat card above) reappear.
+    // The legend entry is back…
     expect(find.text('Income'), findsAtLeastNWidgets(1));
+    // …and so is the stat card, which lives on the other sub-tab.
+    await openDashboardView(tester, 'Overview');
+    expect(find.text('Income'), findsOneWidget);
+    expect(find.text(fmtMoney(50000)), findsOneWidget);
   });
 
   testWidgets('transactions month header masks the income total', (
