@@ -243,8 +243,12 @@ void main() {
         DateTime(2026, 9),
         now: DateTime(2026, 9, 17),
       );
-      // September runs 30 days: 1400 × 30 / 17.
-      expect(mid.vsPrevious.actualFull, closeTo(1400 * 30 / 17, 0.001));
+      // The projection follows the reference month's curve, not a flat daily
+      // pace: August had reached 1000 of its 1500 by the 17th, so September's
+      // 1400 scales by 1500/1000.
+      expect(mid.vsPrevious.actualFull, closeTo(1400 * 1500 / 1000, 0.001));
+      // Same figures in the usual window (every month spends alike here).
+      expect(mid.vsUsual.actualFull, closeTo(2100, 0.001));
 
       final early = buildMonthComparison(
         p,
@@ -256,6 +260,50 @@ void main() {
         isNull,
         reason: 'a ×10 multiplier is noise, not a forecast',
       );
+    });
+
+    test('the projection always agrees with the headline delta', () async {
+      // A front-loaded August: 5000 by day 17, only 1000 after. A flat daily
+      // pace would project September past August's total even while the
+      // headline says "less" — the shape projection cannot contradict it.
+      final p = await loaded();
+      await spend(p, DateTime(2026, 8, 1), 5000);
+      await spend(p, DateTime(2026, 8, 20), 1000);
+      await spend(p, DateTime(2026, 9, 5), 4000);
+
+      final c = buildMonthComparison(
+        p,
+        DateTime(2026, 9),
+        now: DateTime(2026, 9, 17),
+      );
+      final prev = c.vsPrevious;
+      expect(prev.delta, -1000, reason: '4000 vs August\'s 5000 by day 17');
+      expect(prev.actualFull, closeTo(4000 * 6000 / 5000, 0.001));
+      expect(
+        prev.actualFull! / prev.referenceFull,
+        closeTo(prev.actual / prev.reference, 1e-9),
+        reason: 'projected share equals the headline share by construction',
+      );
+      expect(
+        prev.actualFull,
+        lessThan(prev.referenceFull),
+        reason: '"less" through day 17 must stay "less" projected',
+      );
+    });
+
+    test('no reference to take a shape from falls back to the flat pace', () async {
+      // First-ever data month: August is empty, so the previous-month
+      // comparison has no curve to follow.
+      final p = await loaded();
+      await spend(p, DateTime(2026, 9, 1), 1700);
+
+      final c = buildMonthComparison(
+        p,
+        DateTime(2026, 9),
+        now: DateTime(2026, 9, 17),
+      );
+      expect(c.vsPrevious.state, CompareState.newThisMonth);
+      expect(c.vsPrevious.actualFull, closeTo(1700 * 30 / 17, 0.001));
     });
 
     test(

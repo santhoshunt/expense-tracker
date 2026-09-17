@@ -30,6 +30,26 @@ class AccountsScreen extends StatefulWidget {
 class _AccountsScreenState extends State<AccountsScreen> {
   AccountType? _typeFilter; // null = all
 
+  /// Order the swipe steps through; also gives the glide its direction.
+  static const List<AccountType?> _filterOrder = [
+    null,
+    AccountType.bank,
+    AccountType.creditCard,
+    AccountType.savings,
+  ];
+
+  /// Which side the current filter arrived from, for the list's glide.
+  int _glideDir = 0;
+
+  void _setTypeFilter(AccountType? t) {
+    if (t == _typeFilter) return;
+    setState(() {
+      _glideDir =
+          _filterOrder.indexOf(t) > _filterOrder.indexOf(_typeFilter) ? 1 : -1;
+      _typeFilter = t;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
@@ -41,14 +61,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final net = finance.netWorth;
 
     return SegmentedSwipe<AccountType?>(
-      values: const [
-        null,
-        AccountType.bank,
-        AccountType.creditCard,
-        AccountType.savings,
-      ],
+      values: _filterOrder,
       selected: _typeFilter,
-      onChanged: (t) => setState(() => _typeFilter = t),
+      onChanged: _setTypeFilter,
       child: Column(
       children: [
         Padding(
@@ -111,10 +126,13 @@ class _AccountsScreenState extends State<AccountsScreen> {
               (AccountType.savings, 'Savings'),
             ],
             selected: _typeFilter,
-            onChanged: (t) => setState(() => _typeFilter = t),
+            onChanged: _setTypeFilter,
           ),
         ),
         Expanded(
+          child: GlideIn(
+          viewKey: _typeFilter ?? 'all',
+          direction: _glideDir,
           child: accounts.isEmpty && closed.isEmpty
               ? Center(
                   child: Padding(
@@ -186,6 +204,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                     );
                   },
                 ),
+          ),
         ),
       ],
       ),

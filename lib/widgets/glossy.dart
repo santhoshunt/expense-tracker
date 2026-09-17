@@ -210,6 +210,10 @@ class SegmentedSwipe<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => GestureDetector(
+    // Opaque: blank regions (an empty list's whitespace) are not
+    // hit-testable under the default deferToChild, and a swipe that lands
+    // there would die. Children still win their own gestures first.
+    behavior: HitTestBehavior.opaque,
     onHorizontalDragEnd: (details) {
       final v = details.primaryVelocity ?? 0;
       if (v.abs() < _minVelocity) return;
@@ -218,6 +222,44 @@ class SegmentedSwipe<T> extends StatelessWidget {
       onChanged(values[next]);
     },
     child: child,
+  );
+}
+
+/// Glides its child in from the side a view change came from: the content
+/// remounts when [viewKey] changes and plays a short fade plus a quarter-
+/// width slide. Entrance-only on purpose — an AnimatedSwitcher would keep
+/// the outgoing view alive too, and the transactions list's
+/// ItemScrollController cannot be attached to two lists at once.
+class GlideIn extends StatelessWidget {
+  /// Identity of the shown view; a change replays the entrance.
+  final Object viewKey;
+
+  /// +1 arrives from the right (forward), -1 from the left, 0 fades in place.
+  final int direction;
+
+  final Widget child;
+
+  const GlideIn({
+    super.key,
+    required this.viewKey,
+    required this.direction,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+    key: ValueKey(viewKey),
+    tween: Tween(begin: 0, end: 1),
+    duration: const Duration(milliseconds: 300),
+    curve: Curves.easeOutCubic,
+    child: child,
+    builder: (context, t, child) => Opacity(
+      opacity: t,
+      child: FractionalTranslation(
+        translation: Offset(0.25 * direction * (1 - t), 0),
+        child: child,
+      ),
+    ),
   );
 }
 

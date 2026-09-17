@@ -87,6 +87,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// Not persisted, matching `_month` and `_yearMode`.
   DashboardView _view = DashboardView.overview;
 
+  /// Which side the current view arrived from, for the entrance glide.
+  int _glideDir = 0;
+
+  void _setView(DashboardView v) {
+    if (v == _view) return;
+    setState(() {
+      _glideDir = v.index > _view.index ? 1 : -1;
+      _view = v;
+    });
+  }
+
   /// Recurring detection scans the whole ledger — memoized on the provider's
   /// revision token so it reruns only when data actually changes.
   Object? _recurringRev;
@@ -417,17 +428,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return SegmentedSwipe<DashboardView>(
       values: DashboardView.values,
       selected: _view,
-      onChanged: (v) => setState(() => _view = v),
+      onChanged: _setView,
+      child: GlideIn(
+      viewKey: _view,
+      direction: _glideDir,
       child: ListView(
-      // Each view keeps its own scroll offset: switching from a long view to
-      // a short one otherwise lands mid-page.
-      key: PageStorageKey(_view),
+      // Every view change starts at the top. The per-view offset memory this
+      // replaces (PageStorageKey) restored wherever a view was last left,
+      // which read as landing at random positions once swiping made the
+      // views feel like pages. GlideIn's key already remounts the list.
       padding: const EdgeInsets.all(16),
       children: [
         GlassSegmented<DashboardView>(
           options: [for (final v in DashboardView.values) (v, v.label)],
           selected: _view,
-          onChanged: (v) => setState(() => _view = v),
+          onChanged: _setView,
         ),
         const SizedBox(height: 16),
         if (overview) ...[
@@ -917,6 +932,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
         const SizedBox(height: 120),
       ],
+      ),
       ),
     );
   }

@@ -56,9 +56,10 @@ class SpendCompare {
   /// The same window of the previous month, or the median of the usual ones.
   final double reference;
 
-  /// [actual] scaled to the whole month while it is still running, the exact
-  /// total once it has ended, and null when too few days have elapsed to
-  /// project anything but noise.
+  /// [actual] projected to the whole month while it is still running (by the
+  /// reference month's own spending curve, so it never contradicts the
+  /// headline delta), the exact total once it has ended, and null when too
+  /// few days have elapsed to project anything but noise.
   final double? actualFull;
 
   /// [reference] over whole months, for the projected line to sit against.
@@ -203,10 +204,11 @@ MonthComparison buildMonthComparison(
       : finance.expenseInMonth(m);
 
   final actual = spent(anchor);
-  final projected = _project(actual, throughDay, days);
 
   final prevRef = spent(previous);
+  final prevFull = finance.expenseInMonth(previous);
   final usualRef = median([for (final m in window) spent(m)]);
+  final usualFull = median([for (final m in window) finance.expenseInMonth(m)]);
 
   return MonthComparison(
     month: anchor,
@@ -217,17 +219,27 @@ MonthComparison buildMonthComparison(
     vsPrevious: SpendCompare(
       actual: actual,
       reference: prevRef,
-      actualFull: projected,
-      referenceFull: finance.expenseInMonth(previous),
+      actualFull: _project(
+        actual: actual,
+        reference: prevRef,
+        referenceFull: prevFull,
+        throughDay: throughDay,
+        days: days,
+      ),
+      referenceFull: prevFull,
       state: _stateFor(actual, prevRef),
     ),
     vsUsual: SpendCompare(
       actual: actual,
       reference: usualRef,
-      actualFull: projected,
-      referenceFull: median([
-        for (final m in window) finance.expenseInMonth(m),
-      ]),
+      actualFull: _project(
+        actual: actual,
+        reference: usualRef,
+        referenceFull: usualFull,
+        throughDay: throughDay,
+        days: days,
+      ),
+      referenceFull: usualFull,
       state: window.length < kMinUsualMonths
           ? CompareState.notEnoughHistory
           : _stateFor(actual, usualRef),
@@ -251,10 +263,24 @@ String deltaPhrase(SpendCompare c) {
   return '${fmtMoney(d.abs())}$suffix ${d > 0 ? 'more' : 'less'}';
 }
 
-double? _project(double actual, int throughDay, int days) {
+/// Scales [actual] by how much of [referenceFull] the reference month had
+/// reached by the same day, so the projection assumes the rest of this month
+/// follows the reference month's curve. That makes it agree with the
+/// headline delta by construction (projected / referenceFull equals
+/// actual / reference): a flat daily pace could beat a front-loaded month
+/// while the headline said "less". The flat pace remains only as the
+/// fallback when there is no reference window to take a shape from.
+double? _project({
+  required double actual,
+  required double reference,
+  required double referenceFull,
+  required int throughDay,
+  required int days,
+}) {
   if (throughDay >= days) return actual;
   if (throughDay < kMinDaysForProjection) return null;
-  return actual * days / throughDay;
+  if (reference <= 0 || referenceFull <= 0) return actual * days / throughDay;
+  return actual * referenceFull / reference;
 }
 
 CompareState _stateFor(double actual, double reference) {
