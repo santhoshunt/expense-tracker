@@ -40,7 +40,16 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
     final net = finance.netWorth;
 
-    return Column(
+    return SegmentedSwipe<AccountType?>(
+      values: const [
+        null,
+        AccountType.bank,
+        AccountType.creditCard,
+        AccountType.savings,
+      ],
+      selected: _typeFilter,
+      onChanged: (t) => setState(() => _typeFilter = t),
+      child: Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -179,6 +188,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 ),
         ),
       ],
+      ),
     );
   }
 }
@@ -1000,12 +1010,10 @@ class _AccountMenu extends StatelessWidget {
                   if (key == null || !ctx.mounted) return;
                   final ok = await finance.addAccountKey(account.id, key);
                   if (!ok && ctx.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'That number is already linked to another account.',
-                        ),
-                      ),
+                    showAppToast(
+                      context,
+                      'That number is already linked to another account.',
+                      tone: AppToastTone.error,
                     );
                   }
                 },
@@ -1158,9 +1166,7 @@ class _AccountMenu extends StatelessWidget {
         .where((a) => a.id != account.id)
         .toList();
     if (others.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No other account to merge into.')),
-      );
+      showAppToast(context, 'No other account to merge into.');
       return;
     }
     // Picking a target only selects it — the merge itself is confirmed
@@ -1502,23 +1508,21 @@ Future<void> showAddAccountDialog(BuildContext context) async {
                         if (key != null) {
                           final ok = await finance.addAccountKey(id, key!);
                           if (!ok) {
-                            messenger.showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'That number is already linked to another account — '
-                                  'account created without it.',
-                                ),
-                              ),
+                            showAppToastOn(
+                              messenger,
+                              'That number is already linked to another '
+                              'account — account created without it.',
+                              tone: AppToastTone.error,
                             );
                           }
                         }
                         navigator.pop();
                       } catch (e) {
                         setState(() => saving = false);
-                        messenger.showSnackBar(
-                          SnackBar(
-                            content: Text('Could not create account: $e'),
-                          ),
+                        showAppToastOn(
+                          messenger,
+                          'Could not create account: $e',
+                          tone: AppToastTone.error,
                         );
                       }
                     },

@@ -22,6 +22,7 @@ import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/figma_palette.dart';
 import '../widgets/picker_sheet.dart';
+import '../widgets/undo_snackbar.dart';
 import '../widgets/color_picker_dialog.dart';
 import '../widgets/glossy.dart';
 import 'classifiers_screen.dart';
@@ -306,14 +307,12 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
     }
     if (!mounted) return;
     if (account == null) {
-      messenger.showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Google sign-in was cancelled or failed. Check that the OAuth '
-            'client is set up for this app, then try again.',
-          ),
-          duration: Duration(seconds: 5),
-        ),
+      showAppToastOn(
+        messenger,
+        'Google sign-in was cancelled or failed. Check that the OAuth '
+        'client is set up for this app, then try again.',
+        tone: AppToastTone.error,
+        duration: const Duration(seconds: 5),
       );
       return;
     }
@@ -347,13 +346,19 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
         _lastBackup = last;
         _lastError = null; // success clears the recorded failure
       });
-      messenger.showSnackBar(SnackBar(content: Text('Saved to Drive: $name')));
+      showAppToastOn(
+        messenger,
+        'Saved to Drive: $name',
+        tone: AppToastTone.success,
+      );
     } catch (e) {
       // uploadNow also persisted the failure; mirror it locally so the
       // banner appears without leaving and re-entering Settings.
       if (mounted) setState(() => _lastError = '$e');
-      messenger.showSnackBar(
-        SnackBar(content: Text('Drive backup failed: $e')),
+      showAppToastOn(
+        messenger,
+        'Drive backup failed: $e',
+        tone: AppToastTone.error,
       );
     } finally {
       if (mounted) setState(() => _uploading = false);
@@ -530,12 +535,10 @@ class _AppIconSectionState extends State<_AppIconSection> {
               final messenger = ScaffoldMessenger.of(context);
               final ok = await _service.select(icon.key);
               if (!ok) {
-                messenger.showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Could not change the app icon on this device.',
-                    ),
-                  ),
+                showAppToastOn(
+                  messenger,
+                  'Could not change the app icon on this device.',
+                  tone: AppToastTone.error,
                 );
                 return;
               }
@@ -1006,7 +1009,11 @@ class _DataSectionState extends State<_DataSection> {
             ),
           );
           if (path != null && path.isNotEmpty) {
-            messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
+            showAppToastOn(
+              messenger,
+              'Saved to $path',
+              tone: AppToastTone.success,
+            );
           }
         case 'export_pdf':
           final sel = await _askExportRange();
@@ -1016,7 +1023,11 @@ class _DataSectionState extends State<_DataSection> {
             () => BackupService.exportPdf(finance, range: sel.range),
           );
           if (path != null && path.isNotEmpty) {
-            messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
+            showAppToastOn(
+              messenger,
+              'Saved to $path',
+              tone: AppToastTone.success,
+            );
           }
         case 'delete_all':
           final includeConfig = await _confirmDeleteAll();
@@ -1027,16 +1038,13 @@ class _DataSectionState extends State<_DataSection> {
             await finance.clearAll(includeConfig: includeConfig);
             await _smsImport.resetLastScan();
           });
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(
-                includeConfig
-                    ? 'All data deleted; rules & categories reset to '
-                          'defaults.'
-                    : 'Transactions and accounts deleted. Rules, categories, '
-                          'groups and budgets were kept.',
-              ),
-            ),
+          showAppToastOn(
+            messenger,
+            includeConfig
+                ? 'All data deleted; rules & categories reset to defaults.'
+                : 'Transactions and accounts deleted. Rules, categories, '
+                      'groups and budgets were kept.',
+            tone: AppToastTone.success,
           );
         case 'export_csv':
           final sel = await _askExportRange();
@@ -1046,7 +1054,11 @@ class _DataSectionState extends State<_DataSection> {
             () => BackupService.exportCsv(finance, range: sel.range),
           );
           if (path != null && path.isNotEmpty) {
-            messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
+            showAppToastOn(
+              messenger,
+              'Saved to $path',
+              tone: AppToastTone.success,
+            );
           }
         case 'import_json':
           final replace = await _askImportMode();
@@ -1060,14 +1072,12 @@ class _DataSectionState extends State<_DataSection> {
             ),
           );
           if (txAdded == null) return; // picker cancelled
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(
-                replace
-                    ? 'Restored $txAdded transactions.'
-                    : 'Imported $txAdded new transactions.',
-              ),
-            ),
+          showAppToastOn(
+            messenger,
+            replace
+                ? 'Restored $txAdded transactions.'
+                : 'Imported $txAdded new transactions.',
+            tone: AppToastTone.success,
           );
         case 'import_csv':
           final replace = await _askImportMode();
@@ -1077,14 +1087,12 @@ class _DataSectionState extends State<_DataSection> {
             () => BackupService.importCsv(finance, replace: replace),
           );
           if (added == null) return; // picker cancelled
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(
-                replace
-                    ? 'Replaced transactions with $added rows from CSV.'
-                    : 'Imported $added new transactions from CSV.',
-              ),
-            ),
+          showAppToastOn(
+            messenger,
+            replace
+                ? 'Replaced transactions with $added rows from CSV.'
+                : 'Imported $added new transactions from CSV.',
+            tone: AppToastTone.success,
           );
         case 'import_drive':
           final driveService = context.read<DriveBackupService>();
@@ -1095,10 +1103,10 @@ class _DataSectionState extends State<_DataSection> {
           if (!mounted) return;
           account ??= await driveService.signIn();
           if (account == null) {
-            messenger.showSnackBar(
-              const SnackBar(
-                content: Text('Google sign-in was cancelled or failed.'),
-              ),
+            showAppToastOn(
+              messenger,
+              'Google sign-in was cancelled or failed.',
+              tone: AppToastTone.error,
             );
             return;
           }
@@ -1119,34 +1127,32 @@ class _DataSectionState extends State<_DataSection> {
             }
             return (backup: backup, added: added);
           });
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text(
-                replaceFromDrive
-                    ? 'Restored ${restored.added} transactions from the '
-                          'cloud backup '
-                          '(${DriveBackupService.formatLastBackup(restored.backup.createdAt)}).'
-                    : 'Imported ${restored.added} new transactions from the '
-                          'cloud backup.',
-              ),
-            ),
+          showAppToastOn(
+            messenger,
+            replaceFromDrive
+                ? 'Restored ${restored.added} transactions from the '
+                      'cloud backup '
+                      '(${DriveBackupService.formatLastBackup(restored.backup.createdAt)}).'
+                : 'Imported ${restored.added} new transactions from the '
+                      'cloud backup.',
+            tone: AppToastTone.success,
           );
       }
     } on FormatException catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('Import failed: ${e.message}')),
+      showAppToastOn(
+        messenger,
+        'Import failed: ${e.message}',
+        tone: AppToastTone.error,
       );
     } catch (_) {
       // Any import action, not just JSON — a failed CSV import used to report
       // that an *export* had failed.
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            action.startsWith('import')
-                ? 'Import failed: could not read that file.'
-                : 'Export failed.',
-          ),
-        ),
+      showAppToastOn(
+        messenger,
+        action.startsWith('import')
+            ? 'Import failed: could not read that file.'
+            : 'Export failed.',
+        tone: AppToastTone.error,
       );
     }
   }
@@ -1351,13 +1357,9 @@ class _PrivacySectionState extends State<_PrivacySection> {
     setState(() => _busy = true);
     try {
       if (!await _lock.isSupported()) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Set up a screen lock (PIN or fingerprint) on this device '
-              'first.',
-            ),
-          ),
+        showAppToastOn(
+          messenger,
+          'Set up a screen lock (PIN or fingerprint) on this device first.',
         );
         return;
       }
@@ -1447,10 +1449,10 @@ class _AboutSectionState extends State<_AboutSection> {
       if (!mounted) return;
       switch (result) {
         case UpToDate(:final currentVersion):
-          messenger.showSnackBar(
-            SnackBar(
-              content: Text("You're on the latest version ($currentVersion)."),
-            ),
+          showAppToastOn(
+            messenger,
+            "You're on the latest version ($currentVersion).",
+            tone: AppToastTone.success,
           );
         case UpdateAvailable(:final latestTag, :final htmlUrl):
           await showDialog<void>(
@@ -1480,7 +1482,7 @@ class _AboutSectionState extends State<_AboutSection> {
             ),
           );
         case CheckFailed(:final message):
-          messenger.showSnackBar(SnackBar(content: Text(message)));
+          showAppToastOn(messenger, message, tone: AppToastTone.error);
       }
     } finally {
       if (mounted) setState(() => _checking = false);

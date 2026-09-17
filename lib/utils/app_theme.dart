@@ -346,9 +346,21 @@ ThemeData _buildAppTheme({
       ),
     ),
     dividerTheme: DividerThemeData(color: border),
-    // Snackbars clear with a sideways swipe (the Android-notification
+    // Snackbars float as bordered pills above the nav bar. The explicit
+    // background keeps dark mode dark — the default inverseSurface flips the
+    // app's look. They clear with a sideways swipe (the Android-notification
     // gesture people expect); the default only accepted a swipe down.
-    snackBarTheme: const SnackBarThemeData(
+    snackBarTheme: SnackBarThemeData(
+      behavior: SnackBarBehavior.floating,
+      backgroundColor: surface2,
+      contentTextStyle: TextStyle(fontSize: 14, color: textPrimary),
+      actionTextColor: accent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.button),
+        side: BorderSide(color: border),
+      ),
+      elevation: 6,
       dismissDirection: DismissDirection.horizontal,
     ),
   );

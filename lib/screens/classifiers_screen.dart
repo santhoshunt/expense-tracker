@@ -196,23 +196,19 @@ class _RulesTabState extends State<_RulesTab> {
         '${applied.droppedPending} pending import'
             '${applied.droppedPending == 1 ? '' : 's'} dropped as spam',
     ];
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(parts.join(' · ')),
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: 'Undo',
-            onPressed: () {
-              finance.restoreRules(before);
-              if (applied.dropped.isNotEmpty) {
-                finance.restoreEditedTransactions(applied.dropped);
-              }
-            },
-          ),
-        ),
-      );
+    showAppToastOn(
+      messenger,
+      parts.join(' · '),
+      tone: AppToastTone.undo,
+      duration: const Duration(seconds: 5),
+      actionLabel: 'Undo',
+      onAction: () {
+        finance.restoreRules(before);
+        if (applied.dropped.isNotEmpty) {
+          finance.restoreEditedTransactions(applied.dropped);
+        }
+      },
+    );
   }
 
   @override
@@ -1607,21 +1603,20 @@ Future<void> _showRuleDialog(
                       ];
                       if (parts.isNotEmpty) {
                         final dropped = applied.dropped;
-                        messenger
-                          ..hideCurrentSnackBar()
-                          ..showSnackBar(
-                            SnackBar(
-                              content: Text(parts.join(' · ')),
-                              duration: const Duration(seconds: 5),
-                              action: dropped.isEmpty
-                                  ? null
-                                  : SnackBarAction(
-                                      label: 'Restore',
-                                      onPressed: () => finance
-                                          .restoreEditedTransactions(dropped),
-                                    ),
-                            ),
-                          );
+                        showAppToastOn(
+                          messenger,
+                          parts.join(' · '),
+                          tone: dropped.isEmpty
+                              ? AppToastTone.info
+                              : AppToastTone.undo,
+                          duration: const Duration(seconds: 5),
+                          actionLabel: dropped.isEmpty ? null : 'Restore',
+                          onAction: dropped.isEmpty
+                              ? null
+                              : () => finance.restoreEditedTransactions(
+                                  dropped,
+                                ),
+                        );
                       }
                     },
               child: Text(existing == null ? 'Create' : 'Save'),

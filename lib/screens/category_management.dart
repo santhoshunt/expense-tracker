@@ -10,6 +10,7 @@ import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
 import '../widgets/section_header.dart';
+import '../widgets/undo_snackbar.dart';
 
 /// Category & group management — the Categories tab in the Cockpit.
 ///
@@ -863,10 +864,10 @@ Future<void> showCategoryDialog(
                           navigator.pop();
                         } catch (e) {
                           setState(() => saving = false);
-                          messenger.showSnackBar(
-                            SnackBar(
-                              content: Text('Could not save category: $e'),
-                            ),
+                          showAppToastOn(
+                            messenger,
+                            'Could not save category: $e',
+                            tone: AppToastTone.error,
                           );
                         }
                       },

@@ -285,9 +285,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try {
       final path = await BackupService.exportPdf(finance, year: year);
       if (path == null) return;
-      messenger.showSnackBar(SnackBar(content: Text('Saved report $year')));
+      showAppToastOn(
+        messenger,
+        'Saved report $year',
+        tone: AppToastTone.success,
+      );
     } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Export failed: $e')));
+      showAppToastOn(messenger, 'Export failed: $e', tone: AppToastTone.error);
     }
   }
 
@@ -410,7 +414,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final trends = _view == DashboardView.trends;
     final breakdown = _view == DashboardView.breakdown;
 
-    return ListView(
+    return SegmentedSwipe<DashboardView>(
+      values: DashboardView.values,
+      selected: _view,
+      onChanged: (v) => setState(() => _view = v),
+      child: ListView(
       // Each view keeps its own scroll offset: switching from a long view to
       // a short one otherwise lands mid-page.
       key: PageStorageKey(_view),
@@ -578,6 +586,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                   ],
                 ),
+              ),
+            ),
+          ],
+          // Overview keeps the highest-signal sections even though Trends and
+          // Breakdown also carry them: it is the landing tab, and a glance
+          // there should not require a tab switch.
+          if (!_yearMode)
+            CategoryComparisonCard(
+              comparison: _comparison(finance),
+              onViewCategory: widget.onViewCategory == null
+                  ? null
+                  : (id) => widget.onViewCategory!(id, _month),
+            ),
+          if (monthExpense > 0 && !_yearMode) ...[
+            const SizedBox(height: 24),
+            Text(
+              'Spending heatmap',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: SpendingHeatmap(month: _month),
               ),
             ),
           ],
@@ -885,6 +917,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
         const SizedBox(height: 120),
       ],
+      ),
     );
   }
 }

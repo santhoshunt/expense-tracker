@@ -330,6 +330,16 @@ void main() {
       ]);
     });
 
+    test('deltaPct is relative to usual, null when there is none', () async {
+      final c = await scenario();
+      final byId = {for (final e in c.categories) e.category.id: e};
+
+      expect(byId['food']!.deltaPct, closeTo(0.4, 1e-9));
+      expect(byId['transport']!.deltaPct, closeTo(-1.0, 1e-9));
+      // New this month: no baseline, so no percentage — not an infinity.
+      expect(byId['shopping']!.deltaPct, isNull);
+    });
+
     test('categories quiet in both windows are left out', () async {
       final c = await scenario();
       expect(c.categories, isNotEmpty);

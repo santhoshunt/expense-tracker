@@ -545,7 +545,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ? const <PairSuggestion>[]
         : _pairSuggestions(finance, allPending, allConfirmed);
 
-    return Column(
+    return SegmentedSwipe<_Filter>(
+      values: _Filter.values,
+      selected: _filter,
+      onChanged: (f) => setState(() => _filter = f),
+      child: Column(
       children: [
         if (spamSuspects.isNotEmpty) _SuspectedSpamCard(suspects: spamSuspects),
         if (pending.isNotEmpty)
@@ -607,8 +611,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           ),
         Expanded(
           child: filtered.isEmpty
+              // Scrollable so the empty state survives being squeezed: while
+              // the review cards and a snackbar animate, this area can pass
+              // through a few frames shorter than the text.
               ? Center(
-                  child: Column(
+                  child: SingleChildScrollView(
+                    child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
@@ -643,6 +651,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         ),
                       ],
                     ],
+                    ),
                   ),
                 )
               : Stack(
@@ -710,27 +719,23 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 ),
         ),
       ],
+      ),
     );
   }
 
   void _afterBulk(int changed, String what, {VoidCallback? onUndo}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(
-            changed == 0
-                ? 'No rows changed.'
-                : '$what set on $changed transaction'
-                      '${changed == 1 ? '' : 's'}.',
-          ),
-          duration: const Duration(seconds: 5),
-          action: changed == 0 || onUndo == null
-              ? null
-              : SnackBarAction(label: 'Undo', onPressed: onUndo),
-        ),
-      );
+    showAppToast(
+      context,
+      changed == 0
+          ? 'No rows changed.'
+          : '$what set on $changed transaction'
+                '${changed == 1 ? '' : 's'}.',
+      tone: changed == 0 ? AppToastTone.info : AppToastTone.undo,
+      duration: const Duration(seconds: 5),
+      actionLabel: changed == 0 || onUndo == null ? null : 'Undo',
+      onAction: changed == 0 ? null : onUndo,
+    );
     setState(_selected.clear);
   }
 
@@ -842,9 +847,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     // always a mistake; existing history on closed accounts is untouched.
     final accounts = finance.openAccounts;
     if (accounts.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('No accounts yet.')));
+      showAppToast(context, 'No accounts yet.');
       return;
     }
     final result = await showPickerSheet<String>(
@@ -926,20 +929,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final rows = [for (final (_, tx) in _rows) ?tx];
     final messenger = ScaffoldMessenger.of(context);
     if (rows.isEmpty) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Nothing to export.')),
-      );
+      showAppToastOn(messenger, 'Nothing to export.');
       return;
     }
     try {
       final path = await BackupService.exportCsvRows(rows);
       // Null = the save dialog was cancelled — not worth a snackbar.
       if (path != null && path.isNotEmpty) {
-        messenger.showSnackBar(SnackBar(content: Text('Saved to $path')));
+        showAppToastOn(messenger, 'Saved to $path', tone: AppToastTone.success);
       }
     } catch (e) {
       debugPrint('CSV export failed: $e');
-      messenger.showSnackBar(const SnackBar(content: Text('Export failed.')));
+      showAppToastOn(messenger, 'Export failed.', tone: AppToastTone.error);
     }
   }
 
@@ -992,13 +993,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final pairId = await finance.pairTransactions(ids[0], ids[1]);
     if (!mounted) return;
     if (pairId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Pick one money-in and one money-out row; neither can already '
-            'be part of a pair.',
-          ),
-        ),
+      showAppToast(
+        context,
+        'Pick one money-in and one money-out row; neither can already '
+        'be part of a pair.',
       );
       return;
     }

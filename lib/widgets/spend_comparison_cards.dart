@@ -70,7 +70,7 @@ class UsualSpendCard extends StatelessWidget {
 
     if (c.state == CompareState.notEnoughHistory) {
       return _Section(
-        title: 'Usual vs this month',
+        title: 'This month vs usual',
         child: Text(
           'A usual figure needs at least $kMinUsualMonths complete months to '
           'mean anything. There '
@@ -82,7 +82,9 @@ class UsualSpendCard extends StatelessWidget {
     }
 
     return _Section(
-      title: 'Usual vs this month',
+      // "This month" leads in every comparison title, so the two headline
+      // cards read as one series instead of juggling the order.
+      title: 'This month vs usual',
       subtitle:
           'The middle of your last $months complete '
           '${months == 1 ? 'month' : 'months'}, so one unusual bill does not '
@@ -239,6 +241,20 @@ class _CompareBody extends StatelessWidget {
   }
 }
 
+/// How the category rows are ordered. The service hands them biggest
+/// absolute change first; the other two orders are recomputed in the card.
+enum _CategorySort {
+  biggestChange('Biggest change', 'Where this month differs most from a '
+      'normal one.'),
+  mostUnusual('Most unusual', 'The furthest from its own usual, so a small '
+      'category that doubled outranks a big one that wobbled.'),
+  highestSpend('Highest spend', 'The most spent this month first.');
+
+  final String label;
+  final String subtitle;
+  const _CategorySort(this.label, this.subtitle);
+}
+
 /// Per-category spend against its usual, biggest deviation first. Only the
 /// top few show until the user asks for the rest.
 class CategoryComparisonCard extends StatefulWidget {
@@ -259,10 +275,28 @@ class CategoryComparisonCard extends StatefulWidget {
 
 class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
   bool _expanded = false;
+  _CategorySort _sort = _CategorySort.biggestChange;
+
+  List<CategoryCompare> _sorted(List<CategoryCompare> rows) {
+    switch (_sort) {
+      case _CategorySort.biggestChange:
+        return rows;
+      case _CategorySort.mostUnusual:
+        return [...rows]..sort((a, b) {
+          final ap = a.deltaPct, bp = b.deltaPct;
+          // No usual to divide by means infinitely unusual: pinned first.
+          if ((ap == null) != (bp == null)) return ap == null ? -1 : 1;
+          if (ap == null || bp == null) return b.actual.compareTo(a.actual);
+          return bp.abs().compareTo(ap.abs());
+        });
+      case _CategorySort.highestSpend:
+        return [...rows]..sort((a, b) => b.actual.compareTo(a.actual));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final rows = widget.comparison.categories;
+    final rows = _sorted(widget.comparison.categories);
     final muted = Theme.of(context).textTheme.bodySmall?.copyWith(
       color: Theme.of(context).colorScheme.onSurfaceVariant,
     );
@@ -279,7 +313,25 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
 
     return _Section(
       title: 'Categories vs usual',
-      subtitle: 'Where this month differs most from a normal one.',
+      subtitle: _sort.subtitle,
+      trailing: PopupMenuButton<_CategorySort>(
+        tooltip: 'Sort',
+        icon: Icon(
+          Icons.sort,
+          size: 20,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+        padding: EdgeInsets.zero,
+        onSelected: (s) => setState(() => _sort = s),
+        itemBuilder: (context) => [
+          for (final s in _CategorySort.values)
+            CheckedPopupMenuItem(
+              value: s,
+              checked: s == _sort,
+              child: Text(s.label),
+            ),
+        ],
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -472,17 +524,29 @@ class _ReferenceLine extends StatelessWidget {
 class _Section extends StatelessWidget {
   final String title;
   final String? subtitle;
+
+  /// Small control on the heading's right edge (the category card's sort).
+  final Widget? trailing;
   final Widget child;
 
-  const _Section({required this.title, this.subtitle, required this.child});
+  const _Section({
+    required this.title,
+    this.subtitle,
+    this.trailing,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final heading = Text(title, style: Theme.of(context).textTheme.titleMedium);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const SizedBox(height: 24),
-        Text(title, style: Theme.of(context).textTheme.titleMedium),
+        if (trailing == null)
+          heading
+        else
+          Row(children: [Expanded(child: heading), trailing!]),
         if (subtitle != null) ...[
           const SizedBox(height: 2),
           Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),

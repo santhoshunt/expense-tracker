@@ -14,6 +14,7 @@ import '../services/sms_import_service.dart';
 import '../services/sms_source.dart';
 import '../services/upcoming_monitor.dart';
 import '../widgets/glossy.dart';
+import '../widgets/undo_snackbar.dart';
 import 'accounts_screen.dart';
 import 'add_transaction_sheet.dart';
 import 'classifiers_screen.dart';
@@ -245,23 +246,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // Combine notification-only imports with SMS auto-import results.
       final totalImported = (result?.imported ?? 0) + notifImported;
       if (totalImported == 0) return;
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Auto-import: $totalImported new transaction'
-            '${totalImported == 1 ? '' : 's'} to review.',
-          ),
-        ),
+      showAppToastOn(
+        messenger,
+        'Auto-import: $totalImported new transaction'
+        '${totalImported == 1 ? '' : 's'} to review.',
+        tone: AppToastTone.success,
       );
     } catch (e) {
       // Fire-and-forget from a post-frame callback — surface instead of
       // vanishing (e.g. READ_SMS revoked between the check and the query).
       debugPrint('Auto-import failed: $e');
       if (mounted) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('Auto-import failed — will retry on next launch.'),
-          ),
+        showAppToastOn(
+          messenger,
+          'Auto-import failed — will retry on next launch.',
+          tone: AppToastTone.error,
         );
       }
     } finally {
@@ -366,10 +365,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // for sideloaded apps) — walk the user through the manual path.
           if (mounted) await _showBlockedHelp();
         } else {
-          messenger.showSnackBar(
-            const SnackBar(
-              content: Text('SMS permission denied — nothing imported.'),
-            ),
+          showAppToastOn(
+            messenger,
+            'SMS permission denied — nothing imported.',
+            tone: AppToastTone.error,
           );
         }
       } else {
@@ -383,15 +382,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (result.duplicates > 0) {
           parts.add('${result.duplicates} duplicates skipped');
         }
-        messenger.showSnackBar(
-          SnackBar(
-            content: Text(
-              parts.isEmpty
-                  ? 'No new transactions found in '
-                        '${result.scanned} scanned message${result.scanned == 1 ? '' : 's'}.'
-                  : parts.join(' · '),
-            ),
-          ),
+        showAppToastOn(
+          messenger,
+          parts.isEmpty
+              ? 'No new transactions found in '
+                    '${result.scanned} scanned message${result.scanned == 1 ? '' : 's'}.'
+              : parts.join(' · '),
+          tone: parts.isEmpty ? AppToastTone.info : AppToastTone.success,
         );
         if (result.imported > 0) setState(() => _index = 1);
       }
@@ -400,10 +397,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // indistinguishable from "found nothing".
       debugPrint('SMS import failed: $e');
       if (mounted) {
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text('Import failed — could not read the SMS inbox.'),
-          ),
+        showAppToastOn(
+          messenger,
+          'Import failed — could not read the SMS inbox.',
+          tone: AppToastTone.error,
         );
       }
     } finally {
