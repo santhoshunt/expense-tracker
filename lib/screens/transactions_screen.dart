@@ -88,6 +88,18 @@ class TransactionsScreen extends StatefulWidget {
 
 class _TransactionsScreenState extends State<TransactionsScreen> {
   _Filter _filter = _Filter.all;
+
+  /// Which side the current filter arrived from, for the list's glide.
+  int _glideDir = 0;
+
+  void _setFilter(_Filter f) {
+    if (f == _filter) return;
+    setState(() {
+      _glideDir = f.index > _filter.index ? 1 : -1;
+      _filter = f;
+    });
+  }
+
   _Sort _sort = _Sort.dateDesc;
   String _search = '';
   final Set<String> _categoryFilter = {};
@@ -268,6 +280,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       final req = widget.request;
       // Reset-then-apply: a stale chip from a previous visit must not AND
       // with the incoming request.
+      _glideDir = 0; // a deep-link is a jump, not a sideways step
       _filter = switch (req?.type) {
         TxType.income => _Filter.income,
         TxType.expense => _Filter.expense,
@@ -548,7 +561,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     return SegmentedSwipe<_Filter>(
       values: _Filter.values,
       selected: _filter,
-      onChanged: (f) => setState(() => _filter = f),
+      onChanged: _setFilter,
       child: Column(
       children: [
         if (spamSuspects.isNotEmpty) _SuspectedSpamCard(suspects: spamSuspects),
@@ -562,7 +575,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             setState(() => _search = '');
           },
           filter: _filter,
-          onFilter: (f) => setState(() => _filter = f),
+          onFilter: _setFilter,
           sort: _sort,
           onSort: (s) => setState(() => _sort = s),
           hasAdvancedFilters: _hasAdvancedFilters,
@@ -610,6 +623,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             onClose: () => setState(_selected.clear),
           ),
         Expanded(
+          child: GlideIn(
+          viewKey: _filter,
+          direction: _glideDir,
           child: filtered.isEmpty
               // Scrollable so the empty state survives being squeezed: while
               // the review cards and a snackbar animate, this area can pass
@@ -637,6 +653,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                             _searchCtrl.clear();
                             setState(() {
                               _search = '';
+                              _glideDir = 0;
                               _filter = _Filter.all;
                               _categoryFilter.clear();
                               _groupFilter.clear();
@@ -717,6 +734,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       ),
                   ],
                 ),
+          ),
         ),
       ],
       ),
