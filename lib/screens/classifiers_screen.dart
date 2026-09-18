@@ -1613,9 +1613,8 @@ Future<void> _showRuleDialog(
                           actionLabel: dropped.isEmpty ? null : 'Restore',
                           onAction: dropped.isEmpty
                               ? null
-                              : () => finance.restoreEditedTransactions(
-                                  dropped,
-                                ),
+                              : () =>
+                                    finance.restoreEditedTransactions(dropped),
                         );
                       }
                     },

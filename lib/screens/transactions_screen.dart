@@ -86,18 +86,42 @@ class TransactionsScreen extends StatefulWidget {
   State<TransactionsScreen> createState() => _TransactionsScreenState();
 }
 
+/// One filter tab's derived list data — the output of the filter → group →
+/// sort → flatten pipeline for that tab.
+class _PageData {
+  final List<Tx> filtered;
+  final Map<DateTime, List<Tx>> groups;
+  final List<(DateTime?, Tx?)> rows;
+  final List<DateTime> months;
+  final Map<DateTime, int> monthIndexes;
+
+  const _PageData({
+    required this.filtered,
+    required this.groups,
+    required this.rows,
+    required this.months,
+    required this.monthIndexes,
+  });
+
+  static const empty = _PageData(
+    filtered: [],
+    groups: {},
+    rows: [],
+    months: [],
+    monthIndexes: {},
+  );
+}
+
 class _TransactionsScreenState extends State<TransactionsScreen> {
   _Filter _filter = _Filter.all;
 
-  /// Which side the current filter arrived from, for the list's glide.
-  int _glideDir = 0;
-
   void _setFilter(_Filter f) {
     if (f == _filter) return;
-    setState(() {
-      _glideDir = f.index > _filter.index ? 1 : -1;
-      _filter = f;
-    });
+    _pageCtrl.animateToPage(
+      f.index,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   _Sort _sort = _Sort.dateDesc;
@@ -135,8 +159,17 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   final _searchCtrl = TextEditingController();
-  final _itemScrollCtrl = ItemScrollController();
-  final _itemPositions = ItemPositionsListener.create();
+  late final PageController _pageCtrl = PageController();
+
+  // One controller/listener per filter: an ItemScrollController cannot be
+  // attached to two lists at once, and during a page drag two filters'
+  // lists are alive simultaneously.
+  final _listCtrls = {
+    for (final f in _Filter.values) f: ItemScrollController(),
+  };
+  final _listPositions = {
+    for (final f in _Filter.values) f: ItemPositionsListener.create(),
+  };
 
   // The month jump panel floats over the list, so it only shows while the
   // user is scrolling (plus a grace period) — parked off-screen otherwise it
@@ -183,12 +216,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   Object? _pipelineRevision;
   String? _pipelineFingerprint;
-  List<Tx> _filtered = const [];
-  Map<DateTime, List<Tx>> _groups = const {};
-  List<(DateTime?, Tx?)> _rows = const [];
-  List<DateTime> _months = const [];
-  Map<DateTime, int> _monthIndexes = const {};
-  int _itemCount = 0;
+
+  /// Lazily filled per filter tab (see _pageDataFor); cleared whenever the
+  /// ledger or a non-tab filter input changes.
+  final Map<_Filter, _PageData> _pageCache = {};
 
   /// One compact, dismissible chip per active filter. Named chips so a
   /// deep-link (or a sheet Apply) always says WHAT is filtering the list
@@ -280,7 +311,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       final req = widget.request;
       // Reset-then-apply: a stale chip from a previous visit must not AND
       // with the incoming request.
-      _glideDir = 0; // a deep-link is a jump, not a sideways step
       _filter = switch (req?.type) {
         TxType.income => _Filter.income,
         TxType.expense => _Filter.expense,
@@ -305,6 +335,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (req?.categoryId != null) _categoryFilter.add(req!.categoryId!);
       if (req?.groupId != null) _groupFilter.add(req!.groupId!);
       if (req?.budgetId != null) _budgetFilter.add(req!.budgetId!);
+      // A deep-link is a jump, not a sideways step. Post-frame because
+      // didUpdateWidget runs during build and a synchronous jumpToPage
+      // would mutate scroll positions mid-build.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pageCtrl.hasClients) {
+          _pageCtrl.jumpToPage(_filter.index);
+        }
+      });
     }
   }
 
@@ -324,10 +362,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _jumpHideTimer?.cancel();
     _searchDebounce?.cancel();
     _searchCtrl.dispose();
+    _pageCtrl.dispose();
     super.dispose();
   }
 
-  List<Tx> _applyFilters(List<Tx> all, FinanceProvider finance) {
+  List<Tx> _applyFilters(List<Tx> all, FinanceProvider finance, _Filter f) {
     final q = normalizeSearchText(_search);
     final budgetFilterList = _budgetFilter.isEmpty
         ? const <SpendBudget>[]
@@ -353,7 +392,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           (t.date.isBefore(rangeStart) || !t.date.isBefore(rangeEnd!))) {
         return false;
       }
-      switch (_filter) {
+      switch (f) {
         case _Filter.income:
           if (t.type != TxType.income || isTransferCategory(t.categoryId)) {
             return false;
@@ -399,11 +438,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     }).toList();
   }
 
-  /// Everything the pipeline output depends on besides the ledger itself.
-  /// Cheap to build relative to one pipeline run; sets are sorted so
-  /// insertion order can't fake a change.
+  /// Everything the pipeline output depends on besides the ledger itself
+  /// and the filter tab (each tab is its own _pageCache entry). Cheap to
+  /// build relative to one pipeline run; sets are sorted so insertion order
+  /// can't fake a change.
   String _pipelineInputs() => [
-    _filter.index,
     _sort.index,
     normalizeSearchText(_search),
     (_categoryFilter.toList()..sort()).join(','),
@@ -417,41 +456,50 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _rangeFilter?.end,
   ].join('|');
 
-  /// Runs filter → group-by-month → sort → flatten, caching the result.
-  /// Skipped entirely when neither the ledger (provider revision) nor any
-  /// filter input changed — selection taps and the scroll-driven
-  /// jump-control toggles rebuild this screen constantly.
-  void _recomputePipeline(FinanceProvider finance, List<Tx> allConfirmed) {
+  /// Runs filter → group-by-month → sort → flatten for one filter tab,
+  /// caching the result per tab. The cache is dropped only when the ledger
+  /// (provider revision) or a non-tab filter input changes — selection taps
+  /// and the scroll-driven jump-control toggles rebuild this screen
+  /// constantly, and a page drag asks for two tabs in the same frame.
+  _PageData _pageDataFor(
+    _Filter f,
+    FinanceProvider finance,
+    List<Tx> allConfirmed,
+  ) {
     final fingerprint = _pipelineInputs();
-    if (identical(_pipelineRevision, finance.revision) &&
-        fingerprint == _pipelineFingerprint) {
-      return;
+    if (!identical(_pipelineRevision, finance.revision) ||
+        fingerprint != _pipelineFingerprint) {
+      // Category labels, account names and aliases all ride on the revision.
+      if (!identical(_pipelineRevision, finance.revision)) _haystacks.clear();
+      _pipelineRevision = finance.revision;
+      _pipelineFingerprint = fingerprint;
+      _pageCache.clear();
+
+      // Prune filter ids whose target was deleted. A dead category/group id
+      // silently emptied the list; a dead budget id was worse — the budget
+      // check no-ops on an empty resolved list, so the filter stopped
+      // filtering while the badge stayed lit. Same precedent as the
+      // _selected pruning in build.
+      _categoryFilter.removeWhere(
+        (id) => !allCategories.any((c) => c.id == id),
+      );
+      _groupFilter.removeWhere(
+        (id) =>
+            id != kUngroupedFilterKey && !finance.groups.any((g) => g.id == id),
+      );
+      _budgetFilter.removeWhere(
+        (id) => !finance.budgets.any((b) => b.id == id),
+      );
     }
-    // Category labels, account names and aliases all ride on the revision.
-    if (!identical(_pipelineRevision, finance.revision)) _haystacks.clear();
-    _pipelineRevision = finance.revision;
-    _pipelineFingerprint = fingerprint;
+    return _pageCache[f] ??= _buildPageData(f, finance, allConfirmed);
+  }
 
-    // Prune filter ids whose target was deleted. A dead category/group id
-    // silently emptied the list; a dead budget id was worse — the budget
-    // check no-ops on an empty resolved list, so the filter stopped
-    // filtering while the badge stayed lit. Same precedent as the
-    // _selected pruning below.
-    _categoryFilter.removeWhere((id) => !allCategories.any((c) => c.id == id));
-    _groupFilter.removeWhere(
-      (id) =>
-          id != kUngroupedFilterKey && !finance.groups.any((g) => g.id == id),
-    );
-    _budgetFilter.removeWhere((id) => !finance.budgets.any((b) => b.id == id));
-
-    final filtered = _applyFilters(allConfirmed, finance);
-
-    // Drop selections that no longer exist (deleted, or re-filtered away by
-    // an edit) so the action bar count never lies.
-    if (_selected.isNotEmpty) {
-      final visible = {for (final t in filtered) t.id};
-      _selected.removeWhere((id) => !visible.contains(id));
-    }
+  _PageData _buildPageData(
+    _Filter f,
+    FinanceProvider finance,
+    List<Tx> allConfirmed,
+  ) {
+    final filtered = _applyFilters(allConfirmed, finance, f);
 
     // Group by month, months always newest-first; sort within each month.
     final groups = <DateTime, List<Tx>>{};
@@ -482,17 +530,22 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         rows.add((null, tx));
       }
     }
-    _filtered = filtered;
-    _groups = groups;
-    _rows = rows;
-    _months = months;
-    _monthIndexes = monthIndexes;
-    _itemCount = rows.length;
+    return _PageData(
+      filtered: filtered,
+      groups: groups,
+      rows: rows,
+      months: months,
+      monthIndexes: monthIndexes,
+    );
   }
 
+  /// The fronted tab's data; empty until build has run once.
+  _PageData get _activeData => _pageCache[_filter] ?? _PageData.empty;
+
   void _scrollToIndex(int index, {double alignment = 0}) {
-    if (!_itemScrollCtrl.isAttached) return;
-    _itemScrollCtrl.scrollTo(
+    final ctrl = _listCtrls[_filter]!;
+    if (!ctrl.isAttached) return;
+    ctrl.scrollTo(
       index: index,
       alignment: alignment,
       duration: const Duration(milliseconds: 400),
@@ -504,14 +557,17 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// then to the previous month; down goes to the next month's header
   /// (or the end of the list when already in the last month).
   void _stepMonth({required bool up}) {
-    if (_months.isEmpty) return;
-    final positions = _itemPositions.itemPositions.value;
+    final data = _activeData;
+    if (data.months.isEmpty) return;
+    final positions = _listPositions[_filter]!.itemPositions.value;
     if (positions.isEmpty) return;
     // Top-most item still visible in the viewport.
     final top = positions
         .where((p) => p.itemTrailingEdge > 0)
         .reduce((a, b) => a.index < b.index ? a : b);
-    final headers = [for (final m in _months) _monthIndexes[m]!]; // ascending
+    final headers = [
+      for (final m in data.months) data.monthIndexes[m]!,
+    ]; // ascending
 
     if (up) {
       var current = headers.lastIndexWhere((h) => h <= top.index);
@@ -528,7 +584,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       final next = headers.indexWhere((h) => h > top.index);
       if (next == -1) {
         // Last month: land the final entry near the bottom of the viewport.
-        _scrollToIndex(_itemCount - 1, alignment: 0.85);
+        _scrollToIndex(data.rows.length - 1, alignment: 0.85);
       } else {
         _scrollToIndex(headers[next]);
       }
@@ -536,7 +592,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   void _scrollToMonth(DateTime month) {
-    final index = _monthIndexes[month];
+    final index = _activeData.monthIndexes[month];
     if (index != null) _scrollToIndex(index);
   }
 
@@ -549,8 +605,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final allConfirmed = finance.transactions;
     final pending = allPending.where((t) => !t.suspectedSpam).toList();
     final spamSuspects = allPending.where((t) => t.suspectedSpam).toList();
-    _recomputePipeline(finance, allConfirmed);
-    final filtered = _filtered;
+    final filtered = _pageDataFor(_filter, finance, allConfirmed).filtered;
+    // Drop selections that no longer exist (deleted, or re-filtered away by
+    // an edit) so the action bar count never lies.
+    if (_selected.isNotEmpty) {
+      final visible = {for (final t in filtered) t.id};
+      _selected.removeWhere((id) => !visible.contains(id));
+    }
     final activeAccount = _accountId == null
         ? null
         : finance.accountById(_accountId!);
@@ -558,11 +619,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ? const <PairSuggestion>[]
         : _pairSuggestions(finance, allPending, allConfirmed);
 
-    return SegmentedSwipe<_Filter>(
-      values: _Filter.values,
-      selected: _filter,
-      onChanged: _setFilter,
-      child: Column(
+    return Column(
       children: [
         if (spamSuspects.isNotEmpty) _SuspectedSpamCard(suspects: spamSuspects),
         if (pending.isNotEmpty)
@@ -576,6 +633,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           },
           filter: _filter,
           onFilter: _setFilter,
+          pager: _pageCtrl,
           sort: _sort,
           onSort: (s) => setState(() => _sort = s),
           hasAdvancedFilters: _hasAdvancedFilters,
@@ -623,121 +681,138 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             onClose: () => setState(_selected.clear),
           ),
         Expanded(
-          child: GlideIn(
-          viewKey: _filter,
-          direction: _glideDir,
-          child: filtered.isEmpty
-              // Scrollable so the empty state survives being squeezed: while
-              // the review cards and a snackbar animate, this area can pass
-              // through a few frames shorter than the text.
-              ? Center(
-                  child: SingleChildScrollView(
-                    child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        allConfirmed.isEmpty
-                            ? 'No transactions yet.\nTap + to add one.'
-                            : 'Nothing matches your search/filters.',
-                        textAlign: TextAlign.center,
-                      ),
-                      // Something is hiding every row (a chip may be
-                      // scrolled out of view) — offer the way out here.
-                      if (allConfirmed.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        TextButton.icon(
-                          icon: const Icon(Icons.filter_alt_off, size: 18),
-                          label: const Text('Clear search & filters'),
-                          onPressed: () {
-                            _searchDebounce?.cancel();
-                            _searchCtrl.clear();
-                            setState(() {
-                              _search = '';
-                              _glideDir = 0;
-                              _filter = _Filter.all;
-                              _categoryFilter.clear();
-                              _groupFilter.clear();
-                              _budgetFilter.clear();
-                              _minAmount = null;
-                              _maxAmount = null;
-                              _accountId = null;
-                              _monthFilter = null;
-                              _rangeFilter = null;
-                            });
-                          },
-                        ),
-                      ],
-                    ],
-                    ),
-                  ),
-                )
-              : Stack(
-                  children: [
-                    // Lazy indexed list: month jumps go by item index, so
-                    // headers never need to be mounted to be reachable.
-                    NotificationListener<ScrollNotification>(
-                      onNotification: (n) {
-                        if (n is ScrollStartNotification ||
-                            n is ScrollUpdateNotification) {
-                          _pokeJumpControls();
-                        }
-                        return false;
-                      },
-                      child: ScrollablePositionedList.builder(
-                        itemScrollController: _itemScrollCtrl,
-                        itemPositionsListener: _itemPositions,
-                        itemCount: _rows.length,
-                        padding: const EdgeInsets.only(bottom: 120),
-                        itemBuilder: (_, i) {
-                          final (month, tx) = _rows[i];
-                          return month != null
-                              ? _MonthHeader(
-                                  month: month,
-                                  txs: _groups[month]!,
-                                  onSelectMonth: () => _selectMonth(month),
-                                )
-                              : TransactionTile(
-                                  tx: tx!,
-                                  selectionMode: _selecting,
-                                  selected: _selected.contains(tx.id),
-                                  onToggleSelect: () => _toggleSelect(tx.id),
-                                );
-                        },
-                      ),
-                    ),
-                    // With a month or range filter the list holds one
-                    // month (or a few) — nothing worth jumping between.
-                    if (_monthFilter == null && _rangeFilter == null)
-                      Positioned(
-                        right: 4,
-                        top: 8,
-                        child: AnimatedSlide(
-                          offset: _jumpVisible
-                              ? Offset.zero
-                              : const Offset(1.4, 0),
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.easeOut,
-                          child: AnimatedOpacity(
-                            opacity: _jumpVisible ? 1 : 0,
-                            duration: const Duration(milliseconds: 250),
-                            child: IgnorePointer(
-                              ignoring: !_jumpVisible,
-                              child: _JumpControls(
-                                months: _months,
-                                onUp: () => _stepMonth(up: true),
-                                onDown: () => _stepMonth(up: false),
-                                onMonth: _scrollToMonth,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
+          child: PageView(
+            controller: _pageCtrl,
+            onPageChanged: (i) {
+              final f = _Filter.values[i];
+              if (f != _filter) setState(() => _filter = f);
+            },
+            children: [
+              for (final f in _Filter.values)
+                _buildPage(f, finance, allConfirmed),
+            ],
           ),
         ),
       ],
-      ),
+    );
+  }
+
+  /// One pager page: [f]'s empty state or list. Uses [f]'s own data and
+  /// controllers — during a drag the neighbor page is alive too.
+  Widget _buildPage(_Filter f, FinanceProvider finance, List<Tx> allConfirmed) {
+    final data = _pageDataFor(f, finance, allConfirmed);
+    // Transparent ColoredBox: the empty state is shrink-wrapped, and a
+    // PageView only receives drags that hit its subtree — blank regions
+    // need an opaque hit-test surface or a swipe there would die.
+    return ColoredBox(
+      color: Colors.transparent,
+      child: data.filtered.isEmpty
+          // Scrollable so the empty state survives being squeezed: while
+          // the review cards and a snackbar animate, this area can pass
+          // through a few frames shorter than the text.
+          ? Center(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      allConfirmed.isEmpty
+                          ? 'No transactions yet.\nTap + to add one.'
+                          : 'Nothing matches your search/filters.',
+                      textAlign: TextAlign.center,
+                    ),
+                    // Something is hiding every row (a chip may be
+                    // scrolled out of view) — offer the way out here.
+                    if (allConfirmed.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      TextButton.icon(
+                        icon: const Icon(Icons.filter_alt_off, size: 18),
+                        label: const Text('Clear search & filters'),
+                        onPressed: () {
+                          _searchDebounce?.cancel();
+                          _searchCtrl.clear();
+                          setState(() {
+                            _search = '';
+                            _filter = _Filter.all;
+                            _categoryFilter.clear();
+                            _groupFilter.clear();
+                            _budgetFilter.clear();
+                            _minAmount = null;
+                            _maxAmount = null;
+                            _accountId = null;
+                            _monthFilter = null;
+                            _rangeFilter = null;
+                          });
+                          // A reset is a jump, not a sideways step.
+                          if (_pageCtrl.hasClients) _pageCtrl.jumpToPage(0);
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            )
+          : Stack(
+              children: [
+                // Lazy indexed list: month jumps go by item index, so
+                // headers never need to be mounted to be reachable.
+                NotificationListener<ScrollNotification>(
+                  onNotification: (n) {
+                    if (n is ScrollStartNotification ||
+                        n is ScrollUpdateNotification) {
+                      _pokeJumpControls();
+                    }
+                    return false;
+                  },
+                  child: ScrollablePositionedList.builder(
+                    itemScrollController: _listCtrls[f],
+                    itemPositionsListener: _listPositions[f],
+                    itemCount: data.rows.length,
+                    padding: const EdgeInsets.only(bottom: 120),
+                    itemBuilder: (_, i) {
+                      final (month, tx) = data.rows[i];
+                      return month != null
+                          ? _MonthHeader(
+                              month: month,
+                              txs: data.groups[month]!,
+                              onSelectMonth: () => _selectMonth(month),
+                            )
+                          : TransactionTile(
+                              tx: tx!,
+                              selectionMode: _selecting,
+                              selected: _selected.contains(tx.id),
+                              onToggleSelect: () => _toggleSelect(tx.id),
+                            );
+                    },
+                  ),
+                ),
+                // With a month or range filter the list holds one
+                // month (or a few) — nothing worth jumping between.
+                if (_monthFilter == null && _rangeFilter == null)
+                  Positioned(
+                    right: 4,
+                    top: 8,
+                    child: AnimatedSlide(
+                      offset: _jumpVisible ? Offset.zero : const Offset(1.4, 0),
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOut,
+                      child: AnimatedOpacity(
+                        opacity: _jumpVisible ? 1 : 0,
+                        duration: const Duration(milliseconds: 250),
+                        child: IgnorePointer(
+                          ignoring: !_jumpVisible,
+                          child: _JumpControls(
+                            months: data.months,
+                            onUp: () => _stepMonth(up: true),
+                            onDown: () => _stepMonth(up: false),
+                            onMonth: _scrollToMonth,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
     );
   }
 
@@ -944,7 +1019,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   /// Exports exactly what the list is showing — same rows, same order.
   Future<void> _exportCsv() async {
-    final rows = [for (final (_, tx) in _rows) ?tx];
+    final rows = [for (final (_, tx) in _activeData.rows) ?tx];
     final messenger = ScaffoldMessenger.of(context);
     if (rows.isEmpty) {
       showAppToastOn(messenger, 'Nothing to export.');
@@ -1029,7 +1104,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// Month-header select toggle: selects every VISIBLE row of that month,
   /// or clears them when they are all already selected.
   void _selectMonth(DateTime month) {
-    final ids = [for (final t in _groups[month] ?? const <Tx>[]) t.id];
+    final ids = [
+      for (final t in _activeData.groups[month] ?? const <Tx>[]) t.id,
+    ];
     if (ids.isEmpty) return;
     setState(() {
       if (ids.every(_selected.contains)) {
@@ -1569,6 +1646,7 @@ class _SearchAndFilterBar extends StatelessWidget {
   final VoidCallback onClearSearch;
   final _Filter filter;
   final ValueChanged<_Filter> onFilter;
+  final PageController pager;
   final _Sort sort;
   final ValueChanged<_Sort> onSort;
   final bool hasAdvancedFilters;
@@ -1581,6 +1659,7 @@ class _SearchAndFilterBar extends StatelessWidget {
     required this.onClearSearch,
     required this.filter,
     required this.onFilter,
+    required this.pager,
     required this.sort,
     required this.onSort,
     required this.hasAdvancedFilters,
@@ -1679,8 +1758,17 @@ class _SearchAndFilterBar extends StatelessWidget {
               (_Filter.expense, 'Expenses'),
               (_Filter.transfers, 'Transfers'),
             ],
+            // Same arrows the tiles use: income arrives (down), expense
+            // leaves (up), transfers move sideways.
+            icons: const [
+              Icons.receipt_long,
+              Icons.arrow_downward,
+              Icons.arrow_upward,
+              Icons.swap_horiz,
+            ],
             selected: filter,
             onChanged: onFilter,
+            pager: pager,
           ),
         ],
       ),

@@ -77,21 +77,32 @@ class GlassButton extends StatelessWidget {
   }
 }
 
-/// Underline tabs: bare labels over a hairline baseline, with a short accent
-/// bar that glides under the selected one. The old boxed track with a filled
-/// thumb read as dated chrome; this keeps the same API, so call sites and
-/// the tests that tap labels by text are untouched.
+/// Segmented control with a glass thumb that slides under the selected tab.
+/// With a [pager] the thumb tracks `pager.page` continuously, so it follows
+/// the finger during a PageView drag (the Cockpit's TabBar feel); without
+/// one it animates between segments on selection. [icons] adds a leading
+/// icon per tab. Tests keep tapping labels by text.
 class GlassSegmented<T> extends StatelessWidget {
   final List<(T, String)> options;
+
+  /// One leading icon per option, in [options] order.
+  final List<IconData>? icons;
+
   final T selected;
   final ValueChanged<T> onChanged;
+
+  /// Continuous position source: the thumb rides `page * segmentWidth`
+  /// mid-drag instead of jumping per selection.
+  final PageController? pager;
 
   const GlassSegmented({
     super.key,
     required this.options,
+    this.icons,
     required this.selected,
     required this.onChanged,
-  });
+    this.pager,
+  }) : assert(icons == null || icons.length == options.length);
 
   @override
   Widget build(BuildContext context) {
@@ -99,168 +110,120 @@ class GlassSegmented<T> extends StatelessWidget {
     final index = options
         .indexWhere((o) => o.$1 == selected)
         .clamp(0, options.length - 1);
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final segmentWidth = constraints.maxWidth / options.length;
-        return SizedBox(
-          // Follows the font scale: at a fixed 38dp the FittedBox merely
-          // shrinks large-font labels until they are unreadable.
-          height: MediaQuery.textScalerOf(context).scale(38),
-          child: Stack(
+    return Container(
+      // Follows the font scale: at a fixed 44dp the FittedBox merely
+      // shrinks large-font labels until they are unreadable.
+      height: MediaQuery.textScalerOf(context).scale(44),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      padding: const EdgeInsets.all(4),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final segmentWidth = constraints.maxWidth / options.length;
+          return Stack(
             children: [
-              // Hairline baseline the accent bar rides on, so the tabs keep
-              // a footprint on sparse pages (the Settings rows).
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 1,
-                child: ColoredBox(
-                  color: scheme.outlineVariant,
-                  child: const SizedBox(height: 1),
-                ),
-              ),
-              // The indicator glides between segments.
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 260),
-                curve: Curves.easeOutCubic,
-                left: index * segmentWidth,
-                bottom: 0,
-                width: segmentWidth,
-                height: 3,
-                child: Center(
-                  child: Container(
-                    width: 28,
-                    height: 3,
-                    decoration: BoxDecoration(
-                      color: scheme.primary,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-              ),
+              _buildThumb(scheme, segmentWidth, index),
               Row(
                 children: [
-                  for (final (value, label) in options)
-                    Expanded(
-                      // Semantics: a bare GestureDetector reads as
-                      // static text to TalkBack — no button role, no
-                      // selected state.
-                      child: Semantics(
-                        button: true,
-                        selected: value == selected,
-                        label: label,
-                        excludeSemantics: true,
-                        child: GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () => onChanged(value),
-                          child: Center(
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: AnimatedDefaultTextStyle(
-                                duration: const Duration(milliseconds: 260),
-                                style: TextStyle(
-                                  // On the body scale (14) — 13.5 was the
-                                  // app's one fractional odd-one-out.
-                                  fontSize: 14,
-                                  fontWeight: value == selected
-                                      ? FontWeight.w600
-                                      : FontWeight.w500,
-                                  color: value == selected
-                                      ? scheme.primary
-                                      : scheme.onSurfaceVariant,
-                                ),
-                                child: Text(label, maxLines: 1),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
+                  for (var i = 0; i < options.length; i++)
+                    Expanded(child: _buildTab(scheme, i)),
                 ],
               ),
             ],
-          ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildThumb(ColorScheme scheme, double segmentWidth, int index) {
+    final thumb = Container(
+      decoration: BoxDecoration(
+        color: scheme.outlineVariant,
+        borderRadius: BorderRadius.circular(9),
+      ),
+    );
+    final p = pager;
+    if (p == null) {
+      return AnimatedPositioned(
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        left: index * segmentWidth,
+        top: 0,
+        bottom: 0,
+        width: segmentWidth,
+        child: thumb,
+      );
+    }
+    // Positioned may be separated from the Stack by non-RenderObject
+    // widgets, so the AnimatedBuilder in between is legal.
+    return AnimatedBuilder(
+      animation: p,
+      builder: (context, _) {
+        final page = (p.hasClients && p.position.haveDimensions)
+            ? (p.page ?? index.toDouble())
+            : index.toDouble();
+        return Positioned(
+          left: page.clamp(0.0, (options.length - 1).toDouble()) * segmentWidth,
+          top: 0,
+          bottom: 0,
+          width: segmentWidth,
+          child: thumb,
         );
       },
     );
   }
-}
 
-/// A horizontal swipe anywhere on the wrapped page steps the segmented
-/// selection: left goes forward through [values], right goes back, stopping
-/// at the ends. Inner horizontal scrollables (the stat-card strip, chip
-/// rows) still win their own drags in the gesture arena; this only receives
-/// what nothing else claimed.
-class SegmentedSwipe<T> extends StatelessWidget {
-  final List<T> values;
-  final T selected;
-  final ValueChanged<T> onChanged;
-  final Widget child;
-
-  const SegmentedSwipe({
-    super.key,
-    required this.values,
-    required this.selected,
-    required this.onChanged,
-    required this.child,
-  });
-
-  /// A lazy flick should not switch views — deliberate swipes move faster.
-  static const double _minVelocity = 200;
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-    // Opaque: blank regions (an empty list's whitespace) are not
-    // hit-testable under the default deferToChild, and a swipe that lands
-    // there would die. Children still win their own gestures first.
-    behavior: HitTestBehavior.opaque,
-    onHorizontalDragEnd: (details) {
-      final v = details.primaryVelocity ?? 0;
-      if (v.abs() < _minVelocity) return;
-      final next = values.indexOf(selected) + (v < 0 ? 1 : -1);
-      if (next < 0 || next >= values.length) return;
-      onChanged(values[next]);
-    },
-    child: child,
-  );
-}
-
-/// Glides its child in from the side a view change came from: the content
-/// remounts when [viewKey] changes and plays a short fade plus a quarter-
-/// width slide. Entrance-only on purpose — an AnimatedSwitcher would keep
-/// the outgoing view alive too, and the transactions list's
-/// ItemScrollController cannot be attached to two lists at once.
-class GlideIn extends StatelessWidget {
-  /// Identity of the shown view; a change replays the entrance.
-  final Object viewKey;
-
-  /// +1 arrives from the right (forward), -1 from the left, 0 fades in place.
-  final int direction;
-
-  final Widget child;
-
-  const GlideIn({
-    super.key,
-    required this.viewKey,
-    required this.direction,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
-    key: ValueKey(viewKey),
-    tween: Tween(begin: 0, end: 1),
-    duration: const Duration(milliseconds: 300),
-    curve: Curves.easeOutCubic,
-    child: child,
-    builder: (context, t, child) => Opacity(
-      opacity: t,
-      child: FractionalTranslation(
-        translation: Offset(0.25 * direction * (1 - t), 0),
-        child: child,
+  Widget _buildTab(ColorScheme scheme, int i) {
+    final (value, label) = options[i];
+    final isSelected = value == selected;
+    final color = isSelected ? scheme.onSurface : scheme.onSurfaceVariant;
+    // Semantics: a bare GestureDetector reads as static text to TalkBack —
+    // no button role, no selected state.
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label: label,
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onChanged(value),
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (icons != null) ...[
+                    Icon(icons![i], size: 16, color: color),
+                    const SizedBox(width: 5),
+                  ],
+                  AnimatedDefaultTextStyle(
+                    duration: const Duration(milliseconds: 260),
+                    style: TextStyle(
+                      // On the body scale (14) — 13.5 was the app's one
+                      // fractional odd-one-out.
+                      fontSize: 14,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.w500,
+                      color: color,
+                    ),
+                    child: Text(label, maxLines: 1),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// Solid card panel — flat, opaque `scheme.surface`. The name survives from

@@ -300,7 +300,7 @@ void main() {
 
     // The dashboard list inflates lazily — scroll until the donut chart
     // (which sits right above the spending card) is built, then a bit more.
-    final scrollable = find.byType(Scrollable).first;
+    final scrollable = verticalScrollable();
     await tester.scrollUntilVisible(
       find.byType(CategoryDonutChart),
       200,
@@ -353,7 +353,7 @@ void main() {
     await tester.pumpAndSettle();
     await openDashboardView(tester, 'Breakdown');
 
-    final scrollable = find.byType(Scrollable).first;
+    final scrollable = verticalScrollable();
     await tester.scrollUntilVisible(
       find.text('Top merchants'),
       200,
@@ -746,7 +746,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('100%'),
       300,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: verticalScrollable(),
     );
     await tester.pumpAndSettle();
     await tester.longPress(row);
@@ -792,7 +792,7 @@ void main() {
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
     final year = DateTime.now().year;
-    final list = find.byType(Scrollable).first;
+    final list = verticalScrollable();
     final monthLabel = find.text(
       fmtMonth(DateTime(year, DateTime.now().month)),
     );
@@ -894,7 +894,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('Fd No 12345'),
       300,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: verticalScrollable(),
     );
     await tester.pumpAndSettle();
     await tester.longPress(row);
@@ -932,7 +932,7 @@ void main() {
 
     // Scroll until the hint itself is on screen (the header alone can be
     // visible while the card below it is still off-stage).
-    final list = find.byType(Scrollable).first;
+    final list = verticalScrollable();
     final hint = find.textContaining('No identifiable merchants in');
     await tester.scrollUntilVisible(hint, 300, scrollable: list);
     expect(hint, findsOneWidget);

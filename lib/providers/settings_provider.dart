@@ -27,6 +27,26 @@ enum CategoryOrder {
   const CategoryOrder(this.label);
 }
 
+/// How the dashboard's "Categories vs usual" rows are ordered. The service
+/// hands them biggest absolute change first; the other two orders are
+/// recomputed in the card.
+enum CategorySort {
+  biggestChange(
+    'Biggest change',
+    'Where this month differs most from a normal one.',
+  ),
+  mostUnusual(
+    'Most unusual',
+    'The furthest from its own usual, so a small category that doubled '
+        'outranks a big one that wobbled.',
+  ),
+  highestSpend('Highest spend', 'The most spent this month first.');
+
+  final String label;
+  final String subtitle;
+  const CategorySort(this.label, this.subtitle);
+}
+
 /// App preferences: theme mode + accent colour, SMS auto-import cadence and
 /// monthly budget alerts. (The old seed/background/glass customization is
 /// gone — the Figma structure is fixed; only mode and accent vary.)
@@ -50,6 +70,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kHideIncome = 'hide_income_v1';
   static const _kDismissedPairs = 'pair_dismissed_v1';
   static const _kCategoryOrder = 'category_order_v1';
+  static const _kCategorySort = 'category_sort_v1';
 
   ThemeMode _mode = ThemeMode.dark; // the app's native look
   Color _accent = FigmaPalette.primary;
@@ -66,6 +87,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _appLock = false;
   bool _hideIncome = false;
   CategoryOrder _categoryOrder = CategoryOrder.mostUsed;
+  CategorySort _categorySort = CategorySort.biggestChange;
   bool _loaded = false;
 
   ThemeMode get mode => _mode;
@@ -105,6 +127,9 @@ class SettingsProvider extends ChangeNotifier {
 
   /// Ordering of the add/edit sheet's category picker.
   CategoryOrder get categoryOrder => _categoryOrder;
+
+  /// Ordering of the "Categories vs usual" card's rows.
+  CategorySort get categorySort => _categorySort;
 
   bool get loaded => _loaded;
 
@@ -176,6 +201,12 @@ class SettingsProvider extends ChangeNotifier {
           CategoryOrder.values.asNameMap()[prefs.getString(_kCategoryOrder)] ??
           CategoryOrder.mostUsed,
       CategoryOrder.mostUsed,
+    );
+    _categorySort = tryRead(
+      () =>
+          CategorySort.values.asNameMap()[prefs.getString(_kCategorySort)] ??
+          CategorySort.biggestChange,
+      CategorySort.biggestChange,
     );
     _loaded = true;
     notifyListeners();
@@ -348,6 +379,16 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  Future<void> setCategorySort(CategorySort sort) async {
+    if (sort == _categorySort) return;
+    _categorySort = sort;
+    notifyListeners();
+    await _persistPref(
+      _kCategorySort,
+      (p) => p.setString(_kCategorySort, sort.name),
+    );
+  }
+
   /// The preference block carried inside JSON backups (the 'settings' key)
   /// — the backup doc used to claim "full snapshot" while every value here
   /// was silently absent, so a fresh-device restore lost the monthly cap,
@@ -366,6 +407,7 @@ class SettingsProvider extends ChangeNotifier {
     'hideIncome': _hideIncome,
     'dismissedPairs': _dismissedPairs.toList(),
     'categoryOrder': _categoryOrder.name,
+    'categorySort': _categorySort.name,
     // appLock is intentionally absent — see setAppLock.
   };
 
@@ -411,6 +453,8 @@ class SettingsProvider extends ChangeNotifier {
     _categoryOrder =
         CategoryOrder.values.asNameMap()[map['categoryOrder']] ??
         _categoryOrder;
+    _categorySort =
+        CategorySort.values.asNameMap()[map['categorySort']] ?? _categorySort;
     await _persistPref('backup restore', (p) async {
       await p.remove(budgetAlertMonthKey(DateTime.now()));
       await p.setString(_kThemeMode, _mode.name);
@@ -426,6 +470,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setBool(_kHideIncome, _hideIncome);
       await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());
       await p.setString(_kCategoryOrder, _categoryOrder.name);
+      await p.setString(_kCategorySort, _categorySort.name);
     });
     notifyListeners();
   }

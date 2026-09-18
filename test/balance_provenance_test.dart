@@ -12,6 +12,8 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 
+import 'dashboard_test_utils.dart';
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -277,10 +279,59 @@ void main() {
         findsOneWidget,
       );
 
-      // A filtered view IS one type — no headers there.
+      // A filtered view IS one type — no headers there. Settle: during the
+      // page slide the outgoing All page (with its headers) is still alive.
       await tester.tap(find.text('Banks'));
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(find.text('BANKS', skipOffstage: false), findsNothing);
+      expect(find.text('My Bank'), findsOneWidget);
+    });
+
+    testWidgets('a swipe on the list steps the type filter', (tester) async {
+      final p = await load(
+        txs: [row('anchor', 200, date: anchorAt, balanceAfter: 5000)],
+        accounts: [
+          Account(
+            id: 'b1',
+            name: 'My Bank',
+            type: AccountType.bank,
+            keys: const {'HDFC:1111'},
+          ),
+          Account(
+            id: 's1',
+            name: 'My FD',
+            type: AccountType.savings,
+            keys: const {'HDFC:3333'},
+          ),
+        ],
+      );
+      await tester.pumpWidget(app(p));
+      await tester.pumpAndSettle();
+      expect(find.text('BANKS'), findsOneWidget);
+
+      // Swipe left on a row: the drag falls through to the PageView.
+      await tester.fling(find.text('My Bank'), const Offset(-300, 0), 1000);
+      await tester.pumpAndSettle();
+      expect(find.text('BANKS'), findsNothing, reason: 'flat filtered view');
+      expect(find.text('My Bank'), findsOneWidget);
+      expect(find.text('My FD'), findsNothing);
+
+      // Tapping a tab animates there; pumpAndSettle proves it terminates.
+      await tester.tap(find.text('Savings'));
+      await tester.pumpAndSettle();
+      expect(find.text('My FD'), findsOneWidget);
+      expect(find.text('My Bank'), findsNothing);
+
+      // The Cards page is empty — its blank space still swipes back.
+      await tester.tap(find.text('Cards'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('accounts yet'), findsOneWidget);
+      await tester.flingFrom(
+        const Offset(400, 400),
+        const Offset(300, 0),
+        1000,
+      );
+      await tester.pumpAndSettle();
       expect(find.text('My Bank'), findsOneWidget);
     });
 
@@ -313,7 +364,7 @@ void main() {
       await tester.scrollUntilVisible(
         text,
         300,
-        scrollable: find.byType(Scrollable).first,
+        scrollable: verticalScrollable(),
       );
       await tester.pump();
       final height = tester.getSize(text).height;

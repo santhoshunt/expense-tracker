@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../providers/settings_provider.dart' show CategorySort;
 import '../services/spend_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
@@ -241,32 +242,27 @@ class _CompareBody extends StatelessWidget {
   }
 }
 
-/// How the category rows are ordered. The service hands them biggest
-/// absolute change first; the other two orders are recomputed in the card.
-enum _CategorySort {
-  biggestChange('Biggest change', 'Where this month differs most from a '
-      'normal one.'),
-  mostUnusual('Most unusual', 'The furthest from its own usual, so a small '
-      'category that doubled outranks a big one that wobbled.'),
-  highestSpend('Highest spend', 'The most spent this month first.');
-
-  final String label;
-  final String subtitle;
-  const _CategorySort(this.label, this.subtitle);
-}
-
 /// Per-category spend against its usual, biggest deviation first. Only the
-/// top few show until the user asks for the rest.
+/// top few show until the user asks for the rest. Row order is a
+/// [CategorySort] (enum in settings_provider.dart, where it persists).
 class CategoryComparisonCard extends StatefulWidget {
   final MonthComparison comparison;
 
   /// Opens the transaction list for a category, scoped to the shown month.
   final void Function(String categoryId)? onViewCategory;
 
+  /// Externally owned sort (the dashboard passes the persisted setting);
+  /// null falls back to widget-local state, which keeps provider-less
+  /// harnesses working.
+  final CategorySort? sort;
+  final ValueChanged<CategorySort>? onSortChanged;
+
   const CategoryComparisonCard({
     super.key,
     required this.comparison,
     this.onViewCategory,
+    this.sort,
+    this.onSortChanged,
   });
 
   @override
@@ -275,13 +271,20 @@ class CategoryComparisonCard extends StatefulWidget {
 
 class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
   bool _expanded = false;
-  _CategorySort _sort = _CategorySort.biggestChange;
+  CategorySort _sort = CategorySort.biggestChange;
+
+  CategorySort get _effectiveSort => widget.sort ?? _sort;
+
+  void _setSort(CategorySort s) {
+    widget.onSortChanged?.call(s);
+    if (widget.sort == null) setState(() => _sort = s);
+  }
 
   List<CategoryCompare> _sorted(List<CategoryCompare> rows) {
-    switch (_sort) {
-      case _CategorySort.biggestChange:
+    switch (_effectiveSort) {
+      case CategorySort.biggestChange:
         return rows;
-      case _CategorySort.mostUnusual:
+      case CategorySort.mostUnusual:
         return [...rows]..sort((a, b) {
           final ap = a.deltaPct, bp = b.deltaPct;
           // No usual to divide by means infinitely unusual: pinned first.
@@ -289,7 +292,7 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
           if (ap == null || bp == null) return b.actual.compareTo(a.actual);
           return bp.abs().compareTo(ap.abs());
         });
-      case _CategorySort.highestSpend:
+      case CategorySort.highestSpend:
         return [...rows]..sort((a, b) => b.actual.compareTo(a.actual));
     }
   }
@@ -311,24 +314,50 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
     final head = rows.take(kTopMoversShown).toList();
     final rest = rows.skip(kTopMoversShown).toList();
 
+    final scheme = Theme.of(context).colorScheme;
     return _Section(
       title: 'Categories vs usual',
-      subtitle: _sort.subtitle,
-      trailing: PopupMenuButton<_CategorySort>(
+      subtitle: _effectiveSort.subtitle,
+      // Compact rounded menu with a small trailing check — the stock
+      // CheckedPopupMenuItem reserves a full leading slot for its tick,
+      // which read as dated chrome and wasted a third of the row.
+      trailing: PopupMenuButton<CategorySort>(
         tooltip: 'Sort',
-        icon: Icon(
-          Icons.sort,
-          size: 20,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
-        ),
+        icon: Icon(Icons.sort, size: 20, color: scheme.onSurfaceVariant),
         padding: EdgeInsets.zero,
-        onSelected: (s) => setState(() => _sort = s),
+        color: scheme.surfaceContainerHigh,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+        onSelected: _setSort,
         itemBuilder: (context) => [
-          for (final s in _CategorySort.values)
-            CheckedPopupMenuItem(
+          for (final s in CategorySort.values)
+            PopupMenuItem(
               value: s,
-              checked: s == _sort,
-              child: Text(s.label),
+              height: 40,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      s.label,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: s == _effectiveSort
+                            ? scheme.onSurface
+                            : scheme.onSurfaceVariant,
+                        fontWeight: s == _effectiveSort
+                            ? FontWeight.w600
+                            : FontWeight.w400,
+                      ),
+                    ),
+                  ),
+                  if (s == _effectiveSort) ...[
+                    const SizedBox(width: 12),
+                    Icon(Icons.check, size: 16, color: scheme.primary),
+                  ],
+                ],
+              ),
             ),
         ],
       ),
@@ -546,7 +575,12 @@ class _Section extends StatelessWidget {
         if (trailing == null)
           heading
         else
-          Row(children: [Expanded(child: heading), trailing!]),
+          Row(
+            children: [
+              Expanded(child: heading),
+              trailing!,
+            ],
+          ),
         if (subtitle != null) ...[
           const SizedBox(height: 2),
           Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),

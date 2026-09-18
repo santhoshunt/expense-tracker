@@ -65,8 +65,7 @@ class SettingsScreen extends StatelessWidget {
           ),
           children: [
             Text('Theme', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            GlassSegmented<ThemeMode>(
+            _RadioSetting<ThemeMode>(
               options: const [
                 (ThemeMode.system, 'System'),
                 (ThemeMode.light, 'Light'),
@@ -130,8 +129,7 @@ class SettingsScreen extends StatelessWidget {
                 'Imports still land in the review queue.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
-              const SizedBox(height: 8),
-              GlassSegmented<AutoImportFrequency>(
+              _RadioSetting<AutoImportFrequency>(
                 options: [
                   for (final f in AutoImportFrequency.values) (f, f.label),
                 ],
@@ -201,8 +199,7 @@ class SettingsScreen extends StatelessWidget {
               'three months.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
-            const SizedBox(height: 8),
-            GlassSegmented<CategoryOrder>(
+            _RadioSetting<CategoryOrder>(
               options: [for (final o in CategoryOrder.values) (o, o.label)],
               selected: settings.categoryOrder,
               onChanged: (o) =>
@@ -239,6 +236,47 @@ class SettingsScreen extends StatelessWidget {
 /// Mirrors the Orbit app's section. Scheduled uploads run silently from
 /// app launch, so the one thing this section must never hide is a recorded
 /// failure — hence the amber banner.
+/// Radio rows for a choice-type setting: one dense row per option. Replaced
+/// the line-tab GlassSegmented here — tabs read as navigation, not as
+/// picking a stored option.
+class _RadioSetting<T> extends StatelessWidget {
+  final List<(T, String)> options;
+  final T selected;
+  final ValueChanged<T> onChanged;
+
+  const _RadioSetting({
+    required this.options,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) => RadioGroup<T>(
+    groupValue: selected,
+    onChanged: (v) {
+      if (v != null) onChanged(v);
+    },
+    // Transparent Material: ListTiles paint splashes on the NEAREST
+    // Material, and the AmbientBackground ColoredBox behind this page
+    // otherwise hides them (same fix FrostedPanel documents).
+    child: Material(
+      type: MaterialType.transparency,
+      child: Column(
+        children: [
+          for (final (value, label) in options)
+            RadioListTile<T>(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              visualDensity: VisualDensity.compact,
+              title: Text(label),
+              value: value,
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _DriveBackupSection extends StatefulWidget {
   const _DriveBackupSection();
 
