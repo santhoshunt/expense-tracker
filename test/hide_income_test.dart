@@ -108,7 +108,7 @@ void main() {
     await tester.scrollUntilVisible(
       find.text('Expense'),
       300,
-      scrollable: find.byType(Scrollable).first,
+      scrollable: verticalScrollable(),
     );
     await tester.pump();
     expect(find.text('Expense'), findsOneWidget);

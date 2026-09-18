@@ -30,7 +30,7 @@ class AccountsScreen extends StatefulWidget {
 class _AccountsScreenState extends State<AccountsScreen> {
   AccountType? _typeFilter; // null = all
 
-  /// Order the swipe steps through; also gives the glide its direction.
+  /// Order the pager steps through.
   static const List<AccountType?> _filterOrder = [
     null,
     AccountType.bank,
@@ -38,33 +38,31 @@ class _AccountsScreenState extends State<AccountsScreen> {
     AccountType.savings,
   ];
 
-  /// Which side the current filter arrived from, for the list's glide.
-  int _glideDir = 0;
+  late final PageController _pageCtrl = PageController();
+
+  @override
+  void dispose() {
+    _pageCtrl.dispose();
+    super.dispose();
+  }
 
   void _setTypeFilter(AccountType? t) {
     if (t == _typeFilter) return;
-    setState(() {
-      _glideDir =
-          _filterOrder.indexOf(t) > _filterOrder.indexOf(_typeFilter) ? 1 : -1;
-      _typeFilter = t;
-    });
+    _pageCtrl.animateToPage(
+      _filterOrder.indexOf(t),
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
-    bool visible(Account a) => _typeFilter == null || a.type == _typeFilter;
-    final accounts = finance.openAccounts.where(visible).toList();
-    final closed = finance.closedAccounts.where(visible).toList();
     final scheme = Theme.of(context).colorScheme;
 
     final net = finance.netWorth;
 
-    return SegmentedSwipe<AccountType?>(
-      values: _filterOrder,
-      selected: _typeFilter,
-      onChanged: _setTypeFilter,
-      child: Column(
+    return Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -125,89 +123,113 @@ class _AccountsScreenState extends State<AccountsScreen> {
               (AccountType.creditCard, 'Cards'),
               (AccountType.savings, 'Savings'),
             ],
+            icons: const [
+              Icons.account_balance_wallet_outlined,
+              Icons.account_balance_outlined,
+              Icons.credit_card,
+              Icons.savings_outlined,
+            ],
             selected: _typeFilter,
             onChanged: _setTypeFilter,
+            pager: _pageCtrl,
           ),
         ),
         Expanded(
-          child: GlideIn(
-          viewKey: _typeFilter ?? 'all',
-          direction: _glideDir,
-          child: accounts.isEmpty && closed.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(32),
-                    child: Text(
-                      _typeFilter != null
-                          ? 'No ${_typeFilter!.label.toLowerCase()} '
-                                'accounts yet.'
-                          : 'No accounts yet.\n\nAccounts are detected '
-                                'automatically from the account and card '
-                                'numbers in your bank SMS. Import messages '
-                                'to populate them.',
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                )
-              : Builder(
-                  builder: (context) {
-                    // Flat heterogeneous list (Rules-tab pattern): open
-                    // cards, then a muted closed section. Closed cards keep
-                    // full tap/menu behavior — only dimmed. The All view
-                    // groups open accounts by type under section headers;
-                    // a filtered view IS one type, so it stays flat.
-                    final items = <Widget>[
-                      if (_typeFilter == null)
-                        for (final (type, header) in const [
-                          (AccountType.bank, 'Banks'),
-                          (AccountType.creditCard, 'Credit cards'),
-                          (AccountType.savings, 'Savings & assets'),
-                        ]) ...[
-                          if (accounts.any((a) => a.type == type)) ...[
-                            UppercaseSectionHeader(
-                              header,
-                              color: scheme.onSurfaceVariant,
-                            ),
-                            for (final a in accounts)
-                              if (a.type == type)
-                                _AccountCard(
-                                  account: a,
-                                  onView: widget.onViewAccount,
-                                ),
-                          ],
-                        ]
-                      else
-                        for (final a in accounts)
-                          _AccountCard(
-                            account: a,
-                            onView: widget.onViewAccount,
-                          ),
-                      if (closed.isNotEmpty) ...[
-                        UppercaseSectionHeader(
-                          'Closed accounts',
-                          color: scheme.onSurfaceVariant,
-                        ),
-                        for (final a in closed)
-                          Opacity(
-                            opacity: 0.6,
-                            child: _AccountCard(
-                              account: a,
-                              onView: widget.onViewAccount,
-                            ),
-                          ),
-                      ],
-                    ];
-                    return ListView.builder(
-                      padding: const EdgeInsets.only(top: 4, bottom: 120),
-                      itemCount: items.length,
-                      itemBuilder: (context, i) => items[i],
-                    );
-                  },
-                ),
+          child: PageView(
+            controller: _pageCtrl,
+            onPageChanged: (i) => setState(() => _typeFilter = _filterOrder[i]),
+            children: [
+              for (final t in _filterOrder) _buildPage(finance, scheme, t),
+            ],
           ),
         ),
       ],
-      ),
+    );
+  }
+
+  /// One pager page. Computes its own filtered lists for [t]: during a drag
+  /// the neighbor page is alive too and must show its own filter, not
+  /// [_typeFilter].
+  Widget _buildPage(
+    FinanceProvider finance,
+    ColorScheme scheme,
+    AccountType? t,
+  ) {
+    bool visible(Account a) => t == null || a.type == t;
+    final accounts = finance.openAccounts.where(visible).toList();
+    final closed = finance.closedAccounts.where(visible).toList();
+    // Transparent ColoredBox: the empty state is shrink-wrapped, and a
+    // PageView only receives drags that hit its subtree — blank regions
+    // need an opaque hit-test surface or a swipe there would die.
+    return ColoredBox(
+      color: Colors.transparent,
+      child: accounts.isEmpty && closed.isEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Text(
+                  t != null
+                      ? 'No ${t.label.toLowerCase()} accounts yet.'
+                      : 'No accounts yet.\n\nAccounts are detected '
+                            'automatically from the account and card '
+                            'numbers in your bank SMS. Import messages '
+                            'to populate them.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            )
+          : Builder(
+              builder: (context) {
+                // Flat heterogeneous list (Rules-tab pattern): open
+                // cards, then a muted closed section. Closed cards keep
+                // full tap/menu behavior — only dimmed. The All view
+                // groups open accounts by type under section headers;
+                // a filtered view IS one type, so it stays flat.
+                final items = <Widget>[
+                  if (t == null)
+                    for (final (type, header) in const [
+                      (AccountType.bank, 'Banks'),
+                      (AccountType.creditCard, 'Credit cards'),
+                      (AccountType.savings, 'Savings & assets'),
+                    ]) ...[
+                      if (accounts.any((a) => a.type == type)) ...[
+                        UppercaseSectionHeader(
+                          header,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        for (final a in accounts)
+                          if (a.type == type)
+                            _AccountCard(
+                              account: a,
+                              onView: widget.onViewAccount,
+                            ),
+                      ],
+                    ]
+                  else
+                    for (final a in accounts)
+                      _AccountCard(account: a, onView: widget.onViewAccount),
+                  if (closed.isNotEmpty) ...[
+                    UppercaseSectionHeader(
+                      'Closed accounts',
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    for (final a in closed)
+                      Opacity(
+                        opacity: 0.6,
+                        child: _AccountCard(
+                          account: a,
+                          onView: widget.onViewAccount,
+                        ),
+                      ),
+                  ],
+                ];
+                return ListView.builder(
+                  padding: const EdgeInsets.only(top: 4, bottom: 120),
+                  itemCount: items.length,
+                  itemBuilder: (context, i) => items[i],
+                );
+              },
+            ),
     );
   }
 }

@@ -291,20 +291,23 @@ void main() {
       );
     });
 
-    test('no reference to take a shape from falls back to the flat pace', () async {
-      // First-ever data month: August is empty, so the previous-month
-      // comparison has no curve to follow.
-      final p = await loaded();
-      await spend(p, DateTime(2026, 9, 1), 1700);
+    test(
+      'no reference to take a shape from falls back to the flat pace',
+      () async {
+        // First-ever data month: August is empty, so the previous-month
+        // comparison has no curve to follow.
+        final p = await loaded();
+        await spend(p, DateTime(2026, 9, 1), 1700);
 
-      final c = buildMonthComparison(
-        p,
-        DateTime(2026, 9),
-        now: DateTime(2026, 9, 17),
-      );
-      expect(c.vsPrevious.state, CompareState.newThisMonth);
-      expect(c.vsPrevious.actualFull, closeTo(1700 * 30 / 17, 0.001));
-    });
+        final c = buildMonthComparison(
+          p,
+          DateTime(2026, 9),
+          now: DateTime(2026, 9, 17),
+        );
+        expect(c.vsPrevious.state, CompareState.newThisMonth);
+        expect(c.vsPrevious.actualFull, closeTo(1700 * 30 / 17, 0.001));
+      },
+    );
 
     test(
       'a baseline below two months is refused rather than guessed',

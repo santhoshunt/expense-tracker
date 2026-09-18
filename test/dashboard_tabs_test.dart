@@ -60,7 +60,7 @@ void main() {
       tester,
     ) async {
       await pump(tester);
-      final list = find.byType(Scrollable).first;
+      final list = verticalScrollable();
 
       // Overview is the landing view. It carries copies of the
       // highest-signal sections (categories vs usual, the heatmap) so a
@@ -97,24 +97,30 @@ void main() {
       await pump(tester);
       expect(find.text('Spent'), findsOneWidget);
 
-      // Swipe left from the segmented control's own row: plain labels there
-      // claim only taps, so the page-level swipe detector receives the drag.
-      await tester.fling(find.text('Overview'), const Offset(-300, 0), 1000);
-      await tester.pumpAndSettle();
+      // Fling on page content — the month selector row, present on every
+      // view. The tab labels sit on the pinned bar outside the pager now,
+      // and its buttons claim only taps, so the drag reaches the PageView.
+      Future<void> swipe(double dx) async {
+        await tester.fling(
+          find.byTooltip('Previous month'),
+          Offset(dx, 0),
+          1000,
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await swipe(-300);
       expect(find.text('This month vs last month'), findsOneWidget);
 
-      await tester.fling(find.text('Trends'), const Offset(-300, 0), 1000);
-      await tester.pumpAndSettle();
+      await swipe(-300);
       expect(find.byType(CategoryDonutChart), findsOneWidget);
 
       // The ends stop: another swipe left stays on Breakdown.
-      await tester.fling(find.text('Breakdown'), const Offset(-300, 0), 1000);
-      await tester.pumpAndSettle();
+      await swipe(-300);
       expect(find.byType(CategoryDonutChart), findsOneWidget);
 
       // And right goes back.
-      await tester.fling(find.text('Breakdown'), const Offset(300, 0), 1000);
-      await tester.pumpAndSettle();
+      await swipe(300);
       expect(find.text('This month vs last month'), findsOneWidget);
     });
 
