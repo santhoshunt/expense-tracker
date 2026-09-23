@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/spend_budget.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -36,7 +37,78 @@ void main() {
     child: const MaterialApp(home: ClassifiersScreen()),
   );
 
-  testWidgets('Cockpit hosts Budgets and Reminders tabs with add flows', (
+  testWidgets('Cockpit hub lists the three groups with live counts, and each '
+      'opens its page', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addRule('amma', 'food');
+    final now = DateTime.now();
+    await p.addBudget(
+      name: 'Eating out',
+      limit: 100,
+      mode: BudgetMode.include,
+      categoryIds: {'food'},
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 500,
+      note: 'Dinner',
+      date: DateTime(now.year, now.month, 1, 0, 0, 1),
+    );
+    await p.addReminder(
+      name: 'Rent',
+      dayOfMonth: 5,
+      categoryId: 'other_expense',
+    );
+    await tester.pumpWidget(cockpit(p));
+    await pumpThrough(tester);
+
+    expect(find.text('Cockpit'), findsOneWidget);
+    String n(int count, String one, String many) =>
+        '$count ${count == 1 ? one : many}';
+    final hub = <(String, String, String, String)>[
+      (
+        'Classify',
+        'Rules, import filters, review',
+        // Only the rule added above: built-ins are not the user's own.
+        '1 rule · '
+            '${n(p.importRules.length, 'import filter', 'import filters')}',
+        'Rules',
+      ),
+      (
+        'Organise',
+        'Categories and groups',
+        '${customCategories.length + kCategories.length} categories',
+        'New category',
+      ),
+      (
+        'Plan',
+        'Budgets and reminders',
+        '1 budget · 1 reminder · 1 over',
+        'Budgets',
+      ),
+    ];
+    for (final (title, gist, count, _) in hub) {
+      expect(find.text(title), findsOneWidget);
+      expect(find.text(gist), findsOneWidget);
+      expect(find.text(count), findsOneWidget, reason: '$title count');
+    }
+    for (final (title, _, _, marker) in hub) {
+      await tester.tap(find.text(title));
+      await pumpThrough(tester);
+      expect(
+        find.descendant(of: find.byType(AppBar), matching: find.text(title)),
+        findsOneWidget,
+      );
+      expect(find.text(marker), findsOneWidget, reason: '$title page');
+      await tester.pageBack();
+      await pumpThrough(tester);
+    }
+    expect(find.text('Cockpit'), findsOneWidget);
+  });
+
+  testWidgets('Plan hosts Budgets and Reminders tabs with add flows', (
     tester,
   ) async {
     final p = FinanceProvider();
@@ -44,7 +116,8 @@ void main() {
     await tester.pumpWidget(cockpit(p));
     await pumpThrough(tester);
 
-    expect(find.text('Cockpit'), findsOneWidget);
+    await tester.tap(find.text('Plan'));
+    await pumpThrough(tester);
     expect(find.text('Budgets'), findsOneWidget);
     expect(find.text('Reminders'), findsOneWidget);
 

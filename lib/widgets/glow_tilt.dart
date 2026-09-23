@@ -21,7 +21,7 @@ typedef TiltSource = Stream<AccelerometerEvent> Function();
 /// the glow cannot drift away over time. The offset is measured against a
 /// slowly moving average of how the phone is held, so at rest the glow
 /// settles back in its corner; only a change of tilt moves it. It moves
-/// toward the lower edge, like liquid.
+/// toward the edge that rises, as a light held still would appear to.
 ///
 /// Needs no permission (Android asks only above 200 readings a second; this
 /// reads about 15). Listens only while the setting is on, animations are
@@ -134,17 +134,17 @@ class _GlowTiltState extends State<GlowTilt>
     final rest = _rest == null ? gravity : Offset.lerp(_rest, gravity, 0.022)!;
     _rest = rest;
     // Readings follow the device's own axes. Upright: tipping the right
-    // edge down lowers x, and the glow slides right, toward it; tipping the
-    // top back raises y, and the glow slides down. Turned sideways the
-    // screen's axes are the device's swapped, with the sign of whichever
-    // side is down.
+    // edge down lowers x, and the glow slides left, toward the edge that
+    // rose; tipping the top back raises y, and the glow slides up. Turned
+    // sideways the screen's axes are the device's swapped, with the sign of
+    // whichever side is down.
     final d = (gravity - rest) / 3.0;
     final Offset toward;
     if (_landscape) {
       final side = rest.dx >= 0 ? 1.0 : -1.0;
-      toward = Offset(side * d.dy, side * d.dx);
+      toward = Offset(-side * d.dy, -side * d.dx);
     } else {
-      toward = Offset(-d.dx, d.dy);
+      toward = Offset(d.dx, -d.dy);
     }
     _setTarget(Offset(toward.dx.clamp(-1.0, 1.0), toward.dy.clamp(-1.0, 1.0)));
   }

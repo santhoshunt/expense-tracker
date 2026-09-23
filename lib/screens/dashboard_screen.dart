@@ -1886,7 +1886,7 @@ class _BudgetCard extends StatelessWidget {
                             title: 'Monthly budget',
                             message:
                                 'Spending against the monthly cap set in '
-                                'Cockpit, Budgets. Green below 80%, orange '
+                                'Cockpit, Plan, Budgets. Green below 80%, orange '
                                 'from 80%, red above 95%. The ring stays full '
                                 'past 100% while the percentage keeps '
                                 'counting.',

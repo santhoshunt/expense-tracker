@@ -99,6 +99,72 @@ void main() {
     expect(sticky, findsNothing);
   });
 
+  testWidgets('tapping the sticky header opens the month list', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    for (var d = 1; d <= 20; d++) {
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 10.0 + d,
+        note: 'jul $d',
+        date: DateTime(2026, 7, d),
+      );
+    }
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 70,
+      note: 'jun 1',
+      date: DateTime(2026, 6, 1),
+    );
+    await tester.pumpWidget(screen(p));
+    await tester.pumpAndSettle();
+    await tester.dragFrom(const Offset(300, 450), const Offset(0, -400));
+    await tester.pumpAndSettle();
+    expect(sticky, findsOneWidget);
+
+    // A drag that starts on the strip still scrolls the list beneath it.
+    final before = tester.getTopLeft(find.text('jul 10'));
+    await tester.dragFrom(tester.getCenter(sticky), const Offset(0, -120));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.text('jul 10')).dy, lessThan(before.dy));
+
+    // The strip itself ignores pointers (so drags reach the list); the tap
+    // is caught by the translucent detector wrapped round it.
+    await tester.tap(sticky, warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(find.text('Jump to month'), findsWidgets);
+    expect(find.text('June 2026'), findsOneWidget);
+  });
+
+  testWidgets('a tap that stops a fling does not open the month list', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    for (var d = 1; d <= 28; d++) {
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 10.0 + d,
+        note: 'jul $d',
+        date: DateTime(2026, 7, d),
+      );
+    }
+    await tester.pumpWidget(screen(p));
+    await tester.pumpAndSettle();
+    await tester.dragFrom(const Offset(300, 450), const Offset(0, -300));
+    await tester.pumpAndSettle();
+    expect(sticky, findsOneWidget);
+
+    await tester.flingFrom(const Offset(300, 500), const Offset(0, -200), 2000);
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tapAt(tester.getCenter(sticky));
+    await tester.pumpAndSettle();
+    expect(find.text('Jump to month'), findsNothing);
+  });
+
   testWidgets('the review card folds away once its queue empties', (
     tester,
   ) async {

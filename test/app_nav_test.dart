@@ -11,8 +11,9 @@ import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 
-/// Tooltip links jump through AppNav: inside the Cockpit a tab switch
-/// happens in place, and from a pushed route a home jump pops back first.
+/// Tooltip links jump through AppNav: on a Cockpit group page a tab of the
+/// same group switches in place, a tab of another group pushes that group's
+/// page, and from a pushed route a home jump pops back first.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -39,20 +40,74 @@ void main() {
     child: MaterialApp(home: home),
   );
 
-  testWidgets('inside the Cockpit, openCockpit switches tab in place', (
+  /// Group pages on the stack, the covered ones included.
+  Finder groupPages() => find.byType(CockpitGroupPage, skipOffstage: false);
+
+  /// The selected tab's label on the showing page.
+  String selectedTab(WidgetTester tester) {
+    final bar = tester.widget<TabBar>(find.byType(TabBar));
+    return (bar.tabs[bar.controller!.index] as Tab).text!;
+  }
+
+  testWidgets('on a group page, openCockpit to a tab of the same group '
+      'switches in place', (tester) async {
+    final p = await providers();
+    await tester.pumpWidget(
+      app(p, const ClassifiersScreen(initialTab: kCockpitTabBudgets)),
+    );
+    await tester.pump();
+    expect(selectedTab(tester), 'Budgets');
+
+    final inside = tester.element(find.byType(TabBarView));
+    AppNav.instance.openCockpit(inside, kCockpitTabReminders);
+    await tester.pumpAndSettle();
+
+    expect(groupPages(), findsOneWidget, reason: 'no stack');
+    expect(selectedTab(tester), 'Reminders');
+  });
+
+  testWidgets('openCockpit from Rules to Budgets pushes the Plan page', (
     tester,
   ) async {
     final p = await providers();
-    await tester.pumpWidget(app(p, const ClassifiersScreen()));
+    await tester.pumpWidget(
+      app(p, const ClassifiersScreen(initialTab: kCockpitTabRules)),
+    );
     await tester.pump();
+    expect(find.text('Classify'), findsOneWidget);
 
-    final inside = tester.element(find.byType(TabBarView));
-    AppNav.instance.openCockpit(inside, kCockpitTabBudgets);
+    AppNav.instance.openCockpit(
+      tester.element(find.byType(TabBarView)),
+      kCockpitTabBudgets,
+    );
     await tester.pumpAndSettle();
 
-    expect(find.byType(ClassifiersScreen), findsOneWidget, reason: 'no stack');
-    final tabs = tester.widget<TabBar>(find.byType(TabBar));
-    expect(tabs.controller!.index, kCockpitTabBudgets);
+    expect(groupPages(), findsNWidgets(2));
+    expect(find.text('Plan'), findsOneWidget);
+    expect(selectedTab(tester), 'Budgets');
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('Classify'), findsOneWidget);
+    expect(selectedTab(tester), 'Rules');
+  });
+
+  testWidgets('a real tip link to a tab of the same group stays on the page', (
+    tester,
+  ) async {
+    final p = await providers();
+    await tester.pumpWidget(
+      app(p, const ClassifiersScreen(initialTab: kCockpitTabReminders)),
+    );
+    await tester.pump();
+
+    await tester.tap(find.bySemanticsLabel('About Reminders'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Check Payment reminders →'));
+    await tester.pumpAndSettle();
+
+    expect(groupPages(), findsOneWidget, reason: 'no stack');
+    expect(selectedTab(tester), 'Budgets');
   });
 
   testWidgets('from a pushed route, a home jump pops back and runs the '
@@ -85,17 +140,24 @@ void main() {
     expect(opened?.type, TxType.expense);
   });
 
-  testWidgets('outside the Cockpit, openCockpit opens it on the tab', (
-    tester,
-  ) async {
+  testWidgets('outside the Cockpit, openCockpit opens the group page on the '
+      'tab', (tester) async {
     final p = await providers();
     await tester.pumpWidget(app(p, const Scaffold(body: Text('home'))));
-    AppNav.instance.openCockpit(
-      tester.element(find.text('home')),
-      kCockpitTabCategories,
-    );
+    final home = tester.element(find.text('home'));
+
+    AppNav.instance.openCockpit(home, kCockpitTabReminders);
     await tester.pumpAndSettle();
-    final tabs = tester.widget<TabBar>(find.byType(TabBar));
-    expect(tabs.controller!.index, kCockpitTabCategories);
+    expect(find.text('Plan'), findsOneWidget);
+    expect(selectedTab(tester), 'Reminders');
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    // A one-tab group: its page has no tab bar.
+    AppNav.instance.openCockpit(home, kCockpitTabCategories);
+    await tester.pumpAndSettle();
+    expect(find.text('Organise'), findsOneWidget);
+    expect(find.byType(TabBar), findsNothing);
+    expect(find.text('New category'), findsOneWidget);
   });
 }

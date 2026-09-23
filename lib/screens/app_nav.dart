@@ -97,14 +97,12 @@ class AppNav {
     _importSms?.call();
   }
 
-  /// Cockpit tab [tab] (a kCockpitTab* index): switches in place when
-  /// already inside the Cockpit, otherwise opens it on that tab.
+  /// Cockpit tab [tab] (a kCockpitTab* id): switches in place when
+  /// already on the Cockpit group page that holds it, otherwise opens that
+  /// group's page on the tab (over the hub or another group's page).
   void openCockpit(BuildContext context, int tab) {
     final scope = CockpitScope.maybeOf(context);
-    if (scope != null) {
-      scope.show(tab);
-      return;
-    }
+    if (scope != null && scope.show(tab)) return;
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => ClassifiersScreen(initialTab: tab)),
     );
@@ -134,22 +132,35 @@ void goSavingsAccounts(BuildContext c) =>
     AppNav.instance.openAccounts(c, type: AccountType.savings);
 void goNewReminder(BuildContext c) => showReminderEditor(c);
 
-/// Marks the inside of the Cockpit, so [AppNav.openCockpit] switches its
-/// tab instead of stacking a second Cockpit.
+/// Marks the inside of a Cockpit group page, so [AppNav.openCockpit]
+/// switches its tab instead of stacking a second copy of the page.
 class CockpitScope extends InheritedWidget {
-  final TabController controller;
+  /// The page's tab bar controller; null on a single-tab page.
+  final TabController? controller;
+
+  /// The kCockpitTab* ids the page shows, in tab order.
+  final List<int> tabs;
 
   const CockpitScope({
     super.key,
     required this.controller,
+    required this.tabs,
     required super.child,
   });
 
-  void show(int tab) => controller.animateTo(tab);
+  /// Selects [tab] when this page holds it. False: the tab lives on another
+  /// group's page, which the caller must open.
+  bool show(int tab) {
+    final i = tabs.indexOf(tab);
+    if (i < 0) return false;
+    controller?.animateTo(i);
+    return true;
+  }
 
   static CockpitScope? maybeOf(BuildContext context) =>
       context.getInheritedWidgetOfExactType<CockpitScope>();
 
   @override
-  bool updateShouldNotify(CockpitScope old) => old.controller != controller;
+  bool updateShouldNotify(CockpitScope old) =>
+      old.controller != controller || old.tabs != tabs;
 }

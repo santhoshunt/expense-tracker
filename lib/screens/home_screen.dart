@@ -469,8 +469,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// Every tab switch, by tap or by a link, lands with the Add button
   /// unfolded. Call inside setState.
   void _showTab(int i) {
+    if (i != _index) {
+      // Never the tab being shown: back must always land somewhere else.
+      _tabHistory
+        ..remove(i)
+        ..remove(_index)
+        ..add(_index);
+    }
     _index = i;
     _fabExtended = true;
+  }
+
+  /// Tabs left behind, newest last. Tab switches (a tap, a donut slice's
+  /// "See transactions", a tooltip link) are not routes, so Android's back
+  /// used to leave the app; it now retraces them first. Each tab keeps its
+  /// own state, so going back lands on the view and scroll it was left at.
+  final List<int> _tabHistory = [];
+
+  void _back() {
+    if (_tabHistory.isEmpty) return;
+    setState(() {
+      _index = _tabHistory.removeLast();
+      _fabExtended = true;
+    });
   }
 
   /// Vertical drags only: the pagers and the stat-card strip scroll
@@ -496,110 +517,118 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       (f) => f.pendingCount,
     );
 
-    return AmbientBackground(
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          // Deliberately NOT animated. Two rounds of AnimatedSwitcher tuning
-          // (sequential fade-through, then a start-anchored layoutBuilder)
-          // still left short titles visibly entering offset and sliding into
-          // place on-device — the switcher sizes its box to the widest of the
-          // outgoing/incoming titles for the whole transition. A static title
-          // cannot shift; the tab body's own fade-through carries the motion.
-          title: Text(_titles[_index]),
-          actions: [
-            IconButton(
-              tooltip: 'Cockpit',
-              icon: const Icon(Icons.tune),
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
-              ),
-            ),
-            // Same IconButton in both states (disabled + spinner icon while
-            // importing) so the action row doesn't shift and the pending
-            // badge doesn't blink out for the duration.
-            if (_smsImport.isSupported)
+    return PopScope(
+      // Locked, the lock gate turns tickers off beneath it: back then must
+      // not switch tabs out of sight.
+      canPop: _tabHistory.isEmpty || !TickerMode.valuesOf(context).enabled,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _back();
+      },
+      child: AmbientBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            // Deliberately NOT animated. Two rounds of AnimatedSwitcher tuning
+            // (sequential fade-through, then a start-anchored layoutBuilder)
+            // still left short titles visibly entering offset and sliding into
+            // place on-device — the switcher sizes its box to the widest of the
+            // outgoing/incoming titles for the whole transition. A static title
+            // cannot shift; the tab body's own fade-through carries the motion.
+            title: Text(_titles[_index]),
+            actions: [
               IconButton(
-                tooltip: _importing ? 'Importing…' : 'Import from SMS',
-                icon: Badge(
-                  isLabelVisible: pendingCount > 0,
-                  label: Text('$pendingCount'),
-                  child: _importing
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.sms_outlined),
-                ),
-                onPressed: _importing ? null : _importFromSms,
-              ),
-            // Import/Export/Delete-all moved into Settings → Data — the old
-            // ⋮ menu's only remaining entry was Settings itself.
-            IconButton(
-              tooltip: 'Settings',
-              icon: const Icon(Icons.settings_outlined),
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              ),
-            ),
-          ],
-        ),
-        body: Column(
-          children: [
-            const _StorageWarningBanners(),
-            Expanded(
-              child: NotificationListener<UserScrollNotification>(
-                onNotification: _onUserScroll,
-                child: _FadeThroughIndexedStack(
-                  index: _index,
-                  children: [
-                    _dashboardTab,
-                    _transactionsTabWidget,
-                    _accountsTab,
-                  ],
+                tooltip: 'Cockpit',
+                icon: const Icon(Icons.tune),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
                 ),
               ),
-            ),
-          ],
-        ),
-        floatingActionButton: GlassButton(
-          icon: Icons.add,
-          label: onAccounts ? 'New account' : 'Add',
-          extended: _fabExtended,
-          onPressed: () => onAccounts
-              ? showAddAccountDialog(context)
-              : showAddTransactionSheet(context),
-        ),
-        // Solid kit-style bar; the theme paints the accent rounded indicator.
-        bottomNavigationBar: NavigationBar(
-          // Scales with the font setting — any constant (68, then 76) clips
-          // the always-shown labels again at a large enough scale.
-          height: MediaQuery.textScalerOf(context).scale(76),
-          selectedIndex: _index,
-          onDestinationSelected: (i) {
-            if (i != _index) Haptics.tick();
-            setState(() => _showTab(i));
-          },
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.dashboard_outlined),
-              selectedIcon: Icon(Icons.dashboard),
-              label: 'Dashboard',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.receipt_long_outlined),
-              selectedIcon: Icon(Icons.receipt_long),
-              label: 'Transactions',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.account_balance_wallet_outlined),
-              selectedIcon: Icon(Icons.account_balance_wallet),
-              label: 'Accounts',
-            ),
-          ],
+              // Same IconButton in both states (disabled + spinner icon while
+              // importing) so the action row doesn't shift and the pending
+              // badge doesn't blink out for the duration.
+              if (_smsImport.isSupported)
+                IconButton(
+                  tooltip: _importing ? 'Importing…' : 'Import from SMS',
+                  icon: Badge(
+                    isLabelVisible: pendingCount > 0,
+                    label: Text('$pendingCount'),
+                    child: _importing
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.sms_outlined),
+                  ),
+                  onPressed: _importing ? null : _importFromSms,
+                ),
+              // Import/Export/Delete-all moved into Settings → Data — the old
+              // ⋮ menu's only remaining entry was Settings itself.
+              IconButton(
+                tooltip: 'Settings',
+                icon: const Icon(Icons.settings_outlined),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                ),
+              ),
+            ],
+          ),
+          body: Column(
+            children: [
+              const _StorageWarningBanners(),
+              Expanded(
+                child: NotificationListener<UserScrollNotification>(
+                  onNotification: _onUserScroll,
+                  child: _FadeThroughIndexedStack(
+                    index: _index,
+                    children: [
+                      _dashboardTab,
+                      _transactionsTabWidget,
+                      _accountsTab,
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          floatingActionButton: GlassButton(
+            icon: Icons.add,
+            label: onAccounts ? 'New account' : 'Add',
+            extended: _fabExtended,
+            onPressed: () => onAccounts
+                ? showAddAccountDialog(context)
+                : showAddTransactionSheet(context),
+          ),
+          // Solid kit-style bar; the theme paints the accent rounded indicator.
+          bottomNavigationBar: NavigationBar(
+            // Scales with the font setting — any constant (68, then 76) clips
+            // the always-shown labels again at a large enough scale.
+            height: MediaQuery.textScalerOf(context).scale(76),
+            selectedIndex: _index,
+            onDestinationSelected: (i) {
+              if (i != _index) Haptics.tick();
+              setState(() => _showTab(i));
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.dashboard_outlined),
+                selectedIcon: Icon(Icons.dashboard),
+                label: 'Dashboard',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.receipt_long_outlined),
+                selectedIcon: Icon(Icons.receipt_long),
+                label: 'Transactions',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.account_balance_wallet_outlined),
+                selectedIcon: Icon(Icons.account_balance_wallet),
+                label: 'Accounts',
+              ),
+            ],
+          ),
         ),
       ),
     );

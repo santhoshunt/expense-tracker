@@ -584,6 +584,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   final _jumping = ValueNotifier(false);
 
+  /// Whether the list is scrolling (a fling included), and whether the
+  /// current touch landed while it was: tapping the top of the screen to
+  /// stop a fling is a habit, and must not open the month list.
+  bool _listMoving = false;
+  bool _touchStoppedList = false;
+
   /// Step month-by-month: up snaps to the current month's header first,
   /// then to the previous month; down goes to the next month's header
   /// (or the end of the list when already in the last month).
@@ -667,24 +673,62 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     }
     final colors = AppColors.of(context);
     final scheme = Theme.of(context).colorScheme;
+    Future<void> jump() async {
+      final picked = await showMonthPickerSheet(
+        context,
+        title: 'Jump to month',
+        months: data.months,
+        selected: month,
+      );
+      if (picked != null && mounted) _scrollToMonth(picked);
+    }
+
     return Align(
       alignment: Alignment.topCenter,
       child: Transform.translate(
         offset: Offset(0, push),
-        child: Container(
-          key: const ValueKey('sticky-month-header'),
-          height: band,
-          alignment: Alignment.centerLeft,
-          // The card fill with a hairline edge: reads as a pinned strip
-          // over the rows rather than a gap cut out of the backdrop.
-          decoration: BoxDecoration(
-            color: (colors.cardFill ?? scheme.surface).withValues(alpha: 0.97),
-            border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
-          ),
-          child: _MonthHeader(
-            month: month,
-            txs: data.groups[month]!,
-            compact: true,
+        child: Semantics(
+          button: true,
+          label:
+              'Jump to month, showing ${DateFormat('MMMM yyyy').format(month)}',
+          onTap: jump,
+          excludeSemantics: true,
+          // Translucent over a strip that ignores pointers: the tap lands
+          // here (its recognizer joins the arena first, so it beats the row
+          // beneath), while the list behind still receives the pointer and
+          // wins any drag, so scrolling from the strip keeps working.
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (_) => _touchStoppedList = _listMoving,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () {
+                if (!_touchStoppedList) jump();
+              },
+              child: IgnorePointer(
+                child: Container(
+                  key: const ValueKey('sticky-month-header'),
+                  height: band,
+                  alignment: Alignment.centerLeft,
+                  // The card fill with a hairline edge: reads as a pinned
+                  // strip over the rows rather than a gap cut out of the
+                  // backdrop.
+                  decoration: BoxDecoration(
+                    color: (colors.cardFill ?? scheme.surface).withValues(
+                      alpha: 0.97,
+                    ),
+                    border: Border(
+                      bottom: BorderSide(color: scheme.outlineVariant),
+                    ),
+                  ),
+                  child: _MonthHeader(
+                    month: month,
+                    txs: data.groups[month]!,
+                    compact: true,
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -894,6 +938,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         n is ScrollUpdateNotification) {
                       _pokeJumpControls();
                     }
+                    if (n is ScrollStartNotification) _listMoving = true;
+                    if (n is ScrollEndNotification) _listMoving = false;
                     return false;
                   },
                   child: ScrollablePositionedList.builder(
@@ -927,23 +973,19 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 // list's positions directly, so scrolling never rebuilds
                 // the screen for it.
                 //
-                // It ignores touches, so a drag starting on it still
-                // scrolls the list, and TalkBack reads the real headers
-                // instead. The next month's header pushes it up and out,
-                // so it never names a month whose rows are not beneath it.
+                // A tap on it opens the month list; a drag starting on it
+                // still scrolls the list (see _stickyBand). The next
+                // month's header pushes it up and out, so it never names a
+                // month whose rows are not beneath it.
                 Positioned.fill(
-                  child: IgnorePointer(
-                    child: ExcludeSemantics(
-                      child: LayoutBuilder(
-                        builder: (context, box) => ListenableBuilder(
-                          listenable: Listenable.merge([
-                            _listPositions[f]!.itemPositions,
-                            _jumping,
-                          ]),
-                          builder: (context, _) =>
-                              _stickyBand(context, data, f, box.maxHeight),
-                        ),
-                      ),
+                  child: LayoutBuilder(
+                    builder: (context, box) => ListenableBuilder(
+                      listenable: Listenable.merge([
+                        _listPositions[f]!.itemPositions,
+                        _jumping,
+                      ]),
+                      builder: (context, _) =>
+                          _stickyBand(context, data, f, box.maxHeight),
                     ),
                   ),
                 ),
@@ -2054,6 +2096,9 @@ class _MonthHeader extends StatelessWidget {
           ),
         ),
       ),
+      // The pinned copy opens the month list: the arrow says so.
+      if (compact)
+        Icon(Icons.arrow_drop_down, size: 18, color: accentTextColor(context)),
       // Beside the name, not the amounts: it acts on the month, and next
       // to the totals it read as an amount action.
       if (onSelectMonth != null)

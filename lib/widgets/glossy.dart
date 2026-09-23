@@ -7,7 +7,7 @@ import 'glow_tilt.dart';
 import 'motion.dart';
 
 /// Screen backdrop: the theme background with the accent glowing in from
-/// the top-right corner and, fainter, the bottom-right. Wraps a whole
+/// the top-left corner and, fainter, the bottom-right. Wraps a whole
 /// Scaffold (made transparent) so the glow also runs under the app bar;
 /// it stays opaque, so a pushed route never shows the page beneath it.
 ///
@@ -60,7 +60,7 @@ class AmbientGlowPainter extends CustomPainter {
     // White backdrops show a tint far more readily than charcoal.
     return [
       glow(
-        Alignment(1.2 + t.dx * 0.25, -1.1 + t.dy * 0.15),
+        Alignment(-1.2 + t.dx * 0.25, -1.1 + t.dy * 0.15),
         1.1,
         dark ? 0.24 : 0.14,
       ),
@@ -84,6 +84,10 @@ class AmbientGlowPainter extends CustomPainter {
   bool shouldRepaint(AmbientGlowPainter old) =>
       old.accent != accent || old.dark != dark || old.tilt != tilt;
 }
+
+/// [base] with the accent washed over it at [alpha].
+Color _tint(ColorScheme scheme, Color base, double alpha) =>
+    Color.alphaBlend(scheme.primary.withValues(alpha: alpha), base);
 
 /// Edge light: an accent rim with the glow kept inside the shape. Used as a
 /// FOREGROUND decoration: a decoration paints its shadows beneath its own
@@ -136,7 +140,8 @@ class GlassButton extends StatelessWidget {
       excludeSemantics: true,
       child: Container(
         decoration: BoxDecoration(
-          color: scheme.outlineVariant,
+          // Same fill as the segmented thumb it is styled after.
+          color: _tint(scheme, scheme.outlineVariant, 0.12),
           borderRadius: BorderRadius.circular(14),
           // Neutral lift so it floats over list content; no accent glow.
           boxShadow: [
@@ -235,7 +240,9 @@ class GlassSegmented<T> extends StatelessWidget {
       // shrinks large-font labels until they are unreadable.
       height: MediaQuery.textScalerOf(context).scale(44),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHigh,
+        // A trace of the accent, like the cards around it: the palette's
+        // plain grey read as a warm, off-colour strip beside tinted cards.
+        color: _tint(scheme, scheme.surfaceContainerHigh, 0.06),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: scheme.outlineVariant),
       ),
@@ -267,7 +274,7 @@ class GlassSegmented<T> extends StatelessWidget {
   ) {
     final thumb = Container(
       decoration: BoxDecoration(
-        color: scheme.outlineVariant,
+        color: _tint(scheme, scheme.outlineVariant, 0.12),
         borderRadius: BorderRadius.circular(9),
       ),
       foregroundDecoration: _edgeLight(scheme, 9),
