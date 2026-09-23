@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
@@ -16,11 +17,14 @@ import '../widgets/animated_fold.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../utils/contrast.dart';
+import '../utils/haptics.dart';
 import '../utils/search_text.dart';
 import '../widgets/category_chip_label.dart';
 import '../widgets/dispose_scope.dart';
+import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
 import '../widgets/month_picker_sheet.dart';
+import '../widgets/motion.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/transaction_tile.dart';
 import '../widgets/undo_snackbar.dart';
@@ -94,6 +98,10 @@ class _PageData {
   final List<Tx> filtered;
   final Map<DateTime, List<Tx>> groups;
   final List<(DateTime?, Tx?)> rows;
+
+  /// The month each entry of [rows] sits under, header rows included, so
+  /// the sticky header can name the month at any scroll position.
+  final List<DateTime> rowMonths;
   final List<DateTime> months;
   final Map<DateTime, int> monthIndexes;
 
@@ -101,6 +109,7 @@ class _PageData {
     required this.filtered,
     required this.groups,
     required this.rows,
+    required this.rowMonths,
     required this.months,
     required this.monthIndexes,
   });
@@ -109,6 +118,7 @@ class _PageData {
     filtered: [],
     groups: {},
     rows: [],
+    rowMonths: [],
     months: [],
     monthIndexes: {},
   );
@@ -155,6 +165,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   bool get _selecting => _selected.isNotEmpty;
 
   void _toggleSelect(String id) {
+    // No tick here: selection starts with a long-press, which already
+    // vibrates, and later row taps are confirmed by the tile's animation.
     setState(
       () => _selected.contains(id) ? _selected.remove(id) : _selected.add(id),
     );
@@ -365,6 +377,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _searchDebounce?.cancel();
     _searchCtrl.dispose();
     _pageCtrl.dispose();
+    _jumping.dispose();
     super.dispose();
   }
 
@@ -526,18 +539,22 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     // this used to) meant allocating the whole ledger's widgets on every
     // build, including every keystroke in the search box.
     final rows = <(DateTime?, Tx?)>[];
+    final rowMonths = <DateTime>[];
     final monthIndexes = <DateTime, int>{};
     for (final month in months) {
       monthIndexes[month] = rows.length;
       rows.add((month, null));
+      rowMonths.add(month);
       for (final tx in groups[month]!) {
         rows.add((null, tx));
+        rowMonths.add(month);
       }
     }
     return _PageData(
       filtered: filtered,
       groups: groups,
       rows: rows,
+      rowMonths: rowMonths,
       months: months,
       monthIndexes: monthIndexes,
     );
@@ -549,13 +566,23 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   void _scrollToIndex(int index, {double alignment = 0}) {
     final ctrl = _listCtrls[_filter]!;
     if (!ctrl.isAttached) return;
-    ctrl.scrollTo(
-      index: index,
-      alignment: alignment,
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeOut,
-    );
+    // A long jump cross-fades in a second list whose positions are not
+    // published, so the sticky header would name the old months; it steps
+    // aside until the jump lands.
+    _jumping.value = true;
+    ctrl
+        .scrollTo(
+          index: index,
+          alignment: alignment,
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeOut,
+        )
+        .whenComplete(() {
+          if (mounted) _jumping.value = false;
+        });
   }
+
+  final _jumping = ValueNotifier(false);
 
   /// Step month-by-month: up snaps to the current month's header first,
   /// then to the previous month; down goes to the next month's header
@@ -600,6 +627,70 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     if (index != null) _scrollToIndex(index);
   }
 
+  /// The month the sticky header should name for [positions], or null when
+  /// it should not show: at the very top, or while the month's own header
+  /// row sits fully on screen at the top (two headers would stack).
+  DateTime? _stickyMonth(_PageData data, Iterable<ItemPosition> positions) {
+    final shown = positions.where((p) => p.itemTrailingEdge > 0);
+    if (shown.isEmpty) return null;
+    final top = shown.reduce((a, b) => a.index < b.index ? a : b);
+    // Positions can still describe the previous, longer list for a frame
+    // after a delete or a filter change.
+    if (top.index >= data.rowMonths.length) return null;
+    // Same tolerance as _stepMonth: a scrollTo can leave the header a hair
+    // above the viewport's top edge.
+    final headerAtTop =
+        data.rows[top.index].$1 != null && top.itemLeadingEdge >= -0.001;
+    return headerAtTop ? null : data.rowMonths[top.index];
+  }
+
+  Widget _stickyBand(
+    BuildContext context,
+    _PageData data,
+    _Filter f,
+    double viewport,
+  ) {
+    if (_jumping.value || viewport <= 0) return const SizedBox.shrink();
+    final positions = _listPositions[f]!.itemPositions.value;
+    final month = _stickyMonth(data, positions);
+    if (month == null) return const SizedBox.shrink();
+    final band = MediaQuery.textScalerOf(context).scale(12) * 1.4 + 16;
+    // The first header below the top row: once it reaches the band, the
+    // band slides up with it.
+    var push = 0.0;
+    for (final p in positions) {
+      if (p.index >= data.rows.length || data.rows[p.index].$1 == null) {
+        continue;
+      }
+      final top = p.itemLeadingEdge * viewport;
+      if (top > 0 && top < band) push = math.min(push, top - band);
+    }
+    final colors = AppColors.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Transform.translate(
+        offset: Offset(0, push),
+        child: Container(
+          key: const ValueKey('sticky-month-header'),
+          height: band,
+          alignment: Alignment.centerLeft,
+          // The card fill with a hairline edge: reads as a pinned strip
+          // over the rows rather than a gap cut out of the backdrop.
+          decoration: BoxDecoration(
+            color: (colors.cardFill ?? scheme.surface).withValues(alpha: 0.97),
+            border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
+          ),
+          child: _MonthHeader(
+            month: month,
+            txs: data.groups[month]!,
+            compact: true,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
@@ -623,11 +714,34 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ? const <PairSuggestion>[]
         : _pairSuggestions(finance, allPending, allConfirmed);
 
+    final hasFilterChips =
+        activeAccount != null ||
+        _monthFilter != null ||
+        _rangeFilter != null ||
+        _categoryFilter.isNotEmpty ||
+        _groupFilter.isNotEmpty ||
+        _budgetFilter.isNotEmpty;
+
+    // The cards and bars above the list fold in and out (AnimatedPresence)
+    // so the list slides instead of jumping. Each child is built only while
+    // it shows: once hidden, the switcher keeps the last built copy for the
+    // fold-out, so no card is ever built from an empty list.
     return Column(
       children: [
-        if (spamSuspects.isNotEmpty) _SuspectedSpamCard(suspects: spamSuspects),
-        if (pending.isNotEmpty)
-          _PendingReviewCard(pending: pending, suggestions: suggestions),
+        AnimatedPresence(
+          key: const ValueKey('spam-card'),
+          visible: spamSuspects.isNotEmpty,
+          child: spamSuspects.isEmpty
+              ? const SizedBox.shrink()
+              : _SuspectedSpamCard(suspects: spamSuspects),
+        ),
+        AnimatedPresence(
+          key: const ValueKey('pending-card'),
+          visible: pending.isNotEmpty,
+          child: pending.isEmpty
+              ? const SizedBox.shrink()
+              : _PendingReviewCard(pending: pending, suggestions: suggestions),
+        ),
         _SearchAndFilterBar(
           searchCtrl: _searchCtrl,
           onSearch: _onSearchChanged,
@@ -644,46 +758,54 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           onOpenFilters: _openFilterSheet,
           onExport: _exportCsv,
         ),
-        if (activeAccount != null ||
-            _monthFilter != null ||
-            _rangeFilter != null ||
-            _categoryFilter.isNotEmpty ||
-            _groupFilter.isNotEmpty ||
-            _budgetFilter.isNotEmpty)
-          // Single-line, horizontally scrollable strip of COMPACT chips —
-          // a wrapping layout grew a row per filter and buried the list
-          // when several were active.
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  for (final chip in _activeFilterChips(finance, activeAccount))
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: chip,
+        AnimatedPresence(
+          key: const ValueKey('filter-chips'),
+          visible: hasFilterChips,
+          child: !hasFilterChips
+              ? const SizedBox.shrink()
+              // Single-line, horizontally scrollable strip of COMPACT chips —
+              // a wrapping layout grew a row per filter and buried the list
+              // when several were active.
+              : Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        for (final chip in _activeFilterChips(
+                          finance,
+                          activeAccount,
+                        ))
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: chip,
+                          ),
+                      ],
                     ),
-                ],
-              ),
-            ),
-          ),
-        if (_selecting)
-          _SelectionBar(
-            count: _selected.length,
-            onSelectAll: () => setState(
-              () => _selected.addAll([for (final t in filtered) t.id]),
-            ),
-            onCategory: () => _bulkCategory(filtered),
-            onAccount: _bulkAccount,
-            onDateTime: _bulkDateTime,
-            // Pairing is a two-row concept — the button only exists at
-            // exactly two selected.
-            onPair: _selected.length == 2 ? _bulkPair : null,
-            onDelete: _bulkDelete,
-            onClose: () => setState(_selected.clear),
-          ),
+                  ),
+                ),
+        ),
+        AnimatedPresence(
+          key: const ValueKey('selection-bar'),
+          visible: _selecting,
+          child: !_selecting
+              ? const SizedBox.shrink()
+              : _SelectionBar(
+                  count: _selected.length,
+                  onSelectAll: () => setState(
+                    () => _selected.addAll([for (final t in filtered) t.id]),
+                  ),
+                  onCategory: () => _bulkCategory(filtered),
+                  onAccount: _bulkAccount,
+                  onDateTime: _bulkDateTime,
+                  // Pairing is a two-row concept — the button only exists at
+                  // exactly two selected.
+                  onPair: _selected.length == 2 ? _bulkPair : null,
+                  onDelete: _bulkDelete,
+                  onClose: () => setState(_selected.clear),
+                ),
+        ),
         Expanded(
           child: PageView(
             controller: _pageCtrl,
@@ -716,44 +838,50 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           // through a few frames shorter than the text.
           ? Center(
               child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      allConfirmed.isEmpty
-                          ? 'No transactions yet.\nTap + to add one.'
-                          : 'Nothing matches your search/filters.',
-                      textAlign: TextAlign.center,
-                    ),
+                child: allConfirmed.isEmpty
+                    ? EmptyState(
+                        icon: Icons.receipt_long_outlined,
+                        message: 'No transactions yet.',
+                        actionLabel: 'Add transaction',
+                        onAction: () => showAddTransactionSheet(context),
+                      )
                     // Something is hiding every row (a chip may be
                     // scrolled out of view) — offer the way out here.
-                    if (allConfirmed.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      TextButton.icon(
-                        icon: const Icon(Icons.filter_alt_off, size: 18),
-                        label: const Text('Clear search & filters'),
-                        onPressed: () {
-                          _searchDebounce?.cancel();
-                          _searchCtrl.clear();
-                          setState(() {
-                            _search = '';
-                            _filter = _Filter.all;
-                            _categoryFilter.clear();
-                            _groupFilter.clear();
-                            _budgetFilter.clear();
-                            _minAmount = null;
-                            _maxAmount = null;
-                            _accountId = null;
-                            _monthFilter = null;
-                            _rangeFilter = null;
-                          });
-                          // A reset is a jump, not a sideways step.
-                          if (_pageCtrl.hasClients) _pageCtrl.jumpToPage(0);
-                        },
+                    // EmptyState's filled button would outweigh a reset,
+                    // so the quieter text button stays below it.
+                    : Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const EmptyState(
+                            icon: Icons.search_off,
+                            message: 'Nothing matches your search/filters.',
+                          ),
+                          TextButton.icon(
+                            icon: const Icon(Icons.filter_alt_off, size: 18),
+                            label: const Text('Clear search & filters'),
+                            onPressed: () {
+                              _searchDebounce?.cancel();
+                              _searchCtrl.clear();
+                              setState(() {
+                                _search = '';
+                                _filter = _Filter.all;
+                                _categoryFilter.clear();
+                                _groupFilter.clear();
+                                _budgetFilter.clear();
+                                _minAmount = null;
+                                _maxAmount = null;
+                                _accountId = null;
+                                _monthFilter = null;
+                                _rangeFilter = null;
+                              });
+                              // A reset is a jump, not a sideways step.
+                              if (_pageCtrl.hasClients) {
+                                _pageCtrl.jumpToPage(0);
+                              }
+                            },
+                          ),
+                        ],
                       ),
-                    ],
-                  ],
-                ),
               ),
             )
           : Stack(
@@ -782,7 +910,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               onSelectMonth: () => _selectMonth(month),
                             )
                           : TransactionTile(
-                              tx: tx!,
+                              // Keyed by row: a search or sort hands this
+                              // slot another transaction, whose tint must
+                              // not ease over from the previous row's.
+                              key: ValueKey(tx!.id),
+                              tx: tx,
                               selectionMode: _selecting,
                               selected: _selected.contains(tx.id),
                               onToggleSelect: () => _toggleSelect(tx.id),
@@ -790,19 +922,53 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     },
                   ),
                 ),
+                // Sticky month header: names the month of the top-most row
+                // once its own header has scrolled away. Listens to the
+                // list's positions directly, so scrolling never rebuilds
+                // the screen for it.
+                //
+                // It ignores touches, so a drag starting on it still
+                // scrolls the list, and TalkBack reads the real headers
+                // instead. The next month's header pushes it up and out,
+                // so it never names a month whose rows are not beneath it.
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: ExcludeSemantics(
+                      child: LayoutBuilder(
+                        builder: (context, box) => ListenableBuilder(
+                          listenable: Listenable.merge([
+                            _listPositions[f]!.itemPositions,
+                            _jumping,
+                          ]),
+                          builder: (context, _) =>
+                              _stickyBand(context, data, f, box.maxHeight),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
                 // With a month or range filter the list holds one
                 // month (or a few) — nothing worth jumping between.
+                // Painted after the sticky header and inside the 52dp gutter
+                // _MonthHeader keeps clear on its right, so both stay usable
+                // at the same top offset.
                 if (_monthFilter == null && _rangeFilter == null)
                   Positioned(
                     right: 4,
                     top: 8,
                     child: AnimatedSlide(
                       offset: _jumpVisible ? Offset.zero : const Offset(1.4, 0),
-                      duration: const Duration(milliseconds: 250),
+                      duration: motionDuration(
+                        context,
+                        const Duration(milliseconds: 250),
+                      ),
                       curve: Curves.easeOut,
                       child: AnimatedOpacity(
                         opacity: _jumpVisible ? 1 : 0,
-                        duration: const Duration(milliseconds: 250),
+                        duration: motionDuration(
+                          context,
+                          const Duration(milliseconds: 250),
+                        ),
                         child: IgnorePointer(
                           ignoring: !_jumpVisible,
                           child: _JumpControls(
@@ -876,6 +1042,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// sheet offers only categories whose type appears in the selection, and
   /// the provider applies each one to matching-type rows only.
   Future<void> _bulkCategory(List<Tx> filtered) async {
+    // The selection bar keeps taking taps while it folds away.
+    if (_selected.isEmpty) return;
     final finance = context.read<FinanceProvider>();
     final selectedTxs = [
       for (final t in filtered)
@@ -888,6 +1056,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     ];
     final picked = await showModalBottomSheet<TxCategory>(
       context: context,
+      useSafeArea: true,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
         child: SingleChildScrollView(
@@ -946,6 +1115,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   Future<void> _bulkAccount() async {
+    if (_selected.isEmpty) return;
     final finance = context.read<FinanceProvider>();
     // Open accounts only — bulk-assigning rows INTO a closed account is
     // always a mistake; existing history on closed accounts is untouched.
@@ -987,6 +1157,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   Future<void> _bulkDateTime() async {
+    if (_selected.isEmpty) return;
     final date = await showDatePicker(
       context: context,
       initialDate: DateTime.now(),
@@ -1128,6 +1299,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       for (final t in _activeData.groups[month] ?? const <Tx>[]) t.id,
     ];
     if (ids.isEmpty) return;
+    // Only this branch can start selection mode: clearing needs a
+    // selection to exist already.
+    if (_selected.isEmpty) Haptics.tick();
     setState(() {
       if (ids.every(_selected.contains)) {
         _selected.removeAll(ids);
@@ -1803,14 +1977,41 @@ class _MonthHeader extends StatelessWidget {
   /// Selects (or clears) every visible row of this month.
   final VoidCallback? onSelectMonth;
 
+  /// The sticky copy: tight padding so it covers as few rows as it can.
+  final bool compact;
+
   const _MonthHeader({
     required this.month,
     required this.txs,
     this.onSelectMonth,
+    this.compact = false,
   });
+
+  /// Totals per month list: the sticky copy rebuilds on every scroll frame,
+  /// and the lists are rebuilt (new keys) whenever the rows change.
+  static final _totals = Expando<(double, double)>();
 
   @override
   Widget build(BuildContext context) {
+    final (income, expense) = _totals[txs] ??= _sum();
+    final scheme = Theme.of(context).colorScheme;
+
+    final now = DateTime.now();
+    final label = (month.year == now.year)
+        ? DateFormat('MMMM').format(month).toUpperCase()
+        : DateFormat('MMMM yyyy').format(month).toUpperCase();
+
+    return Padding(
+      // Right padding matches the jump-controls column width so the label
+      // never slides under the nav pill.
+      padding: compact
+          ? const EdgeInsets.fromLTRB(20, 0, 52, 0)
+          : const EdgeInsets.fromLTRB(20, 24, 52, 6),
+      child: _row(context, scheme, label, income, expense),
+    );
+  }
+
+  (double, double) _sum() {
     // Own-account transfers are audit entries — the header totals mirror the
     // dashboard's income/expense figures, which exclude them.
     final income = txs
@@ -1825,95 +2026,85 @@ class _MonthHeader extends StatelessWidget {
         // spendAmount: group splits count only the user's own share here,
         // matching the dashboard's Spent card.
         .fold(0.0, (s, t) => s + t.spendAmount);
-    final scheme = Theme.of(context).colorScheme;
+    return (income, expense);
+  }
 
-    final now = DateTime.now();
-    final label = (month.year == now.year)
-        ? DateFormat('MMMM').format(month).toUpperCase()
-        : DateFormat('MMMM yyyy').format(month).toUpperCase();
-
-    return Padding(
-      // Right padding matches the jump-controls column width so the label
-      // never slides under the nav pill.
-      padding: const EdgeInsets.fromLTRB(20, 24, 52, 6),
-      child: Row(
-        children: [
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              // accentTextColor, not scheme.primary: same 4.5:1 fix as
-              // UppercaseSectionHeader — the raw accent read at ~2.5:1 on
-              // the light surface (the amounts beside it were already
-              // bumped for exactly this).
-              style: TextStyle(
-                color: accentTextColor(context),
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.4,
-              ),
+  Widget _row(
+    BuildContext context,
+    ColorScheme scheme,
+    String label,
+    double income,
+    double expense,
+  ) => Row(
+    children: [
+      Flexible(
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          // accentTextColor, not scheme.primary: same 4.5:1 fix as
+          // UppercaseSectionHeader — the raw accent read at ~2.5:1 on
+          // the light surface (the amounts beside it were already
+          // bumped for exactly this).
+          style: TextStyle(
+            color: accentTextColor(context),
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 1.4,
+          ),
+        ),
+      ),
+      // Beside the name, not the amounts: it acts on the month, and next
+      // to the totals it read as an amount action.
+      if (onSelectMonth != null)
+        IconButton(
+          tooltip: 'Select month',
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          constraints: const BoxConstraints(),
+          icon: Icon(Icons.checklist, size: 18, color: scheme.onSurfaceVariant),
+          onPressed: onSelectMonth,
+        ),
+      const Spacer(),
+      // Width-capped as one unit: at large text scales the pair shrinks
+      // to fit instead of overflowing past the jump controls.
+      if (income > 0 || expense > 0)
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 160),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 12/w700: at 11/w600 these saturated colours fell below
+                // AA contrast on the light surface.
+                if (income > 0)
+                  Text(
+                    context.select<SettingsProvider, bool>((s) => s.hideIncome)
+                        ? '+$kMaskedAmount'
+                        : '+${fmtMoneyCompact(income)}',
+                    style: TextStyle(
+                      color: AppColors.of(context).green,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                if (income > 0 && expense > 0) const SizedBox(width: 6),
+                if (expense > 0)
+                  Text(
+                    '−${fmtMoneyCompact(expense)}',
+                    style: TextStyle(
+                      color: scheme.error,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
             ),
           ),
-          // Beside the name, not the amounts: it acts on the month, and next
-          // to the totals it read as an amount action.
-          if (onSelectMonth != null)
-            IconButton(
-              tooltip: 'Select month',
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              constraints: const BoxConstraints(),
-              icon: Icon(
-                Icons.checklist,
-                size: 18,
-                color: scheme.onSurfaceVariant,
-              ),
-              onPressed: onSelectMonth,
-            ),
-          const Spacer(),
-          // Width-capped as one unit: at large text scales the pair shrinks
-          // to fit instead of overflowing past the jump controls.
-          if (income > 0 || expense > 0)
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 160),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // 12/w700: at 11/w600 these saturated colours fell below
-                    // AA contrast on the light surface.
-                    if (income > 0)
-                      Text(
-                        context.select<SettingsProvider, bool>(
-                              (s) => s.hideIncome,
-                            )
-                            ? '+$kMaskedAmount'
-                            : '+${fmtMoneyCompact(income)}',
-                        style: TextStyle(
-                          color: AppColors.of(context).green,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                        ),
-                      ),
-                    if (income > 0 && expense > 0) const SizedBox(width: 6),
-                    if (expense > 0)
-                      Text(
-                        '−${fmtMoneyCompact(expense)}',
-                        style: TextStyle(
-                          color: scheme.error,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
+        ),
+    ],
+  );
 }
 
 class _JumpControls extends StatelessWidget {

@@ -32,6 +32,7 @@ import '../widgets/monthly_bar_chart.dart';
 import '../widgets/spend_comparison_cards.dart';
 import '../widgets/transaction_tile.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
+import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
 
 /// Which slice of the dashboard is on screen. The page grew to fifteen
@@ -474,12 +475,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'No transactions yet. Import your bank SMS with the '
-                  'message icon in the top bar, or add one by hand with '
-                  'the + button below.',
+                  'No transactions yet. Import your bank SMS, or add one by '
+                  'hand.',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: scheme.onSurfaceVariant,
                   ),
+                ),
+                const SizedBox(height: 12),
+                // The two ways in, as buttons rather than directions to
+                // icons elsewhere on the screen.
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    if (AppNav.instance.canImportSms)
+                      FilledButton.icon(
+                        onPressed: () => AppNav.instance.importSms(context),
+                        icon: const Icon(Icons.sms_outlined),
+                        label: const Text('Import SMS'),
+                      ),
+                    OutlinedButton.icon(
+                      onPressed: () => showAddTransactionSheet(context),
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add transaction'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -565,17 +585,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       // Monthly budget progress — only when a cap is set. Uses the selected
       // month's spend so browsing past months shows their usage too.
+      // Keyed: the first-run card above comes and goes, and the list
+      // matches unkeyed children by position.
       Builder(
+        key: const ValueKey('presence-monthly-budget'),
         builder: (context) {
           final budget = context.select<SettingsProvider, double>(
             (s) => s.monthlyBudget,
           );
-          if (budget <= 0 || _yearMode) return const SizedBox.shrink();
-          return Padding(
-            padding: const EdgeInsets.only(top: 16),
-            child: _BudgetCard(
-              spent: finance.budgetSpentInMonth(_month),
-              cap: budget,
+          return AnimatedPresence(
+            visible: budget > 0 && !_yearMode,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: _BudgetCard(
+                spent: finance.budgetSpentInMonth(_month),
+                cap: budget,
+              ),
             ),
           );
         },
@@ -583,53 +608,64 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // Custom spend limits, one compact progress row each — full ring
       // cards would dominate the page with several budgets. Budgets are
       // monthly, so the Year view skips them.
-      if (finance.budgets.isNotEmpty && !_yearMode) ...[
-        const SizedBox(height: 24),
-        const _SectionHeading(
-          'Budgets',
-          tip:
-              '"Only these" budgets count the picked categories; "All '
-              'except" budgets count everything else. Same colours as the '
-              'monthly budget.',
-          link: InfoLink(
-            prompt: 'Need another limit?',
-            label: 'Add or edit budgets',
-            onTap: goCockpitBudgets,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: Padding(
-            // all(16): the dashboard's section cards had six different
-            // inner paddings — edges never lined up while scrolling.
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                for (final b in finance.budgets)
-                  _SpendBudgetRow(
-                    name: b.name,
-                    spent: finance.budgetSpentFor(b, _month),
-                    limit: b.limit,
-                    // Detail sheet (ring + pie + trend); the transactions
-                    // deep-link lives on a button inside it.
-                    onTap: () => showBudgetDetailSheet(
-                      context,
-                      b,
-                      _month,
-                      onViewTransactions: widget.onViewBudget,
-                      onViewCategory: widget.onViewCategory,
-                    ),
-                  ),
-              ],
+      // The sections the Year view drops fold away (and back) rather than
+      // popping, so the switch reads as one change.
+      AnimatedPresence(
+        key: const ValueKey('presence-budgets'),
+        visible: finance.budgets.isNotEmpty && !_yearMode,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 24),
+            const _SectionHeading(
+              'Budgets',
+              tip:
+                  '"Only these" budgets count the picked categories; "All '
+                  'except" budgets count everything else. Same colours as the '
+                  'monthly budget.',
+              link: InfoLink(
+                prompt: 'Need another limit?',
+                label: 'Add or edit budgets',
+                onTap: goCockpitBudgets,
+              ),
             ),
-          ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                // all(16): the dashboard's section cards had six different
+                // inner paddings — edges never lined up while scrolling.
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    for (final b in finance.budgets)
+                      _SpendBudgetRow(
+                        name: b.name,
+                        spent: finance.budgetSpentFor(b, _month),
+                        limit: b.limit,
+                        // Detail sheet (ring + pie + trend); the transactions
+                        // deep-link lives on a button inside it.
+                        onTap: () => showBudgetDetailSheet(
+                          context,
+                          b,
+                          _month,
+                          onViewTransactions: widget.onViewBudget,
+                          onViewCategory: widget.onViewCategory,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
       // Overview keeps the highest-signal sections even though Trends and
       // Breakdown also carry them: it is the landing tab, and a glance
       // there should not require a tab switch.
-      if (!_yearMode)
-        CategoryComparisonCard(
+      AnimatedPresence(
+        key: const ValueKey('presence-category-comparison'),
+        visible: !_yearMode,
+        child: CategoryComparisonCard(
           comparison: _comparison(finance),
           onViewCategory: widget.onViewCategory == null
               ? null
@@ -638,17 +674,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
           onSortChanged: (s) =>
               context.read<SettingsProvider>().setCategorySort(s),
         ),
-      if (monthExpense > 0 && !_yearMode) ...[
-        const SizedBox(height: 24),
-        const _SectionHeading('Spending heatmap', tip: _heatmapTip),
-        const SizedBox(height: 8),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: SpendingHeatmap(month: _month),
-          ),
+      ),
+      AnimatedPresence(
+        key: const ValueKey('presence-heatmap'),
+        visible: monthExpense > 0 && !_yearMode,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 24),
+            const _SectionHeading('Spending heatmap', tip: _heatmapTip),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: SpendingHeatmap(month: _month),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
       if (recent.isNotEmpty) ...[
         const SizedBox(height: 24),
         _SectionHeading(
@@ -739,6 +783,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           padding: const EdgeInsets.all(16),
           child: CategoryDonutChart(
             data: byCategory,
+            emptyText: _yearMode
+                ? 'No spending this year'
+                : 'No spending this month',
             onCategoryTap: widget.onViewCategory == null || _yearMode
                 ? null
                 : (id) => widget.onViewCategory!(id, _month),
@@ -1359,6 +1406,7 @@ class _UpcomingCard extends StatelessWidget {
     final finance = context.read<FinanceProvider>();
     showModalBottomSheet<void>(
       context: context,
+      useSafeArea: true,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
         child: Column(
@@ -1430,6 +1478,7 @@ class _UpcomingCard extends StatelessWidget {
     final status = cardBillStatus(a, now)!;
     showModalBottomSheet<void>(
       context: context,
+      useSafeArea: true,
       showDragHandle: true,
       // Four tiles can outgrow the sheet's default max height on short
       // screens — scroll instead of clipping.

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'motion.dart';
+
 /// Animated collapse/expand for a section body: a pure height reveal.
 ///
 /// Deliberately NOT an AnimatedCrossFade — fading content in while the
@@ -21,7 +23,7 @@ class AnimatedFold extends StatelessWidget {
       child: AnimatedAlign(
         alignment: Alignment.topCenter,
         heightFactor: collapsed ? 0 : 1,
-        duration: duration,
+        duration: motionDuration(context, duration),
         curve: Curves.easeOutCubic,
         child: child,
       ),

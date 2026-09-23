@@ -32,11 +32,25 @@ Future<void> showBalanceBreakdownSheet(
         child: FrostedPanel(
           radius: BorderRadius.circular(28),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+            padding: const EdgeInsets.fromLTRB(24, 10, 24, 24),
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  // The handle sits on the floating panel (as on the month
+                  // picker): the framework's would float over the dimmed
+                  // backdrop above it.
+                  Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Theme.of(
+                        ctx,
+                      ).colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
                   Text(
                     'Balance breakdown',
                     // titleLarge: every other bottom sheet titles itself with

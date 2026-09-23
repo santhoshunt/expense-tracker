@@ -165,7 +165,9 @@ void main() {
     await tester.pump();
     await expectTip(tester, 'Test a message', 'Shows what the parser does');
 
-    await tester.tap(find.text('New import rule'));
+    // By its spoken label: the scroll above may have folded the FAB to its
+    // icon, which drops the visible text but keeps the label.
+    await tester.tap(find.bySemanticsLabel('New import rule'));
     await pumpThrough(tester);
     expect(
       find.text(
@@ -232,7 +234,7 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.tap(find.text('Add budget'));
+    await tester.tap(find.text('New budget'));
     await pumpThrough(tester);
     await expectTip(
       tester,

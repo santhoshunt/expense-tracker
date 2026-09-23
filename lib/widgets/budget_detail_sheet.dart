@@ -6,7 +6,9 @@ import '../models/spend_budget.dart';
 import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
+import '../utils/haptics.dart';
 import 'category_donut_chart.dart';
+import 'chart_popup.dart';
 import 'info_tip.dart';
 import 'motion.dart';
 
@@ -100,6 +102,9 @@ Future<void> showBudgetDetailSheet(
                   Row(
                     children: [
                       RingProgress(
+                        // Sweeps up once as the sheet opens; stepping months
+                        // then eases between values.
+                        sweepIn: true,
                         value: pct,
                         color: color,
                         trackColor: color.withValues(alpha: 0.25),
@@ -204,7 +209,9 @@ Future<void> showBudgetDetailSheet(
 
 /// Six vertical bars of budget spend, tinted by the same green/orange/error
 /// thresholds the budget rows use, with a subtle line where the limit sits.
-class _BudgetTrendBars extends StatelessWidget {
+/// Stepping months eases the bars to their new heights. Tapping a bar lifts
+/// it, dims the rest and opens that month's spend against the limit.
+class _BudgetTrendBars extends StatefulWidget {
   final List<DateTime> months;
   final List<double> spent;
   final double limit;
@@ -216,10 +223,73 @@ class _BudgetTrendBars extends StatelessWidget {
   });
 
   @override
+  State<_BudgetTrendBars> createState() => _BudgetTrendBarsState();
+}
+
+class _BudgetTrendBarsState extends State<_BudgetTrendBars>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _select = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 180),
+  );
+  int? _selected;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _select.duration = motionDuration(
+      context,
+      const Duration(milliseconds: 180),
+    );
+  }
+
+  @override
+  void dispose() {
+    _select.dispose();
+    super.dispose();
+  }
+
+  Future<void> _open(BuildContext cell, int i, double heightFactor) async {
+    final spent = widget.spent[i];
+    final limit = widget.limit;
+    final pct = limit == 0 ? 0.0 : spent / limit;
+    final box = cell.findRenderObject()! as RenderBox;
+    Haptics.tick();
+    // A different bar starts from flat, not from the last one's lift.
+    if (_selected != i) _select.value = 0;
+    setState(() => _selected = i);
+    _select.forward();
+    await showAnchoredBubble(
+      context,
+      anchor: chartAnchor(
+        cell,
+        Offset(box.size.width / 2, box.size.height * (1 - heightFactor)),
+      ),
+      maxWidth: kChartPopupWidth,
+      content: (_) => ChartPopup(
+        title: DateFormat('MMMM yyyy').format(widget.months[i]),
+        rows: [('Spent', fmtMoney(spent)), ('Limit', fmtMoney(limit))],
+        footnote: limit == 0 ? null : '${(pct * 100).round()}% of limit',
+        footnoteColor: limit == 0 ? null : budgetColor(context, pct),
+        host: context,
+      ),
+    );
+    if (!mounted || _selected != i) return;
+    await _select.reverse();
+    if (mounted && _selected == i && _select.value == 0) {
+      setState(() => _selected = null);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final months = widget.months;
+    final spent = widget.spent;
+    final limit = widget.limit;
     final scheme = Theme.of(context).colorScheme;
     final maxVal = [...spent, limit].fold(0.0, (m, v) => v > m ? v : m);
     final mmm = DateFormat('MMM');
+    final morph = motionDuration(context, const Duration(milliseconds: 450));
 
     Color barColor(double v) {
       final pct = limit == 0 ? 0.0 : v / limit;
@@ -242,6 +312,52 @@ class _BudgetTrendBars extends StatelessWidget {
       ],
     );
 
+    Widget bar(int i) {
+      final heightFactor = maxVal == 0
+          ? 0.0
+          : (spent[i] / maxVal).clamp(0.02, 1.0);
+      return Builder(
+        // The whole column is the target: a short bar is too small to hit.
+        builder: (cell) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _open(cell, i, heightFactor),
+          child: AnimatedBuilder(
+            animation: _select,
+            builder: (context, child) {
+              final t = Curves.easeOutCubic.transform(_select.value);
+              final isSelected = _selected == i;
+              return Opacity(
+                opacity: _selected == null || isSelected ? 1 : 1 - 0.7 * t,
+                child: Transform.translate(
+                  offset: Offset(0, isSelected ? -4 * t : 0),
+                  child: child,
+                ),
+              );
+            },
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: AnimatedFractionallySizedBox(
+                duration: morph,
+                curve: Curves.easeOutCubic,
+                heightFactor: heightFactor,
+                child: AnimatedContainer(
+                  duration: morph,
+                  decoration: BoxDecoration(
+                    color: spent[i] == 0
+                        ? scheme.surfaceContainerHigh
+                        : barColor(spent[i]),
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(4),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return SizedBox(
       height: 120,
       child: Column(
@@ -256,45 +372,31 @@ class _BudgetTrendBars extends StatelessWidget {
           Expanded(
             child: Stack(
               children: [
-                Positioned.fill(
-                  child: slots(
-                    (i) => Align(
-                      alignment: Alignment.bottomCenter,
-                      child: FractionallySizedBox(
-                        heightFactor: maxVal == 0
-                            ? 0
-                            : (spent[i] / maxVal).clamp(0.02, 1.0),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: spent[i] == 0
-                                ? scheme.surfaceContainerHigh
-                                : barColor(spent[i]),
-                            borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(4),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+                Positioned.fill(child: slots(bar)),
                 // The limit, on the same scale as the bars ([maxVal]
-                // includes it, so the line always fits).
+                // includes it, so the line always fits). It ignores taps so
+                // the bars beneath it stay tappable.
                 if (limit > 0 && maxVal > 0)
                   Positioned.fill(
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      child: FractionallySizedBox(
-                        key: const ValueKey('budget-limit-line'),
-                        heightFactor: limit / maxVal,
-                        widthFactor: 1,
+                    child: IgnorePointer(
+                      child: Align(
                         alignment: Alignment.bottomCenter,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            border: Border(
-                              top: BorderSide(
-                                color: scheme.onSurfaceVariant.withValues(
-                                  alpha: 0.7,
+                        // Eases with the bars, so a bar under the limit
+                        // never pokes above the line mid-step.
+                        child: AnimatedFractionallySizedBox(
+                          key: const ValueKey('budget-limit-line'),
+                          duration: morph,
+                          curve: Curves.easeOutCubic,
+                          heightFactor: limit / maxVal,
+                          widthFactor: 1,
+                          alignment: Alignment.bottomCenter,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              border: Border(
+                                top: BorderSide(
+                                  color: scheme.onSurfaceVariant.withValues(
+                                    alpha: 0.7,
+                                  ),
                                 ),
                               ),
                             ),

@@ -30,6 +30,17 @@ typedef CardPaymentResult = ({
   String? prevPaidMonth,
 });
 
+/// What [FinanceProvider.deleteBudget] removed, so a snackbar Undo can hand
+/// it to [FinanceProvider.restoreBudget]: the budget, its list position, and
+/// the fired-alert marker's prefs key with its level (null when no alert had
+/// fired this month).
+typedef DeletedBudget = ({
+  SpendBudget budget,
+  int index,
+  String alertKey,
+  int? alertLevel,
+});
+
 /// Income / expense / savings totals for one month, plus the per-category
 /// expense breakdown and the transfer flows — all produced in a single pass.
 class _MonthTotals {
@@ -2021,10 +2032,47 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(budgets: true);
   }
 
-  Future<void> deleteBudget(String id) async {
+  /// Returns what [restoreBudget] needs to undo the delete, or null when no
+  /// budget had [id]. The fired-alert marker is captured as its exact key and
+  /// level so the undo can put back the same record, not a recomputed one.
+  Future<DeletedBudget?> deleteBudget(String id) async {
+    // Gone from the list before any await: a budget still listed with its
+    // marker already cleared would let the budget monitor re-send its
+    // alerts, and a second tap in the gap would find nothing to undo.
+    final i = _budgets.indexWhere((b) => b.id == id);
+    if (i == -1) return null;
+    final budget = _budgets.removeAt(i);
+    notifyListeners();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(customBudgetAlertKey(id, DateTime.now()));
-    _budgets.removeWhere((b) => b.id == id);
+    final alertKey = customBudgetAlertKey(id, DateTime.now());
+    final alertLevel = prefs.getInt(alertKey);
+    await prefs.remove(alertKey);
+    await _persist(budgets: true);
+    return (
+      budget: budget,
+      index: i,
+      alertKey: alertKey,
+      alertLevel: alertLevel,
+    );
+  }
+
+  /// The undo half of [deleteBudget]: the budget returns with its id at its
+  /// old list position, and its fired-alert marker comes back so the 80/90/
+  /// over alerts already sent this month do not fire a second time.
+  Future<void> restoreBudget(DeletedBudget d) async {
+    if (_budgets.any((b) => b.id == d.budget.id)) return;
+    // Marker BEFORE the budget reappears: the budget monitor is a provider
+    // listener, and seeing the budget without its marker would re-fire the
+    // alerts. A marker from a month that has since ended is dropped rather
+    // than written, since the new month's alerts have not fired yet.
+    if (d.alertLevel != null &&
+        d.alertKey == customBudgetAlertKey(d.budget.id, DateTime.now())) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(d.alertKey, d.alertLevel!);
+    }
+    // Re-check after the awaits: a same-id budget may have landed in the gap.
+    if (_budgets.any((b) => b.id == d.budget.id)) return;
+    _budgets.insert(d.index.clamp(0, _budgets.length), d.budget);
     notifyListeners();
     await _persist(budgets: true);
   }
@@ -2104,10 +2152,15 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(reminders: true);
   }
 
-  /// Undo half of [deleteReminder]: puts the captured reminder back.
-  Future<void> restoreReminder(Reminder r) async {
+  /// Undo half of [deleteReminder]: puts the captured reminder back, at
+  /// [index] (its old list position) when given, otherwise at the end.
+  Future<void> restoreReminder(Reminder r, {int? index}) async {
     if (_reminders.any((x) => x.id == r.id)) return;
-    _reminders.add(r);
+    if (index == null) {
+      _reminders.add(r);
+    } else {
+      _reminders.insert(index.clamp(0, _reminders.length), r);
+    }
     notifyListeners();
     await _persist(reminders: true);
   }

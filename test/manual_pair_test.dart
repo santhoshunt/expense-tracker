@@ -72,7 +72,8 @@ void main() {
     expect(pairButton, findsNothing, reason: 'one selected');
 
     await tester.tap(find.textContaining('cardack'));
-    await tester.pump();
+    // Past the selection bar's fold-in, so its buttons are tappable.
+    await tester.pump(const Duration(milliseconds: 300));
     expect(pairButton, findsOneWidget);
 
     await tester.tap(pairButton);
@@ -116,7 +117,8 @@ void main() {
     await tester.longPress(find.textContaining('billdebit'));
     await tester.pump();
     await tester.tap(find.textContaining('coffeerun'));
-    await tester.pump();
+    // Past the selection bar's fold-in, so its buttons are tappable.
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(pairButton);
     await tester.pump(const Duration(milliseconds: 400));
 

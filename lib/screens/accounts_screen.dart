@@ -12,6 +12,7 @@ import '../utils/format.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/balance_breakdown.dart';
 import '../widgets/dispose_scope.dart';
+import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
@@ -202,19 +203,17 @@ class _AccountsScreenState extends State<AccountsScreen> {
     return ColoredBox(
       color: Colors.transparent,
       child: accounts.isEmpty && closed.isEmpty
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32),
-                child: Text(
-                  t != null
-                      ? 'No ${t.label.toLowerCase()} accounts yet.'
-                      : 'No accounts yet.\n\nAccounts are detected '
-                            'automatically from the account and card '
-                            'numbers in your bank SMS. Import messages '
-                            'to populate them.',
-                  textAlign: TextAlign.center,
-                ),
-              ),
+          ? EmptyState(
+              icon: Icons.account_balance_wallet_outlined,
+              message: t != null
+                  ? 'No ${t.label.toLowerCase()} accounts yet.'
+                  : 'No accounts yet.\n\nAccounts are detected '
+                        'automatically from the account and card '
+                        'numbers in your bank SMS. Import messages '
+                        'to populate them.',
+              // Same words as the floating button on this tab.
+              actionLabel: 'New account',
+              onAction: () => showAddAccountDialog(context),
             )
           : Builder(
               builder: (context) {
