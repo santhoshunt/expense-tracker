@@ -18,6 +18,10 @@ class PaletteColors {
   /// Applied when the theme is picked; the user can change it afterwards.
   final Color accent;
 
+  /// Near-black palettes: cards sit too close to the background to read as
+  /// separate shapes, so they get a [border] hairline like light mode's.
+  final bool outlineCards;
+
   const PaletteColors({
     required this.bg,
     required this.surface,
@@ -27,6 +31,7 @@ class PaletteColors {
     required this.textSecondary,
     required this.textMuted,
     required this.accent,
+    this.outlineCards = false,
   });
 }
 
@@ -60,6 +65,7 @@ enum AppPalette {
       textSecondary: Color(0xFF8FB3B0),
       textMuted: Color(0xFF6F8F8C),
       accent: Color(0xFF00E5FF),
+      outlineCards: true,
     ),
   ),
   amoled(
@@ -67,13 +73,14 @@ enum AppPalette {
     'True black, saves battery',
     PaletteColors(
       bg: Color(0xFF000000),
-      surface: Color(0xFF0A0A0C),
-      surface2: Color(0xFF131317),
-      border: Color(0xFF24242A),
+      surface: Color(0xFF0E0E11),
+      surface2: Color(0xFF18181D),
+      border: Color(0xFF33333B),
       textPrimary: Color(0xFFFFFFFF),
       textSecondary: Color(0xFFA6A6B0),
       textMuted: Color(0xFF85858F),
       accent: FigmaPalette.primary,
+      outlineCards: true,
     ),
   ),
   nord(

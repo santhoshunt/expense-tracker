@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,6 +9,8 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/budget_widget_service.dart';
+import 'package:expense_tracker/utils/app_palettes.dart';
+import 'package:expense_tracker/utils/figma_palette.dart';
 
 /// The Android budget widget renders whatever [buildWidgetSnapshot] writes —
 /// these tests pin the snapshot's contents; the native side is display-only.
@@ -109,5 +112,32 @@ void main() {
     expect(decoded.single, containsPair('id', kOverallBudgetWidgetId));
     expect(decoded.single, contains('spent'));
     expect(decoded.single, contains('limit'));
+  });
+
+  test('the widget theme follows the dark palette and accent', () async {
+    final (_, s) = await loaded();
+    await s.setPalette(AppPalette.amoled);
+    await s.setAccent(FigmaPalette.green);
+
+    final dark = buildWidgetTheme(s, Brightness.dark);
+    expect(dark['surface'], AppPalette.amoled.colors.surface.toARGB32());
+    expect(dark['text'], AppPalette.amoled.colors.textPrimary.toARGB32());
+    expect(dark['accent'], FigmaPalette.green.toARGB32());
+
+    // System mode on a light phone, and forced light, use the light kit.
+    await s.setMode(ThemeMode.system);
+    expect(
+      buildWidgetTheme(s, Brightness.light)['surface'],
+      FigmaPaletteLight.surface.toARGB32(),
+    );
+    expect(
+      buildWidgetTheme(s, Brightness.dark)['surface'],
+      AppPalette.amoled.colors.surface.toARGB32(),
+    );
+    await s.setMode(ThemeMode.light);
+    expect(
+      buildWidgetTheme(s, Brightness.dark)['text'],
+      FigmaPaletteLight.textPrimary.toARGB32(),
+    );
   });
 }

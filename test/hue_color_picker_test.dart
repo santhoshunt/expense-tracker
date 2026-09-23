@@ -8,7 +8,7 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/screens/category_management.dart';
 import 'package:expense_tracker/utils/contrast.dart';
 import 'package:expense_tracker/utils/figma_palette.dart';
-import 'package:expense_tracker/widgets/category_color_picker.dart';
+import 'package:expense_tracker/widgets/hue_color_picker.dart';
 
 /// The category colour palette and its hue-family picker.
 void main() {
@@ -33,17 +33,17 @@ void main() {
       expect(
         contrastRatio(c, FigmaPalette.surface),
         greaterThanOrEqualTo(3),
-        reason: categoryColorName(c),
+        reason: hueColorName(c),
       );
     }
   });
 
   test('names follow the hue columns and tone rows', () {
-    expect(categoryColorName(kNoCategoryColor), 'None');
-    expect(categoryColorName(FigmaPalette.primary), 'Coral');
-    expect(categoryColorName(FigmaPalette.primaryLight), 'Coral, light');
-    expect(categoryColorName(kCategoryColorChoices.last), 'Rose, deep');
-    expect(categoryColorName(const Color(0xFF123456)), 'Custom');
+    expect(hueColorName(kNoCategoryColor), 'None');
+    expect(hueColorName(FigmaPalette.primary), 'Coral');
+    expect(hueColorName(FigmaPalette.primaryLight), 'Coral, light');
+    expect(hueColorName(kCategoryColorChoices.last), 'Rose, deep');
+    expect(hueColorName(const Color(0xFF123456)), 'Custom');
   });
 
   Future<List<Color>> pump(WidgetTester tester, Color initial) async {
@@ -55,7 +55,7 @@ void main() {
         home: Scaffold(
           body: AlertDialog(
             content: StatefulBuilder(
-              builder: (context, setState) => CategoryColorPicker(
+              builder: (context, setState) => HueColorPicker(
                 value: picked.isEmpty ? initial : picked.last,
                 onChanged: (c) => setState(() => picked.add(c)),
               ),
@@ -115,6 +115,61 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('New category'), findsOneWidget);
     expect(find.text('Colour · None'), findsOneWidget);
+  });
+
+  testWidgets('the accent picker offers the theme accent as "Theme"', (
+    tester,
+  ) async {
+    const themeAccent = Color(0xFF00E5FF);
+    final picked = <Color>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) => HueColorPicker(
+              title: 'Accent',
+              value: picked.isEmpty ? FigmaPalette.primary : picked.last,
+              onChanged: (c) => setState(() => picked.add(c)),
+              none: themeAccent,
+              noneLabel: 'Theme',
+              noneIsNeutral: false,
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(find.text('Accent · Coral'), findsOneWidget);
+
+    await tester.tap(find.bySemanticsLabel('Theme'));
+    await tester.pump();
+    expect(picked.last, themeAccent);
+    expect(find.text('Accent · Theme'), findsOneWidget);
+  });
+
+  testWidgets('a theme accent that is a palette colour selects only Theme', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: HueColorPicker(
+            value: FigmaPalette.primary,
+            onChanged: (_) {},
+            none: FigmaPalette.primary,
+            noneLabel: 'Theme',
+            noneIsNeutral: false,
+          ),
+        ),
+      ),
+    );
+    expect(
+      tester.getSemantics(find.bySemanticsLabel('Theme')),
+      isSemantics(isSelected: true),
+    );
+    expect(
+      tester.getSemantics(find.bySemanticsLabel('Coral')),
+      isSemantics(isSelected: false),
+    );
   });
 
   testWidgets('Custom opens the colour dialog', (tester) async {

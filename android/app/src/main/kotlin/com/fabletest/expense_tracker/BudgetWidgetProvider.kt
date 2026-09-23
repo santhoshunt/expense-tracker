@@ -6,10 +6,12 @@ import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
+import android.content.res.ColorStateList
+import android.os.Build
 import android.view.View
 import android.widget.RemoteViews
 import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * Home-screen budget widget. Pure display: the Flutter side computes every
@@ -30,11 +32,55 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
          * `flutter.` prefix and stores everything in this one file). */
         private const val FLUTTER_PREFS = "FlutterSharedPreferences"
         private const val DATA_KEY = "flutter.budget_widget_data_v1"
+        private const val THEME_KEY = "flutter.budget_widget_theme_v1"
 
-        // The app's dark palette (FigmaPalette) — RemoteViews can't read the
-        // Flutter theme, so the widget commits to the app's native dark look.
-        private const val ACCENT = 0xFFEA7C69.toInt() // coral
-        private const val OVER = 0xFFFF7CA3.toInt() // pink / error
+        /** The app theme's colours for the widget, written by the Dart side
+         * next to the snapshot (buildWidgetTheme). Defaults are the dark kit,
+         * for a widget rendered before the app has synced a theme. */
+        private class WidgetTheme(private val json: JSONObject?) {
+            private fun c(key: String, fallback: Long) =
+                (json?.optLong(key, fallback) ?: fallback).toInt()
+
+            val surface = c("surface", 0xFF252836)
+            val text = c("text", 0xFFFFFFFF)
+            val textSecondary = c("textSecondary", 0xFFB4C0C8)
+            val track = c("track", 0xFF3B3F4F)
+            val accent = c("accent", 0xFFEA7C69)
+            val over = c("over", 0xFFFF7CA3)
+        }
+
+        private fun readTheme(context: Context) = WidgetTheme(
+            try {
+                context.getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
+                    .getString(THEME_KEY, null)?.let { JSONObject(it) }
+            } catch (_: Exception) {
+                null
+            }
+        )
+
+        private fun applyTheme(views: RemoteViews, theme: WidgetTheme, detailed: Boolean) {
+            views.setInt(R.id.widget_bg, "setColorFilter", theme.surface)
+            views.setTextColor(R.id.widget_name, theme.text)
+            views.setTextColor(R.id.widget_amounts, theme.text)
+            views.setTextColor(R.id.widget_empty, theme.textSecondary)
+            if (detailed) views.setTextColor(R.id.widget_meta, theme.textSecondary)
+            // Tint lists are settable through RemoteViews from Android 12;
+            // older launchers keep the drawables' default kit colours.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                views.setColorStateList(
+                    R.id.widget_bg, "setImageTintList",
+                    ColorStateList.valueOf(theme.surface)
+                )
+                views.setColorStateList(
+                    R.id.widget_progress, "setProgressTintList",
+                    ColorStateList.valueOf(theme.accent)
+                )
+                views.setColorStateList(
+                    R.id.widget_progress, "setProgressBackgroundTintList",
+                    ColorStateList.valueOf(theme.track)
+                )
+            }
+        }
 
         fun saveSelection(context: Context, appWidgetId: Int, budgetId: String) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -91,6 +137,8 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             views.setOnClickPendingIntent(R.id.widget_root, open)
+            val theme = readTheme(context)
+            applyTheme(views, theme, detailed)
 
             val entry = findEntry(context, selectionOf(context, appWidgetId))
             if (entry == null) {
@@ -127,7 +175,7 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
                 )
                 views.setTextColor(
                     R.id.widget_status,
-                    if (over) OVER else Color.WHITE
+                    if (over) theme.over else theme.text
                 )
                 views.setTextViewText(
                     R.id.widget_meta,

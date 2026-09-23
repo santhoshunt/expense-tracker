@@ -13,11 +13,17 @@ class AppColors extends ThemeExtension<AppColors> {
   final Color blue;
   final Color purple;
 
+  /// Hairline around cards and panels, or null for none: light mode's white
+  /// cards and the near-black palettes need one to separate from the
+  /// background.
+  final Color? cardOutline;
+
   const AppColors({
     required this.green,
     required this.orange,
     required this.blue,
     required this.purple,
+    this.cardOutline,
   });
 
   /// Falls back to the dark set when the theme carries no extension
@@ -37,6 +43,7 @@ class AppColors extends ThemeExtension<AppColors> {
     orange: FigmaPaletteLight.orange,
     blue: FigmaPaletteLight.blue,
     purple: FigmaPaletteLight.purple,
+    cardOutline: FigmaPaletteLight.border,
   );
 
   @override
@@ -45,11 +52,13 @@ class AppColors extends ThemeExtension<AppColors> {
     Color? orange,
     Color? blue,
     Color? purple,
+    Color? cardOutline,
   }) => AppColors(
     green: green ?? this.green,
     orange: orange ?? this.orange,
     blue: blue ?? this.blue,
     purple: purple ?? this.purple,
+    cardOutline: cardOutline ?? this.cardOutline,
   );
 
   @override
@@ -60,6 +69,7 @@ class AppColors extends ThemeExtension<AppColors> {
       orange: Color.lerp(orange, other.orange, t)!,
       blue: Color.lerp(blue, other.blue, t)!,
       purple: Color.lerp(purple, other.purple, t)!,
+      cardOutline: Color.lerp(cardOutline, other.cardOutline, t),
     );
   }
 }
@@ -197,10 +207,16 @@ ThemeData _buildAppTheme({
     scrim: Colors.black,
   );
 
+  final appColors = !dark
+      ? AppColors.light
+      : p.outlineCards
+      ? AppColors.dark.copyWith(cardOutline: border)
+      : AppColors.dark;
+
   final base = ThemeData(
     useMaterial3: true,
     colorScheme: scheme,
-    extensions: [dark ? AppColors.dark : AppColors.light],
+    extensions: [appColors],
     scaffoldBackgroundColor: bg,
     // Smooth fade-forward route transitions on every platform.
     pageTransitionsTheme: PageTransitionsTheme(
@@ -226,8 +242,9 @@ ThemeData _buildAppTheme({
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.card),
-        // White cards need a hairline to separate from the light backdrop.
-        side: dark ? BorderSide.none : BorderSide(color: border),
+        side: appColors.cardOutline == null
+            ? BorderSide.none
+            : BorderSide(color: appColors.cardOutline!),
       ),
     ),
     inputDecorationTheme: InputDecorationTheme(

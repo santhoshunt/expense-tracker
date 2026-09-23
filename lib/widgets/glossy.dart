@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../utils/app_theme.dart';
+
 /// Flat backdrop behind screen content. The Scaffold already paints this
 /// colour; the widget stays for standalone call sites (Cockpit,
 /// Settings) so every screen shares one background source.
@@ -15,7 +17,24 @@ class AmbientBackground extends StatelessWidget {
   );
 }
 
-/// Accent primary-action pill — the app's FAB.
+/// Edge light: an accent rim with the glow kept inside the shape. Used as a
+/// FOREGROUND decoration: a decoration paints its shadows beneath its own
+/// fill, which would hide an inner glow.
+BoxDecoration _edgeLight(ColorScheme scheme, double radius) => BoxDecoration(
+  borderRadius: BorderRadius.circular(radius),
+  border: Border.all(color: scheme.primary.withValues(alpha: 0.55)),
+  boxShadow: [
+    BoxShadow(
+      color: scheme.primary.withValues(alpha: 0.20),
+      blurRadius: 10,
+      blurStyle: BlurStyle.inner,
+    ),
+  ],
+);
+
+/// Primary-action pill — the app's FAB. Styled like [GlassSegmented]'s
+/// thumb (quiet fill, accent edge light) rather than a solid accent fill,
+/// so it reads as the primary action without outshouting the page.
 class GlassButton extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -35,18 +54,20 @@ class GlassButton extends StatelessWidget {
     // it as a button to assistive tech.
     return Semantics(
       button: true,
-      child: DecoratedBox(
+      child: Container(
         decoration: BoxDecoration(
-          color: scheme.primary,
+          color: scheme.outlineVariant,
           borderRadius: BorderRadius.circular(14),
+          // Neutral lift so it floats over list content; no accent glow.
           boxShadow: [
             BoxShadow(
-              color: scheme.primary.withValues(alpha: 0.30),
-              blurRadius: 20,
-              offset: const Offset(0, 8),
+              color: Colors.black.withValues(alpha: 0.28),
+              blurRadius: 14,
+              offset: const Offset(0, 5),
             ),
           ],
         ),
+        foregroundDecoration: _edgeLight(scheme, 14),
         child: Material(
           color: Colors.transparent,
           child: InkWell(
@@ -57,14 +78,14 @@ class GlassButton extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, size: 22, color: scheme.onPrimary),
+                  Icon(icon, size: 22, color: scheme.onSurface),
                   const SizedBox(width: 8),
                   Text(
                     label,
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 15,
-                      color: scheme.onPrimary,
+                      color: scheme.onSurface,
                     ),
                   ),
                 ],
@@ -145,20 +166,7 @@ class GlassSegmented<T> extends StatelessWidget {
         color: scheme.outlineVariant,
         borderRadius: BorderRadius.circular(9),
       ),
-      // Edge light: an accent rim with the glow kept inside the thumb. It
-      // sits in the foreground because a decoration paints its shadows
-      // beneath its own fill, which would hide an inner glow.
-      foregroundDecoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(9),
-        border: Border.all(color: scheme.primary.withValues(alpha: 0.55)),
-        boxShadow: [
-          BoxShadow(
-            color: scheme.primary.withValues(alpha: 0.20),
-            blurRadius: 10,
-            blurStyle: BlurStyle.inner,
-          ),
-        ],
-      ),
+      foregroundDecoration: _edgeLight(scheme, 9),
     );
     final p = pager;
     if (p == null) {
@@ -256,14 +264,12 @@ class FrostedPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final outline = AppColors.of(context).cardOutline;
     return Container(
       decoration: BoxDecoration(
         color: scheme.surface,
         borderRadius: radius,
-        // White cards need a hairline against the light backdrop.
-        border: scheme.brightness == Brightness.light
-            ? Border.all(color: scheme.outlineVariant)
-            : null,
+        border: outline == null ? null : Border.all(color: outline),
       ),
       clipBehavior: Clip.antiAlias,
       // Transparent Material between the colored box and any ListTile/InkWell

@@ -85,6 +85,33 @@ void main() {
     expect(c.accent, FigmaPalette.primary);
   });
 
+  test('near-black themes outline their cards', () {
+    for (final p in AppPalette.values) {
+      final dark = buildAppTheme(
+        brightness: Brightness.dark,
+        accent: FigmaPalette.primary,
+        palette: p,
+      );
+      final outline = dark.extension<AppColors>()!.cardOutline;
+      final side = (dark.cardTheme.shape! as RoundedRectangleBorder).side;
+      if (p.colors.outlineCards) {
+        expect(outline, p.colors.border, reason: p.name);
+        expect(side.color, p.colors.border, reason: p.name);
+      } else {
+        expect(outline, isNull, reason: p.name);
+        expect(side, BorderSide.none, reason: p.name);
+      }
+    }
+    expect(AppPalette.amoled.colors.outlineCards, isTrue);
+
+    // Light mode keeps its hairline regardless of palette.
+    final light = buildAppTheme(
+      brightness: Brightness.light,
+      accent: FigmaPalette.primary,
+    );
+    expect(light.extension<AppColors>()!.cardOutline, FigmaPaletteLight.border);
+  });
+
   test('dark themes follow the palette, light themes ignore it', () {
     for (final p in AppPalette.values) {
       final dark = buildAppTheme(
