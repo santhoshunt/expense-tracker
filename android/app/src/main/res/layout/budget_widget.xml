@@ -2,13 +2,28 @@
 <!-- Compact (4×1) budget widget: name, amounts, progress bar — deliberately
      nothing below the bar, so a one-cell slot never clips text. The
      detailed variant (budget_widget_detailed.xml) carries the status and
-     month lines. All colours literal (dark kit): white primary text,
-     #B4C0C8 secondary — never dark-on-dark. -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+     month lines. The literal colours are the default dark kit; the
+     provider recolours card, text and bar to the app's theme. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- The card: a white rounded shape tinted to the app theme's surface
+         at render time (RemoteViews cannot recolour a background drawable,
+         but it can colour-filter an ImageView). -->
+    <ImageView
+        android:id="@+id/widget_bg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/budget_widget_bg"
+        android:tint="#252836" />
+
+    <LinearLayout
+    android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/budget_widget_bg"
     android:gravity="center_vertical"
     android:orientation="vertical"
     android:paddingHorizontal="14dp"
@@ -67,3 +82,4 @@
         android:textSize="13sp"
         android:visibility="gone" />
 </LinearLayout>
+</FrameLayout>

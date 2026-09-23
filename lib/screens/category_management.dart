@@ -6,7 +6,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
-import '../widgets/category_color_picker.dart';
+import '../widgets/hue_color_picker.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
@@ -352,7 +352,7 @@ class _CategoriesTabState extends State<CategoriesTab> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  CategoryColorPicker(
+                  HueColorPicker(
                     value: color,
                     onChanged: (c) => setState(() => color = c),
                   ),
@@ -665,7 +665,7 @@ Future<void> showCategoryDialog(
                     ],
                   ),
                   const SizedBox(height: 16),
-                  CategoryColorPicker(
+                  HueColorPicker(
                     value: color,
                     onChanged: (c) => setState(() => color = c),
                   ),

@@ -49,20 +49,3 @@ abstract final class FigmaPaletteLight {
   static const purple = Color(0xFF5A58C9); // was 6F6DE0
   static const pink = Color(0xFFC0264F); // was E14C7E (3.9:1)
 }
-
-/// A selectable accent colour for the app theme.
-class AccentColor {
-  final String name;
-  final Color color;
-  const AccentColor(this.name, this.color);
-}
-
-/// Accent presets offered in Settings — the kit family first, coral default.
-const List<AccentColor> kAccentPresets = [
-  AccentColor('Coral', FigmaPalette.primary),
-  AccentColor('Sunset', FigmaPalette.orange),
-  AccentColor('Mint', FigmaPalette.green),
-  AccentColor('Sky', FigmaPalette.blue),
-  AccentColor('Iris', FigmaPalette.purple),
-  AccentColor('Rose', FigmaPalette.pink),
-];

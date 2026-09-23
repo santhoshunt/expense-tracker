@@ -1,11 +1,13 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show Brightness, ThemeMode;
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/figma_palette.dart';
 import '../utils/format.dart';
 
 /// Snapshot id of the overall monthly cap (which is not a SpendBudget).
@@ -22,22 +24,32 @@ const String kOverallBudgetWidgetId = '_overall';
 /// "as of last app use" and labels the month and date honestly.
 class BudgetWidgetService {
   static const _dataKey = 'budget_widget_data_v1';
+  static const _themeKey = 'budget_widget_theme_v1';
   static const _channel = MethodChannel('expense_tracker/sms');
 
   /// Last JSON written this session — sync rides every provider
   /// notification, and most of them change no budget figure. The updated
   /// label is date-granular (not time), so the comparison actually hits.
   String? _lastWritten;
+  String? _lastTheme;
 
   Future<void> sync(FinanceProvider finance, SettingsProvider settings) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     final json = jsonEncode(
       buildWidgetSnapshot(finance, settings, DateTime.now()),
     );
-    if (json == _lastWritten) return;
+    final theme = jsonEncode(
+      buildWidgetTheme(
+        settings,
+        PlatformDispatcher.instance.platformBrightness,
+      ),
+    );
+    if (json == _lastWritten && theme == _lastTheme) return;
     _lastWritten = json;
+    _lastTheme = theme;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_dataKey, json);
+    await prefs.setString(_themeKey, theme);
     try {
       await _channel.invokeMethod<void>('updateBudgetWidgets');
     } on PlatformException {
@@ -47,6 +59,29 @@ class BudgetWidgetService {
       // Headless/test environments have no platform handler.
     }
   }
+}
+
+/// The widget's colours as ARGB ints, following the app: the chosen dark
+/// palette and accent, or the light palette when the app shows light
+/// ([ThemeMode.system] resolves against [platformBrightness] at sync time).
+Map<String, int> buildWidgetTheme(
+  SettingsProvider settings,
+  Brightness platformBrightness,
+) {
+  final light =
+      settings.mode == ThemeMode.light ||
+      (settings.mode == ThemeMode.system &&
+          platformBrightness == Brightness.light);
+  final p = settings.palette.colors;
+  return {
+    'surface': (light ? FigmaPaletteLight.surface : p.surface).toARGB32(),
+    'text': (light ? FigmaPaletteLight.textPrimary : p.textPrimary).toARGB32(),
+    'textSecondary': (light ? FigmaPaletteLight.textSecondary : p.textSecondary)
+        .toARGB32(),
+    'track': (light ? FigmaPaletteLight.border : p.border).toARGB32(),
+    'accent': settings.accent.toARGB32(),
+    'over': (light ? FigmaPaletteLight.pink : FigmaPalette.pink).toARGB32(),
+  };
 }
 
 /// The widget snapshot: the overall monthly cap first (when set), then

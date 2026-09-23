@@ -1,12 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Detailed (4×2) budget widget: the compact layout plus the percent/left
      status line and the month · updated line — the extra cell of height is
-     what keeps them from clipping. Same literal dark-kit colours. -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+     what keeps them from clipping. Same default dark-kit colours, recoloured
+     to the app's theme by the provider. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/widget_root"
     android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- The card: a white rounded shape tinted to the app theme's surface
+         at render time (RemoteViews cannot recolour a background drawable,
+         but it can colour-filter an ImageView). -->
+    <ImageView
+        android:id="@+id/widget_bg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/budget_widget_bg"
+        android:tint="#252836" />
+
+    <LinearLayout
+    android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/budget_widget_bg"
     android:gravity="center_vertical"
     android:orientation="vertical"
     android:paddingHorizontal="16dp"
@@ -78,3 +94,4 @@
         android:textSize="13sp"
         android:visibility="gone" />
 </LinearLayout>
+</FrameLayout>

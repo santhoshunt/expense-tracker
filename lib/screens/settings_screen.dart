@@ -20,11 +20,9 @@ import '../services/notification_source.dart';
 import '../services/sms_source.dart';
 import '../utils/app_palettes.dart';
 import '../utils/app_theme.dart';
-import '../utils/contrast.dart';
-import '../utils/figma_palette.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/undo_snackbar.dart';
-import '../widgets/color_picker_dialog.dart';
+import '../widgets/hue_color_picker.dart';
 import '../widgets/glossy.dart';
 import 'classifiers_screen.dart';
 
@@ -102,40 +100,20 @@ class SettingsScreen extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Used for buttons, highlights and selected states.',
+              'Used for buttons, highlights and selected states. Theme '
+              'follows the dark theme\'s own accent.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                for (final preset in kAccentPresets)
-                  _AccentSwatch(
-                    name: preset.name,
-                    color: preset.color,
-                    selected: preset.color == settings.accent,
-                    onTap: () => context.read<SettingsProvider>().setAccent(
-                      preset.color,
-                    ),
-                  ),
-                _CustomAccentSwatch(
-                  // "Custom" is active when the accent matches no preset.
-                  selected: !kAccentPresets.any(
-                    (p) => p.color == settings.accent,
-                  ),
-                  current: settings.accent,
-                  onTap: () async {
-                    final provider = context.read<SettingsProvider>();
-                    final c = await showColorPickerDialog(
-                      context,
-                      initial: settings.accent,
-                      title: 'Accent colour',
-                    );
-                    if (c != null) await provider.setAccent(c);
-                  },
-                ),
-              ],
+            HueColorPicker(
+              title: 'Accent',
+              value: settings.accent,
+              onChanged: (c) => context.read<SettingsProvider>().setAccent(c),
+              none: settings.palette.colors.accent,
+              noneLabel: 'Theme',
+              noneIsNeutral: false,
+              customTitle: 'Accent colour',
+              cell: 42,
             ),
             if (SmsSource().isSupported) ...[
               const SizedBox(height: 24),
@@ -951,117 +929,6 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
                 child: const Text('Enable'),
               ),
         onTap: granted ? _showDiagnostics : null,
-      ),
-    );
-  }
-}
-
-class _AccentSwatch extends StatelessWidget {
-  final String name;
-  final Color color;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _AccentSwatch({
-    required this.name,
-    required this.color,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Tooltip(
-      message: name,
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: selected ? scheme.onSurface : Colors.transparent,
-              width: 2.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: color.withValues(alpha: selected ? 0.5 : 0.25),
-                blurRadius: selected ? 12 : 6,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: selected ? Icon(Icons.check, color: onSwatch(color)) : null,
-        ),
-      ),
-    );
-  }
-}
-
-/// Rainbow swatch that opens the custom colour picker.
-class _CustomAccentSwatch extends StatelessWidget {
-  final bool selected;
-  final Color current;
-  final VoidCallback onTap;
-
-  const _CustomAccentSwatch({
-    required this.selected,
-    required this.current,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Tooltip(
-      message: 'Custom',
-      child: InkWell(
-        onTap: onTap,
-        customBorder: const CircleBorder(),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: selected
-                ? null
-                : const SweepGradient(
-                    colors: [
-                      FigmaPalette.pink,
-                      FigmaPalette.orange,
-                      FigmaPalette.green,
-                      FigmaPalette.blue,
-                      FigmaPalette.purple,
-                      FigmaPalette.pink,
-                    ],
-                  ),
-            color: selected ? current : null,
-            border: Border.all(
-              color: selected ? scheme.onSurface : Colors.transparent,
-              width: 2.5,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: current.withValues(alpha: selected ? 0.5 : 0.0),
-                blurRadius: 12,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Icon(
-            selected ? Icons.check : Icons.colorize,
-            // Selected = flat user-picked fill, so contrast is computed; the
-            // unselected rainbow gradient always carries white fine.
-            color: selected ? onSwatch(current) : Colors.white,
-            size: 20,
-          ),
-        ),
       ),
     );
   }

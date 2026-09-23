@@ -2,13 +2,16 @@ import 'package:flutter/material.dart';
 
 import '../models/transaction.dart';
 import '../utils/contrast.dart';
-import '../utils/figma_palette.dart';
 import 'color_picker_dialog.dart';
 
-/// Human name of a category colour: "None", "Teal", "Iris, light",
-/// "Rose, deep", or "Custom" for anything off the palette.
-String categoryColorName(Color c) {
-  if (c == kNoCategoryColor) return 'None';
+/// Human name of a palette colour: [noneLabel] for [none], "Teal",
+/// "Iris, light", "Rose, deep", or "Custom" for anything off the palette.
+String hueColorName(
+  Color c, {
+  Color none = kNoCategoryColor,
+  String noneLabel = 'None',
+}) {
+  if (c == none) return noneLabel;
   final i = kCategoryColorChoices.indexOf(c);
   if (i < 0) return 'Custom';
   final hue = kCategoryHueNames[i % kCategoryHueNames.length];
@@ -19,32 +22,71 @@ String categoryColorName(Color c) {
   };
 }
 
-/// Colour picker for categories and groups: None and Custom on top, then
-/// the palette as hue columns in light / base / deep rows. The label names
-/// the current pick.
-class CategoryColorPicker extends StatelessWidget {
+/// Colour picker over [kCategoryColorChoices]: a "none" choice and Custom on
+/// top, then the palette as hue columns in light / base / deep rows. The
+/// label names the current pick.
+///
+/// Categories use the defaults: "None" is the neutral grey chip. The accent
+/// setting passes its theme's own accent as [none], labelled "Theme".
+class HueColorPicker extends StatelessWidget {
   final Color value;
   final ValueChanged<Color> onChanged;
+  final String title;
+  final Color none;
+  final String noneLabel;
 
-  const CategoryColorPicker({
+  /// True draws [none] as the neutral chip it renders as on a category;
+  /// false draws it filled, like a palette swatch.
+  final bool noneIsNeutral;
+  final String customTitle;
+
+  /// Grid cell size; the grid scales down (never up) to fit its width.
+  final double cell;
+
+  const HueColorPicker({
     super.key,
     required this.value,
     required this.onChanged,
+    this.title = 'Colour',
+    this.none = kNoCategoryColor,
+    this.noneLabel = 'None',
+    this.noneIsNeutral = true,
+    this.customTitle = 'Category colour',
+    this.cell = 32,
   });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final isCustom =
-        value != kNoCategoryColor && !kCategoryColorChoices.contains(value);
+    final isNone = value == none;
+    final isCustom = !isNone && !kCategoryColorChoices.contains(value);
     final columns = kCategoryHueNames.length;
+    String name(Color c) => hueColorName(c, none: none, noneLabel: noneLabel);
+
+    Widget swatch(Color c) => SizedBox(
+      width: cell,
+      height: cell,
+      child: Center(
+        child: _Swatch(
+          size: cell - 6,
+          // Always the hue's own name, even when it equals [none].
+          label: hueColorName(c),
+          // When the none choice is itself a palette colour (a theme accent
+          // that is Coral), only the none swatch shows as selected.
+          selected: !isNone && c == value,
+          onTap: () => onChanged(c),
+          decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+          checkColor: onSwatch(c),
+        ),
+      ),
+    );
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Colour · ${categoryColorName(value)}',
+          '$title · ${name(value)}',
           style: Theme.of(context).textTheme.labelMedium,
         ),
         const SizedBox(height: 8),
@@ -52,18 +94,23 @@ class CategoryColorPicker extends StatelessWidget {
           children: [
             _Swatch(
               size: 36,
-              label: 'None',
-              selected: value == kNoCategoryColor,
-              onTap: () => onChanged(kNoCategoryColor),
+              label: noneLabel,
+              selected: isNone,
+              onTap: () => onChanged(none),
               decoration: BoxDecoration(
-                color: Color.alphaBlend(
-                  kNoCategoryColor.withValues(alpha: 0.15),
-                  scheme.surface,
-                ),
+                color: noneIsNeutral
+                    ? Color.alphaBlend(
+                        none.withValues(alpha: 0.15),
+                        scheme.surface,
+                      )
+                    : none,
                 shape: BoxShape.circle,
               ),
-              icon: Icons.format_color_reset_outlined,
-              iconColor: kNoCategoryColor,
+              icon: noneIsNeutral
+                  ? Icons.format_color_reset_outlined
+                  : Icons.palette_outlined,
+              iconColor: noneIsNeutral ? none : onSwatch(none),
+              checkColor: noneIsNeutral ? none : onSwatch(none),
             ),
             const SizedBox(width: 12),
             _Swatch(
@@ -73,8 +120,8 @@ class CategoryColorPicker extends StatelessWidget {
               onTap: () async {
                 final c = await showColorPickerDialog(
                   context,
-                  initial: isCustom ? value : FigmaPalette.primary,
-                  title: 'Category colour',
+                  initial: isCustom ? value : none,
+                  title: customTitle,
                 );
                 if (c != null) onChanged(c);
               },
@@ -91,7 +138,7 @@ class CategoryColorPicker extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 12),
-        // Fixed cells, scaled down on narrow dialogs. Not a LayoutBuilder:
+        // Fixed cells, scaled down on narrow widths. Not a LayoutBuilder:
         // AlertDialog sizes its content with IntrinsicWidth, which a
         // LayoutBuilder cannot answer.
         FittedBox(
@@ -104,7 +151,7 @@ class CategoryColorPicker extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     for (var col = 0; col < columns; col++)
-                      _cell(kCategoryColorChoices[row * columns + col]),
+                      swatch(kCategoryColorChoices[row * columns + col]),
                   ],
                 ),
             ],
@@ -113,21 +160,6 @@ class CategoryColorPicker extends StatelessWidget {
       ],
     );
   }
-
-  Widget _cell(Color c) => SizedBox(
-    width: 32,
-    height: 32,
-    child: Center(
-      child: _Swatch(
-        size: 26,
-        label: categoryColorName(c),
-        selected: c == value,
-        onTap: () => onChanged(c),
-        decoration: BoxDecoration(color: c, shape: BoxShape.circle),
-        checkColor: onSwatch(c),
-      ),
-    ),
-  );
 }
 
 const _rainbow = [
