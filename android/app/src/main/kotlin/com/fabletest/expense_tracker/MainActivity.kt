@@ -141,6 +141,12 @@ class MainActivity : FlutterFragmentActivity() {
         "swoosh" to "IconSwoosh",
         "classic" to "IconClassic",
         "midnight" to "IconMidnight",
+        "aurora" to "IconAurora",
+        "sunset" to "IconSunset",
+        "wallet" to "IconWallet",
+        "piggy" to "IconPiggy",
+        "pie" to "IconPie",
+        "forest" to "IconForest",
     )
 
     private fun component(cls: String) =
