@@ -178,7 +178,7 @@ void main() {
     await tester.tap(find.text('Cancel'));
     await pumpThrough(tester);
 
-    await tester.tap(find.text('Transactions'));
+    await tester.tap(find.text('Review'));
     await pumpThrough(tester);
     await expectTip(
       tester,

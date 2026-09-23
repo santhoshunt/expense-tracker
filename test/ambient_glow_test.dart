@@ -35,7 +35,7 @@ void main() {
         ),
       );
       final glows = glowsOf(tester);
-      expect(glows, hasLength(2), reason: 'top-right and bottom-right');
+      expect(glows, hasLength(2), reason: 'top-left and bottom-right');
       for (final g in glows) {
         expect(g.colors.first.withValues(alpha: 1), accent);
         expect(g.colors.last.a, 0, reason: 'fades out');
@@ -43,7 +43,7 @@ void main() {
     });
   }
 
-  testWidgets('the main glow rests top right and drifts with the tilt', (
+  testWidgets('the main glow rests top left and drifts with the tilt', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -57,13 +57,13 @@ void main() {
     );
     final painter = painterOf(tester);
     final rest = painter.glows(Offset.zero);
-    expect((rest.first.center as Alignment).x, greaterThan(1));
+    expect((rest.first.center as Alignment).x, lessThan(-1));
     expect((rest.first.center as Alignment).y, lessThan(-1));
     expect((rest.last.center as Alignment).y, greaterThan(1));
     final tilted = painter.glows(const Offset(-1, 0));
     expect(
       (tilted.first.center as Alignment).x,
-      closeTo(0.95, 1e-9),
+      closeTo(-1.45, 1e-9),
       reason: 'noticeable: a quarter of the half-width',
     );
     expect(

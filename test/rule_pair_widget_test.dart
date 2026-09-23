@@ -13,7 +13,9 @@ Widget app(FinanceProvider p) => MultiProvider(
     ChangeNotifierProvider.value(value: p),
     ChangeNotifierProvider(create: (_) => SettingsProvider()),
   ],
-  child: const MaterialApp(home: ClassifiersScreen()),
+  child: const MaterialApp(
+    home: ClassifiersScreen(initialTab: kCockpitTabRules),
+  ),
 );
 
 void main() {

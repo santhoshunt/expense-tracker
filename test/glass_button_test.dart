@@ -35,7 +35,14 @@ void main() {
     final fill = box.decoration! as BoxDecoration;
     final rim = box.foregroundDecoration! as BoxDecoration;
     final scheme = theme.colorScheme;
-    expect(fill.color, scheme.outlineVariant);
+    // Quiet: the neutral fill with only a trace of the accent in it.
+    expect(
+      fill.color,
+      Color.alphaBlend(
+        scheme.primary.withValues(alpha: 0.12),
+        scheme.outlineVariant,
+      ),
+    );
     expect(
       (rim.border! as Border).top.color,
       scheme.primary.withValues(alpha: 0.55),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -77,5 +78,70 @@ void main() {
     await settle(tester);
     expect(find.text('Add'), findsOneWidget);
     semantics.dispose();
+  });
+
+  testWidgets('Android back retraces tab switches before leaving the app', (
+    tester,
+  ) async {
+    final finance = FinanceProvider();
+    await finance.load();
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: finance),
+          ChangeNotifierProvider(create: (_) => SettingsProvider()),
+          Provider<DriveBackupService>(create: (_) => DriveBackupService()),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await settle(tester);
+    Future<void> systemBack() async {
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/navigation',
+        const JSONMethodCodec().encodeMethodCall(const MethodCall('popRoute')),
+        (_) {},
+      );
+      await settle(tester);
+    }
+
+    String title() => tester
+        .widget<Text>(
+          find
+              .descendant(of: find.byType(AppBar), matching: find.byType(Text))
+              .first,
+        )
+        .data!;
+
+    expect(title(), 'Dashboard');
+    await tester.tap(find.text('Transactions').last);
+    await settle(tester);
+    await tester.tap(find.text('Accounts').last);
+    await settle(tester);
+    expect(title(), 'Accounts');
+
+    await systemBack();
+    expect(title(), 'Transactions');
+    await systemBack();
+    expect(title(), 'Dashboard');
+    // Nothing left to retrace: back now reaches the system, which closes
+    // the app, and the tab stays put.
+    final platformCalls = <String>[];
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        platformCalls.add(call.method);
+        return null;
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    await systemBack();
+    expect(title(), 'Dashboard');
+    expect(platformCalls, contains('SystemNavigator.pop'));
   });
 }

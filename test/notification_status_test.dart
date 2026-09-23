@@ -97,16 +97,16 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
   }
 
-  /// Home → Cockpit → Budgets tab (the section moved out of Settings).
+  /// Home → Cockpit → Plan, which opens on its Budgets tab (the section
+  /// moved out of Settings).
   Future<void> openBudgetsTab(WidgetTester tester) async {
     await tester.tap(find.byTooltip('Cockpit'));
     await pumpThrough(tester);
-    await tester.tap(find.text('Budgets'));
+    await tester.tap(find.text('Plan'));
     await pumpThrough(tester);
   }
 
-  /// The Budgets tab's own list — `Scrollable.first` would hit the
-  /// scrollable TabBar instead.
+  /// The Budgets tab's own list, found inside the TabBarView.
   Finder tabScrollable() => find
       .descendant(
         of: find.byType(TabBarView),

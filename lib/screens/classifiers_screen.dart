@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../models/import_rule.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../providers/settings_provider.dart';
 import '../services/sms_parser.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
@@ -26,7 +27,8 @@ import 'app_nav.dart';
 import 'category_management.dart';
 import 'cockpit_tabs.dart';
 
-/// Cockpit tab indices, for callers that deep-link into a tab.
+/// Cockpit tab ids, for callers that deep-link into a tab. Ids, not tab bar
+/// indices: each [CockpitGroup] page numbers its own tabs from 0.
 const int kCockpitTabRules = 0;
 const int kCockpitTabImport = 1;
 const int kCockpitTabTransactions = 2;
@@ -34,37 +36,233 @@ const int kCockpitTabCategories = 3;
 const int kCockpitTabBudgets = 4;
 const int kCockpitTabReminders = 5;
 
+/// The Cockpit's three groups, each one page holding the tabs in [tabs]
+/// (kCockpitTab* ids, in tab order). Six tabs on one bar were too many to
+/// scan, so the hub splits them by what they steer, as Settings does.
+enum CockpitGroup {
+  classify('Classify', 'Rules, import filters, review', Icons.rule, [
+    kCockpitTabRules,
+    kCockpitTabImport,
+    kCockpitTabTransactions,
+  ]),
+  organise('Organise', 'Categories and groups', Icons.category_outlined, [
+    kCockpitTabCategories,
+  ]),
+  plan('Plan', 'Budgets and reminders', Icons.track_changes, [
+    kCockpitTabBudgets,
+    kCockpitTabReminders,
+  ]);
+
+  const CockpitGroup(this.title, this.gist, this.icon, this.tabs);
+
+  final String title;
+  final String gist;
+  final IconData icon;
+  final List<int> tabs;
+
+  /// The group whose page holds kCockpitTab* [tab].
+  static CockpitGroup of(int tab) =>
+      values.firstWhere((g) => g.tabs.contains(tab));
+}
+
+/// Tab bar labels by kCockpitTab* id. The Transactions tab reads "Review"
+/// here: it sits beside Rules as the place to check their results, and the
+/// home screen already has a Transactions tab.
+const Map<int, String> _kCockpitTabLabels = {
+  kCockpitTabRules: 'Rules',
+  kCockpitTabImport: 'Import',
+  kCockpitTabTransactions: 'Review',
+  kCockpitTabCategories: 'Categories',
+  kCockpitTabBudgets: 'Budgets',
+  kCockpitTabReminders: 'Reminders',
+};
+
 /// The Cockpit: everything that steers the app — rules, import checks, the
 /// ledger as a classification tool, categories, budgets and reminders.
 /// (File and class keep the historical Classifiers name; only the
 /// user-visible copy changed.)
-class ClassifiersScreen extends StatefulWidget {
-  /// Which tab to open on — see the kCockpitTab* constants.
-  final int initialTab;
-  const ClassifiersScreen({super.key, this.initialTab = 0});
+///
+/// Without [initialTab] it shows the hub of [CockpitGroup]s; with one it
+/// opens straight on that tab's group page, the tab selected (deep links).
+class ClassifiersScreen extends StatelessWidget {
+  /// Which tab to open on — see the kCockpitTab* constants. Null: the hub.
+  final int? initialTab;
+  const ClassifiersScreen({super.key, this.initialTab});
 
   @override
-  State<ClassifiersScreen> createState() => _ClassifiersScreenState();
+  Widget build(BuildContext context) {
+    final tab = initialTab;
+    if (tab == null) return const _CockpitHub();
+    return CockpitGroupPage(group: CockpitGroup.of(tab), initialTab: tab);
+  }
 }
 
-class _ClassifiersScreenState extends State<ClassifiersScreen>
+/// Direction pairs (same pattern, opposite-direction categories) render as
+/// ONE tile owned by the earlier rule: that rule's id maps to its twin,
+/// which the Rules tab then skips.
+Map<String, ClassifierRule> _pairSiblings(List<ClassifierRule> rules) {
+  final siblingOf = <String, ClassifierRule>{};
+  final absorbed = <String>{};
+  for (final r in rules) {
+    if (absorbed.contains(r.id) || siblingOf.containsKey(r.id)) continue;
+    final s = directionSiblingOf(r, rules);
+    if (s == null || absorbed.contains(s.id) || siblingOf.containsKey(s.id)) {
+      continue;
+    }
+    siblingOf[r.id] = s;
+    absorbed.add(s.id);
+  }
+  return siblingOf;
+}
+
+/// The Cockpit root: one card per [CockpitGroup], each with a live count so
+/// the hub says what is inside before it is opened.
+class _CockpitHub extends StatelessWidget {
+  const _CockpitHub();
+
+  static String _count(int n, String one, String many) =>
+      '$n ${n == 1 ? one : many}';
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.watch<FinanceProvider>();
+    final cap = context.select<SettingsProvider, double>(
+      (s) => s.monthlyBudget,
+    );
+    final now = DateTime.now();
+    final month = DateTime(now.year, now.month);
+    // Limits this month's counted spending has passed: the custom budgets
+    // and the monthly cap, which heads the Budgets tab.
+    final over =
+        finance.budgets
+            .where(
+              (b) => b.limit > 0 && finance.budgetSpentFor(b, month) > b.limit,
+            )
+            .length +
+        (cap > 0 && finance.budgetSpentInMonth(month) > cap ? 1 : 0);
+    // Your own rules as the Rules tab lists them: a direction pair is one
+    // row, and the built-in rules are left out.
+    final pairTwins = {
+      for (final s in _pairSiblings(finance.rules).values) s.id,
+    };
+    final ownRules = finance.rules
+        .where((r) => !r.isBuiltIn && !pairTwins.contains(r.id))
+        .length;
+    final counts = {
+      CockpitGroup.classify: [
+        _count(ownRules, 'rule', 'rules'),
+        _count(finance.importRules.length, 'import filter', 'import filters'),
+      ],
+      // What the Categories tab lists: your categories plus the built-ins.
+      CockpitGroup.organise: [
+        _count(
+          customCategories.length + kCategories.length,
+          'category',
+          'categories',
+        ),
+      ],
+      CockpitGroup.plan: [
+        if (cap > 0) 'Monthly cap set',
+        _count(finance.budgets.length, 'budget', 'budgets'),
+        _count(finance.reminders.length, 'reminder', 'reminders'),
+        if (over > 0) '$over over',
+      ],
+    };
+    final textTheme = Theme.of(context).textTheme;
+
+    return AmbientBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(title: const Text('Cockpit')),
+        body: ListView(
+          padding: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            16 + MediaQuery.viewPaddingOf(context).bottom,
+          ),
+          children: [
+            for (final (i, g) in CockpitGroup.values.indexed) ...[
+              if (i > 0) const SizedBox(height: 12),
+              FrostedPanel(
+                radius: BorderRadius.circular(20),
+                child: ListTile(
+                  isThreeLine: true,
+                  leading: Icon(g.icon),
+                  title: Text(g.title),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(g.gist),
+                      const SizedBox(height: 2),
+                      Text(
+                        counts[g]!.join(' · '),
+                        style: textTheme.bodySmall?.copyWith(
+                          color: accentTextColor(context),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CockpitGroupPage(group: g),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One Cockpit group on its own page: a tab bar over [group]'s tabs (none
+/// for a single-tab group) and the add button of the tab showing.
+class CockpitGroupPage extends StatefulWidget {
+  final CockpitGroup group;
+
+  /// The kCockpitTab* id to open on; null, or one outside [group], opens
+  /// the first tab.
+  final int? initialTab;
+
+  const CockpitGroupPage({super.key, required this.group, this.initialTab});
+
+  @override
+  State<CockpitGroupPage> createState() => _CockpitGroupPageState();
+}
+
+class _CockpitGroupPageState extends State<CockpitGroupPage>
     with SingleTickerProviderStateMixin {
-  late final TabController _tab;
+  /// Null on a single-tab group, which shows no tab bar.
+  TabController? _tab;
 
   /// Whether the FAB shows its label. Scrolling down folds it to the icon
   /// so it covers less of the list; scrolling up or a tab change brings the
   /// label back.
   bool _fabExtended = true;
 
+  List<int> get _tabs => widget.group.tabs;
+
+  /// The kCockpitTab* id showing.
+  int get _current => _tabs[_tab?.index ?? 0];
+
   @override
   void initState() {
     super.initState();
-    _tab = TabController(
-      length: 6,
-      vsync: this,
-      initialIndex: widget.initialTab,
-    );
-    _tab.addListener(() => setState(() => _fabExtended = true));
+    if (_tabs.length > 1) {
+      final start = _tabs.indexOf(widget.initialTab ?? _tabs.first);
+      _tab = TabController(
+        length: _tabs.length,
+        vsync: this,
+        initialIndex: start < 0 ? 0 : start,
+      )..addListener(() => setState(() => _fabExtended = true));
+    }
   }
 
   bool _onUserScroll(UserScrollNotification n) {
@@ -82,38 +280,43 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
 
   @override
   void dispose() {
-    _tab.dispose();
+    _tab?.dispose();
     super.dispose();
   }
 
+  Widget _tabBody(int tab) => switch (tab) {
+    kCockpitTabRules => _RulesTab(),
+    kCockpitTabImport => _ImportTab(),
+    kCockpitTabTransactions => _TransactionsTab(),
+    kCockpitTabCategories => const CategoriesTab(),
+    kCockpitTabBudgets => const BudgetsTab(),
+    _ => const RemindersTab(),
+  };
+
   @override
   Widget build(BuildContext context) {
+    final tab = _tab;
     return CockpitScope(
-      controller: _tab,
+      controller: tab,
+      tabs: _tabs,
       child: AmbientBackground(
         child: Scaffold(
           backgroundColor: Colors.transparent,
           appBar: AppBar(
-            title: const Text('Cockpit'),
-            bottom: TabBar(
-              controller: _tab,
-              isScrollable: true,
-              tabAlignment: TabAlignment.start,
-              // Roomier labels: tabs packed edge-to-edge read as cramped —
-              // let the bar scroll instead.
-              labelPadding: const EdgeInsets.symmetric(horizontal: 20),
-              tabs: const [
-                Tab(text: 'Rules'),
-                Tab(text: 'Import'),
-                Tab(text: 'Transactions'),
-                Tab(text: 'Categories'),
-                Tab(text: 'Budgets'),
-                Tab(text: 'Reminders'),
-              ],
-            ),
+            title: Text(widget.group.title),
+            // Two or three short labels fit the width, so the bar is fixed
+            // rather than scrolling.
+            bottom: tab == null
+                ? null
+                : TabBar(
+                    controller: tab,
+                    tabs: [
+                      for (final t in _tabs) Tab(text: _kCockpitTabLabels[t]),
+                    ],
+                  ),
           ),
           // FAB only on the tabs with an add flow.
-          floatingActionButton: switch (_tab.index) {
+          floatingActionButton: switch (_current) {
             kCockpitTabRules => GlassButton(
               icon: Icons.add,
               label: 'New rule',
@@ -148,17 +351,12 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
           },
           body: NotificationListener<UserScrollNotification>(
             onNotification: _onUserScroll,
-            child: TabBarView(
-              controller: _tab,
-              children: [
-                _RulesTab(),
-                _ImportTab(),
-                _TransactionsTab(),
-                const CategoriesTab(),
-                const BudgetsTab(),
-                const RemindersTab(),
-              ],
-            ),
+            child: tab == null
+                ? _tabBody(_tabs.single)
+                : TabBarView(
+                    controller: tab,
+                    children: [for (final t in _tabs) _tabBody(t)],
+                  ),
           ),
         ),
       ),
@@ -270,20 +468,10 @@ class _RulesTabState extends State<_RulesTab> {
     }
 
     final q = _search.trim().toLowerCase();
-    // Direction pairs (same pattern, opposite-direction categories) render
-    // as ONE tile owned by the earlier rule; the twin is skipped. Resolved
-    // over the full list so a search hit on either member keeps the pair.
-    final siblingOf = <String, ClassifierRule>{};
-    final absorbed = <String>{};
-    for (final r in rules) {
-      if (absorbed.contains(r.id) || siblingOf.containsKey(r.id)) continue;
-      final s = directionSiblingOf(r, rules);
-      if (s == null || absorbed.contains(s.id) || siblingOf.containsKey(s.id)) {
-        continue;
-      }
-      siblingOf[r.id] = s;
-      absorbed.add(s.id);
-    }
+    // Resolved over the full list so a search hit on either member keeps
+    // the pair.
+    final siblingOf = _pairSiblings(rules);
+    final absorbed = {for (final s in siblingOf.values) s.id};
     bool shows(ClassifierRule r) =>
         ruleMatchesQuery(r, q) ||
         (siblingOf[r.id] != null && ruleMatchesQuery(siblingOf[r.id]!, q));

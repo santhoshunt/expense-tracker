@@ -60,7 +60,7 @@ void main() {
     }
   }
 
-  testWidgets('tipping the right edge down slides the glow right', (
+  testWidgets('tipping the right edge down slides the glow left', (
     tester,
   ) async {
     await pump(tester);
@@ -72,7 +72,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 66));
     }
     await frames(tester, 30);
-    expect(tilt!.value.dx, greaterThan(0.5));
+    expect(tilt!.value.dx, lessThan(-0.5));
     expect(tilt!.value.dy.abs(), lessThan(0.05));
   });
 
@@ -86,7 +86,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 66));
     }
     await frames(tester, 30);
-    expect(tilt!.value.dx, greaterThan(0.5));
+    expect(tilt!.value.dx, lessThan(-0.5));
 
     await settings.setTiltGlow(false);
     await tester.pump();
