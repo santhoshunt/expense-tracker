@@ -624,7 +624,8 @@ class FinanceProvider extends ChangeNotifier {
   ) => _monthTotals(month).transfersByCategory;
 
   /// Spending per parent group for [month], largest first. The null group is
-  /// the "Other" bucket: groupable categories with no assignment.
+  /// the "Other" bucket: expense categories with no assignment (ungrouped
+  /// transfer categories are left out entirely).
   ///
   /// Only money-out rows count — plain expenses plus expense-typed transfer
   /// rows whose category is grouped (per the user's rule, a grouped transfer
@@ -632,6 +633,7 @@ class FinanceProvider extends ChangeNotifier {
   /// are ignored here. Plain income categories are never groupable.
   List<(CategoryGroup?, double)> groupSpendInMonth(DateTime month) {
     final t = _monthTotals(month);
+    final byId = {for (final g in _groups) g.id: g};
     final sums = <String?, double>{};
     for (final e in t.byCategory) {
       final g = _groupAssignments[e.key.id];
@@ -640,14 +642,17 @@ class FinanceProvider extends ChangeNotifier {
     // Row-direction bucket, not the gross transfersByCategory filtered by
     // the CATEGORY's type: an income-typed row in an expense transfer
     // category (import-reachable) must not inflate its group's spend.
+    // Ungrouped transfers stay out of "Other": savings moves and card
+    // payments are not spending the user filed anywhere.
     for (final e in t.transferOutByCategory) {
       final g = _groupAssignments[e.key.id];
+      if (g == null || !byId.containsKey(g)) continue;
       sums[g] = (sums[g] ?? 0) + e.value;
     }
-    final byId = {for (final g in _groups) g.id: g};
     final result = <(CategoryGroup?, double)>[
       for (final e in sums.entries)
-        // A dangling assignment (group deleted) lands in "Other" too.
+        // An expense category's dangling assignment (group deleted) lands
+        // in "Other" too; a dangling transfer was skipped above.
         (e.key == null ? null : byId[e.key], e.value),
     ];
     result.sort((a, b) => b.$2.compareTo(a.$2));

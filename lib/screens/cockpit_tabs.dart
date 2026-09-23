@@ -11,6 +11,7 @@ import '../utils/contrast.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../widgets/budget_dialog.dart';
+import '../widgets/info_tip.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/glossy.dart';
 
@@ -60,7 +61,18 @@ class RemindersTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
       children: [
-        Text('Reminders', style: Theme.of(context).textTheme.titleMedium),
+        InfoLabel(
+          label: Text(
+            'Reminders',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          tip: const InfoTip(
+            title: 'Reminders',
+            message:
+                'Reminders notify only when Payment reminders is on, in the '
+                'Budgets tab.',
+          ),
+        ),
         const SizedBox(height: 4),
         Text(
           'Bills the app cannot detect from SMS: cash, a new payee, '
@@ -180,6 +192,24 @@ class _BudgetSectionState extends State<_BudgetSection>
     _settings.setMonthlyBudget(v);
   }
 
+  /// The cap tip's worked line: this month's spend against the cap, with the
+  /// same figures and formatting as the dashboard's budget card. Reads the
+  /// field first: opening the tip takes focus, which commits the typed cap,
+  /// so the line must show that value rather than the one saved before.
+  String? _capExample() {
+    final typed = _capCtrl.text.trim();
+    final cap = typed.isEmpty
+        ? 0.0
+        : parseAmount(typed) ?? _settings.monthlyBudget;
+    if (cap <= 0) return null;
+    final now = DateTime.now();
+    final spent = context.read<FinanceProvider>().budgetSpentInMonth(
+      DateTime(now.year, now.month),
+    );
+    return 'This month: ${fmtMoneyCompact(spent)} of '
+        '${fmtMoneyCompact(cap)} (${(spent / cap * 100).round()}%)';
+  }
+
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsProvider>();
@@ -210,6 +240,14 @@ class _BudgetSectionState extends State<_BudgetSection>
                 prefixText: '₹ ',
                 helperText: 'Leave blank to turn the budget off',
                 errorText: _capError,
+                suffixIcon: InfoTip(
+                  title: 'Monthly cap',
+                  message:
+                      'Counts confirmed spending only. Pending imports, '
+                      'transfers and card bill payments are left out, and a '
+                      'split bill counts only your share.',
+                  example: _capExample,
+                ),
               ),
               // Unfocus (not just commit): pressing Done closes the keyboard
               // but leaves the field focused, and a focused field yanks the
@@ -219,28 +257,38 @@ class _BudgetSectionState extends State<_BudgetSection>
               onSubmitted: (_) => _capFocus.unfocus(),
               onTapOutside: (_) => _capFocus.unfocus(),
             ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Budget alerts'),
-              subtitle: Text(
-                hasCap
-                    ? 'Notify as spending approaches the cap or a custom '
-                          'budget limit'
-                    : 'Set a cap or a custom budget to enable alerts',
-                style: Theme.of(context).textTheme.bodySmall,
+            _SwitchWithTip(
+              tip: const InfoTip(
+                title: 'Budget alerts',
+                message:
+                    'Checks run only while the app is open. Each alert fires '
+                    'at most once a month per budget, for the highest level '
+                    'newly crossed. Changing a limit re-arms its alerts.',
               ),
-              value: settings.budgetAlerts && hasCap,
-              onChanged: hasCap
-                  ? (on) async {
-                      await context.read<SettingsProvider>().setBudgetAlerts(
-                        on,
-                      );
-                      if (on) {
-                        await NotificationService.instance.requestPermission();
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Budget alerts'),
+                subtitle: Text(
+                  hasCap
+                      ? 'Notify as spending approaches the cap or a custom '
+                            'budget limit'
+                      : 'Set a cap or a custom budget to enable alerts',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                value: settings.budgetAlerts && hasCap,
+                onChanged: hasCap
+                    ? (on) async {
+                        await context.read<SettingsProvider>().setBudgetAlerts(
+                          on,
+                        );
+                        if (on) {
+                          await NotificationService.instance
+                              .requestPermission();
+                        }
+                        await _checkNotifications();
                       }
-                      await _checkNotifications();
-                    }
-                  : null,
+                    : null,
+              ),
             ),
             // Alerts silently go nowhere while notifications cannot be shown —
             // say WHICH problem it is, since each has a different remedy and
@@ -313,28 +361,57 @@ class _BudgetSectionState extends State<_BudgetSection>
             ],
             // Independent of the cap: card due dates and detected recurring
             // payments exist without any budget.
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Payment reminders'),
-              subtitle: Text(
-                'Card bills and detected recurring payments, checked when '
-                'the app opens',
-                style: Theme.of(context).textTheme.bodySmall,
+            _SwitchWithTip(
+              tip: const InfoTip(
+                title: 'Payment reminders',
+                message:
+                    'Card bills notify once billed and unpaid, from 5 days '
+                    'before the due date. Detected recurring payments and '
+                    'your reminders notify from 2 days before. Each notifies '
+                    'once per due month, when you open the app.',
               ),
-              value: settings.upcomingReminders,
-              onChanged: (on) async {
-                await context.read<SettingsProvider>().setUpcomingReminders(on);
-                if (on) {
-                  await NotificationService.instance.requestPermission();
-                }
-                await _checkNotifications();
-              },
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Payment reminders'),
+                subtitle: Text(
+                  'Card bills, your reminders and detected recurring '
+                  'payments, checked when the app opens',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                value: settings.upcomingReminders,
+                onChanged: (on) async {
+                  await context.read<SettingsProvider>().setUpcomingReminders(
+                    on,
+                  );
+                  if (on) {
+                    await NotificationService.instance.requestPermission();
+                  }
+                  await _checkNotifications();
+                },
+              ),
             ),
           ],
         ),
       ),
     );
   }
+}
+
+/// A switch row with its [InfoTip] beside the tile rather than inside it:
+/// SwitchListTile merges its children's semantics, which would fold the
+/// tip into the switch so a screen reader could never open it.
+class _SwitchWithTip extends StatelessWidget {
+  final Widget child;
+  final InfoTip tip;
+  const _SwitchWithTip({required this.child, required this.tip});
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(child: child),
+      tip,
+    ],
+  );
 }
 
 class _ThresholdSwitch extends StatelessWidget {
@@ -351,7 +428,9 @@ class _ThresholdSwitch extends StatelessWidget {
   Widget build(BuildContext context) {
     return SwitchListTile(
       dense: true,
-      contentPadding: const EdgeInsets.only(left: 8),
+      // Right inset = the info tip beside the switches above, so all the
+      // switches in the panel share one column.
+      contentPadding: const EdgeInsets.only(left: 8, right: 32),
       title: Text(label),
       value: value,
       onChanged: (on) =>

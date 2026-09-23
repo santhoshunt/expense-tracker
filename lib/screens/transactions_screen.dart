@@ -413,11 +413,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (_groupFilter.isNotEmpty) {
         final gid = finance.groupIdOf(t.categoryId);
         // "Other" matches unassigned *groupable* categories only, so plain
-        // income rows don't flood an Other-group filter.
+        // income rows don't flood an Other-group filter — and not ungrouped
+        // transfers, which the dashboard's Other total leaves out.
         final matches = gid != null
             ? _groupFilter.contains(gid)
             : _groupFilter.contains(kUngroupedFilterKey) &&
-                  finance.isGroupable(t.category);
+                  finance.isGroupable(t.category) &&
+                  !t.category.isTransfer;
         if (!matches) return false;
       }
       if (budgetFilterList.isNotEmpty &&

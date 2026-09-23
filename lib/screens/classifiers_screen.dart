@@ -13,6 +13,7 @@ import '../utils/format.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
+import '../widgets/info_tip.dart';
 import '../widgets/keyboard_unfocus.dart';
 import '../widgets/section_header.dart';
 import '../widgets/budget_dialog.dart';
@@ -65,72 +66,67 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Cockpit'),
-        bottom: TabBar(
-          controller: _tab,
-          isScrollable: true,
-          tabAlignment: TabAlignment.start,
-          // Roomier labels: tabs packed edge-to-edge read as cramped —
-          // let the bar scroll instead.
-          labelPadding: const EdgeInsets.symmetric(horizontal: 20),
-          tabs: const [
-            Tab(text: 'Rules'),
-            Tab(text: 'Import'),
-            Tab(text: 'Transactions'),
-            Tab(text: 'Categories'),
-            Tab(text: 'Budgets'),
-            Tab(text: 'Reminders'),
-          ],
-        ),
-      ),
-      // FAB only on the tabs with an add flow.
-      floatingActionButton: switch (_tab.index) {
-        kCockpitTabRules => GlassButton(
-          icon: Icons.add,
-          label: 'New rule',
-          onPressed: () => _showRuleDialog(context),
-        ),
-        kCockpitTabImport => GlassButton(
-          icon: Icons.add,
-          label: 'New import rule',
-          onPressed: () => _showImportRuleDialog(context),
-        ),
-        kCockpitTabCategories => GlassButton(
-          icon: Icons.add,
-          label: 'New category',
-          onPressed: () => showCategoryDialog(context),
-        ),
-        kCockpitTabBudgets => GlassButton(
-          icon: Icons.add,
-          label: 'New budget',
-          onPressed: () => showBudgetDialog(context),
-        ),
-        kCockpitTabReminders => GlassButton(
-          icon: Icons.add,
-          label: 'New reminder',
-          onPressed: () => showReminderEditor(context),
-        ),
-        _ => null,
-      },
-      body: AmbientBackground(
-        // Transparent Material: the tabs' ListTiles paint their ink on the
-        // nearest Material, and the ambient ColoredBox in between would hide
-        // it (debug assertion under tests, invisible splashes on device).
-        child: Material(
-          type: MaterialType.transparency,
-          child: TabBarView(
+    return AmbientBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          title: const Text('Cockpit'),
+          bottom: TabBar(
             controller: _tab,
-            children: [
-              _RulesTab(),
-              _ImportTab(),
-              _TransactionsTab(),
-              const CategoriesTab(),
-              const BudgetsTab(),
-              const RemindersTab(),
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            // Roomier labels: tabs packed edge-to-edge read as cramped —
+            // let the bar scroll instead.
+            labelPadding: const EdgeInsets.symmetric(horizontal: 20),
+            tabs: const [
+              Tab(text: 'Rules'),
+              Tab(text: 'Import'),
+              Tab(text: 'Transactions'),
+              Tab(text: 'Categories'),
+              Tab(text: 'Budgets'),
+              Tab(text: 'Reminders'),
             ],
           ),
+        ),
+        // FAB only on the tabs with an add flow.
+        floatingActionButton: switch (_tab.index) {
+          kCockpitTabRules => GlassButton(
+            icon: Icons.add,
+            label: 'New rule',
+            onPressed: () => _showRuleDialog(context),
+          ),
+          kCockpitTabImport => GlassButton(
+            icon: Icons.add,
+            label: 'New import rule',
+            onPressed: () => _showImportRuleDialog(context),
+          ),
+          kCockpitTabCategories => GlassButton(
+            icon: Icons.add,
+            label: 'New category',
+            onPressed: () => showCategoryDialog(context),
+          ),
+          kCockpitTabBudgets => GlassButton(
+            icon: Icons.add,
+            label: 'New budget',
+            onPressed: () => showBudgetDialog(context),
+          ),
+          kCockpitTabReminders => GlassButton(
+            icon: Icons.add,
+            label: 'New reminder',
+            onPressed: () => showReminderEditor(context),
+          ),
+          _ => null,
+        },
+        body: TabBarView(
+          controller: _tab,
+          children: [
+            _RulesTab(),
+            _ImportTab(),
+            _TransactionsTab(),
+            const CategoriesTab(),
+            const BudgetsTab(),
+            const RemindersTab(),
+          ],
         ),
       ),
     );
@@ -271,6 +267,20 @@ class _RulesTabState extends State<_RulesTab> {
 
     Widget header(String label) => UppercaseSectionHeader(label);
 
+    // The ordering tip rides on whichever header shows first: with no
+    // rules of your own (fresh install, or filtered away) it is Built-in.
+    Widget orderHeader(String label) => _TipHeader(
+      label: label,
+      tip: InfoTip(
+        title: label,
+        message:
+            'Rules are checked top to bottom, and the first match wins. '
+            'Your rules always come before built-in ones, and a new rule '
+            'goes to the top. Long-press rules to select them; rules with '
+            'the same category can be merged.',
+      ),
+    );
+
     Widget tile(ClassifierRule r) {
       final sibling = siblingOf[r.id];
       return _RuleTile(
@@ -294,9 +304,10 @@ class _RulesTabState extends State<_RulesTab> {
     // Flat item list keeps the whole thing lazily built. Filtering happens
     // before the section split, so an all-filtered section drops its header.
     final items = <Widget>[
-      if (userRules.isNotEmpty) header('Your rules'),
+      if (userRules.isNotEmpty) orderHeader('Your rules'),
       ...userRules.map(tile),
-      if (builtinRules.isNotEmpty) header('Built-in'),
+      if (builtinRules.isNotEmpty)
+        userRules.isEmpty ? orderHeader('Built-in') : header('Built-in'),
       ...builtinRules.map(tile),
     ];
     return Column(
@@ -420,6 +431,24 @@ class _RuleSelectionBar extends StatelessWidget {
   }
 }
 
+/// An [UppercaseSectionHeader] followed by an [InfoTip], keeping the plain
+/// header's left inset and close to its height.
+class _TipHeader extends StatelessWidget {
+  final String label;
+  final InfoTip tip;
+  const _TipHeader({required this.label, required this.tip});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    // The 32dp tip takes up most of the plain header's 20/6 vertical inset.
+    padding: const EdgeInsets.fromLTRB(20, 11, 20, 0),
+    child: InfoLabel(
+      label: UppercaseSectionHeader(label, padding: EdgeInsets.zero),
+      tip: tip,
+    ),
+  );
+}
+
 class _RuleTile extends StatelessWidget {
   final ClassifierRule rule;
 
@@ -483,13 +512,26 @@ class _RuleTile extends StatelessWidget {
       // the row height instead of letting one rule blow out the list. With
       // several OR-conditions, an explicit count beats an ellipsis that
       // hides conditions 3+ without a trace.
-      title: Text(
-        rule.patterns.length > 1
-            ? 'contains "${rule.patterns.first}"'
-            : 'contains ${rule.patterns.map((p) => '"$p"').join()}',
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
+      title: () {
+        final text = Text(
+          rule.patterns.length > 1
+              ? 'contains "${rule.patterns.first}"'
+              : 'contains ${rule.patterns.map((p) => '"$p"').join()}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        );
+        // Hidden while selecting: a tap there must toggle the row.
+        if (sib == null || selectionMode) return text;
+        return InfoLabel(
+          label: text,
+          tip: const InfoTip(
+            title: 'Rule pair',
+            message:
+                'One pattern, two rules: one for money out, one for money '
+                'in. Editing or deleting the pair changes both.',
+          ),
+        );
+      }(),
       subtitle: Text(
         [
           if (rule.patterns.length > 1)
@@ -583,7 +625,16 @@ class _ImportTab extends StatelessWidget {
           child: Text('No ignore rules — every bank alert imports.'),
         ),
       ...ignoreRules.map((r) => _ImportRuleTile(rule: r)),
-      header('Flagged as spam when containing'),
+      const _TipHeader(
+        label: 'Flagged as spam when containing',
+        tip: InfoTip(
+          title: 'Flagged as spam when containing',
+          message:
+              'Flagged messages are still imported, but held in the '
+              'suspected spam queue for review. If one of your own rules '
+              'matches a message when it is imported, the flag is cleared.',
+        ),
+      ),
       if (spamRules.isEmpty)
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
@@ -597,10 +648,20 @@ class _ImportTab extends StatelessWidget {
           spacing: 8,
           runSpacing: 4,
           children: [
-            TextButton.icon(
-              icon: const Icon(Icons.science_outlined),
-              label: const Text('Test a message'),
-              onPressed: () => _showTestMessageDialog(context),
+            InfoLabel(
+              label: TextButton.icon(
+                icon: const Icon(Icons.science_outlined),
+                label: const Text('Test a message'),
+                onPressed: () => _showTestMessageDialog(context),
+              ),
+              tip: const InfoTip(
+                title: 'Test a message',
+                message:
+                    'Shows what the parser does with the pasted text. It is '
+                    'more lenient about senders than the real inbox scan and '
+                    'does not check for duplicates, so a real import can '
+                    'still skip the message.',
+              ),
             ),
             TextButton.icon(
               icon: const Icon(Icons.settings_backup_restore),
@@ -841,9 +902,18 @@ class _TransactionsTabState extends State<_TransactionsTab> {
         // otherwise unlabelled.
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-          child: Text(
-            'Tap to recategorise · long-press to make a rule from a message.',
-            style: Theme.of(context).textTheme.bodySmall,
+          child: InfoLabel(
+            label: Text(
+              'Tap to recategorise · long-press to make a rule from a message.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            tip: const InfoTip(
+              title: 'Tap to recategorise',
+              message:
+                  'Picking a category also switches the row to that '
+                  "category's direction and marks it as set by hand, so "
+                  'rules will not change it again.',
+            ),
           ),
         ),
         Expanded(
@@ -1234,7 +1304,7 @@ Future<void> _showImportRuleDialog(
                   decoration: const InputDecoration(
                     labelText: 'If the SMS contains…',
                     helperText:
-                        'Case-insensitive, matched as plain text — '
+                        'Case-insensitive, matches whole words, '
                         'e.g. "will be debited"',
                   ),
                 ),
@@ -1372,26 +1442,44 @@ Future<void> _showRuleDialog(
                   // Category first: it names what the rule DOES, and below
                   // the condition list it sat under the fold once the
                   // keyboard opened.
-                  AppDropdownField<String>(
-                    label: 'Then classify as',
-                    value: categoryId,
-                    items: [..._categoryPickerItems(ctx)],
-                    onChanged: (v) {
-                      if (v == null) return;
-                      setState(() {
-                        categoryId = v;
-                        // The second slot must stay the OPPOSITE direction;
-                        // drop it when the first pick moves onto its side
-                        // (or becomes spam, which has no direction).
-                        final other = otherCategoryId;
-                        if (v == kSpamCategoryId ||
-                            (other != null &&
-                                categoryById(other).type ==
-                                    categoryById(v).type)) {
-                          otherCategoryId = null;
-                        }
-                      });
-                    },
+                  // The field already has a suffix (the arrow), so the tip
+                  // trails it like the conditions' remove button.
+                  Row(
+                    children: [
+                      Expanded(
+                        child: AppDropdownField<String>(
+                          label: 'Then classify as',
+                          value: categoryId,
+                          items: [..._categoryPickerItems(ctx)],
+                          onChanged: (v) {
+                            if (v == null) return;
+                            setState(() {
+                              categoryId = v;
+                              // The second slot must stay the OPPOSITE
+                              // direction; drop it when the first pick moves
+                              // onto its side (or becomes spam, which has no
+                              // direction).
+                              final other = otherCategoryId;
+                              if (v == kSpamCategoryId ||
+                                  (other != null &&
+                                      categoryById(other).type ==
+                                          categoryById(v).type)) {
+                                otherCategoryId = null;
+                              }
+                            });
+                          },
+                        ),
+                      ),
+                      const InfoTip(
+                        title: 'Then classify as',
+                        message:
+                            'Saving applies the rule to past SMS rows right '
+                            'away, except rows you categorised by hand. '
+                            'Spam: matching messages are never imported, and '
+                            'matching imports still waiting for review are '
+                            'deleted after you confirm.',
+                      ),
+                    ],
                   ),
                   // Rules only fire for alerts moving money in the category's
                   // direction (the matcher skips the rest), so one keyword
@@ -1477,6 +1565,20 @@ Future<void> _showRuleDialog(
                               errorText: ctrls[i].text.contains('|')
                                   ? 'Remove "|" — use "Add another condition" '
                                         'for OR'
+                                  : null,
+                              suffixIcon: i == 0
+                                  ? const InfoTip(
+                                      title: 'If the SMS contains…',
+                                      message:
+                                          'Matches whole words in the SMS '
+                                          'text, ignoring case: "RD Ac" '
+                                          'matches "RD Ac 1234" but not '
+                                          '"card account". Apart from spam '
+                                          'rules, a rule fires only when the '
+                                          'message moves money in its '
+                                          "category's direction. Transactions "
+                                          'added by hand are never matched.',
+                                    )
                                   : null,
                             ),
                           ),

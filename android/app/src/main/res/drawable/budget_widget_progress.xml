@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Rounded progress track: coral fill (the app accent) over a charcoal
-     groove. Colour never carries the over-budget state alone — the status
-     text says it in words too. -->
+<!-- Rounded progress track over a charcoal groove. From Android 12 the
+     provider tints the fill green, orange or red by how much of the budget
+     is used; older launchers keep this coral. Colour never carries the
+     over-budget state alone: the status text says it in words too. -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:id="@android:id/background">
         <shape android:shape="rectangle">

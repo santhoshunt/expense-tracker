@@ -25,6 +25,7 @@ import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/undo_snackbar.dart';
 import '../widgets/spending_heatmap.dart';
 import '../widgets/glossy.dart';
+import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
 import '../widgets/category_donut_chart.dart';
 import '../widgets/monthly_bar_chart.dart';
@@ -75,6 +76,11 @@ class DashboardScreen extends StatefulWidget {
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
+
+/// The heatmap sits on two views; one wording for both headings.
+const _heatmapTip =
+    "Each day is shaded by its spending compared with this month's biggest "
+    'day. Days with no spending stay plain.';
 
 class _DashboardScreenState extends State<DashboardScreen> {
   late DateTime _month;
@@ -393,6 +399,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           onPressed: () => setState(() => _yearMode = !_yearMode),
           child: Text(_yearMode ? 'Month' : 'Year'),
         ),
+        const InfoTip(
+          title: 'Year view',
+          message:
+              'Year view adds up the 12 months of the year. Budgets, '
+              'comparisons, the heatmap, merchants, groups and transfers are '
+              'hidden, and the totals and categories do not open their '
+              'transactions.',
+        ),
       ],
     );
   }
@@ -431,6 +445,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final categorySort = context.select<SettingsProvider, CategorySort>(
       (s) => s.categorySort,
     );
+    // The stat cards' tips name the window their figures cover.
+    final period = _yearMode ? 'this year' : 'this month';
     // One children-list builder per view; called lazily from each page's
     // Builder so only mounted pages construct their widgets.
     List<Widget> overviewChildren() => [
@@ -496,6 +512,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     : finance.incomeInMonth(_month),
                 icon: Icons.arrow_downward,
                 color: colors.green,
+                tip:
+                    'Money in $period, not counting transfers between '
+                    'your own accounts or pending imports.',
                 onTap: widget.onViewTransactions == null || _yearMode
                     ? null
                     : () => widget.onViewTransactions!(TxType.income, _month),
@@ -507,6 +526,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               value: monthExpense,
               icon: Icons.arrow_upward,
               color: scheme.error,
+              tip:
+                  'Confirmed spending $period. Transfers and card bill '
+                  'payments are left out, and a split bill counts only your '
+                  'share.',
               onTap: widget.onViewTransactions == null || _yearMode
                   ? null
                   : () => widget.onViewTransactions!(TxType.expense, _month),
@@ -523,6 +546,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   : finance.savingsOutflowInMonth(_month),
               icon: Icons.savings_outlined,
               color: colors.orange,
+              tip: 'Money moved to savings $period.',
               onTap: widget.onViewCategory == null || _yearMode
                   ? null
                   : () => widget.onViewCategory!(
@@ -555,7 +579,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // monthly, so the Year view skips them.
       if (finance.budgets.isNotEmpty && !_yearMode) ...[
         const SizedBox(height: 24),
-        Text('Budgets', style: Theme.of(context).textTheme.titleMedium),
+        const _SectionHeading(
+          'Budgets',
+          tip:
+              '"Only these" budgets count the picked categories; "All '
+              'except" budgets count everything else. Same colours as the '
+              'monthly budget.',
+        ),
         const SizedBox(height: 8),
         Card(
           child: Padding(
@@ -599,10 +629,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       if (monthExpense > 0 && !_yearMode) ...[
         const SizedBox(height: 24),
-        Text(
-          'Spending heatmap',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
+        const _SectionHeading('Spending heatmap', tip: _heatmapTip),
         const SizedBox(height: 8),
         Card(
           child: Padding(
@@ -613,9 +640,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ],
       if (recent.isNotEmpty) ...[
         const SizedBox(height: 24),
-        Text(
+        _SectionHeading(
           'Recent transactions',
-          style: Theme.of(context).textTheme.titleMedium,
+          tip:
+              'Your 5 newest confirmed transactions, whatever month is '
+              'selected.',
         ),
         const SizedBox(height: 8),
         Card(
@@ -647,7 +676,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ],
       const SizedBox(height: 24),
       Text(
-        _yearMode ? 'Months of $year' : 'Last 6 months',
+        _yearMode
+            ? 'Months of $year'
+            : _month == DateTime(DateTime.now().year, DateTime.now().month)
+            ? 'Last 6 months'
+            : '6 months to ${fmtMonth(_month)}',
         style: Theme.of(context).textTheme.titleMedium,
       ),
       const SizedBox(height: 8),
@@ -660,6 +693,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 months: _yearMode
                     ? [for (var m = 1; m <= 12; m++) DateTime(year, m)]
                     : null,
+                end: _month,
                 showIncome: !hideIncome,
               ),
               const SizedBox(height: 8),
@@ -696,7 +730,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
       ),
       if (byCategory.isNotEmpty) ...[
-        const SizedBox(height: 12),
+        const SizedBox(height: 24),
+        _SectionHeading(
+          'By category',
+          tip:
+              "The percentage is this category's share of the "
+              "${_yearMode ? "year's" : "month's"} spending. Long-press a row "
+              'to set or edit a budget for it; "of ₹X" shows that budget.',
+        ),
+        const SizedBox(height: 8),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -740,7 +782,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // "nothing identifiable yet".
       if (!_yearMode && (topMerchantsList.isNotEmpty || monthExpense > 0)) ...[
         const SizedBox(height: 24),
-        Text('Top merchants', style: Theme.of(context).textTheme.titleMedium),
+        const _SectionHeading(
+          'Top merchants',
+          tip:
+              'Names come from the SMS text or the note. Transfers and spam '
+              'are left out. Long-press a merchant to rename it everywhere.',
+        ),
         const SizedBox(height: 8),
         Card(
           child: Padding(
@@ -821,10 +868,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ],
       // Spending per parent group (Needs/Wants/…). Grouped transfer
       // outflows are included in their group's sum; "Other" collects
-      // ungrouped categories.
+      // ungrouped categories (ungrouped transfers stay out of it).
       if (finance.groups.isNotEmpty && groupTotal > 0 && !_yearMode) ...[
         const SizedBox(height: 24),
-        Text('By group', style: Theme.of(context).textTheme.titleMedium),
+        const _SectionHeading(
+          'By group',
+          tip:
+              "Each group's share of the grouped total. Categories with "
+              'no group count under Other. Money-out transfers in a grouped '
+              'category count toward its group; other transfers are left '
+              'out.',
+        ),
         const SizedBox(height: 8),
         Card(
           child: Padding(
@@ -855,10 +909,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // weekdays are usually hot across history.
       if (monthExpense > 0 && !_yearMode) ...[
         const SizedBox(height: 24),
-        Text(
-          'Spending heatmap',
-          style: Theme.of(context).textTheme.titleMedium,
-        ),
+        const _SectionHeading('Spending heatmap', tip: _heatmapTip),
         const SizedBox(height: 8),
         Card(
           child: Padding(
@@ -871,7 +922,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // shown separately so the flows are still visible.
       if (transfersBy.isNotEmpty && !_yearMode) ...[
         const SizedBox(height: 24),
-        Text('Transfers', style: Theme.of(context).textTheme.titleMedium),
+        const _SectionHeading(
+          'Transfers',
+          tip:
+              'Money moved between your own accounts. Out also includes '
+              "friends' shares of split bills, which have no transaction of "
+              'their own.',
+        ),
         const SizedBox(height: 8),
         Card(
           child: Padding(
@@ -1109,6 +1166,20 @@ class _UpcomingCard extends StatelessWidget {
                     color: scheme.onSurfaceVariant,
                   ),
                 ),
+                // A direct child of the header row, beside the count: the
+                // row's own tap folds the card, the tip's tap stays its own.
+                const InfoTip(
+                  title: 'Upcoming',
+                  message:
+                      'Card bills, your reminders from a week before to a '
+                      'week after their due day, and payments the app '
+                      'spotted repeating (from SMS or your notes), '
+                      'including regular income. A repeat is spotted after 3 '
+                      'payments to the same merchant about a month apart. '
+                      'Card icons: green not billed or paid, orange billed, '
+                      'red due within 5 days or overdue. Long-press a '
+                      'spotted payment to hide it.',
+                ),
                 const Spacer(),
                 IconButton(
                   tooltip: 'Add reminder',
@@ -1148,7 +1219,7 @@ class _UpcomingCard extends StatelessWidget {
                     children: [
                       if (entries.isEmpty)
                         Text(
-                          'Nothing due in the next week.',
+                          'Nothing due soon.',
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: scheme.onSurfaceVariant),
                         ),
@@ -1559,11 +1630,52 @@ class _BalanceCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Text(
-                    _useAccounts ? 'Net balance' : 'Available balance',
-                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: InfoLabel(
+                        label: Text(
+                          _useAccounts ? 'Net balance' : 'Available balance',
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                        tip: _useAccounts
+                            ? InfoTip(
+                                title: 'Net balance',
+                                message:
+                                    'Bank balances minus what you owe on '
+                                    'credit cards. Savings and closed '
+                                    'accounts are left out. A card with no '
+                                    'known outstanding counts as zero.',
+                                // The balance breakdown sheet's own figures.
+                                example: () =>
+                                    'Now: ${fmtMoney(finance.bankBalanceTotal)} '
+                                    'in banks − '
+                                    '${fmtMoney(finance.cardOutstandingTotal)} '
+                                    'on cards = ${fmtMoney(finance.netWorth)}',
+                              )
+                            : InfoTip(
+                                title: 'Available balance',
+                                message:
+                                    'All income minus all spending and money '
+                                    'moved to savings, since your first '
+                                    'transaction.',
+                                example: () {
+                                  if (!finance.hasTransactions) return null;
+                                  // Masked like the breakdown sheet's
+                                  // income row when income is hidden.
+                                  final hide = context
+                                      .read<SettingsProvider>()
+                                      .hideIncome;
+                                  final saved = finance.totalSavingsTransfers;
+                                  return '${hide ? kMaskedAmount : fmtMoney(finance.totalIncome)} in'
+                                      ' − ${fmtMoney(finance.totalExpense)} out'
+                                      '${saved > 0 ? ' − ${fmtMoney(saved)} to savings' : ''}'
+                                      ' = ${fmtMoney(finance.balance)}';
+                                },
+                              ),
+                      ),
+                    ),
                   ),
-                  const Spacer(),
                   Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
                 ],
               ),
@@ -1588,10 +1700,23 @@ class _BalanceCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     Expanded(
-                      child: Text(
-                        '${fmtMoney(finance.totalSavingsTransfers)} moved to '
-                        'savings',
-                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: InfoLabel(
+                          label: Text(
+                            '${fmtMoney(finance.totalSavingsTransfers)} moved '
+                            'to savings',
+                            style: TextStyle(color: scheme.onSurfaceVariant),
+                          ),
+                          tip: const InfoTip(
+                            title: 'Moved to savings',
+                            message:
+                                'All money moved to savings since your first '
+                                'transaction. It is already taken out of the '
+                                "figure above. Your savings accounts' value "
+                                'shows under Accounts.',
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -1660,11 +1785,26 @@ class _BudgetCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 8),
                       Flexible(
-                        child: Text(
-                          'Monthly budget',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        child: InfoLabel(
+                          label: Text(
+                            'Monthly budget',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: scheme.onSurfaceVariant),
+                          ),
+                          tip: InfoTip(
+                            title: 'Monthly budget',
+                            message:
+                                'Spending against the monthly cap set in '
+                                'Cockpit, Budgets. Green below 80%, orange '
+                                'from 80%, red from 100%. The ring stays full '
+                                'past 100% while the percentage keeps '
+                                'counting.',
+                            // Rounded the way the ring's centre label is.
+                            example: () =>
+                                '${fmtMoney(spent)} of ${fmtMoney(cap)} = '
+                                '${(pct * 100).round()}%',
+                          ),
                         ),
                       ),
                     ],
@@ -1700,48 +1840,70 @@ class _StatCard extends StatelessWidget {
   final Color color;
   final VoidCallback? onTap;
 
+  /// What the figure counts, behind the card's "i".
+  final String tip;
+
   const _StatCard({
     required this.label,
     required this.value,
     required this.icon,
     required this.color,
+    required this.tip,
     this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
+    // The "i" sits in the card's top-right corner, over the padding, rather
+    // than in the label row: its 32dp target would make the row taller than
+    // the strip's 88dp height allows.
     return Card(
       child: InkWell(
         onTap: onTap,
-        child: Container(
-          constraints: const BoxConstraints(minWidth: 132),
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-          child: Column(
+        child: Stack(
+          children: [
+            _body(context),
+            Positioned(
+              top: 6,
+              right: 0,
+              child: InfoTip(title: label, message: tip),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _body(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minWidth: 132),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, size: 16, color: color),
-                  const SizedBox(width: 6),
-                  Text(label, style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-              const SizedBox(height: 8),
-              // Plain text — no increment animation. Animating on month change
-              // made the figures visibly "roll", which read as glitchy.
-              Text(
-                fmtMoney(value),
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: color,
-                ),
-              ),
+              Icon(icon, size: 16, color: color),
+              const SizedBox(width: 6),
+              Text(label, style: Theme.of(context).textTheme.bodySmall),
+              // Keeps the label clear of the corner "i".
+              const SizedBox(width: 20),
             ],
           ),
-        ),
+          const SizedBox(height: 8),
+          // Plain text — no increment animation. Animating on month change
+          // made the figures visibly "roll", which read as glitchy.
+          Text(
+            fmtMoney(value),
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1941,6 +2103,24 @@ class _CategoryRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A dashboard section's titleMedium heading with its "i" explaining it.
+/// The heading keeps a plain [Text] so finders by text still land on it.
+class _SectionHeading extends StatelessWidget {
+  final String title;
+  final String tip;
+
+  const _SectionHeading(this.title, {required this.tip});
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.centerLeft,
+    child: InfoLabel(
+      label: Text(title, style: Theme.of(context).textTheme.titleMedium),
+      tip: InfoTip(title: title, message: tip),
+    ),
+  );
 }
 
 class _LegendDot extends StatelessWidget {

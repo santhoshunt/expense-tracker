@@ -122,7 +122,11 @@ void main() {
     final dark = buildWidgetTheme(s, Brightness.dark);
     expect(dark['surface'], AppPalette.amoled.colors.surface.toARGB32());
     expect(dark['text'], AppPalette.amoled.colors.textPrimary.toARGB32());
-    expect(dark['accent'], FigmaPalette.green.toARGB32());
+    // The bar is coloured by budget use, not by the accent.
+    expect(dark.containsKey('accent'), isFalse);
+    expect(dark['safe'], FigmaPalette.green.toARGB32());
+    expect(dark['warn'], FigmaPalette.orange.toARGB32());
+    expect(dark['over'], FigmaPalette.pink.toARGB32());
 
     // System mode on a light phone, and forced light, use the light kit.
     await s.setMode(ThemeMode.system);

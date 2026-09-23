@@ -12,7 +12,8 @@ import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/budget_detail_sheet.dart';
 
 /// The month switcher inside the budget detail sheet: chevrons step the
-/// shown month, figures follow, the current month is the upper bound.
+/// shown month, figures follow, and the forward bound matches the
+/// dashboard's (the current month, or the latest month with data after it).
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -73,7 +74,8 @@ void main() {
 
     expect(find.text(fmtMonth(thisMonth)), findsOneWidget);
     expect(find.text('${fmtMoney(800)} / ${fmtMoney(1000)}'), findsOneWidget);
-    // At the current month the forward chevron is disabled. byTooltip
+    // No data after the current month, so the forward chevron is disabled
+    // here. byTooltip
     // matches the Tooltip INSIDE the button, so climb to the button itself.
     final next = tester.widget<IconButton>(
       find

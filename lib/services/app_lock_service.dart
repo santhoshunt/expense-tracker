@@ -23,6 +23,18 @@ class AppLockService {
     }
   }
 
+  /// [isSupported] for the turn-off path: null when the platform could not
+  /// answer. Only a definite false (no screen lock at all) may skip the
+  /// prompt; a passing error must not switch the lock off unasked.
+  Future<bool?> canAuthenticate() async {
+    if (!_supported) return false;
+    try {
+      return await _auth.isDeviceSupported();
+    } on PlatformException {
+      return null;
+    }
+  }
+
   /// Shows the system unlock prompt; true only on success. Biometric with
   /// device-credential (PIN/pattern) fallback. Any platform error counts as
   /// a failed attempt — the gate stays locked and offers retry.

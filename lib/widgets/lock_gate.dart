@@ -94,9 +94,10 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     if (!_locked) return widget.child;
     final scheme = Theme.of(context).colorScheme;
-    return Scaffold(
-      body: AmbientBackground(
-        child: Center(
+    return AmbientBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
