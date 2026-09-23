@@ -244,6 +244,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       context,
       'Deleted ${tx.category.label} · ${fmtMoney(tx.amount)}',
       () => finance.restoreEditedTransactions([tx, ?partner]),
+      icon: Icons.delete_outline,
+      tone: AppToastTone.removal,
     );
     navigator.pop();
   }
@@ -290,6 +292,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                 context,
                 'Unpaired',
                 b == null ? () {} : () => finance.pairTransactions(a, b),
+                icon: Icons.link_off,
+                tone: AppToastTone.removal,
               );
               navigator.pop();
             },

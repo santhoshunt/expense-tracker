@@ -6,6 +6,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
+import '../widgets/category_color_picker.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
@@ -324,7 +325,7 @@ class _CategoriesTabState extends State<CategoriesTab> {
     CategoryGroup? existing,
   }) async {
     final labelCtrl = TextEditingController(text: existing?.label ?? '');
-    var color = existing?.color ?? kCategoryColorChoices.first;
+    var color = existing?.color ?? kNoCategoryColor;
 
     await showDialog(
       context: context,
@@ -351,47 +352,9 @@ class _CategoriesTabState extends State<CategoriesTab> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  Text('Colour', style: Theme.of(ctx).textTheme.labelMedium),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      for (final (i, choice) in kCategoryColorChoices.indexed)
-                        Semantics(
-                          button: true,
-                          selected: choice == color,
-                          label: 'Colour ${i + 1}',
-                          excludeSemantics: true,
-                          child: _pickerTarget(
-                            InkWell(
-                              customBorder: const CircleBorder(),
-                              onTap: () => setState(() => color = choice),
-                              child: Container(
-                                width: 32,
-                                height: 32,
-                                decoration: BoxDecoration(
-                                  color: choice,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: choice == color
-                                        ? Theme.of(ctx).colorScheme.onSurface
-                                        : Colors.transparent,
-                                    width: 2,
-                                  ),
-                                ),
-                                child: choice == color
-                                    ? Icon(
-                                        Icons.check,
-                                        size: 16,
-                                        color: onSwatch(choice),
-                                      )
-                                    : null,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
+                  CategoryColorPicker(
+                    value: color,
+                    onChanged: (c) => setState(() => color = c),
                   ),
                 ],
               ),
@@ -520,7 +483,7 @@ Future<void> showCategoryDialog(
   var type = existing?.type ?? TxType.expense;
   var isTransfer = existing?.isTransfer ?? false;
   var icon = existing?.icon ?? Icons.home;
-  var color = existing?.color ?? kCategoryColorChoices.first;
+  var color = existing?.color ?? kNoCategoryColor;
   String? groupId = existing == null ? null : finance.groupIdOf(existing.id);
   // Re-entrancy latch: the build-time duplicate check can't stop a
   // double-tap (both presses see the pre-add state), and Create awaits the
@@ -702,47 +665,9 @@ Future<void> showCategoryDialog(
                     ],
                   ),
                   const SizedBox(height: 16),
-                  Text('Colour', style: Theme.of(ctx).textTheme.labelMedium),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      for (final (i, choice) in kCategoryColorChoices.indexed)
-                        Semantics(
-                          button: true,
-                          selected: choice == color,
-                          label: 'Colour ${i + 1}',
-                          excludeSemantics: true,
-                          child: _pickerTarget(
-                            InkWell(
-                              customBorder: const CircleBorder(),
-                              onTap: () => setState(() => color = choice),
-                              child: Container(
-                                width: 32,
-                                height: 32,
-                                decoration: BoxDecoration(
-                                  color: choice,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: choice == color
-                                        ? Theme.of(ctx).colorScheme.onSurface
-                                        : Colors.transparent,
-                                    width: 2,
-                                  ),
-                                ),
-                                child: choice == color
-                                    ? Icon(
-                                        Icons.check,
-                                        size: 16,
-                                        color: onSwatch(choice),
-                                      )
-                                    : null,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
+                  CategoryColorPicker(
+                    value: color,
+                    onChanged: (c) => setState(() => color = c),
                   ),
                 ],
               ),

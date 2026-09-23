@@ -251,6 +251,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         'Auto-import: $totalImported new transaction'
         '${totalImported == 1 ? '' : 's'} to review.',
         tone: AppToastTone.success,
+        icon: Icons.sms_outlined,
       );
     } catch (e) {
       // Fire-and-forget from a post-frame callback — surface instead of
@@ -389,6 +390,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     '${result.scanned} scanned message${result.scanned == 1 ? '' : 's'}.'
               : parts.join(' · '),
           tone: parts.isEmpty ? AppToastTone.info : AppToastTone.success,
+          icon: Icons.sms_outlined,
         );
         if (result.imported > 0) setState(() => _index = 1);
       }

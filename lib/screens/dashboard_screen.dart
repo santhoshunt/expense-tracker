@@ -306,6 +306,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         messenger,
         'Saved report $year',
         tone: AppToastTone.success,
+        icon: Icons.picture_as_pdf_outlined,
       );
     } catch (e) {
       showAppToastOn(messenger, 'Export failed: $e', tone: AppToastTone.error);
@@ -1271,6 +1272,8 @@ class _UpcomingCard extends StatelessWidget {
                   context,
                   '${r.name} marked paid',
                   () => finance.updateReminder(before),
+                  icon: Icons.task_alt,
+                  tone: AppToastTone.success,
                 );
               },
             ),
@@ -1296,6 +1299,8 @@ class _UpcomingCard extends StatelessWidget {
                   context,
                   'Deleted reminder "${r.name}"',
                   () => finance.restoreReminder(before),
+                  icon: Icons.delete_outline,
+                  tone: AppToastTone.removal,
                 );
               },
             ),
@@ -1358,6 +1363,8 @@ class _UpcomingCard extends StatelessWidget {
                       context,
                       '${a.name} bill marked paid',
                       () => finance.setCardBillPaidMonth(a.id, prev),
+                      icon: Icons.task_alt,
+                      tone: AppToastTone.success,
                     );
                   },
                 ),
@@ -1485,6 +1492,8 @@ class _UpcomingCard extends StatelessWidget {
                         result.prevPaidMonth,
                       );
                     },
+                    icon: Icons.payments_outlined,
+                    tone: AppToastTone.success,
                   );
                 },
                 child: const Text('Save'),

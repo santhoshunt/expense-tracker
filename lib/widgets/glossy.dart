@@ -145,6 +145,20 @@ class GlassSegmented<T> extends StatelessWidget {
         color: scheme.outlineVariant,
         borderRadius: BorderRadius.circular(9),
       ),
+      // Edge light: an accent rim with the glow kept inside the thumb. It
+      // sits in the foreground because a decoration paints its shadows
+      // beneath its own fill, which would hide an inner glow.
+      foregroundDecoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: scheme.primary.withValues(alpha: 0.55)),
+        boxShadow: [
+          BoxShadow(
+            color: scheme.primary.withValues(alpha: 0.20),
+            blurRadius: 10,
+            blurStyle: BlurStyle.inner,
+          ),
+        ],
+      ),
     );
     final p = pager;
     if (p == null) {

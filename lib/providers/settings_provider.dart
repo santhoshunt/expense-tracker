@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/budget.dart';
+import '../utils/app_palettes.dart';
 import '../utils/figma_palette.dart';
 
 /// How often SMS auto-import runs. Imports happen on app launch when due —
@@ -47,9 +48,8 @@ enum CategorySort {
   const CategorySort(this.label, this.subtitle);
 }
 
-/// App preferences: theme mode + accent colour, SMS auto-import cadence and
-/// monthly budget alerts. (The old seed/background/glass customization is
-/// gone — the Figma structure is fixed; only mode and accent vary.)
+/// App preferences: theme mode, dark palette + accent colour, SMS
+/// auto-import cadence and monthly budget alerts.
 class SettingsProvider extends ChangeNotifier {
   static const _kThemeMode = 'theme_mode_v1';
   static const _kAccent = 'accent_color_v1';
@@ -71,9 +71,11 @@ class SettingsProvider extends ChangeNotifier {
   static const _kDismissedPairs = 'pair_dismissed_v1';
   static const _kCategoryOrder = 'category_order_v1';
   static const _kCategorySort = 'category_sort_v1';
+  static const _kPalette = 'palette_v1';
 
   ThemeMode _mode = ThemeMode.dark; // the app's native look
   Color _accent = FigmaPalette.primary;
+  AppPalette _palette = AppPalette.standard;
   AutoImportFrequency _autoImport = AutoImportFrequency.off;
   double _monthlyBudget = 0; // 0 = no cap set
   bool _budgetAlerts = true;
@@ -92,6 +94,9 @@ class SettingsProvider extends ChangeNotifier {
 
   ThemeMode get mode => _mode;
   Color get accent => _accent;
+
+  /// The dark theme's structural palette (light mode ignores it).
+  AppPalette get palette => _palette;
   AutoImportFrequency get autoImport => _autoImport;
 
   /// Overall monthly spending cap; 0 means no budget is set.
@@ -208,6 +213,12 @@ class SettingsProvider extends ChangeNotifier {
           CategorySort.biggestChange,
       CategorySort.biggestChange,
     );
+    _palette = tryRead(
+      () =>
+          AppPalette.values.asNameMap()[prefs.getString(_kPalette)] ??
+          AppPalette.standard,
+      AppPalette.standard,
+    );
     _loaded = true;
     notifyListeners();
   }
@@ -298,6 +309,19 @@ class SettingsProvider extends ChangeNotifier {
     _accent = color;
     notifyListeners();
     await _persistPref(_kAccent, (p) => p.setInt(_kAccent, color.toARGB32()));
+  }
+
+  /// Switches the dark theme and adopts its accent in the same notify, so
+  /// the app cross-fades once. The accent swatches can change it after.
+  Future<void> setPalette(AppPalette palette) async {
+    if (palette == _palette) return;
+    _palette = palette;
+    _accent = palette.colors.accent;
+    notifyListeners();
+    await _persistPref(_kPalette, (p) async {
+      await p.setString(_kPalette, palette.name);
+      await p.setInt(_kAccent, _accent.toARGB32());
+    });
   }
 
   Future<void> setUpcomingReminders(bool enabled) async {
@@ -408,6 +432,7 @@ class SettingsProvider extends ChangeNotifier {
     'dismissedPairs': _dismissedPairs.toList(),
     'categoryOrder': _categoryOrder.name,
     'categorySort': _categorySort.name,
+    'palette': _palette.name,
     // appLock is intentionally absent — see setAppLock.
   };
 
@@ -455,6 +480,7 @@ class SettingsProvider extends ChangeNotifier {
         _categoryOrder;
     _categorySort =
         CategorySort.values.asNameMap()[map['categorySort']] ?? _categorySort;
+    _palette = AppPalette.values.asNameMap()[map['palette']] ?? _palette;
     await _persistPref('backup restore', (p) async {
       await p.remove(budgetAlertMonthKey(DateTime.now()));
       await p.setString(_kThemeMode, _mode.name);
@@ -471,6 +497,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());
       await p.setString(_kCategoryOrder, _categoryOrder.name);
       await p.setString(_kCategorySort, _categorySort.name);
+      await p.setString(_kPalette, _palette.name);
     });
     notifyListeners();
   }

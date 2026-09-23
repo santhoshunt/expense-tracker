@@ -88,8 +88,12 @@ void main() {
     // No account on either leg → plain transfer categories.
     expect(out.categoryId, 'transfer_out');
     expect(inn.categoryId, 'transfer_in');
+    // By label: the toast leads with the same link icon.
     expect(
-      find.byIcon(Icons.link, skipOffstage: false),
+      find.byWidgetPredicate(
+        (w) => w is Icon && w.semanticLabel == 'paired transfer',
+        skipOffstage: false,
+      ),
       findsNWidgets(2),
       reason: 'both tiles carry the link marker',
     );

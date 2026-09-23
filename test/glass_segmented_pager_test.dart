@@ -54,6 +54,18 @@ void main() {
     expect(tester.getTopLeft(_thumb()).dx, greaterThan(mid));
   });
 
+  testWidgets('the thumb carries an accent edge light', (tester) async {
+    final ctrl = PageController();
+    addTearDown(ctrl.dispose);
+    await tester.pumpWidget(_Harness(ctrl: ctrl));
+
+    final thumb = tester.widget<Container>(_thumb());
+    final glow = thumb.foregroundDecoration! as BoxDecoration;
+    final primary = Theme.of(tester.element(_thumb())).colorScheme.primary;
+    expect((glow.border! as Border).top.color, primary.withValues(alpha: 0.55));
+    expect(glow.boxShadow!.single.blurStyle, BlurStyle.inner);
+  });
+
   testWidgets('the ends stop', (tester) async {
     final ctrl = PageController();
     addTearDown(ctrl.dispose);

@@ -199,7 +199,8 @@ class _RulesTabState extends State<_RulesTab> {
     showAppToastOn(
       messenger,
       parts.join(' · '),
-      tone: AppToastTone.undo,
+      tone: AppToastTone.change,
+      icon: Icons.call_merge,
       duration: const Duration(seconds: 5),
       actionLabel: 'Undo',
       onAction: () {
@@ -547,6 +548,8 @@ class _RuleTile extends StatelessWidget {
                       finance.restoreRule(sib, sibIndex);
                     }
                   },
+                  icon: Icons.delete_outline,
+                  tone: AppToastTone.removal,
                 );
               },
             ),
@@ -754,6 +757,8 @@ class _ImportRuleTile extends StatelessWidget {
             context,
             'Deleted rule "${rule.pattern}"',
             () => finance.restoreImportRule(rule, index),
+            icon: Icons.delete_outline,
+            tone: AppToastTone.removal,
           );
         },
       ),
@@ -1608,7 +1613,8 @@ Future<void> _showRuleDialog(
                           parts.join(' · '),
                           tone: dropped.isEmpty
                               ? AppToastTone.info
-                              : AppToastTone.undo,
+                              : AppToastTone.change,
+                          icon: Icons.rule,
                           duration: const Duration(seconds: 5),
                           actionLabel: dropped.isEmpty ? null : 'Restore',
                           onAction: dropped.isEmpty

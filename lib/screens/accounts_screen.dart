@@ -1030,6 +1030,8 @@ class _AccountMenu extends StatelessWidget {
                               context,
                               'Unlinked ${k.replaceFirst(':', ' ••')}',
                               () => finance.addAccountKey(account.id, k),
+                              icon: Icons.link_off,
+                              tone: AppToastTone.removal,
                             );
                           },
                         ),
@@ -1198,6 +1200,8 @@ class _AccountMenu extends StatelessWidget {
       context,
       'Closed "${account.name}"',
       () => finance.reopenAccount(account.id),
+      icon: Icons.archive_outlined,
+      tone: AppToastTone.removal,
     );
   }
 
