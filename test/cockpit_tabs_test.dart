@@ -85,12 +85,15 @@ void main() {
     expect(find.text('Add reminder', skipOffstage: false), findsNothing);
     // The pointer row sits near the bottom, offstage in the cache extent.
     await tester.scrollUntilVisible(
-      find.text('Moved — manage them in Cockpit'),
+      find.text('Rules, import filters, categories, budgets and reminders'),
       300,
       scrollable: find.byType(Scrollable).first,
     );
     await tester.pump();
-    expect(find.text('Rules, categories, budgets & reminders'), findsOneWidget);
-    expect(find.text('Moved — manage them in Cockpit'), findsOneWidget);
+    expect(find.text('Open Cockpit'), findsOneWidget);
+    expect(
+      find.text('Rules, import filters, categories, budgets and reminders'),
+      findsOneWidget,
+    );
   });
 }

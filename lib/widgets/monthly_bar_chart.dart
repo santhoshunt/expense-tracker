@@ -8,25 +8,38 @@ import '../utils/app_theme.dart';
 import '../utils/format.dart';
 
 /// Income vs expense bars per month, drawn with CustomPaint to avoid a
-/// charting dependency. Defaults to the last six months; the dashboard's
-/// Year view passes the twelve months of a year instead.
+/// charting dependency. Defaults to the six months ending at [end]; the
+/// dashboard's Year view passes the twelve months of a year instead.
 class MonthlyBarChart extends StatelessWidget {
   final List<DateTime>? months;
+
+  /// Last month of the default six-month window: the dashboard's selected
+  /// month, so browsing back moves the chart too. Null means the current
+  /// month.
+  final DateTime? end;
 
   /// False removes the income series entirely (Settings → Hide income):
   /// no income bars, and the scale and peak labels derive from expenses.
   final bool showIncome;
 
-  const MonthlyBarChart({super.key, this.months, this.showIncome = true});
+  const MonthlyBarChart({
+    super.key,
+    this.months,
+    this.end,
+    this.showIncome = true,
+  });
+
+  /// The months drawn, oldest first.
+  List<DateTime> get shownMonths {
+    if (months != null) return months!;
+    final last = end ?? DateTime.now();
+    return List.generate(6, (i) => DateTime(last.year, last.month - (5 - i)));
+  }
 
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
-    final now = DateTime.now();
-    final months =
-        this.months ??
-        List.generate(6, (i) => DateTime(now.year, now.month - (5 - i)));
-    final data = months
+    final data = shownMonths
         .map(
           (m) => _MonthData(
             label: DateFormat('MMM').format(m),
@@ -105,7 +118,7 @@ class _BarChartPainter extends CustomPainter {
     if (maxVal == 0) {
       _paintText(
         canvas,
-        'No data yet — add a transaction to see trends',
+        'No transactions in these months',
         Offset(size.width / 2, size.height / 2),
         center: true,
         // Both axes: `center` alone is horizontal, which left the text's

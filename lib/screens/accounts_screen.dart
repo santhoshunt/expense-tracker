@@ -13,6 +13,7 @@ import '../widgets/picker_sheet.dart';
 import '../widgets/balance_breakdown.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
+import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
 import '../widgets/section_header.dart';
 import '../widgets/undo_snackbar.dart';
@@ -61,6 +62,11 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final scheme = Theme.of(context).colorScheme;
 
     final net = finance.netWorth;
+    // The accounts the net figure is made of: savings and asset accounts
+    // are left out of it, so they are left out of the count too.
+    final netAccounts = finance.openAccounts
+        .where((a) => a.type == AccountType.bank || a.isCard)
+        .length;
 
     return Column(
       children: [
@@ -94,14 +100,29 @@ class _AccountsScreenState extends State<AccountsScreen> {
                               color: scheme.primary,
                             ),
                           ),
-                          Text(
-                            'Net across ${finance.openAccounts.length} '
-                            'account'
-                            '${finance.openAccounts.length == 1 ? '' : 's'}'
-                            ' · tap for breakdown',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: scheme.onSurfaceVariant),
+                          InfoLabel(
+                            label: Text(
+                              netAccounts == 1
+                                  ? 'Net across 1 bank or card account'
+                                        ' · tap for breakdown'
+                                  : 'Net across $netAccounts bank and card '
+                                        'accounts · tap for breakdown',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: scheme.onSurfaceVariant),
+                            ),
+                            tip: InfoTip(
+                              title: 'Net balance',
+                              message:
+                                  'Bank balances minus credit card '
+                                  'outstanding. Savings and asset accounts '
+                                  'are not included.',
+                              example: () =>
+                                  '${fmtMoney(finance.bankBalanceTotal)} in '
+                                  'banks − '
+                                  '${fmtMoney(finance.cardOutstandingTotal)} '
+                                  'on cards = ${fmtMoney(finance.netWorth)}',
+                            ),
                           ),
                         ],
                       ),
@@ -185,6 +206,17 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 // full tap/menu behavior — only dimmed. The All view
                 // groups open accounts by type under section headers;
                 // a filtered view IS one type, so it stays flat.
+                // The balance rule is the same on every bank and savings
+                // tile, so only the page's first one carries its "i". Banks
+                // render before savings in the All view.
+                final tipFor =
+                    (accounts
+                                .where((a) => a.type == AccountType.bank)
+                                .firstOrNull ??
+                            accounts
+                                .where((a) => a.type == AccountType.savings)
+                                .firstOrNull)
+                        ?.id;
                 final items = <Widget>[
                   if (t == null)
                     for (final (type, header) in const [
@@ -202,16 +234,41 @@ class _AccountsScreenState extends State<AccountsScreen> {
                             _AccountCard(
                               account: a,
                               onView: widget.onViewAccount,
+                              balanceTip: a.id == tipFor,
                             ),
                       ],
                     ]
                   else
                     for (final a in accounts)
-                      _AccountCard(account: a, onView: widget.onViewAccount),
+                      _AccountCard(
+                        account: a,
+                        onView: widget.onViewAccount,
+                        balanceTip: a.id == tipFor,
+                      ),
                   if (closed.isNotEmpty) ...[
-                    UppercaseSectionHeader(
-                      'Closed accounts',
-                      color: scheme.onSurfaceVariant,
+                    // The header's own inset, less what the 32dp tip adds
+                    // above and below the 11px text.
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: InfoLabel(
+                          label: UppercaseSectionHeader(
+                            'Closed accounts',
+                            color: scheme.onSurfaceVariant,
+                            padding: EdgeInsets.zero,
+                          ),
+                          tip: const InfoTip(
+                            title: 'Closed accounts',
+                            message:
+                                'Closed accounts are left out of totals, '
+                                'pickers and Upcoming. They keep their '
+                                'history and linked numbers, so new alerts '
+                                'still land on them. Reopen one from its '
+                                'menu.',
+                          ),
+                        ),
+                      ),
                     ),
                     for (final a in closed)
                       Opacity(
@@ -238,7 +295,14 @@ class _AccountCard extends StatelessWidget {
   final Account account;
   final void Function(String accountId) onView;
 
-  const _AccountCard({required this.account, required this.onView});
+  /// Carries the "i" on its Balance label (bank and savings tiles only).
+  final bool balanceTip;
+
+  const _AccountCard({
+    required this.account,
+    required this.onView,
+    this.balanceTip = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -303,7 +367,7 @@ class _AccountCard extends StatelessWidget {
                 if (isCard)
                   _CardFigures(account: account)
                 else
-                  _BankBalance(account: account),
+                  _BankBalance(account: account, showTip: balanceTip),
               ],
             ),
           ),
@@ -338,7 +402,8 @@ String provenanceLine(
 
 class _BankBalance extends StatelessWidget {
   final Account account;
-  const _BankBalance({required this.account});
+  final bool showTip;
+  const _BankBalance({required this.account, this.showTip = false});
 
   @override
   Widget build(BuildContext context) {
@@ -354,7 +419,24 @@ class _BankBalance extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text('Balance', style: TextStyle(color: scheme.onSurfaceVariant)),
+            // One group, so spaceBetween keeps the tip beside the label.
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Balance',
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                ),
+                if (showTip)
+                  const InfoTip(
+                    title: 'Balance',
+                    message:
+                        'The newest known balance wins, whether you set it '
+                        'or a bank alert stated it. Transactions after it are '
+                        'added on.',
+                  ),
+              ],
+            ),
             const SizedBox(width: 8),
             // Shrink rather than overflow when the amount and label compete
             // for width (long balances, large font scales).
@@ -403,23 +485,38 @@ class _GoalProgress extends StatelessWidget {
     final reached = balance >= goal;
 
     String line;
+    String? example;
     if (reached) {
       line = 'Goal reached · ${fmtMoney(goal)}';
     } else {
       line = 'Saved ${fmtMoney(balance)} of ${fmtMoney(goal)}';
+      final avg = avgMonthlyNet(
+        finance.transactionsForAccount(account.id),
+        now: DateTime.now(),
+      );
       final projected = projectedGoalDate(
         balance: balance,
         goal: goal,
-        avgMonthlyNet: avgMonthlyNet(
-          finance.transactionsForAccount(account.id),
-          now: DateTime.now(),
-        ),
+        avgMonthlyNet: avg,
         now: DateTime.now(),
       );
       // No projection line when nothing is flowing in — a made-up date is
       // worse than none.
-      if (projected != null) line += ' · on track for ~${fmtMonth(projected)}';
+      if (projected != null) {
+        line += ' · on track for ~${fmtMonth(projected)}';
+        final months = ((goal - balance) / avg * 10).round() / 10;
+        final n = months == months.roundToDouble()
+            ? '${months.round()}'
+            : months.toStringAsFixed(1);
+        example =
+            '${fmtMoney(goal - balance)} left ÷ ${fmtMoney(avg)} a month '
+            '≈ $n month${n == '1' ? '' : 's'}';
+      }
     }
+    final text = Text(
+      line,
+      style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -433,10 +530,20 @@ class _GoalProgress extends StatelessWidget {
           backgroundColor: colors.green.withValues(alpha: 0.12),
         ),
         const SizedBox(height: 6),
-        Text(
-          line,
-          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-        ),
+        if (reached)
+          text
+        else
+          InfoLabel(
+            label: text,
+            tip: InfoTip(
+              title: 'Savings goal',
+              message:
+                  'The finish month assumes you keep adding your average '
+                  'over the last 90 days. It is hidden when that average is '
+                  'zero or negative.',
+              example: () => example,
+            ),
+          ),
       ],
     );
   }
@@ -848,16 +955,41 @@ class _CardFigures extends StatelessWidget {
             backgroundColor: scheme.error.withValues(alpha: 0.12),
           ),
           const SizedBox(height: 6),
-          Text(
-            'Available ${fmtMoney(available)} of ${fmtMoney(limit)}'
-            '${account.creditLimit == null ? ' (est.)' : ''}',
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+          Builder(
+            builder: (context) {
+              final estimated = finance.creditLimitIsEstimated(account);
+              final text = Text(
+                'Available ${fmtMoney(available)} of ${fmtMoney(limit)}'
+                '${estimated ? ' (est.)' : ''}',
+                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+              );
+              if (!estimated) return text;
+              return InfoLabel(
+                label: text,
+                tip: const InfoTip(
+                  title: 'Estimated limit',
+                  message:
+                      '"Est." means the credit limit is estimated from the '
+                      'highest available limit a bank alert ever reported. '
+                      "Set the real limit from the card's menu for an exact "
+                      'figure.',
+                ),
+              );
+            },
           ),
         ],
         const SizedBox(height: 6),
-        Text(
-          'Spent this month ${fmtMoney(spent)}',
-          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+        InfoLabel(
+          label: Text(
+            'Spent this month ${fmtMoney(spent)}',
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+          ),
+          tip: const InfoTip(
+            title: 'Spent this month',
+            message:
+                'Spending on this card in the current calendar month, '
+                'whatever month the dashboard shows. Transfers are left out.',
+          ),
         ),
         if (account.dueDay != null) ...[
           const SizedBox(height: 6),
@@ -866,7 +998,9 @@ class _CardFigures extends StatelessWidget {
               final hasDues = outstanding != null && outstanding > 0;
               if (!hasDues) {
                 return Text(
-                  'No dues',
+                  // Unknown is not zero: with no outstanding figure there
+                  // is no telling whether anything is owed.
+                  outstanding == null ? 'Dues unknown' : 'No dues',
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
                     fontSize: 12,

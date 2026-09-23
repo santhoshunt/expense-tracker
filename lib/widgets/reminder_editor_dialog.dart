@@ -6,6 +6,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/format.dart';
 import 'dispose_scope.dart';
+import 'info_tip.dart';
 import 'picker_sheet.dart';
 
 /// Create/edit dialog for a manual [Reminder]: name, day of month, optional
@@ -79,16 +80,30 @@ Future<void> showReminderEditor(
                     onChanged: (_) => setState(() {}),
                   ),
                   const SizedBox(height: 16),
-                  AppDropdownField<int>(
-                    label: 'Due day of month',
-                    value: day,
-                    items: [
-                      for (var d = 1; d <= 31; d++)
-                        PickerItem(value: d, label: '$d'),
+                  // Dropdowns carry their own arrow suffix, so each tip
+                  // trails its field instead.
+                  Row(
+                    children: [
+                      Expanded(
+                        child: AppDropdownField<int>(
+                          label: 'Due day of month',
+                          value: day,
+                          items: [
+                            for (var d = 1; d <= 31; d++)
+                              PickerItem(value: d, label: '$d'),
+                          ],
+                          onChanged: (v) {
+                            if (v != null) setState(() => day = v);
+                          },
+                        ),
+                      ),
+                      const InfoTip(
+                        title: 'Due day of month',
+                        message:
+                            'Days 29 to 31 fall on the last day of shorter '
+                            'months.',
+                      ),
                     ],
-                    onChanged: (v) {
-                      if (v != null) setState(() => day = v);
-                    },
                   ),
                   const SizedBox(height: 16),
                   TextField(
@@ -104,19 +119,32 @@ Future<void> showReminderEditor(
                     onChanged: (_) => setState(() {}),
                   ),
                   const SizedBox(height: 16),
-                  AppDropdownField<String>(
-                    label: 'Category',
-                    value: categoryId,
-                    items: categoryItems,
-                    onChanged: (v) {
-                      if (v != null) setState(() => categoryId = v);
-                    },
+                  Row(
+                    children: [
+                      Expanded(
+                        child: AppDropdownField<String>(
+                          label: 'Category',
+                          value: categoryId,
+                          items: categoryItems,
+                          onChanged: (v) {
+                            if (v != null) setState(() => categoryId = v);
+                          },
+                        ),
+                      ),
+                      const InfoTip(
+                        title: 'Category',
+                        message:
+                            'Sets the icon and colour. Marking a reminder '
+                            'paid does not create a transaction.',
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Shows in Upcoming from a week before the due day and '
-                    'notifies on open when it is due. Mark it paid from the '
-                    'Upcoming card each month.',
+                    'Shows in Upcoming from a week before the due day until '
+                    'a week after, and notifies from 2 days before, when you '
+                    'open the app. Mark it paid from the Upcoming card each '
+                    'month.',
                     style: Theme.of(ctx).textTheme.bodySmall,
                   ),
                 ],

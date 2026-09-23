@@ -45,8 +45,16 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
             val text = c("text", 0xFFFFFFFF)
             val textSecondary = c("textSecondary", 0xFFB4C0C8)
             val track = c("track", 0xFF3B3F4F)
-            val accent = c("accent", 0xFFEA7C69)
+            val safe = c("safe", 0xFF50D1AA)
+            val warn = c("warn", 0xFFFFB572)
             val over = c("over", 0xFFFF7CA3)
+
+            /** Green below 80% used, orange from 80% to 95%, red above. */
+            fun barColor(pct: Int) = when {
+                pct > 95 -> over
+                pct >= 80 -> warn
+                else -> safe
+            }
         }
 
         private fun readTheme(context: Context) = WidgetTheme(
@@ -70,10 +78,6 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
                 views.setColorStateList(
                     R.id.widget_bg, "setImageTintList",
                     ColorStateList.valueOf(theme.surface)
-                )
-                views.setColorStateList(
-                    R.id.widget_progress, "setProgressTintList",
-                    ColorStateList.valueOf(theme.accent)
                 )
                 views.setColorStateList(
                     R.id.widget_progress, "setProgressBackgroundTintList",
@@ -166,6 +170,12 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
                 "${entry.optString("spentLabel")} of ${entry.optString("limitLabel")}"
             )
             views.setProgressBar(R.id.widget_progress, 100, pct.coerceAtMost(100), false)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                views.setColorStateList(
+                    R.id.widget_progress, "setProgressTintList",
+                    ColorStateList.valueOf(theme.barColor(pct))
+                )
+            }
             if (detailed) {
                 // These views exist only in the detailed layout — RemoteViews
                 // fails to apply when told to fill ids the layout lacks.

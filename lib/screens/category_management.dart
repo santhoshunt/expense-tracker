@@ -10,6 +10,7 @@ import '../widgets/hue_color_picker.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
+import '../widgets/info_tip.dart';
 import '../widgets/section_header.dart';
 import '../widgets/undo_snackbar.dart';
 
@@ -79,7 +80,17 @@ class _CategoriesTabState extends State<CategoriesTab> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
       children: [
-        Text('Groups', style: Theme.of(context).textTheme.titleMedium),
+        InfoLabel(
+          label: Text('Groups', style: Theme.of(context).textTheme.titleMedium),
+          tip: const InfoTip(
+            title: 'Groups',
+            message:
+                "Groups add up their categories' spending on the "
+                "dashboard's By group card, including money-out transfers "
+                'in those categories. Only expense and transfer categories '
+                'can join a group. Budgets do not depend on groups.',
+          ),
+        ),
         const SizedBox(height: 4),
         Text(
           'Parent buckets for your spending (e.g. Needs, Wants, Leisure). '
@@ -423,8 +434,9 @@ class _CategoriesTabState extends State<CategoriesTab> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const Text(
-                'Its transactions move to the category below; rules '
-                'targeting it are removed.',
+                'Its transactions move to the category below. Rules '
+                'targeting it are removed, and it leaves its group and any '
+                'budgets it was in.',
               ),
               const SizedBox(height: 16),
               AppDropdownField<String>(
@@ -551,45 +563,81 @@ Future<void> showCategoryDialog(
                   if (!isFallback) ...[
                     // No selected checkmark and single-line scale-down labels:
                     // "Money out" + icon + check wrapped in the narrow dialog.
-                    SegmentedButton<TxType>(
-                      showSelectedIcon: false,
-                      segments: [
-                        ButtonSegment(
-                          value: TxType.expense,
-                          label: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              isTransfer ? 'Money out' : 'Expense',
-                              maxLines: 1,
-                            ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SegmentedButton<TxType>(
+                            showSelectedIcon: false,
+                            segments: [
+                              ButtonSegment(
+                                value: TxType.expense,
+                                label: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    isTransfer ? 'Money out' : 'Expense',
+                                    maxLines: 1,
+                                  ),
+                                ),
+                                icon: const Icon(Icons.arrow_upward, size: 16),
+                              ),
+                              ButtonSegment(
+                                value: TxType.income,
+                                label: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    isTransfer ? 'Money in' : 'Income',
+                                    maxLines: 1,
+                                  ),
+                                ),
+                                icon: const Icon(
+                                  Icons.arrow_downward,
+                                  size: 16,
+                                ),
+                              ),
+                            ],
+                            selected: {type},
+                            onSelectionChanged: (s) =>
+                                setState(() => type = s.first),
                           ),
-                          icon: const Icon(Icons.arrow_upward, size: 16),
                         ),
-                        ButtonSegment(
-                          value: TxType.income,
-                          label: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              isTransfer ? 'Money in' : 'Income',
-                              maxLines: 1,
-                            ),
-                          ),
-                          icon: const Icon(Icons.arrow_downward, size: 16),
+                        const InfoTip(
+                          title: 'Direction',
+                          message:
+                              'Changing direction re-types every transaction '
+                              'in this category. Switching a category that '
+                              'is not a transfer to income also removes it '
+                              'from its group and budgets.',
                         ),
                       ],
-                      selected: {type},
-                      onSelectionChanged: (s) => setState(() => type = s.first),
                     ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Transfer'),
-                      subtitle: Text(
-                        'Affects account balance only — not counted as income '
-                        'or expense (like "To savings" or "Card bill").',
-                        style: Theme.of(ctx).textTheme.bodySmall,
-                      ),
-                      value: isTransfer,
-                      onChanged: (v) => setState(() => isTransfer = v),
+                    // Tip beside the tile, not in it: SwitchListTile merges
+                    // its children's semantics and would swallow the tip.
+                    Row(
+                      children: [
+                        Expanded(
+                          child: SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Transfer'),
+                            subtitle: Text(
+                              'Affects account balance only, not counted as '
+                              'income or expense (like "To savings" or "Card '
+                              'bill").',
+                              style: Theme.of(ctx).textTheme.bodySmall,
+                            ),
+                            value: isTransfer,
+                            onChanged: (v) => setState(() => isTransfer = v),
+                          ),
+                        ),
+                        const InfoTip(
+                          title: 'Transfer',
+                          message:
+                              'Transfers are left out of income, spending, '
+                              'the monthly cap and "All except" budgets. '
+                              'Money-out transfers still count in a budget '
+                              'that picks them under "Only these", and in '
+                              "their group's total.",
+                        ),
+                      ],
                     ),
                   ],
                   if (groupable && finance.groups.isNotEmpty) ...[

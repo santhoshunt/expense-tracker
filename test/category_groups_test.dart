@@ -156,6 +156,15 @@ void main() {
       },
     );
 
+    test('an ungrouped money-out transfer stays out of Other', () async {
+      final p = await loaded();
+      await spend(p, 'other_expense', 30); // unassigned plain expense
+      await spend(p, 'savings_out', 200); // unassigned transfer
+
+      final sums = {for (final (g, v) in p.groupSpendInMonth(july)) g?.id: v};
+      expect(sums[null], 30);
+    });
+
     test('dangling assignment after group deletion falls into Other', () async {
       final p = await loaded();
       await spend(p, 'food', 100);

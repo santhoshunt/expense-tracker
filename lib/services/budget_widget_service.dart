@@ -62,8 +62,9 @@ class BudgetWidgetService {
 }
 
 /// The widget's colours as ARGB ints, following the app: the chosen dark
-/// palette and accent, or the light palette when the app shows light
-/// ([ThemeMode.system] resolves against [platformBrightness] at sync time).
+/// palette, or the light palette when the app shows light
+/// ([ThemeMode.system] resolves against [platformBrightness] at sync time),
+/// plus the budget bar's threshold colours.
 Map<String, int> buildWidgetTheme(
   SettingsProvider settings,
   Brightness platformBrightness,
@@ -79,7 +80,10 @@ Map<String, int> buildWidgetTheme(
     'textSecondary': (light ? FigmaPaletteLight.textSecondary : p.textSecondary)
         .toARGB32(),
     'track': (light ? FigmaPaletteLight.border : p.border).toARGB32(),
-    'accent': settings.accent.toARGB32(),
+    // Bar colours by how much of the budget is used: BudgetWidgetProvider
+    // picks one (green below 80%, orange to 95%, red above).
+    'safe': (light ? FigmaPaletteLight.green : FigmaPalette.green).toARGB32(),
+    'warn': (light ? FigmaPaletteLight.orange : FigmaPalette.orange).toARGB32(),
     'over': (light ? FigmaPaletteLight.pink : FigmaPalette.pink).toARGB32(),
   };
 }

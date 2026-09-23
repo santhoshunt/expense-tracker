@@ -18,12 +18,17 @@ class AppColors extends ThemeExtension<AppColors> {
   /// background.
   final Color? cardOutline;
 
+  /// Card and panel fill: the surface with a trace of the accent. Null
+  /// (bare-MaterialApp tests) means plain `scheme.surface`.
+  final Color? cardFill;
+
   const AppColors({
     required this.green,
     required this.orange,
     required this.blue,
     required this.purple,
     this.cardOutline,
+    this.cardFill,
   });
 
   /// Falls back to the dark set when the theme carries no extension
@@ -53,12 +58,14 @@ class AppColors extends ThemeExtension<AppColors> {
     Color? blue,
     Color? purple,
     Color? cardOutline,
+    Color? cardFill,
   }) => AppColors(
     green: green ?? this.green,
     orange: orange ?? this.orange,
     blue: blue ?? this.blue,
     purple: purple ?? this.purple,
     cardOutline: cardOutline ?? this.cardOutline,
+    cardFill: cardFill ?? this.cardFill,
   );
 
   @override
@@ -70,6 +77,7 @@ class AppColors extends ThemeExtension<AppColors> {
       blue: Color.lerp(blue, other.blue, t)!,
       purple: Color.lerp(purple, other.purple, t)!,
       cardOutline: Color.lerp(cardOutline, other.cardOutline, t),
+      cardFill: Color.lerp(cardFill, other.cardFill, t),
     );
   }
 }
@@ -207,11 +215,12 @@ ThemeData _buildAppTheme({
     scrim: Colors.black,
   );
 
-  final appColors = !dark
-      ? AppColors.light
-      : p.outlineCards
-      ? AppColors.dark.copyWith(cardOutline: border)
-      : AppColors.dark;
+  // Cards carry a trace of the accent, echoing AmbientBackground's glow.
+  final cardFill = blend(accent, dark ? 0.05 : 0.035);
+  final appColors = (!dark ? AppColors.light : AppColors.dark).copyWith(
+    cardOutline: dark && p.outlineCards ? border : null,
+    cardFill: cardFill,
+  );
 
   final base = ThemeData(
     useMaterial3: true,
@@ -225,8 +234,10 @@ ThemeData _buildAppTheme({
           platform: const FadeForwardsPageTransitionsBuilder(),
       },
     ),
+    // Transparent so AmbientBackground's accent glow runs under the bar;
+    // over a plain Scaffold it shows the same background as before.
     appBarTheme: AppBarTheme(
-      backgroundColor: bg,
+      backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
       scrolledUnderElevation: 0,
       titleTextStyle: TextStyle(
@@ -237,7 +248,7 @@ ThemeData _buildAppTheme({
     ),
     cardTheme: CardThemeData(
       elevation: 0,
-      color: surface,
+      color: appColors.cardFill,
       surfaceTintColor: Colors.transparent,
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(

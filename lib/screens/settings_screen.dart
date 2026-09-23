@@ -24,6 +24,7 @@ import '../widgets/picker_sheet.dart';
 import '../widgets/undo_snackbar.dart';
 import '../widgets/hue_color_picker.dart';
 import '../widgets/glossy.dart';
+import '../widgets/info_tip.dart';
 import 'classifiers_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -33,10 +34,11 @@ class SettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final settings = context.watch<SettingsProvider>();
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: AmbientBackground(
-        child: ListView(
+    return AmbientBackground(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(title: const Text('Settings')),
+        body: ListView(
           // Keep every child laid out: with the default cache extent,
           // stateful children (RCS tile, app icons, budget) are destroyed on
           // scroll-out and re-created on scroll-in, re-running their async
@@ -63,7 +65,18 @@ class SettingsScreen extends StatelessWidget {
             16 + MediaQuery.viewPaddingOf(context).bottom,
           ),
           children: [
-            Text('Theme', style: Theme.of(context).textTheme.titleMedium),
+            InfoLabel(
+              label: Text(
+                'Theme',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              tip: const InfoTip(
+                title: 'Theme',
+                message:
+                    "System follows your phone's light or dark setting. A "
+                    'new install starts in Dark.',
+              ),
+            ),
             _RadioSetting<ThemeMode>(
               options: const [
                 (ThemeMode.system, 'System'),
@@ -74,7 +87,19 @@ class SettingsScreen extends StatelessWidget {
               onChanged: (m) => context.read<SettingsProvider>().setMode(m),
             ),
             const SizedBox(height: 24),
-            Text('Dark theme', style: Theme.of(context).textTheme.titleMedium),
+            InfoLabel(
+              label: Text(
+                'Dark theme',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              tip: const InfoTip(
+                title: 'Dark theme',
+                message:
+                    'Changes backgrounds, cards and text in dark mode. '
+                    "Picking a theme also replaces your accent colour with the "
+                    "theme's own, even a custom one.",
+              ),
+            ),
             const SizedBox(height: 4),
             Text(
               'Used in dark mode. Picking one also sets its accent colour.',
@@ -94,9 +119,19 @@ class SettingsScreen extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 24),
-            Text(
-              'Accent colour',
-              style: Theme.of(context).textTheme.titleMedium,
+            InfoLabel(
+              label: Text(
+                'Accent colour',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              tip: const InfoTip(
+                title: 'Accent colour',
+                message:
+                    'Colours buttons, highlights and selected items in light '
+                    "and dark mode. Theme uses the current dark theme's "
+                    'accent. Picking another dark theme later resets the '
+                    "accent to that theme's.",
+              ),
             ),
             const SizedBox(height: 4),
             Text(
@@ -117,9 +152,21 @@ class SettingsScreen extends StatelessWidget {
             ),
             if (SmsSource().isSupported) ...[
               const SizedBox(height: 24),
-              Text(
-                'Automatic SMS import',
-                style: Theme.of(context).textTheme.titleMedium,
+              InfoLabel(
+                label: Text(
+                  'Automatic SMS import',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                tip: const InfoTip(
+                  title: 'Automatic SMS import',
+                  message:
+                      'Scans your SMS inbox when you open or return to the '
+                      'app, as often as this setting allows. Daily: the first '
+                      'open each day. Weekly: 7 days after the last automatic '
+                      'scan. The first scan reaches back 30 days. It needs SMS '
+                      'permission; without it, the scan is skipped. New rows '
+                      'wait in the review queue, and duplicates are skipped.',
+                ),
               ),
               const SizedBox(height: 4),
               Text(
@@ -152,16 +199,28 @@ class SettingsScreen extends StatelessWidget {
               const _AppIconSection(),
             ],
             const SizedBox(height: 24),
-            Text(
-              'Cloud backup',
-              style: Theme.of(context).textTheme.titleMedium,
+            InfoLabel(
+              label: Text(
+                'Cloud backup',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              tip: const InfoTip(
+                title: 'Cloud backup',
+                message:
+                    'Uploads a backup file to the Expense Tracker Backups '
+                    'folder in your Google Drive. It holds transactions, '
+                    'accounts, rules, categories, budgets and most settings, '
+                    'but not SMS text, app lock, the app icon or this '
+                    'schedule. The newest 7 backups are kept; older ones are '
+                    'deleted.',
+              ),
             ),
             const SizedBox(height: 4),
             Text(
-              'Backs up everything to a "Expense Tracker Backups" folder in '
+              'Backs up your data to an "Expense Tracker Backups" folder in '
               'your Google Drive on the chosen schedule. Backups include '
-              'transactions, rules and settings — not the original SMS '
-              'text. Restore via menu → Import → From Google Drive.',
+              'transactions, rules and settings, but not the original SMS '
+              'text. Restore from Data, Import, From Google Drive.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -170,8 +229,7 @@ class SettingsScreen extends StatelessWidget {
             Text('Data', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
             Text(
-              'Export or import your data as files, or wipe everything. '
-              'Moved here from the home screen menu.',
+              'Export or import your data as files, or wipe everything.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -187,9 +245,18 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 12),
             const _PrivacySection(),
             const SizedBox(height: 24),
-            Text(
-              'Category order',
-              style: Theme.of(context).textTheme.titleMedium,
+            InfoLabel(
+              label: Text(
+                'Category order',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              tip: const InfoTip(
+                title: 'Category order',
+                message:
+                    'Sets the order of the category list when you add or edit '
+                    'a transaction. The first category in the list is picked '
+                    'by default for a new transaction.',
+              ),
             ),
             const SizedBox(height: 4),
             Text(
@@ -211,8 +278,10 @@ class SettingsScreen extends StatelessWidget {
               radius: BorderRadius.circular(20),
               child: ListTile(
                 leading: const Icon(Icons.tune),
-                title: const Text('Rules, categories, budgets & reminders'),
-                subtitle: const Text('Moved — manage them in Cockpit'),
+                title: const Text('Open Cockpit'),
+                subtitle: const Text(
+                  'Rules, import filters, categories, budgets and reminders',
+                ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.push(
                   context,
@@ -473,14 +542,33 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                 'Last backup: '
                 '${DriveBackupService.formatLastBackup(_lastBackup)}',
               ),
-              trailing: TextButton(
-                onPressed: _disconnect,
-                child: const Text('Disconnect'),
+              trailing: InfoLabel(
+                label: TextButton(
+                  onPressed: _disconnect,
+                  child: const Text('Disconnect'),
+                ),
+                tip: const InfoTip(
+                  title: 'Disconnect',
+                  message:
+                      'Signs this app out of Google Drive. Backups already in '
+                      'your Drive stay there.',
+                ),
               ),
             ),
             ListTile(
               leading: const Icon(Icons.schedule_outlined),
-              title: const Text('Frequency'),
+              title: const InfoLabel(
+                label: Text('Frequency'),
+                tip: InfoTip(
+                  title: 'Frequency',
+                  message:
+                      'Checked when the app starts fresh and after each App '
+                      'lock unlock. Returning to the app does not '
+                      'check, so backups run only on days you open the app. '
+                      'Daily waits at least 23 hours, weekly 6 days, monthly '
+                      '28 days. An empty ledger is never uploaded on schedule.',
+                ),
+              ),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -517,7 +605,16 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                       child: CircularProgressIndicator(strokeWidth: 2.5),
                     )
                   : const Icon(Icons.cloud_upload_outlined),
-              title: const Text('Back up now'),
+              title: const InfoLabel(
+                label: Text('Back up now'),
+                tip: InfoTip(
+                  title: 'Back up now',
+                  message:
+                      'Uploads right away, even when there are no '
+                      'transactions. Only 7 backups are kept, so repeated '
+                      'empty uploads can push out older good ones.',
+                ),
+              ),
               enabled: !_uploading,
               onTap: _backupNow,
             ),
@@ -911,7 +1008,19 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
               : Icons.notifications_off_outlined,
           color: granted ? scheme.primary : scheme.onSurfaceVariant,
         ),
-        title: const Text('Capture RCS alerts'),
+        title: const InfoLabel(
+          label: Text('Capture RCS alerts'),
+          tip: InfoTip(
+            title: 'Capture RCS alerts',
+            message:
+                'Picks up bank alerts from messaging-app notifications that '
+                'mention an amount in ₹, Rs or INR, which the SMS scan cannot '
+                'see. It works even when automatic import is Off: captured '
+                'alerts import each time you open the app. To stop it, revoke '
+                'notification access in Android settings (tap this tile, then '
+                'System settings).',
+          ),
+        ),
         subtitle: Text(
           granted
               ? 'On — new bank alerts are captured as they arrive and added '
@@ -1259,7 +1368,9 @@ class _DataSectionState extends State<_DataSection> {
   /// counts what it destroys, and Replace destroys exactly as much.
   Future<bool?> _askImportMode() {
     final finance = context.read<FinanceProvider>();
-    final txCount = finance.transactions.length;
+    // Confirmed + pending: Replace clears the whole ledger, and
+    // `transactions` alone leaves out rows still awaiting review.
+    final txCount = finance.transactionCount;
     final acctCount = finance.accounts.length;
     return showDialog<bool>(
       context: context,
@@ -1302,7 +1413,17 @@ class _DataSectionState extends State<_DataSection> {
         children: [
           ListTile(
             leading: const Icon(Icons.file_upload_outlined),
-            title: const Text('Export…'),
+            title: const InfoLabel(
+              label: Text('Export…'),
+              tip: InfoTip(
+                title: 'Export…',
+                message:
+                    'Backup (JSON): everything needed to restore, without SMS '
+                    'text. Transactions (CSV): confirmed and pending rows, for '
+                    'spreadsheets. Report (PDF): confirmed rows only, and it '
+                    'shows income totals even with Hide income on.',
+              ),
+            ),
             subtitle: Text(
               'Backup (JSON), transactions (CSV) or a PDF report',
               style: Theme.of(context).textTheme.bodySmall,
@@ -1331,7 +1452,20 @@ class _DataSectionState extends State<_DataSection> {
           ),
           ListTile(
             leading: const Icon(Icons.file_download_outlined),
-            title: const Text('Import…'),
+            title: const InfoLabel(
+              label: Text('Import…'),
+              tip: InfoTip(
+                title: 'Import…',
+                message:
+                    'Merge adds only what is new; anything already in the app '
+                    'wins. Replace clears transactions and accounts first; a '
+                    'JSON or Drive backup also replaces your rules, '
+                    'categories, budgets and settings. A CSV without row ids '
+                    'gets new ids, so merging the same CSV twice creates '
+                    'duplicates. Imported rows do not carry their original '
+                    'SMS text.',
+              ),
+            ),
             subtitle: Text(
               'From a backup file, a CSV, or Google Drive',
               style: Theme.of(context).textTheme.bodySmall,
@@ -1360,9 +1494,21 @@ class _DataSectionState extends State<_DataSection> {
           ),
           ListTile(
             leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
-            title: Text(
-              'Delete all data',
-              style: TextStyle(color: scheme.error),
+            title: InfoLabel(
+              label: Text(
+                'Delete all data',
+                style: TextStyle(color: scheme.error),
+              ),
+              tip: const InfoTip(
+                title: 'Delete all data',
+                message:
+                    'Always deletes transactions and accounts. With the box '
+                    'ticked, it also resets rules, import rules, categories, '
+                    'groups and budgets to the defaults and clears reminders '
+                    'and merchant names. It never touches your monthly cap, '
+                    'theme, other settings or Drive backups. The next SMS scan '
+                    're-imports the last 30 days.',
+              ),
             ),
             onTap: () => _handleBackupAction('delete_all'),
           ),
@@ -1374,8 +1520,11 @@ class _DataSectionState extends State<_DataSection> {
 
 /// App lock toggle. Enabling requires one successful authentication first:
 /// a device that cannot authenticate must never be able to arm a lock it
-/// cannot open. Disabling is immediate — reaching this screen already means
-/// the app is unlocked.
+/// cannot open. Disabling requires one too, so someone holding the unlocked
+/// phone (the lock only re-arms after 2 minutes away) cannot switch it off.
+/// The exception is a device that can no longer authenticate at all (screen
+/// lock removed): the lock could never be opened again, so it turns off
+/// without a prompt.
 class _PrivacySection extends StatefulWidget {
   const _PrivacySection();
 
@@ -1390,13 +1539,18 @@ class _PrivacySectionState extends State<_PrivacySection> {
   Future<void> _toggle(bool on) async {
     if (_busy) return;
     final settings = context.read<SettingsProvider>();
-    if (!on) {
-      await settings.setAppLock(false);
-      return;
-    }
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _busy = true);
     try {
+      if (!on) {
+        // No prompt possible (screen lock removed since): the lock could
+        // never be opened again, so let it go rather than trap the user.
+        if (await _lock.canAuthenticate() == false ||
+            await _lock.authenticate()) {
+          await settings.setAppLock(false);
+        }
+        return;
+      }
       if (!await _lock.isSupported()) {
         showAppToastOn(
           messenger,
@@ -1420,29 +1574,75 @@ class _PrivacySectionState extends State<_PrivacySection> {
       radius: BorderRadius.circular(20),
       child: Column(
         children: [
-          SwitchListTile(
-            secondary: const Icon(Icons.lock_outline),
-            title: const Text('App lock'),
-            subtitle: Text(
-              'Require fingerprint or device PIN when opening the app',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+          _TipSwitchTile(
+            icon: Icons.lock_outline,
+            label: 'App lock',
+            tip:
+                'Asks for your fingerprint or device PIN when the app opens, '
+                'or returns after 2 minutes away. It does not hide '
+                'notification text, the home-screen widget or the app preview '
+                'in recent apps. This setting is not included in backups.',
+            subtitle: 'Require fingerprint or device PIN when opening the app',
             value: enabled,
             onChanged: _busy ? null : _toggle,
           ),
-          SwitchListTile(
-            secondary: const Icon(Icons.visibility_off_outlined),
-            title: const Text('Hide income'),
-            subtitle: Text(
-              'Hide income totals on the dashboard and in monthly '
-              'summaries. Individual transactions still show their amounts.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+          _TipSwitchTile(
+            icon: Icons.visibility_off_outlined,
+            label: 'Hide income',
+            tip:
+                'Hides income totals on the dashboard, in month headers and '
+                'in the balance breakdown. The balance figure still shows, '
+                'and exports and the PDF report still include income.',
+            subtitle:
+                'Hide income totals on the dashboard and in monthly '
+                'summaries. Individual transactions still show their amounts.',
             value: hideIncome,
             onChanged: (v) => context.read<SettingsProvider>().setHideIncome(v),
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A switch row with an "i" after its label. Not a SwitchListTile: that
+/// merges every descendant into one semantics node, which would swallow the
+/// tip's own button (a screen reader could only toggle the switch). The row
+/// tap still toggles, as a SwitchListTile's does.
+class _TipSwitchTile extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String tip;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  const _TipSwitchTile({
+    required this.icon,
+    required this.label,
+    required this.tip,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final onChanged = this.onChanged;
+    return ListTile(
+      enabled: onChanged != null,
+      leading: Icon(icon),
+      title: InfoLabel(
+        label: Text(label),
+        tip: InfoTip(title: label, message: tip),
+      ),
+      subtitle: Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+      // Named so the switch is not announced as an unlabelled toggle.
+      trailing: Semantics(
+        label: label,
+        child: Switch(value: value, onChanged: onChanged),
+      ),
+      onTap: onChanged == null ? null : () => onChanged(!value),
     );
   }
 }
@@ -1544,7 +1744,16 @@ class _AboutSectionState extends State<_AboutSection> {
           ),
           ListTile(
             leading: const Icon(Icons.system_update_alt),
-            title: const Text('Check for updates'),
+            title: const InfoLabel(
+              label: Text('Check for updates'),
+              tip: InfoTip(
+                title: 'Check for updates',
+                message:
+                    'Compares this version with the latest release on GitHub. '
+                    'It does not download or install anything; View release '
+                    'opens the page in your browser.',
+              ),
+            ),
             subtitle: Text(
               'Compares with the latest GitHub release',
               style: Theme.of(context).textTheme.bodySmall,

@@ -5,9 +5,11 @@ import '../providers/settings_provider.dart' show CategorySort;
 import '../services/spend_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
+import '../utils/dates.dart';
 import '../utils/format.dart';
 import 'animated_fold.dart';
 import 'comparison_bar.dart';
+import 'info_tip.dart';
 
 /// The dashboard's three spending comparisons: this month against the last
 /// one, against what a month usually costs, and the same question per
@@ -39,6 +41,12 @@ class PreviousMonthCard extends StatelessWidget {
     final name = _monthName.format(comparison.previousMonth);
     return _Section(
       title: 'This month vs last month',
+      tip:
+          'While the month is running, compares spending up to the same day '
+          'of last month. The projection scales this month\'s spending by '
+          'how last month grew from this day to its end. It appears from '
+          'day $kMinDaysForProjection.',
+      example: () => projectionExample(comparison),
       child: _CompareBody(
         comparison: comparison,
         compare: c,
@@ -59,6 +67,31 @@ class PreviousMonthCard extends StatelessWidget {
   }
 }
 
+/// The "This month vs last month" projection worked with its real inputs,
+/// mirroring `_project` in services/spend_comparison.dart: the reference
+/// month's curve when it has one, the flat daily pace otherwise. Null when
+/// the card shows no projection (month over, before day
+/// [kMinDaysForProjection], or nothing on either side).
+String? projectionExample(MonthComparison comparison) {
+  final c = comparison.vsPrevious;
+  final projected = c.actualFull;
+  if (!comparison.partial || projected == null || c.empty) return null;
+  final days = daysInMonth(comparison.month.year, comparison.month.month);
+  final ratio = c.reference <= 0 || c.referenceFull <= 0
+      ? '$days days ÷ ${comparison.throughDay} days'
+      : '${fmtMoney(c.referenceFull)} ÷ ${fmtMoney(c.reference)}';
+  return '${fmtMoney(c.actual)} so far × ($ratio) = '
+      '${fmtMoney(projected)} projected';
+}
+
+/// The shortfall note shown instead of a "usual" figure while fewer than
+/// [kMinUsualMonths] complete months are on record.
+String usualShortfallNote(int months) =>
+    'A usual figure needs at least $kMinUsualMonths complete months to '
+    'mean anything. There '
+    '${months == 1 ? 'is 1 month' : 'are $months months'} on record so '
+    'far, so this fills in as you keep importing.';
+
 class UsualSpendCard extends StatelessWidget {
   final MonthComparison comparison;
 
@@ -73,10 +106,7 @@ class UsualSpendCard extends StatelessWidget {
       return _Section(
         title: 'This month vs usual',
         child: Text(
-          'A usual figure needs at least $kMinUsualMonths complete months to '
-          'mean anything. There '
-          '${months == 1 ? 'is 1 month' : 'are $months months'} on record so '
-          'far, so this fills in as you keep importing.',
+          usualShortfallNote(months),
           style: Theme.of(context).textTheme.bodySmall,
         ),
       );
@@ -304,9 +334,40 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
       color: Theme.of(context).colorScheme.onSurfaceVariant,
     );
 
+    const title = 'Categories vs usual';
+    const tip =
+        '"Usual" is the middle value of up to $kUsualWindowMonths complete '
+        'months before this one, so one unusual month does not move it. A '
+        'month with nothing in a category counts as zero. While the month is '
+        "running, both sides count only up to today's date. Red means more "
+        'than usual, green less.';
+    String? example() {
+      if (rows.isEmpty) return null;
+      final top = rows.first;
+      if (top.usual <= 0) return null;
+      final d = top.delta;
+      return '${top.category.label}: ${fmtMoney(top.actual)} this month vs '
+          '${fmtMoney(top.usual)} usual = '
+          '${d < 0 ? '−' : '+'}${fmtMoney(d.abs())}';
+    }
+
+    // Same gate as "This month vs usual": with too little history every
+    // row would read "New this month", which says nothing.
+    if (widget.comparison.usualMonths < kMinUsualMonths) {
+      return _Section(
+        title: title,
+        tip: tip,
+        child: Text(
+          usualShortfallNote(widget.comparison.usualMonths),
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      );
+    }
+
     if (rows.isEmpty) {
       return _Section(
-        title: 'Categories vs usual',
+        title: title,
+        tip: tip,
         child: Text('No category spending to compare yet.', style: muted),
       );
     }
@@ -316,7 +377,9 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
 
     final scheme = Theme.of(context).colorScheme;
     return _Section(
-      title: 'Categories vs usual',
+      title: title,
+      tip: tip,
+      example: example,
       subtitle: _effectiveSort.subtitle,
       // Compact rounded menu with a small trailing check — the stock
       // CheckedPopupMenuItem reserves a full leading slot for its tick,
@@ -556,18 +619,33 @@ class _Section extends StatelessWidget {
 
   /// Small control on the heading's right edge (the category card's sort).
   final Widget? trailing;
+
+  /// The heading's "i", titled with [title].
+  final String? tip;
+  final String? Function()? example;
   final Widget child;
 
   const _Section({
     required this.title,
     this.subtitle,
     this.trailing,
+    this.tip,
+    this.example,
     required this.child,
   });
 
   @override
   Widget build(BuildContext context) {
-    final heading = Text(title, style: Theme.of(context).textTheme.titleMedium);
+    final text = Text(title, style: Theme.of(context).textTheme.titleMedium);
+    final Widget heading = tip == null
+        ? text
+        : Align(
+            alignment: Alignment.centerLeft,
+            child: InfoLabel(
+              label: text,
+              tip: InfoTip(title: title, message: tip!, example: example),
+            ),
+          );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

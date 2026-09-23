@@ -2,19 +2,45 @@ import 'package:flutter/material.dart';
 
 import '../utils/app_theme.dart';
 
-/// Flat backdrop behind screen content. The Scaffold already paints this
-/// colour; the widget stays for standalone call sites (Cockpit,
-/// Settings) so every screen shares one background source.
+/// Screen backdrop: the theme background with the accent glowing in from
+/// the top-left corner and, fainter, the bottom-right. Wraps a whole
+/// Scaffold (made transparent) so the glow also runs under the app bar;
+/// it stays opaque, so a pushed route never shows the page beneath it.
 class AmbientBackground extends StatelessWidget {
   final Widget child;
 
   const AmbientBackground({super.key, required this.child});
 
   @override
-  Widget build(BuildContext context) => ColoredBox(
-    color: Theme.of(context).scaffoldBackgroundColor,
-    child: child,
-  );
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final accent = theme.colorScheme.primary;
+    // White backdrops show a tint far more readily than charcoal.
+    final dark = theme.brightness == Brightness.dark;
+    RadialGradient glow(Alignment from, double radius, double alpha) =>
+        RadialGradient(
+          center: from,
+          radius: radius,
+          colors: [
+            accent.withValues(alpha: alpha),
+            accent.withValues(alpha: 0),
+          ],
+        );
+    return ColoredBox(
+      color: theme.scaffoldBackgroundColor,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: glow(const Alignment(-1.2, -1.1), 1.1, dark ? 0.24 : 0.14),
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: glow(const Alignment(1.2, 1.1), 0.9, dark ? 0.12 : 0.07),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
 }
 
 /// Edge light: an accent rim with the glow kept inside the shape. Used as a
@@ -248,7 +274,9 @@ class GlassSegmented<T> extends StatelessWidget {
   }
 }
 
-/// Solid card panel — flat, opaque `scheme.surface`. The name survives from
+/// Solid card panel — flat and opaque, in the theme's accent-touched card
+/// fill (`AppColors.cardFill`, plain `scheme.surface` without the theme
+/// extension). The name survives from
 /// the old liquid-glass look; there is no BackdropFilter anywhere anymore,
 /// which also keeps list scrolling cheap.
 class FrostedPanel extends StatelessWidget {
@@ -264,10 +292,11 @@ class FrostedPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final outline = AppColors.of(context).cardOutline;
+    final colors = AppColors.of(context);
+    final outline = colors.cardOutline;
     return Container(
       decoration: BoxDecoration(
-        color: scheme.surface,
+        color: colors.cardFill ?? scheme.surface,
         borderRadius: radius,
         border: outline == null ? null : Border.all(color: outline),
       ),

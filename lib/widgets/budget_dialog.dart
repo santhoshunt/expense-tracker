@@ -7,6 +7,7 @@ import '../providers/finance_provider.dart';
 import '../utils/format.dart';
 import 'category_chip_label.dart';
 import 'dispose_scope.dart';
+import 'info_tip.dart';
 
 /// Create/edit dialog for a [SpendBudget]. Shared by Settings ("Custom
 /// budgets") and the dashboard's category rows, which open it pre-filled
@@ -119,13 +120,28 @@ Future<void> showBudgetDialog(
                     onSelectionChanged: (s) => setState(() => mode = s.first),
                   ),
                   const SizedBox(height: 8),
-                  Text(
-                    mode == BudgetMode.include
-                        ? 'Only spending in the picked categories counts '
-                              'toward this budget.'
-                        : 'All spending counts except the picked '
-                              'categories. Transfers never count.',
-                    style: Theme.of(ctx).textTheme.bodySmall,
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          mode == BudgetMode.include
+                              ? 'Only spending in the picked categories '
+                                    'counts toward this budget.'
+                              : 'All spending counts except the picked '
+                                    'categories. Transfers never count.',
+                          style: Theme.of(ctx).textTheme.bodySmall,
+                        ),
+                      ),
+                      const InfoTip(
+                        title: 'Only these / All except',
+                        message:
+                            'Only these: counts spending in the picked '
+                            'categories, including money-out transfers you '
+                            'pick. All except: counts all spending except the '
+                            'picked categories, and transfers never count. '
+                            'Pending imports never count.',
+                      ),
+                    ],
                   ),
                   for (final (label, cats) in sections) ...[
                     const SizedBox(height: 12),

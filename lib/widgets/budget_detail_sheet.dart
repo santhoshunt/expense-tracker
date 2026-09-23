@@ -7,6 +7,7 @@ import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import 'category_donut_chart.dart';
+import 'info_tip.dart';
 import 'motion.dart';
 
 /// Visual detail for one custom budget, starting at [month]: progress ring,
@@ -34,8 +35,13 @@ Future<void> showBudgetDetailSheet(
           final finance = ctx.watch<FinanceProvider>();
           final colors = AppColors.of(ctx);
           final scheme = Theme.of(ctx).colorScheme;
+          // Same bound as the dashboard's next-month arrow: the current
+          // month, or a later one when rows dated ahead put data there.
           final now = DateTime.now();
-          final latest = DateTime(now.year, now.month);
+          var latest = DateTime(now.year, now.month);
+          for (final m in finance.monthsWithData) {
+            if (m.isAfter(latest)) latest = m;
+          }
           final spent = finance.budgetSpentFor(budget, shown);
           final limit = budget.limit;
           final pct = limit == 0 ? 0.0 : spent / limit;
@@ -85,8 +91,6 @@ Future<void> showBudgetDetailSheet(
                         tooltip: 'Next month',
                         visualDensity: VisualDensity.compact,
                         icon: const Icon(Icons.chevron_right, size: 20),
-                        // The current month is the end of the road — the
-                        // dashboard's own switcher stops there too.
                         onPressed: shown.isBefore(latest)
                             ? () => setSheetState(
                                 () => shown = DateTime(
@@ -166,9 +170,21 @@ Future<void> showBudgetDetailSheet(
                       ),
                     ),
                   ],
-                  Text(
-                    'Last 6 months',
-                    style: Theme.of(ctx).textTheme.titleSmall,
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: InfoLabel(
+                      label: Text(
+                        'Last 6 months',
+                        style: Theme.of(ctx).textTheme.titleSmall,
+                      ),
+                      tip: const InfoTip(
+                        title: 'Last 6 months',
+                        message:
+                            "Each bar is that month's spending in this "
+                            'budget, coloured like the ring. The line marks '
+                            'the limit.',
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 8),
                   _BudgetTrendBars(months: months, spent: trend, limit: limit),
@@ -221,29 +237,39 @@ class _BudgetTrendBars extends StatelessWidget {
           : colors.green;
     }
 
+    final label = Theme.of(
+      context,
+    ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant);
+
+    // One row of six equal slots, so the value labels, the bars and the
+    // month labels line up column for column.
+    Widget slots(Widget Function(int i) cell) => Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        for (var i = 0; i < months.length; i++) ...[
+          if (i > 0) const SizedBox(width: 8),
+          Expanded(child: cell(i)),
+        ],
+      ],
+    );
+
     return SizedBox(
       height: 120,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      child: Column(
         children: [
-          for (final (i, m) in months.indexed) ...[
-            if (i > 0) const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      fmtMoneyCompact(spent[i]),
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Expanded(
-                    child: Align(
+          slots(
+            (i) => FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(fmtMoneyCompact(spent[i]), style: label),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Expanded(
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: slots(
+                    (i) => Align(
                       alignment: Alignment.bottomCenter,
                       child: FractionallySizedBox(
                         heightFactor: maxVal == 0
@@ -262,17 +288,39 @@ class _BudgetTrendBars extends StatelessWidget {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    mmm.format(m),
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
+                ),
+                // The limit, on the same scale as the bars ([maxVal]
+                // includes it, so the line always fits).
+                if (limit > 0 && maxVal > 0)
+                  Positioned.fill(
+                    child: Align(
+                      alignment: Alignment.bottomCenter,
+                      child: FractionallySizedBox(
+                        key: const ValueKey('budget-limit-line'),
+                        heightFactor: limit / maxVal,
+                        widthFactor: 1,
+                        alignment: Alignment.bottomCenter,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            border: Border(
+                              top: BorderSide(
+                                color: scheme.onSurfaceVariant.withValues(
+                                  alpha: 0.7,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-                ],
-              ),
+              ],
             ),
-          ],
+          ),
+          const SizedBox(height: 4),
+          slots(
+            (i) => Center(child: Text(mmm.format(months[i]), style: label)),
+          ),
         ],
       ),
     );
