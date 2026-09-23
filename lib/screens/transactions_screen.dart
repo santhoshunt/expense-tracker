@@ -816,7 +816,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
   }
 
-  void _afterBulk(int changed, String what, {VoidCallback? onUndo}) {
+  void _afterBulk(
+    int changed,
+    String what, {
+    required IconData icon,
+    VoidCallback? onUndo,
+  }) {
     if (!mounted) return;
     showAppToast(
       context,
@@ -824,7 +829,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           ? 'No rows changed.'
           : '$what set on $changed transaction'
                 '${changed == 1 ? '' : 's'}.',
-      tone: changed == 0 ? AppToastTone.info : AppToastTone.undo,
+      tone: changed == 0 ? AppToastTone.info : AppToastTone.change,
+      icon: changed == 0 ? null : icon,
       duration: const Duration(seconds: 5),
       actionLabel: changed == 0 || onUndo == null ? null : 'Undo',
       onAction: changed == 0 ? null : onUndo,
@@ -930,6 +936,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _afterBulk(
       changed,
       'Category',
+      icon: Icons.category_outlined,
       onUndo: () => finance.restoreEditedTransactions(snapshot),
     );
   }
@@ -972,7 +979,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       Set.of(_selected),
       picked,
     );
-    _afterBulk(changed, 'Account');
+    _afterBulk(changed, 'Account', icon: Icons.account_balance_wallet_outlined);
   }
 
   Future<void> _bulkDateTime() async {
@@ -1013,6 +1020,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _afterBulk(
       changed,
       'Date & time',
+      icon: Icons.event_outlined,
       onUndo: () => finance.restoreEditedTransactions(snapshot),
     );
   }
@@ -1029,7 +1037,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       final path = await BackupService.exportCsvRows(rows);
       // Null = the save dialog was cancelled — not worth a snackbar.
       if (path != null && path.isNotEmpty) {
-        showAppToastOn(messenger, 'Saved to $path', tone: AppToastTone.success);
+        showAppToastOn(
+          messenger,
+          'Saved to $path',
+          tone: AppToastTone.success,
+          icon: Icons.download_done,
+        );
       }
     } catch (e) {
       debugPrint('CSV export failed: $e');
@@ -1073,6 +1086,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       context,
       'Deleted ${removed.length} transaction${removed.length == 1 ? '' : 's'}',
       () => finance.restoreTransactions(removed),
+      icon: Icons.delete_sweep_outlined,
+      tone: AppToastTone.removal,
     );
   }
 
@@ -1098,6 +1113,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       context,
       'Paired as transfer',
       () => finance.unpair(pairId),
+      icon: Icons.link,
     );
   }
 
@@ -2021,6 +2037,8 @@ class _PendingReviewCard extends StatelessWidget {
       context,
       'Discarded ${removed.length} import${removed.length == 1 ? '' : 's'}',
       () => finance.restoreTransactions(removed),
+      icon: Icons.block,
+      tone: AppToastTone.removal,
     );
   }
 
@@ -2200,6 +2218,7 @@ class _TransferSuggestionRow extends StatelessWidget {
                     context,
                     'Paired as $kindLabel',
                     () => finance.unpair(pairId),
+                    icon: Icons.link,
                   );
                 },
                 child: const Text('Pair'),
@@ -2332,6 +2351,8 @@ class _PendingRow extends StatelessWidget {
                 'Confirmed ${fmtMoney(confirmed.amount)} from '
                 '${confirmed.sender.isEmpty ? 'SMS' : confirmed.sender}',
                 () => finance.restoreEditedTransactions([confirmed]),
+                icon: Icons.done_all,
+                tone: AppToastTone.success,
               );
             },
           ),
@@ -2349,6 +2370,8 @@ class _PendingRow extends StatelessWidget {
                 'Discarded ${fmtMoney(discarded.amount)} from '
                 '${discarded.sender.isEmpty ? 'SMS' : discarded.sender}',
                 () => finance.restoreTransaction(discarded),
+                icon: Icons.block,
+                tone: AppToastTone.removal,
               );
             },
           ),

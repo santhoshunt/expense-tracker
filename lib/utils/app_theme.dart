@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_palettes.dart';
 import 'figma_palette.dart';
 
 /// Theme-aware semantic colours (income green, warning orange, chart blue /
@@ -88,22 +89,29 @@ abstract final class AppRadius {
 /// Memo for [buildAppTheme]: the `Consumer<SettingsProvider>` around
 /// `MaterialApp` re-runs on every settings change (a threshold toggle, a
 /// budget-cap commit), and each run used to construct both variants' full
-/// `ColorScheme` + ~15 sub-themes from scratch. Keyed by brightness+accent —
-/// the only inputs. Two entries per accent ever used; tiny.
-final Map<int, ThemeData> _themeCache = {};
+/// `ColorScheme` + ~15 sub-themes from scratch. Keyed by the only inputs:
+/// accent, brightness, and (dark only) the palette. Tiny.
+final Map<(int, Brightness, AppPalette?), ThemeData> _themeCache = {};
 
 /// Figma-kit theme in a dark and a light variant, tinted by the
-/// user-selected [accent] (coral by default). Screens style themselves via
-/// `scheme.*` and [AppColors], so the palettes live here.
+/// user-selected [accent] (coral by default). In dark mode the structural
+/// colours come from [palette]; light mode always uses [FigmaPaletteLight].
+/// Screens style themselves via `scheme.*` and [AppColors], so the palettes
+/// live here.
 ThemeData buildAppTheme({
   required Brightness brightness,
   required Color accent,
+  AppPalette palette = AppPalette.standard,
 }) {
-  final cacheKey =
-      (accent.toARGB32() << 1) | (brightness == Brightness.dark ? 1 : 0);
+  final dark = brightness == Brightness.dark;
+  final cacheKey = (accent.toARGB32(), brightness, dark ? palette : null);
   final cached = _themeCache[cacheKey];
   if (cached != null) return cached;
-  final theme = _buildAppTheme(brightness: brightness, accent: accent);
+  final theme = _buildAppTheme(
+    brightness: brightness,
+    accent: accent,
+    palette: palette,
+  );
   _themeCache[cacheKey] = theme;
   return theme;
 }
@@ -111,28 +119,28 @@ ThemeData buildAppTheme({
 ThemeData _buildAppTheme({
   required Brightness brightness,
   required Color accent,
+  required AppPalette palette,
 }) {
   final dark = brightness == Brightness.dark;
+  final p = palette.colors;
 
-  final bg = dark ? FigmaPalette.bg : FigmaPaletteLight.bg;
-  final surface = dark ? FigmaPalette.surface : FigmaPaletteLight.surface;
-  final surface2 = dark ? FigmaPalette.surface2 : FigmaPaletteLight.surface2;
-  final border = dark ? FigmaPalette.border : FigmaPaletteLight.border;
-  final textPrimary = dark
-      ? FigmaPalette.textPrimary
-      : FigmaPaletteLight.textPrimary;
+  final bg = dark ? p.bg : FigmaPaletteLight.bg;
+  final surface = dark ? p.surface : FigmaPaletteLight.surface;
+  final surface2 = dark ? p.surface2 : FigmaPaletteLight.surface2;
+  final border = dark ? p.border : FigmaPaletteLight.border;
+  final textPrimary = dark ? p.textPrimary : FigmaPaletteLight.textPrimary;
   final textSecondary = dark
-      ? FigmaPalette.textSecondary
+      ? p.textSecondary
       : FigmaPaletteLight.textSecondary;
-  final textMuted = dark ? FigmaPalette.textMuted : FigmaPaletteLight.textMuted;
+  final textMuted = dark ? p.textMuted : FigmaPaletteLight.textMuted;
   final blue = dark ? FigmaPalette.blue : FigmaPaletteLight.blue;
   final purple = dark ? FigmaPalette.purple : FigmaPaletteLight.purple;
   final pink = dark ? FigmaPalette.pink : FigmaPaletteLight.pink;
+  // Dark ink for glyphs on bright fills (light accents, blue, purple).
+  final ink = dark ? p.bg : FigmaPalette.bg;
 
   // Light accents (mint, sunset) need dark text/icons on top of them.
-  final onAccent = accent.computeLuminance() > 0.45
-      ? FigmaPalette.bg
-      : Colors.white;
+  final onAccent = accent.computeLuminance() > 0.45 ? ink : Colors.white;
   final accentLight = Color.lerp(accent, Colors.white, 0.35)!;
   final accentGlow = accent.withValues(alpha: 0.30);
   Color blend(Color c, double alpha) =>
@@ -148,12 +156,12 @@ ThemeData _buildAppTheme({
     inversePrimary: accentLight,
 
     secondary: blue,
-    onSecondary: dark ? FigmaPalette.bg : Colors.white,
+    onSecondary: dark ? ink : Colors.white,
     secondaryContainer: blend(blue, 0.22),
     onSecondaryContainer: textPrimary,
 
     tertiary: purple,
-    onTertiary: dark ? FigmaPalette.bg : Colors.white,
+    onTertiary: dark ? ink : Colors.white,
     tertiaryContainer: blend(purple, 0.20),
     onTertiaryContainer: textPrimary,
 
@@ -183,7 +191,7 @@ ThemeData _buildAppTheme({
     outlineVariant: border,
 
     inverseSurface: dark ? const Color(0xFFF1F1F5) : FigmaPalette.surface,
-    onInverseSurface: dark ? FigmaPalette.bg : Colors.white,
+    onInverseSurface: dark ? ink : Colors.white,
     surfaceTint: Colors.transparent, // no M3 elevation tinting
     shadow: Colors.black,
     scrim: Colors.black,

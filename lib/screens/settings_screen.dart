@@ -18,6 +18,7 @@ import '../services/sms_import_service.dart';
 import '../services/update_service.dart';
 import '../services/notification_source.dart';
 import '../services/sms_source.dart';
+import '../utils/app_palettes.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/figma_palette.dart';
@@ -73,6 +74,26 @@ class SettingsScreen extends StatelessWidget {
               ],
               selected: settings.mode,
               onChanged: (m) => context.read<SettingsProvider>().setMode(m),
+            ),
+            const SizedBox(height: 24),
+            Text('Dark theme', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'Used in dark mode. Picking one also sets its accent colour.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (final p in AppPalette.values)
+                  _PaletteTile(
+                    palette: p,
+                    selected: p == settings.palette,
+                    onTap: () => context.read<SettingsProvider>().setPalette(p),
+                  ),
+              ],
             ),
             const SizedBox(height: 24),
             Text(
@@ -388,6 +409,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
         messenger,
         'Saved to Drive: $name',
         tone: AppToastTone.success,
+        icon: Icons.cloud_done_outlined,
       );
     } catch (e) {
       // uploadNow also persisted the failure; mirror it locally so the
@@ -624,6 +646,113 @@ class _AppIconSectionState extends State<_AppIconSection> {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// One dark theme choice: a miniature of its background, a card in its text
+/// colours, and its accent, framed like the app-icon tiles.
+class _PaletteTile extends StatelessWidget {
+  final AppPalette palette;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _PaletteTile({
+    required this.palette,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final c = palette.colors;
+    Widget bar(double width, Color color) => Container(
+      width: width,
+      height: 5,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(3),
+      ),
+    );
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '${palette.label} theme',
+      excludeSemantics: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.card),
+                border: Border.all(
+                  color: selected ? scheme.primary : scheme.outlineVariant,
+                  width: selected ? 2.5 : 1,
+                ),
+              ),
+              child: Container(
+                width: 76,
+                height: 64,
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  color: c.bg,
+                  borderRadius: BorderRadius.circular(AppRadius.control),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: c.surface,
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: c.border),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          bar(22, c.textSecondary),
+                          const SizedBox(height: 4),
+                          bar(36, c.textPrimary),
+                        ],
+                      ),
+                    ),
+                    const Spacer(),
+                    Row(
+                      children: [
+                        Expanded(child: bar(double.infinity, c.surface2)),
+                        const SizedBox(width: 5),
+                        Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: c.accent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              palette.label,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1051,6 +1180,7 @@ class _DataSectionState extends State<_DataSection> {
               messenger,
               'Saved to $path',
               tone: AppToastTone.success,
+              icon: Icons.download_done,
             );
           }
         case 'export_pdf':
@@ -1065,6 +1195,7 @@ class _DataSectionState extends State<_DataSection> {
               messenger,
               'Saved to $path',
               tone: AppToastTone.success,
+              icon: Icons.download_done,
             );
           }
         case 'delete_all':
@@ -1082,7 +1213,8 @@ class _DataSectionState extends State<_DataSection> {
                 ? 'All data deleted; rules & categories reset to defaults.'
                 : 'Transactions and accounts deleted. Rules, categories, '
                       'groups and budgets were kept.',
-            tone: AppToastTone.success,
+            tone: AppToastTone.removal,
+            icon: Icons.delete_forever_outlined,
           );
         case 'export_csv':
           final sel = await _askExportRange();
@@ -1096,6 +1228,7 @@ class _DataSectionState extends State<_DataSection> {
               messenger,
               'Saved to $path',
               tone: AppToastTone.success,
+              icon: Icons.download_done,
             );
           }
         case 'import_json':
@@ -1116,6 +1249,7 @@ class _DataSectionState extends State<_DataSection> {
                 ? 'Restored $txAdded transactions.'
                 : 'Imported $txAdded new transactions.',
             tone: AppToastTone.success,
+            icon: Icons.file_download_done,
           );
         case 'import_csv':
           final replace = await _askImportMode();
@@ -1131,6 +1265,7 @@ class _DataSectionState extends State<_DataSection> {
                 ? 'Replaced transactions with $added rows from CSV.'
                 : 'Imported $added new transactions from CSV.',
             tone: AppToastTone.success,
+            icon: Icons.file_download_done,
           );
         case 'import_drive':
           final driveService = context.read<DriveBackupService>();
@@ -1174,6 +1309,7 @@ class _DataSectionState extends State<_DataSection> {
                 : 'Imported ${restored.added} new transactions from the '
                       'cloud backup.',
             tone: AppToastTone.success,
+            icon: Icons.cloud_download_outlined,
           );
       }
     } on FormatException catch (e) {
@@ -1491,6 +1627,7 @@ class _AboutSectionState extends State<_AboutSection> {
             messenger,
             "You're on the latest version ($currentVersion).",
             tone: AppToastTone.success,
+            icon: Icons.verified_outlined,
           );
         case UpdateAvailable(:final latestTag, :final htmlUrl):
           await showDialog<void>(

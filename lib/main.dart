@@ -57,6 +57,7 @@ class ExpenseTrackerApp extends StatelessWidget {
           darkTheme: buildAppTheme(
             brightness: Brightness.dark,
             accent: settings.accent,
+            palette: settings.palette,
           ),
           themeMode: settings.mode,
           // Mode/accent changes cross-fade instead of snapping.

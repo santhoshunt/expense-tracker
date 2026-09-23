@@ -99,16 +99,56 @@ const Map<String, IconData> kCategoryIconChoices = {
   'group': Icons.group,
 };
 
-/// Colour options for user-created categories.
+/// "No colour": the muted grey, which every category badge (a 15% wash of
+/// the colour behind an icon in it) renders as a neutral chip. The built-in
+/// "Other" categories use it too.
+const Color kNoCategoryColor = FigmaPalette.textMuted;
+
+/// Hue columns of [kCategoryColorChoices], in order.
+const List<String> kCategoryHueNames = [
+  'Coral',
+  'Sunset',
+  'Amber',
+  'Mint',
+  'Teal',
+  'Sky',
+  'Iris',
+  'Rose',
+];
+
+/// Colour options for categories: three rows (light, base, deep) of the
+/// eight [kCategoryHueNames] columns. The base row holds the kit hues the
+/// built-ins use, and Coral light is [FigmaPalette.primaryLight], so every
+/// built-in colour stays pickable. Deep tones clear 3:1 against the dark
+/// card surface, where category glyphs are drawn in these colours.
 const List<Color> kCategoryColorChoices = [
+  // Light (35% toward white)
+  FigmaPalette.primaryLight,
+  Color(0xFFFFCFA3),
+  Color(0xFFF9D68C),
+  Color(0xFF8DE1C8),
+  Color(0xFF77D9D0),
+  Color(0xFF9BCCF9),
+  Color(0xFFB8B7FE),
+  Color(0xFFFFAAC3),
+  // Base
   FigmaPalette.primary,
   FigmaPalette.orange,
+  Color(0xFFF5C04E),
   FigmaPalette.green,
+  Color(0xFF2EC4B6),
   FigmaPalette.blue,
   FigmaPalette.purple,
   FigmaPalette.pink,
-  FigmaPalette.primaryLight,
-  FigmaPalette.textMuted,
+  // Deep (22% toward black)
+  Color(0xFFB76152),
+  Color(0xFFC78D59),
+  Color(0xFFBF963D),
+  Color(0xFF3EA385),
+  Color(0xFF24998E),
+  Color(0xFF4F89C0),
+  Color(0xFF7270C6),
+  Color(0xFFC7617F),
 ];
 
 const List<TxCategory> kCategories = [

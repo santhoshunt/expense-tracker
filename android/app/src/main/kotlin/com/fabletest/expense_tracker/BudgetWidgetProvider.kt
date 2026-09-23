@@ -105,8 +105,10 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
             val spent = entry.optDouble("spent", 0.0)
             val limit = entry.optDouble("limit", 0.0)
             val over = spent > limit
+            // The text keeps counting past 100 ("110% used"); only the bar
+            // stops full, like the in-app budget ring.
             val pct =
-                if (limit <= 0) 0 else ((spent / limit) * 100).toInt().coerceIn(0, 100)
+                if (limit <= 0) 0 else ((spent / limit) * 100).toInt().coerceAtLeast(0)
 
             views.setViewVisibility(R.id.widget_body, View.VISIBLE)
             views.setViewVisibility(R.id.widget_empty, View.GONE)
@@ -115,7 +117,7 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
                 R.id.widget_amounts,
                 "${entry.optString("spentLabel")} of ${entry.optString("limitLabel")}"
             )
-            views.setProgressBar(R.id.widget_progress, 100, pct, false)
+            views.setProgressBar(R.id.widget_progress, 100, pct.coerceAtMost(100), false)
             if (detailed) {
                 // These views exist only in the detailed layout — RemoteViews
                 // fails to apply when told to fill ids the layout lacks.
