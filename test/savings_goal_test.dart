@@ -92,8 +92,18 @@ void main() {
   group('avgMonthlyNet', () {
     final now = DateTime(2026, 9, 1);
 
+    /// A row from before the window: the account has a long history, so
+    /// the full 90 days are the divisor. (It falls outside the sum.)
+    Tx oldRow() => tx(
+      type: TxType.expense,
+      categoryId: kSavingsTransferCategoryId,
+      amount: 1,
+      date: now.subtract(const Duration(days: 200)),
+    );
+
     test('averages the trailing 90 days to a calendar-month rate', () {
       final rows = [
+        oldRow(),
         for (final daysAgo in [10, 40, 70])
           tx(
             type: TxType.expense,
@@ -123,6 +133,7 @@ void main() {
 
     test('withdrawals subtract', () {
       final rows = [
+        oldRow(),
         tx(
           type: TxType.expense,
           categoryId: kSavingsTransferCategoryId,
@@ -137,6 +148,36 @@ void main() {
         ),
       ];
       expect(avgMonthlyNet(rows, now: now), closeTo(6000 / (90 / 30.44), 0.01));
+    });
+
+    test('a young account divides by the days it covers, not 90', () {
+      // First row 19 days ago: 20 days on record (both ends count).
+      final rows = [
+        for (final daysAgo in [19, 5])
+          tx(
+            type: TxType.expense,
+            categoryId: kSavingsTransferCategoryId,
+            amount: 10000,
+            date: now.subtract(Duration(days: daysAgo)),
+          ),
+      ];
+      expect(
+        avgMonthlyNet(rows, now: now),
+        closeTo(20000 / (20 / 30.44), 0.01),
+      );
+    });
+
+    test('under 14 days of history there is no pace yet', () {
+      final rows = [
+        tx(
+          type: TxType.expense,
+          categoryId: kSavingsTransferCategoryId,
+          amount: 10000,
+          date: now.subtract(const Duration(days: 2)),
+        ),
+      ];
+      expect(avgMonthlyNet(rows, now: now), 0);
+      expect(avgMonthlyNet(const [], now: now), 0);
     });
   });
 

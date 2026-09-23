@@ -82,6 +82,16 @@ class AppColors extends ThemeExtension<AppColors> {
   }
 }
 
+/// Colour for a budget used to [pct] (1.0 = the whole limit): green below
+/// 80%, orange from 80%, red above 95%. The one ladder behind every budget
+/// ring and bar, matching the home-screen widget (BudgetWidgetProvider.kt).
+Color budgetColor(BuildContext context, double pct) {
+  final colors = AppColors.of(context);
+  if (pct > 0.95) return Theme.of(context).colorScheme.error;
+  if (pct >= 0.8) return colors.orange;
+  return colors.green;
+}
+
 /// The app's corner-radius scale. Every rounded corner should sit on one of
 /// these tiers — an audit found 13 distinct ad-hoc radii, several of them
 /// same-role-different-value (category avatars at 11 vs 12, icon-picker

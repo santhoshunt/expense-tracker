@@ -70,6 +70,38 @@ void main() {
     expect(find.text('Got it'), findsNothing);
   });
 
+  testWidgets('a link closes the bubble and runs from the host screen', (
+    tester,
+  ) async {
+    BuildContext? got;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (host) => InfoTip(
+              title: 'By category',
+              message: 'Share of the month.',
+              link: InfoLink(
+                prompt: 'Transactions not classified right?',
+                label: 'Set up transaction rules',
+                onTap: (c) => got = c,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.bySemanticsLabel('About By category'));
+    await tester.pumpAndSettle();
+    expect(find.text('Transactions not classified right?'), findsOneWidget);
+
+    await tester.tap(find.text('Set up transaction rules →'));
+    await tester.pumpAndSettle();
+    expect(find.text('Share of the month.'), findsNothing, reason: 'closed');
+    expect(got, isNotNull);
+    expect(got!.mounted, isTrue, reason: 'the host, not the dismissed bubble');
+  });
+
   testWidgets('the bubble stays on screen near an edge', (tester) async {
     await pump(tester, at: Alignment.bottomRight);
     await tester.tap(find.bySemanticsLabel('About Net balance'));

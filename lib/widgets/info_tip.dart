@@ -11,17 +11,20 @@ import '../utils/contrast.dart';
 /// back gesture or "Got it" closes it.
 ///
 /// [example] runs when the bubble opens, so it reads the figures of that
-/// moment; returning null (no data yet) leaves the line out.
+/// moment; returning null (no data yet) leaves the line out. [link] adds a
+/// question and a link that closes the bubble and goes somewhere useful.
 class InfoTip extends StatelessWidget {
   final String title;
   final String message;
   final String? Function()? example;
+  final InfoLink? link;
 
   const InfoTip({
     super.key,
     required this.title,
     required this.message,
     this.example,
+    this.link,
   });
 
   @override
@@ -35,18 +38,24 @@ class InfoTip extends StatelessWidget {
       label: 'About $title',
       onTap: () => _open(context),
       excludeSemantics: true,
-      child: InkResponse(
-        radius: 18,
-        onTap: () => _open(context),
-        // 32dp target around a 16dp glyph: sits inside a heading row
-        // without pushing its height.
-        child: SizedBox(
-          width: 32,
-          height: 32,
-          child: Icon(
-            Icons.info_outline,
-            size: 16,
-            color: scheme.onSurfaceVariant,
+      // Its own ink surface: the ripple paints on the nearest Material, and
+      // inside a text field that one lies beneath the field's fill, so the
+      // splash animated hidden behind it.
+      child: Material(
+        type: MaterialType.transparency,
+        child: InkResponse(
+          radius: 18,
+          onTap: () => _open(context),
+          // 32dp target around a 16dp glyph: sits inside a heading row
+          // without pushing its height.
+          child: SizedBox(
+            width: 32,
+            height: 32,
+            child: Icon(
+              Icons.info_outline,
+              size: 16,
+              color: scheme.onSurfaceVariant,
+            ),
           ),
         ),
       ),
@@ -68,6 +77,10 @@ class InfoTip extends StatelessWidget {
         title: title,
         message: message,
         example: exampleText,
+        link: link,
+        // The link runs from the screen that owns the tip, not from the
+        // bubble's own route, which is gone by then.
+        host: context,
       ),
       transitionBuilder: (ctx, animation, _, child) {
         final curved = CurvedAnimation(
@@ -84,6 +97,17 @@ class InfoTip extends StatelessWidget {
       },
     );
   }
+}
+
+/// A tooltip's way out: an optional [prompt] question and a [label]ed link.
+/// [onTap] receives the context of the screen that shows the tip, after the
+/// bubble has closed.
+class InfoLink {
+  final String? prompt;
+  final String label;
+  final void Function(BuildContext context) onTap;
+
+  const InfoLink({this.prompt, required this.label, required this.onTap});
 }
 
 /// A label followed by its [InfoTip], for heading rows. The label may
@@ -113,12 +137,16 @@ class _InfoBubble extends StatelessWidget {
   final String title;
   final String message;
   final String? example;
+  final InfoLink? link;
+  final BuildContext host;
 
   const _InfoBubble({
     required this.anchor,
     required this.title,
     required this.message,
     required this.example,
+    required this.link,
+    required this.host,
   });
 
   @override
@@ -194,6 +222,35 @@ class _InfoBubble extends StatelessWidget {
                   example!,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+            if (link case final link?) ...[
+              const SizedBox(height: 10),
+              Divider(height: 1, color: border),
+              const SizedBox(height: 8),
+              if (link.prompt case final prompt?)
+                Text(
+                  prompt,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              InkWell(
+                borderRadius: BorderRadius.circular(6),
+                onTap: () {
+                  Navigator.pop(context);
+                  if (host.mounted) link.onTap(host);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Text(
+                    '${link.label} →',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: accentTextColor(context),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ),

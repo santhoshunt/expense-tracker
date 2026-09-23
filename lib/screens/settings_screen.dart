@@ -25,6 +25,7 @@ import '../widgets/undo_snackbar.dart';
 import '../widgets/hue_color_picker.dart';
 import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
+import 'app_nav.dart';
 import 'classifiers_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -159,6 +160,11 @@ class SettingsScreen extends StatelessWidget {
                 ),
                 tip: const InfoTip(
                   title: 'Automatic SMS import',
+                  link: InfoLink(
+                    prompt: 'Imports landing in the wrong category?',
+                    label: 'Open transaction rules',
+                    onTap: goCockpitRules,
+                  ),
                   message:
                       'Scans your SMS inbox when you open or return to the '
                       'app, as often as this setting allows. Daily: the first '
@@ -252,6 +258,11 @@ class SettingsScreen extends StatelessWidget {
               ),
               tip: const InfoTip(
                 title: 'Category order',
+                link: InfoLink(
+                  prompt: 'Want different categories?',
+                  label: 'Edit categories',
+                  onTap: goCockpitCategories,
+                ),
                 message:
                     'Sets the order of the category list when you add or edit '
                     'a transaction. The first category in the list is picked '
@@ -562,9 +573,9 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                 tip: InfoTip(
                   title: 'Frequency',
                   message:
-                      'Checked when the app starts fresh and after each App '
-                      'lock unlock. Returning to the app does not '
-                      'check, so backups run only on days you open the app. '
+                      'Checked when the app starts fresh. Returning to it does '
+                      'not check, so backups run only on days you open the '
+                      'app. '
                       'Daily waits at least 23 hours, weekly 6 days, monthly '
                       '28 days. An empty ledger is never uploaded on schedule.',
                 ),
@@ -1008,8 +1019,8 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
               : Icons.notifications_off_outlined,
           color: granted ? scheme.primary : scheme.onSurfaceVariant,
         ),
-        title: const InfoLabel(
-          label: Text('Capture RCS alerts'),
+        title: InfoLabel(
+          label: const Text('Capture RCS alerts'),
           tip: InfoTip(
             title: 'Capture RCS alerts',
             message:
@@ -1017,8 +1028,12 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
                 'mention an amount in ₹, Rs or INR, which the SMS scan cannot '
                 'see. It works even when automatic import is Off: captured '
                 'alerts import each time you open the app. To stop it, revoke '
-                'notification access in Android settings (tap this tile, then '
-                'System settings).',
+                'notification access in Android settings.',
+            link: InfoLink(
+              prompt: 'Change what this app can read?',
+              label: 'Open notification access',
+              onTap: (_) => _source.openAccessSettings(),
+            ),
           ),
         ),
         subtitle: Text(
@@ -1404,6 +1419,29 @@ class _DataSectionState extends State<_DataSection> {
     );
   }
 
+  /// The export picker, shared by the Export tile and the Delete all tip's
+  /// "Export a backup" link.
+  void _showExport() => _pickAndRun(
+    title: 'Export',
+    items: const [
+      PickerItem(
+        value: 'export_json',
+        label: 'Backup (JSON)',
+        leading: Icon(Icons.data_object, size: 20),
+      ),
+      PickerItem(
+        value: 'export_csv',
+        label: 'Transactions (CSV)',
+        leading: Icon(Icons.table_chart_outlined, size: 20),
+      ),
+      PickerItem(
+        value: 'export_pdf',
+        label: 'Report (PDF)',
+        leading: Icon(Icons.picture_as_pdf_outlined, size: 20),
+      ),
+    ],
+  );
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -1429,27 +1467,9 @@ class _DataSectionState extends State<_DataSection> {
               style: Theme.of(context).textTheme.bodySmall,
             ),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => _pickAndRun(
-              title: 'Export',
-              items: const [
-                PickerItem(
-                  value: 'export_json',
-                  label: 'Backup (JSON)',
-                  leading: Icon(Icons.data_object, size: 20),
-                ),
-                PickerItem(
-                  value: 'export_csv',
-                  label: 'Transactions (CSV)',
-                  leading: Icon(Icons.table_chart_outlined, size: 20),
-                ),
-                PickerItem(
-                  value: 'export_pdf',
-                  label: 'Report (PDF)',
-                  leading: Icon(Icons.picture_as_pdf_outlined, size: 20),
-                ),
-              ],
-            ),
+            onTap: _showExport,
           ),
+
           ListTile(
             leading: const Icon(Icons.file_download_outlined),
             title: const InfoLabel(
@@ -1499,7 +1519,7 @@ class _DataSectionState extends State<_DataSection> {
                 'Delete all data',
                 style: TextStyle(color: scheme.error),
               ),
-              tip: const InfoTip(
+              tip: InfoTip(
                 title: 'Delete all data',
                 message:
                     'Always deletes transactions and accounts. With the box '
@@ -1508,6 +1528,11 @@ class _DataSectionState extends State<_DataSection> {
                     'and merchant names. It never touches your monthly cap, '
                     'theme, other settings or Drive backups. The next SMS scan '
                     're-imports the last 30 days.',
+                link: InfoLink(
+                  prompt: 'Want a copy first?',
+                  label: 'Export a backup',
+                  onTap: (_) => _showExport(),
+                ),
               ),
             ),
             onTap: () => _handleBackupAction('delete_all'),
@@ -1744,14 +1769,22 @@ class _AboutSectionState extends State<_AboutSection> {
           ),
           ListTile(
             leading: const Icon(Icons.system_update_alt),
-            title: const InfoLabel(
-              label: Text('Check for updates'),
+            title: InfoLabel(
+              label: const Text('Check for updates'),
               tip: InfoTip(
                 title: 'Check for updates',
                 message:
                     'Compares this version with the latest release on GitHub. '
                     'It does not download or install anything; View release '
                     'opens the page in your browser.',
+                link: InfoLink(
+                  prompt: 'See what changed in each version?',
+                  label: 'All releases on GitHub',
+                  onTap: (_) => launchUrl(
+                    Uri.parse(UpdateService.releasesPageUrl),
+                    mode: LaunchMode.externalApplication,
+                  ),
+                ),
               ),
             ),
             subtitle: Text(

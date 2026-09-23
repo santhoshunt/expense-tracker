@@ -33,8 +33,6 @@ Future<void> showBudgetDetailSheet(
       return StatefulBuilder(
         builder: (ctx, setSheetState) {
           final finance = ctx.watch<FinanceProvider>();
-          final colors = AppColors.of(ctx);
-          final scheme = Theme.of(ctx).colorScheme;
           // Same bound as the dashboard's next-month arrow: the current
           // month, or a later one when rows dated ahead put data there.
           final now = DateTime.now();
@@ -46,11 +44,7 @@ Future<void> showBudgetDetailSheet(
           final limit = budget.limit;
           final pct = limit == 0 ? 0.0 : spent / limit;
           final over = spent > limit;
-          final color = pct >= 1.0
-              ? scheme.error
-              : pct >= 0.8
-              ? colors.orange
-              : colors.green;
+          final color = budgetColor(ctx, pct);
           final breakdown = finance.budgetBreakdownFor(budget, shown);
           final months = List.generate(
             6,
@@ -223,18 +217,13 @@ class _BudgetTrendBars extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = AppColors.of(context);
     final scheme = Theme.of(context).colorScheme;
     final maxVal = [...spent, limit].fold(0.0, (m, v) => v > m ? v : m);
     final mmm = DateFormat('MMM');
 
     Color barColor(double v) {
       final pct = limit == 0 ? 0.0 : v / limit;
-      return pct >= 1.0
-          ? scheme.error
-          : pct >= 0.8
-          ? colors.orange
-          : colors.green;
+      return budgetColor(context, pct);
     }
 
     final label = Theme.of(

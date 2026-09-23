@@ -17,6 +17,7 @@ import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
 import '../widgets/section_header.dart';
 import '../widgets/undo_snackbar.dart';
+import 'app_nav.dart';
 
 class AccountsScreen extends StatefulWidget {
   /// Tapping an account jumps to its filtered transaction list.
@@ -42,7 +43,23 @@ class _AccountsScreenState extends State<AccountsScreen> {
   late final PageController _pageCtrl = PageController();
 
   @override
+  void initState() {
+    super.initState();
+    // Tooltip links can land on a given page (e.g. Savings). Post-frame:
+    // the jump arrives alongside the home tab switch that reveals us.
+    AppNav.instance.attachAccounts(
+      this,
+      showType: (t) => WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pageCtrl.hasClients) {
+          _pageCtrl.jumpToPage(_filterOrder.indexOf(t));
+        }
+      }),
+    );
+  }
+
+  @override
   void dispose() {
+    AppNav.instance.detachAccounts(this);
     _pageCtrl.dispose();
     super.dispose();
   }
@@ -206,17 +223,6 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 // full tap/menu behavior — only dimmed. The All view
                 // groups open accounts by type under section headers;
                 // a filtered view IS one type, so it stays flat.
-                // The balance rule is the same on every bank and savings
-                // tile, so only the page's first one carries its "i". Banks
-                // render before savings in the All view.
-                final tipFor =
-                    (accounts
-                                .where((a) => a.type == AccountType.bank)
-                                .firstOrNull ??
-                            accounts
-                                .where((a) => a.type == AccountType.savings)
-                                .firstOrNull)
-                        ?.id;
                 final items = <Widget>[
                   if (t == null)
                     for (final (type, header) in const [
@@ -234,17 +240,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
                             _AccountCard(
                               account: a,
                               onView: widget.onViewAccount,
-                              balanceTip: a.id == tipFor,
                             ),
                       ],
                     ]
                   else
                     for (final a in accounts)
-                      _AccountCard(
-                        account: a,
-                        onView: widget.onViewAccount,
-                        balanceTip: a.id == tipFor,
-                      ),
+                      _AccountCard(account: a, onView: widget.onViewAccount),
                   if (closed.isNotEmpty) ...[
                     // The header's own inset, less what the 32dp tip adds
                     // above and below the 11px text.
@@ -295,14 +296,7 @@ class _AccountCard extends StatelessWidget {
   final Account account;
   final void Function(String accountId) onView;
 
-  /// Carries the "i" on its Balance label (bank and savings tiles only).
-  final bool balanceTip;
-
-  const _AccountCard({
-    required this.account,
-    required this.onView,
-    this.balanceTip = false,
-  });
+  const _AccountCard({required this.account, required this.onView});
 
   @override
   Widget build(BuildContext context) {
@@ -365,9 +359,9 @@ class _AccountCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 14),
                 if (isCard)
-                  _CardFigures(account: account)
+                  _CardFigures(account: account, onView: onView)
                 else
-                  _BankBalance(account: account, showTip: balanceTip),
+                  _BankBalance(account: account),
               ],
             ),
           ),
@@ -402,8 +396,7 @@ String provenanceLine(
 
 class _BankBalance extends StatelessWidget {
   final Account account;
-  final bool showTip;
-  const _BankBalance({required this.account, this.showTip = false});
+  const _BankBalance({required this.account});
 
   @override
   Widget build(BuildContext context) {
@@ -427,14 +420,18 @@ class _BankBalance extends StatelessWidget {
                   'Balance',
                   style: TextStyle(color: scheme.onSurfaceVariant),
                 ),
-                if (showTip)
-                  const InfoTip(
-                    title: 'Balance',
-                    message:
-                        'The newest known balance wins, whether you set it '
-                        'or a bank alert stated it. Transactions after it are '
-                        'added on.',
+                InfoTip(
+                  title: 'Balance',
+                  message:
+                      'The newest known balance wins, whether you set it or '
+                      'a bank alert stated it. Transactions after it are '
+                      'added on.',
+                  link: InfoLink(
+                    prompt: 'Balance looks off?',
+                    label: 'Set the balance',
+                    onTap: (c) => showSetBalanceDialog(c, account),
                   ),
+                ),
               ],
             ),
             const SizedBox(width: 8),
@@ -539,9 +536,16 @@ class _GoalProgress extends StatelessWidget {
               title: 'Savings goal',
               message:
                   'The finish month assumes you keep adding your average '
-                  'over the last 90 days. It is hidden when that average is '
-                  'zero or negative.',
+                  "over the last 90 days, or since the account's first "
+                  'transaction if that is more recent. It waits for 14 days '
+                  'of history and is hidden when the average is zero or '
+                  'negative.',
               example: () => example,
+              link: InfoLink(
+                prompt: 'Want a different target?',
+                label: 'Edit the goal',
+                onTap: (c) => showSavingsGoalDialog(c, account),
+              ),
             ),
           ),
       ],
@@ -865,7 +869,10 @@ Future<void> showCardCycleDialog(BuildContext context, Account account) async {
 
 class _CardFigures extends StatelessWidget {
   final Account account;
-  const _CardFigures({required this.account});
+
+  /// Opens this card's transactions (the Spent this month tip's link).
+  final void Function(String accountId) onView;
+  const _CardFigures({required this.account, required this.onView});
 
   @override
   Widget build(BuildContext context) {
@@ -966,13 +973,18 @@ class _CardFigures extends StatelessWidget {
               if (!estimated) return text;
               return InfoLabel(
                 label: text,
-                tip: const InfoTip(
+                tip: InfoTip(
                   title: 'Estimated limit',
                   message:
                       '"Est." means the credit limit is estimated from the '
                       'highest available limit a bank alert ever reported. '
                       "Set the real limit from the card's menu for an exact "
                       'figure.',
+                  link: InfoLink(
+                    prompt: 'Know the real limit?',
+                    label: 'Set the credit limit',
+                    onTap: (c) => showCreditLimitDialog(c, account),
+                  ),
                 ),
               );
             },
@@ -984,11 +996,16 @@ class _CardFigures extends StatelessWidget {
             'Spent this month ${fmtMoney(spent)}',
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
-          tip: const InfoTip(
+          tip: InfoTip(
             title: 'Spent this month',
             message:
                 'Spending on this card in the current calendar month, '
                 'whatever month the dashboard shows. Transfers are left out.',
+            link: InfoLink(
+              prompt: 'See what makes it up?',
+              label: "This card's transactions",
+              onTap: (_) => onView(account.id),
+            ),
           ),
         ),
         if (account.dueDay != null) ...[

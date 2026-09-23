@@ -24,7 +24,9 @@ import '../widgets/month_picker_sheet.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/transaction_tile.dart';
 import '../widgets/undo_snackbar.dart';
+import '../widgets/info_tip.dart';
 import 'add_transaction_sheet.dart';
+import 'app_nav.dart';
 
 enum _Filter { all, income, expense, transfers }
 
@@ -2061,15 +2063,34 @@ class _PendingReviewCard extends StatelessWidget {
               'pending_review',
             ),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              // 4 + the tip's 32dp target + 4: the old 10 + 20 + 10 height,
+              // so the pinned cards leave the list the same room.
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
               child: Row(
                 children: [
                   Icon(Icons.sms, size: 18, color: scheme.primary),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      'Imported from SMS · ${pending.length} to review',
-                      style: Theme.of(context).textTheme.titleSmall,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: InfoLabel(
+                        label: Text(
+                          'Imported from SMS · ${pending.length} to review',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        tip: const InfoTip(
+                          title: 'Imported from SMS',
+                          message:
+                              'Rows read from your SMS wait here until you '
+                              'confirm or discard them. They do not count in '
+                              'any total until confirmed.',
+                          link: InfoLink(
+                            prompt: 'Imports classified wrong?',
+                            label: 'Set up transaction rules',
+                            onTap: goCockpitRules,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                   AnimatedRotation(
@@ -2254,7 +2275,8 @@ class _SuspectedSpamCard extends StatelessWidget {
             onTap: () =>
                 context.read<SettingsProvider>().toggleSection('spam_review'),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              // 4 + the tip's 32dp target + 4, as on the review card.
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
               child: Row(
                 children: [
                   Icon(
@@ -2264,9 +2286,27 @@ class _SuspectedSpamCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      'Suspected spam · ${suspects.length} — review one by one',
-                      style: Theme.of(context).textTheme.titleSmall,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: InfoLabel(
+                        label: Text(
+                          'Suspected spam · ${suspects.length} — review one by one',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        tip: const InfoTip(
+                          title: 'Suspected spam',
+                          message:
+                              'Messages containing one of the Flagged as spam '
+                              "phrases on the Cockpit's Import tab wait here. "
+                              'Confirm or discard each one; there is no batch '
+                              'confirm for these.',
+                          link: InfoLink(
+                            prompt: 'Want fewer false flags?',
+                            label: 'Edit import rules',
+                            onTap: goCockpitImport,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                   AnimatedRotation(

@@ -19,6 +19,7 @@ import '../widgets/section_header.dart';
 import '../widgets/budget_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/undo_snackbar.dart';
+import 'app_nav.dart';
 import 'category_management.dart';
 import 'cockpit_tabs.dart';
 
@@ -66,67 +67,70 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
 
   @override
   Widget build(BuildContext context) {
-    return AmbientBackground(
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          title: const Text('Cockpit'),
-          bottom: TabBar(
+    return CockpitScope(
+      controller: _tab,
+      child: AmbientBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            title: const Text('Cockpit'),
+            bottom: TabBar(
+              controller: _tab,
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
+              // Roomier labels: tabs packed edge-to-edge read as cramped —
+              // let the bar scroll instead.
+              labelPadding: const EdgeInsets.symmetric(horizontal: 20),
+              tabs: const [
+                Tab(text: 'Rules'),
+                Tab(text: 'Import'),
+                Tab(text: 'Transactions'),
+                Tab(text: 'Categories'),
+                Tab(text: 'Budgets'),
+                Tab(text: 'Reminders'),
+              ],
+            ),
+          ),
+          // FAB only on the tabs with an add flow.
+          floatingActionButton: switch (_tab.index) {
+            kCockpitTabRules => GlassButton(
+              icon: Icons.add,
+              label: 'New rule',
+              onPressed: () => _showRuleDialog(context),
+            ),
+            kCockpitTabImport => GlassButton(
+              icon: Icons.add,
+              label: 'New import rule',
+              onPressed: () => _showImportRuleDialog(context),
+            ),
+            kCockpitTabCategories => GlassButton(
+              icon: Icons.add,
+              label: 'New category',
+              onPressed: () => showCategoryDialog(context),
+            ),
+            kCockpitTabBudgets => GlassButton(
+              icon: Icons.add,
+              label: 'New budget',
+              onPressed: () => showBudgetDialog(context),
+            ),
+            kCockpitTabReminders => GlassButton(
+              icon: Icons.add,
+              label: 'New reminder',
+              onPressed: () => showReminderEditor(context),
+            ),
+            _ => null,
+          },
+          body: TabBarView(
             controller: _tab,
-            isScrollable: true,
-            tabAlignment: TabAlignment.start,
-            // Roomier labels: tabs packed edge-to-edge read as cramped —
-            // let the bar scroll instead.
-            labelPadding: const EdgeInsets.symmetric(horizontal: 20),
-            tabs: const [
-              Tab(text: 'Rules'),
-              Tab(text: 'Import'),
-              Tab(text: 'Transactions'),
-              Tab(text: 'Categories'),
-              Tab(text: 'Budgets'),
-              Tab(text: 'Reminders'),
+            children: [
+              _RulesTab(),
+              _ImportTab(),
+              _TransactionsTab(),
+              const CategoriesTab(),
+              const BudgetsTab(),
+              const RemindersTab(),
             ],
           ),
-        ),
-        // FAB only on the tabs with an add flow.
-        floatingActionButton: switch (_tab.index) {
-          kCockpitTabRules => GlassButton(
-            icon: Icons.add,
-            label: 'New rule',
-            onPressed: () => _showRuleDialog(context),
-          ),
-          kCockpitTabImport => GlassButton(
-            icon: Icons.add,
-            label: 'New import rule',
-            onPressed: () => _showImportRuleDialog(context),
-          ),
-          kCockpitTabCategories => GlassButton(
-            icon: Icons.add,
-            label: 'New category',
-            onPressed: () => showCategoryDialog(context),
-          ),
-          kCockpitTabBudgets => GlassButton(
-            icon: Icons.add,
-            label: 'New budget',
-            onPressed: () => showBudgetDialog(context),
-          ),
-          kCockpitTabReminders => GlassButton(
-            icon: Icons.add,
-            label: 'New reminder',
-            onPressed: () => showReminderEditor(context),
-          ),
-          _ => null,
-        },
-        body: TabBarView(
-          controller: _tab,
-          children: [
-            _RulesTab(),
-            _ImportTab(),
-            _TransactionsTab(),
-            const CategoriesTab(),
-            const BudgetsTab(),
-            const RemindersTab(),
-          ],
         ),
       ),
     );
@@ -278,6 +282,11 @@ class _RulesTabState extends State<_RulesTab> {
             'Your rules always come before built-in ones, and a new rule '
             'goes to the top. Long-press rules to select them; rules with '
             'the same category can be merged.',
+        link: const InfoLink(
+          prompt: 'Want to check the results?',
+          label: 'See classified transactions',
+          onTap: goCockpitTransactions,
+        ),
       ),
     );
 
@@ -493,13 +502,11 @@ class _RuleTile extends StatelessWidget {
             ? scheme.primary.withValues(alpha: 0.18)
             : isSpam
             ? scheme.error.withValues(alpha: 0.12)
-            : sib != null
-            ? scheme.primary.withValues(alpha: 0.12)
             : cat!.color.withValues(alpha: 0.15),
+        // A pair shows its own (primary) rule's category like any rule; the
+        // subtitle names both directions.
         child: selected
             ? Icon(Icons.check, color: scheme.primary, size: 20)
-            : sib != null
-            ? Icon(Icons.swap_vert, color: scheme.primary, size: 20)
             : Icon(
                 isSpam ? Icons.block : cat!.icon,
                 color: isSpam
@@ -512,26 +519,13 @@ class _RuleTile extends StatelessWidget {
       // the row height instead of letting one rule blow out the list. With
       // several OR-conditions, an explicit count beats an ellipsis that
       // hides conditions 3+ without a trace.
-      title: () {
-        final text = Text(
-          rule.patterns.length > 1
-              ? 'contains "${rule.patterns.first}"'
-              : 'contains ${rule.patterns.map((p) => '"$p"').join()}',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        );
-        // Hidden while selecting: a tap there must toggle the row.
-        if (sib == null || selectionMode) return text;
-        return InfoLabel(
-          label: text,
-          tip: const InfoTip(
-            title: 'Rule pair',
-            message:
-                'One pattern, two rules: one for money out, one for money '
-                'in. Editing or deleting the pair changes both.',
-          ),
-        );
-      }(),
+      title: Text(
+        rule.patterns.length > 1
+            ? 'contains "${rule.patterns.first}"'
+            : 'contains ${rule.patterns.map((p) => '"$p"').join()}',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
       subtitle: Text(
         [
           if (rule.patterns.length > 1)
@@ -633,6 +627,11 @@ class _ImportTab extends StatelessWidget {
               'Flagged messages are still imported, but held in the '
               'suspected spam queue for review. If one of your own rules '
               'matches a message when it is imported, the flag is cleared.',
+          link: InfoLink(
+            prompt: 'Something flagged by mistake?',
+            label: 'Review suspected spam',
+            onTap: goAllTransactions,
+          ),
         ),
       ),
       if (spamRules.isEmpty)
@@ -913,6 +912,11 @@ class _TransactionsTabState extends State<_TransactionsTab> {
                   'Picking a category also switches the row to that '
                   "category's direction and marks it as set by hand, so "
                   'rules will not change it again.',
+              link: InfoLink(
+                prompt: 'Transactions not classified right?',
+                label: 'Set up transaction rules',
+                onTap: goCockpitRules,
+              ),
             ),
           ),
         ),
@@ -1487,15 +1491,34 @@ Future<void> _showRuleDialog(
                   // twin is a second ordinary rule sharing the pattern.
                   if (categoryId != kSpamCategoryId) ...[
                     const SizedBox(height: 8),
-                    AppDropdownField<String?>(
-                      label: 'Other direction',
-                      value: otherCategoryId,
-                      items: _oppositeDirectionItems(
-                        categoryById(categoryId).type == TxType.income
-                            ? TxType.expense
-                            : TxType.income,
-                      ),
-                      onChanged: (v) => setState(() => otherCategoryId = v),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: AppDropdownField<String?>(
+                            label: 'Other direction',
+                            value: otherCategoryId,
+                            items: _oppositeDirectionItems(
+                              categoryById(categoryId).type == TxType.income
+                                  ? TxType.expense
+                                  : TxType.income,
+                            ),
+                            onChanged: (v) =>
+                                setState(() => otherCategoryId = v),
+                          ),
+                        ),
+                        // Explained here, while the pair is being made,
+                        // rather than on the finished row in the list.
+                        const InfoTip(
+                          title: 'Rule pair',
+                          message:
+                              'Picking a category here makes a rule pair: one '
+                              'pattern, two rules, one for money out and one '
+                              'for money in. The Rules list shows the pair as '
+                              'one row, and editing or deleting it changes '
+                              'both. Not for this direction removes the '
+                              'second rule.',
+                        ),
+                      ],
                     ),
                     Padding(
                       padding: const EdgeInsets.only(top: 4, left: 12),

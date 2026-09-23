@@ -32,6 +32,7 @@ import '../widgets/monthly_bar_chart.dart';
 import '../widgets/spend_comparison_cards.dart';
 import '../widgets/transaction_tile.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
+import 'app_nav.dart';
 
 /// Which slice of the dashboard is on screen. The page grew to fifteen
 /// sections in one scroll; splitting it into sub-tabs (rather than a second
@@ -530,6 +531,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   'Confirmed spending $period. Transfers and card bill '
                   'payments are left out, and a split bill counts only your '
                   'share.',
+              link: const InfoLink(
+                prompt: 'Spending in the wrong category?',
+                label: 'Set up transaction rules',
+                onTap: goCockpitRules,
+              ),
               onTap: widget.onViewTransactions == null || _yearMode
                   ? null
                   : () => widget.onViewTransactions!(TxType.expense, _month),
@@ -585,6 +591,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               '"Only these" budgets count the picked categories; "All '
               'except" budgets count everything else. Same colours as the '
               'monthly budget.',
+          link: InfoLink(
+            prompt: 'Need another limit?',
+            label: 'Add or edit budgets',
+            onTap: goCockpitBudgets,
+          ),
         ),
         const SizedBox(height: 8),
         Card(
@@ -645,6 +656,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
           tip:
               'Your 5 newest confirmed transactions, whatever month is '
               'selected.',
+          link: const InfoLink(
+            prompt: 'Looking for older ones?',
+            label: 'See all transactions',
+            onTap: goAllTransactions,
+          ),
         ),
         const SizedBox(height: 8),
         Card(
@@ -737,6 +753,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               "The percentage is this category's share of the "
               "${_yearMode ? "year's" : "month's"} spending. Long-press a row "
               'to set or edit a budget for it; "of ₹X" shows that budget.',
+          link: const InfoLink(
+            prompt: 'Transactions not classified right?',
+            label: 'Set up transaction rules',
+            onTap: goCockpitRules,
+          ),
         ),
         const SizedBox(height: 8),
         Card(
@@ -878,6 +899,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               'no group count under Other. Money-out transfers in a grouped '
               'category count toward its group; other transfers are left '
               'out.',
+          link: InfoLink(
+            prompt: 'Change what is in each group?',
+            label: 'Edit groups',
+            onTap: goCockpitCategories,
+          ),
         ),
         const SizedBox(height: 8),
         Card(
@@ -928,6 +954,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               'Money moved between your own accounts. Out also includes '
               "friends' shares of split bills, which have no transaction of "
               'their own.',
+          link: InfoLink(
+            prompt: 'A category should count as a transfer?',
+            label: 'Edit categories',
+            onTap: goCockpitCategories,
+          ),
         ),
         const SizedBox(height: 8),
         Card(
@@ -1179,6 +1210,11 @@ class _UpcomingCard extends StatelessWidget {
                       'Card icons: green not billed or paid, orange billed, '
                       'red due within 5 days or overdue. Long-press a '
                       'spotted payment to hide it.',
+                  link: InfoLink(
+                    prompt: 'A bill the app cannot detect?',
+                    label: 'Add a reminder',
+                    onTap: goNewReminder,
+                  ),
                 ),
                 const Spacer(),
                 IconButton(
@@ -1652,6 +1688,11 @@ class _BalanceCard extends StatelessWidget {
                                     'in banks − '
                                     '${fmtMoney(finance.cardOutstandingTotal)} '
                                     'on cards = ${fmtMoney(finance.netWorth)}',
+                                link: const InfoLink(
+                                  prompt: 'A card missing its credit limit?',
+                                  label: 'Open accounts',
+                                  onTap: goAccounts,
+                                ),
                               )
                             : InfoTip(
                                 title: 'Available balance',
@@ -1715,6 +1756,11 @@ class _BalanceCard extends StatelessWidget {
                                 'transaction. It is already taken out of the '
                                 "figure above. Your savings accounts' value "
                                 'shows under Accounts.',
+                            link: InfoLink(
+                              prompt: 'Where is the money now?',
+                              label: 'See savings accounts',
+                              onTap: goSavingsAccounts,
+                            ),
                           ),
                         ),
                       ),
@@ -1730,8 +1776,8 @@ class _BalanceCard extends StatelessWidget {
   }
 }
 
-/// Monthly-cap progress: spent vs cap, colour shifting green→amber→red as
-/// usage climbs past 80% and 100%.
+/// Monthly-cap progress: spent vs cap, coloured by [budgetColor] (green,
+/// then amber from 80%, red above 95%).
 class _BudgetCard extends StatelessWidget {
   final double spent;
   final double cap;
@@ -1742,12 +1788,7 @@ class _BudgetCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final pct = cap <= 0 ? 0.0 : (spent / cap);
     final over = spent > cap;
-    final colors = AppColors.of(context);
-    final color = pct >= 1.0
-        ? scheme.error
-        : pct >= 0.8
-        ? colors.orange
-        : colors.green;
+    final color = budgetColor(context, pct);
     final remaining = cap - spent;
 
     return FrostedPanel(
@@ -1797,13 +1838,18 @@ class _BudgetCard extends StatelessWidget {
                             message:
                                 'Spending against the monthly cap set in '
                                 'Cockpit, Budgets. Green below 80%, orange '
-                                'from 80%, red from 100%. The ring stays full '
+                                'from 80%, red above 95%. The ring stays full '
                                 'past 100% while the percentage keeps '
                                 'counting.',
                             // Rounded the way the ring's centre label is.
                             example: () =>
                                 '${fmtMoney(spent)} of ${fmtMoney(cap)} = '
                                 '${(pct * 100).round()}%',
+                            link: const InfoLink(
+                              prompt: 'Want a different cap?',
+                              label: 'Change the monthly cap',
+                              onTap: goCockpitBudgets,
+                            ),
                           ),
                         ),
                       ),
@@ -1842,6 +1888,7 @@ class _StatCard extends StatelessWidget {
 
   /// What the figure counts, behind the card's "i".
   final String tip;
+  final InfoLink? link;
 
   const _StatCard({
     required this.label,
@@ -1850,6 +1897,7 @@ class _StatCard extends StatelessWidget {
     required this.color,
     required this.tip,
     this.onTap,
+    this.link,
   });
 
   @override
@@ -1866,7 +1914,7 @@ class _StatCard extends StatelessWidget {
             Positioned(
               top: 6,
               right: 0,
-              child: InfoTip(title: label, message: tip),
+              child: InfoTip(title: label, message: tip, link: link),
             ),
           ],
         ),
@@ -1929,15 +1977,9 @@ class _SpendBudgetRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = AppColors.of(context);
-    final scheme = Theme.of(context).colorScheme;
     final pct = limit == 0 ? 0.0 : spent / limit;
     final over = spent > limit;
-    final color = pct >= 1.0
-        ? scheme.error
-        : pct >= 0.8
-        ? colors.orange
-        : colors.green;
+    final color = budgetColor(context, pct);
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(AppRadius.control),
@@ -2110,15 +2152,16 @@ class _CategoryRow extends StatelessWidget {
 class _SectionHeading extends StatelessWidget {
   final String title;
   final String tip;
+  final InfoLink? link;
 
-  const _SectionHeading(this.title, {required this.tip});
+  const _SectionHeading(this.title, {required this.tip, this.link});
 
   @override
   Widget build(BuildContext context) => Align(
     alignment: Alignment.centerLeft,
     child: InfoLabel(
       label: Text(title, style: Theme.of(context).textTheme.titleMedium),
-      tip: InfoTip(title: title, message: tip),
+      tip: InfoTip(title: title, message: tip, link: link),
     ),
   );
 }
