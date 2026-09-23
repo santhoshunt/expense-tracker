@@ -11,9 +11,11 @@ import '../utils/contrast.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../widgets/budget_dialog.dart';
+import '../widgets/empty_state.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/glossy.dart';
+import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
 
 /// The Budgets and Reminders tabs of the Cockpit screen. The sections moved
@@ -455,9 +457,9 @@ class _ThresholdSwitch extends StatelessWidget {
   }
 }
 
-/// User-defined spend limits: list with edit/delete plus an add flow.
-/// The category/group pickers live in the dialog; progress renders on the
-/// dashboard.
+/// User-defined spend limits: list with edit/delete; adding goes through the
+/// Cockpit FAB. The category/group pickers live in the dialog; progress
+/// renders on the dashboard.
 class _CustomBudgetsSection extends StatelessWidget {
   const _CustomBudgetsSection();
 
@@ -483,13 +485,12 @@ class _CustomBudgetsSection extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // No button: the tab's 'New budget' FAB is the add flow.
             if (finance.budgets.isEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                child: Text(
-                  'No custom budgets yet.',
-                  style: TextStyle(color: scheme.onSurfaceVariant),
-                ),
+              const EmptyState(
+                compact: true,
+                icon: Icons.track_changes,
+                message: 'No custom budgets yet.',
               ),
             for (final b in finance.budgets)
               ListTile(
@@ -512,56 +513,45 @@ class _CustomBudgetsSection extends StatelessWidget {
                 trailing: IconButton(
                   tooltip: 'Delete budget',
                   icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: () => _confirmDelete(context, b),
+                  onPressed: () => _delete(context, b),
                 ),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-              child: TextButton.icon(
-                icon: const Icon(Icons.add),
-                label: const Text('Add budget'),
-                onPressed: () => showBudgetDialog(context),
-              ),
-            ),
           ],
         ),
       ),
     );
   }
 
-  Future<void> _confirmDelete(BuildContext context, SpendBudget b) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete "${b.name}"?'),
-        content: const Text('Transactions are not affected.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+  /// Deletes at once and offers Undo (the app's delete model, see
+  /// showUndoSnackBar). The provider is captured here because the undo can
+  /// run after this tab is gone.
+  void _delete(BuildContext context, SpendBudget b) {
+    final finance = context.read<FinanceProvider>();
+    // The delete reads the alert marker across an await, so the undo waits
+    // on the same future for what it captured.
+    final pending = finance.deleteBudget(b.id);
+    showUndoSnackBar(
+      context,
+      'Deleted budget "${b.name}"',
+      () async {
+        final removed = await pending;
+        if (removed != null) await finance.restoreBudget(removed);
+      },
+      icon: Icons.delete_outline,
+      tone: AppToastTone.removal,
     );
-    if (ok == true && context.mounted) {
-      await context.read<FinanceProvider>().deleteBudget(b.id);
-    }
   }
 }
 
-/// Manual monthly reminders: list with edit/delete plus an add flow. The
-/// editor lives in widgets/ so the dashboard's Upcoming card shares it.
+/// Manual monthly reminders: list with edit/delete; adding goes through the
+/// Cockpit FAB. The editor lives in widgets/ so the dashboard's Upcoming
+/// card shares it.
 class _RemindersSection extends StatelessWidget {
   const _RemindersSection();
 
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
-    final scheme = Theme.of(context).colorScheme;
     final thisMonth = monthKey(DateTime.now());
 
     String subtitle(Reminder r) => [
@@ -577,13 +567,12 @@ class _RemindersSection extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // No button: the tab's 'New reminder' FAB is the add flow.
             if (finance.reminders.isEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                child: Text(
-                  'No reminders yet.',
-                  style: TextStyle(color: scheme.onSurfaceVariant),
-                ),
+              const EmptyState(
+                compact: true,
+                icon: Icons.event_repeat_outlined,
+                message: 'No reminders yet.',
               ),
             for (final r in finance.reminders)
               ListTile(
@@ -611,43 +600,27 @@ class _RemindersSection extends StatelessWidget {
                 trailing: IconButton(
                   tooltip: 'Delete reminder',
                   icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: () => _confirmDelete(context, r),
+                  onPressed: () => _delete(context, r),
                 ),
               ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-              child: TextButton.icon(
-                icon: const Icon(Icons.add),
-                label: const Text('Add reminder'),
-                onPressed: () => showReminderEditor(context),
-              ),
-            ),
           ],
         ),
       ),
     );
   }
 
-  Future<void> _confirmDelete(BuildContext context, Reminder r) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete "${r.name}"?'),
-        content: const Text('Transactions are not affected.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+  /// Deletes at once and offers Undo, which returns the reminder to the
+  /// position it held in the list rather than the end.
+  void _delete(BuildContext context, Reminder r) {
+    final finance = context.read<FinanceProvider>();
+    final index = finance.reminders.indexWhere((x) => x.id == r.id);
+    finance.deleteReminder(r.id);
+    showUndoSnackBar(
+      context,
+      'Deleted reminder "${r.name}"',
+      () => finance.restoreReminder(r, index: index),
+      icon: Icons.delete_outline,
+      tone: AppToastTone.removal,
     );
-    if (ok == true && context.mounted) {
-      await context.read<FinanceProvider>().deleteReminder(r.id);
-    }
   }
 }

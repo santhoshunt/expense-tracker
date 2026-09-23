@@ -40,6 +40,12 @@ void main() {
     await pumpThrough(tester);
   }
 
+  /// Opens a group page from the Settings root by its row title.
+  Future<void> openGroup(WidgetTester tester, String title) async {
+    await tester.tap(find.text(title));
+    await pumpThrough(tester);
+  }
+
   Future<void> openTip(WidgetTester tester, String label) async {
     await tester.scrollUntilVisible(
       find.text(label),
@@ -55,6 +61,7 @@ void main() {
     tester,
   ) async {
     await pumpSettings(tester);
+    await openGroup(tester, 'Backup and data');
     await openTip(tester, 'Cloud backup');
     expect(
       find.textContaining('The newest 7 backups are kept'),
@@ -68,10 +75,13 @@ void main() {
 
   testWidgets('App lock tip opens without toggling the lock', (tester) async {
     await pumpSettings(tester);
+    await openGroup(tester, 'Privacy');
     await openTip(tester, 'App lock');
     expect(find.textContaining('returns after 2 minutes away'), findsOneWidget);
+    // The pushed group page, not SettingsScreen: the root route is offstage
+    // under it, and finders skip offstage widgets.
     final settings = tester
-        .element(find.byType(SettingsScreen))
+        .element(find.byType(SettingsGroupPage))
         .read<SettingsProvider>();
     expect(settings.appLock, isFalse);
   });

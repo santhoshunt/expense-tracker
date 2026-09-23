@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:provider/provider.dart';
 
 import '../models/import_rule.dart';
@@ -12,9 +13,11 @@ import '../utils/contrast.dart';
 import '../utils/format.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
+import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/keyboard_unfocus.dart';
+import '../widgets/motion.dart';
 import '../widgets/section_header.dart';
 import '../widgets/budget_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
@@ -48,6 +51,11 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tab;
 
+  /// Whether the FAB shows its label. Scrolling down folds it to the icon
+  /// so it covers less of the list; scrolling up or a tab change brings the
+  /// label back.
+  bool _fabExtended = true;
+
   @override
   void initState() {
     super.initState();
@@ -56,7 +64,20 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
       vsync: this,
       initialIndex: widget.initialTab,
     );
-    _tab.addListener(() => setState(() {}));
+    _tab.addListener(() => setState(() => _fabExtended = true));
+  }
+
+  bool _onUserScroll(UserScrollNotification n) {
+    // The TabBarView's own page swipes arrive here too, as horizontal
+    // scrolls; only a list moving up or down steers the FAB.
+    if (n.metrics.axis != Axis.vertical) return false;
+    final extend = switch (n.direction) {
+      ScrollDirection.reverse => false,
+      ScrollDirection.forward => true,
+      ScrollDirection.idle => _fabExtended,
+    };
+    if (extend != _fabExtended) setState(() => _fabExtended = extend);
+    return false;
   }
 
   @override
@@ -96,40 +117,48 @@ class _ClassifiersScreenState extends State<ClassifiersScreen>
             kCockpitTabRules => GlassButton(
               icon: Icons.add,
               label: 'New rule',
+              extended: _fabExtended,
               onPressed: () => _showRuleDialog(context),
             ),
             kCockpitTabImport => GlassButton(
               icon: Icons.add,
               label: 'New import rule',
+              extended: _fabExtended,
               onPressed: () => _showImportRuleDialog(context),
             ),
             kCockpitTabCategories => GlassButton(
               icon: Icons.add,
               label: 'New category',
+              extended: _fabExtended,
               onPressed: () => showCategoryDialog(context),
             ),
             kCockpitTabBudgets => GlassButton(
               icon: Icons.add,
               label: 'New budget',
+              extended: _fabExtended,
               onPressed: () => showBudgetDialog(context),
             ),
             kCockpitTabReminders => GlassButton(
               icon: Icons.add,
               label: 'New reminder',
+              extended: _fabExtended,
               onPressed: () => showReminderEditor(context),
             ),
             _ => null,
           },
-          body: TabBarView(
-            controller: _tab,
-            children: [
-              _RulesTab(),
-              _ImportTab(),
-              _TransactionsTab(),
-              const CategoriesTab(),
-              const BudgetsTab(),
-              const RemindersTab(),
-            ],
+          body: NotificationListener<UserScrollNotification>(
+            onNotification: _onUserScroll,
+            child: TabBarView(
+              controller: _tab,
+              children: [
+                _RulesTab(),
+                _ImportTab(),
+                _TransactionsTab(),
+                const CategoriesTab(),
+                const BudgetsTab(),
+                const RemindersTab(),
+              ],
+            ),
           ),
         ),
       ),
@@ -222,15 +251,19 @@ class _RulesTabState extends State<_RulesTab> {
   Widget build(BuildContext context) {
     final rules = context.watch<FinanceProvider>().rules;
     if (rules.isEmpty) {
-      return const Center(
-        child: Padding(
-          padding: EdgeInsets.all(32),
-          child: Text(
-            'No rules yet.\n\nRules categorise SMS imports automatically, '
-            'e.g. if the message contains "Chai Kings" → Food & Dining.\n\n'
-            'A rule with the Spam category drops matching messages '
-            'entirely — they are never imported.',
-            textAlign: TextAlign.center,
+      // Scrollable so the three paragraphs and the button survive a short
+      // viewport or a large font scale.
+      return Center(
+        child: SingleChildScrollView(
+          child: EmptyState(
+            icon: Icons.rule,
+            message:
+                'No rules yet.\n\nRules categorise SMS imports automatically, '
+                'e.g. if the message contains "Chai Kings" → Food & Dining.\n\n'
+                'A rule with the Spam category drops matching messages '
+                'entirely — they are never imported.',
+            actionLabel: 'Add rule',
+            onAction: () => _showRuleDialog(context),
           ),
         ),
       );
@@ -293,20 +326,27 @@ class _RulesTabState extends State<_RulesTab> {
     Widget tile(ClassifierRule r) {
       final sibling = siblingOf[r.id];
       return _RuleTile(
+        // Keyed by rule: a search hands this slot another rule, whose tint
+        // must not ease over from the previous one's.
+        key: ValueKey(r.id),
         rule: r,
         sibling: sibling,
         selectionMode: _selecting,
         selected: _selected.contains(r.id),
         // A pair selects as one unit (both ids), so the count stays honest
         // and a merge can never split a pair.
-        onToggleSelect: () => setState(() {
-          final ids = {r.id, ?sibling?.id};
-          if (_selected.contains(r.id)) {
-            _selected.removeAll(ids);
-          } else {
-            _selected.addAll(ids);
-          }
-        }),
+        onToggleSelect: () {
+          // Only a long-press can reach here with nothing selected, so this
+          // ticks exactly when selection mode starts.
+          setState(() {
+            final ids = {r.id, ?sibling?.id};
+            if (_selected.contains(r.id)) {
+              _selected.removeAll(ids);
+            } else {
+              _selected.addAll(ids);
+            }
+          });
+        },
       );
     }
 
@@ -469,6 +509,7 @@ class _RuleTile extends StatelessWidget {
   final VoidCallback onToggleSelect;
 
   const _RuleTile({
+    super.key,
     required this.rule,
     this.sibling,
     required this.selectionMode,
@@ -488,6 +529,10 @@ class _RuleTile extends StatelessWidget {
     final cat = isSpam ? null : categoryById(rule.categoryId);
     final sib = sibling;
     final sibCat = sib == null ? null : categoryById(sib.categoryId);
+    final selectMotion = motionDuration(
+      context,
+      const Duration(milliseconds: 160),
+    );
 
     return ListTile(
       onTap: selectionMode
@@ -496,24 +541,52 @@ class _RuleTile extends StatelessWidget {
       onLongPress: onToggleSelect,
       selected: selected,
       // The avatar flips to a check when picked (TransactionTile precedent —
-      // clearer than a checkbox column that reflows the whole list).
-      leading: CircleAvatar(
-        backgroundColor: selected
-            ? scheme.primary.withValues(alpha: 0.18)
-            : isSpam
-            ? scheme.error.withValues(alpha: 0.12)
-            : cat!.color.withValues(alpha: 0.15),
-        // A pair shows its own (primary) rule's category like any rule; the
-        // subtitle names both directions.
-        child: selected
-            ? Icon(Icons.check, color: scheme.primary, size: 20)
-            : Icon(
-                isSpam ? Icons.block : cat!.icon,
-                color: isSpam
-                    ? scheme.error
-                    : categoryGlyphColor(context, cat!.color),
-                size: 20,
-              ),
+      // clearer than a checkbox column that reflows the whole list). Same
+      // motion as the transaction tile: the fill eases over and the glyphs
+      // swap with a small pop. An AnimatedContainer rather than a
+      // CircleAvatar, whose built-in fade ignores Remove animations.
+      leading: AnimatedContainer(
+        duration: selectMotion,
+        curve: Curves.easeOutCubic,
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: selected
+              ? scheme.primary.withValues(alpha: 0.18)
+              : isSpam
+              ? scheme.error.withValues(alpha: 0.12)
+              : cat!.color.withValues(alpha: 0.15),
+        ),
+        child: AnimatedSwitcher(
+          duration: selectMotion,
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) => FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(
+              scale: Tween(begin: 0.6, end: 1.0).animate(animation),
+              child: child,
+            ),
+          ),
+          // A pair shows its own (primary) rule's category like any rule;
+          // the subtitle names both directions.
+          child: selected
+              ? Icon(
+                  Icons.check,
+                  key: const ValueKey(true),
+                  color: scheme.primary,
+                  size: 20,
+                )
+              : Icon(
+                  isSpam ? Icons.block : cat!.icon,
+                  key: const ValueKey(false),
+                  color: isSpam
+                      ? scheme.error
+                      : categoryGlyphColor(context, cat!.color),
+                  size: 20,
+                ),
+        ),
       ),
       // Patterns pre-filled from an SMS body can be whole sentences — cap
       // the row height instead of letting one rule blow out the list. With
@@ -614,9 +687,10 @@ class _ImportTab extends StatelessWidget {
       const _CoreChecksCard(),
       header('Ignored when containing'),
       if (ignoreRules.isEmpty)
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          child: Text('No ignore rules — every bank alert imports.'),
+        const EmptyState(
+          compact: true,
+          icon: Icons.filter_alt_off_outlined,
+          message: 'No ignore rules — every bank alert imports.',
         ),
       ...ignoreRules.map((r) => _ImportRuleTile(rule: r)),
       const _TipHeader(
@@ -635,9 +709,10 @@ class _ImportTab extends StatelessWidget {
         ),
       ),
       if (spamRules.isEmpty)
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          child: Text('No spam signals — nothing gets flagged for review.'),
+        const EmptyState(
+          compact: true,
+          icon: Icons.report_off_outlined,
+          message: 'No spam signals — nothing gets flagged for review.',
         ),
       ...spamRules.map((r) => _ImportRuleTile(rule: r)),
       Padding(
@@ -923,11 +998,16 @@ class _TransactionsTabState extends State<_TransactionsTab> {
         Expanded(
           child: txs.isEmpty
               ? Center(
-                  child: Text(
-                    all.isEmpty
-                        ? 'No confirmed transactions yet.'
-                        : 'Nothing matches your search.',
-                    textAlign: TextAlign.center,
+                  child: SingleChildScrollView(
+                    child: all.isEmpty
+                        ? const EmptyState(
+                            icon: Icons.receipt_long_outlined,
+                            message: 'No confirmed transactions yet.',
+                          )
+                        : const EmptyState(
+                            icon: Icons.search_off,
+                            message: 'Nothing matches your search.',
+                          ),
                   ),
                 )
               : ListView.builder(

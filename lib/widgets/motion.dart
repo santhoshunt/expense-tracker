@@ -4,6 +4,58 @@ import 'package:flutter/material.dart';
 
 import '../utils/format.dart';
 
+/// [d], or zero while Android's "Remove animations" is on, so every
+/// transition in the app stands still when the user asked for that.
+Duration motionDuration(BuildContext context, Duration d) =>
+    (MediaQuery.maybeDisableAnimationsOf(context) ?? false) ? Duration.zero : d;
+
+/// Shows or hides [child] by folding it open or shut with a fade, so the
+/// content below slides instead of jumping. Hidden, it takes no space.
+class AnimatedPresence extends StatelessWidget {
+  final bool visible;
+  final Widget child;
+
+  const AnimatedPresence({
+    super.key,
+    required this.visible,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) => AnimatedSwitcher(
+    duration: motionDuration(context, const Duration(milliseconds: 220)),
+    switchInCurve: Curves.easeOutCubic,
+    switchOutCurve: Curves.easeInCubic,
+    // passthrough: a full-width card keeps the width its parent gives it
+    // rather than shrinking to its content while it folds.
+    layoutBuilder: (current, previous) => Stack(
+      fit: StackFit.passthrough,
+      alignment: Alignment.topCenter,
+      children: [...previous, ?current],
+    ),
+    transitionBuilder: (child, animation) => FadeTransition(
+      opacity: animation,
+      child: SizeTransition(
+        sizeFactor: animation,
+        alignment: Alignment.topCenter,
+        // A card folding away is already gone: taps on it would act on
+        // rows or a selection that no longer exist.
+        child: AnimatedBuilder(
+          animation: animation,
+          builder: (_, child) => IgnorePointer(
+            ignoring: animation.status == AnimationStatus.reverse,
+            child: child,
+          ),
+          child: child,
+        ),
+      ),
+    ),
+    child: visible
+        ? KeyedSubtree(key: const ValueKey(true), child: child)
+        : const SizedBox.shrink(key: ValueKey(false)),
+  );
+}
+
 /// Money text that morphs when its value changes in place (an edit, a sync):
 /// the old number slides up and fades out while the new one rises in from
 /// below. Softer than a hard swap.
@@ -29,7 +81,7 @@ class MorphingAmount extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = '$prefix${fmtMoney(value)}';
     return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 380),
+      duration: motionDuration(context, const Duration(milliseconds: 380)),
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
       layoutBuilder: (current, previous) =>
@@ -60,10 +112,11 @@ class MorphingAmount extends StatelessWidget {
   }
 }
 
-/// Ring gauge whose arc sweeps from empty to [value] while the centre
-/// percentage counts up in sync (both driven by one animation). [value] is a
-/// fraction that may exceed 1 (e.g. 2.3 for 230% over budget); the arc caps
-/// at a full circle while the label keeps counting.
+/// Ring gauge whose arc eases to [value] while the centre percentage counts
+/// in sync (both driven by one animation). [value] is a fraction that may
+/// exceed 1 (e.g. 2.3 for 230% over budget); the arc caps at a full circle
+/// while the label keeps counting. With [sweepIn] it sweeps up from empty
+/// when it first appears; otherwise it appears at its value.
 class RingProgress extends StatelessWidget {
   final double value;
   final double size;
@@ -72,6 +125,7 @@ class RingProgress extends StatelessWidget {
   final Color trackColor;
   final TextStyle? labelStyle;
   final Duration duration;
+  final bool sweepIn;
 
   const RingProgress({
     super.key,
@@ -82,16 +136,17 @@ class RingProgress extends StatelessWidget {
     this.strokeWidth = 9,
     this.labelStyle,
     this.duration = const Duration(milliseconds: 900),
+    this.sweepIn = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<double>(
-      // begin == end: `begin` only matters at mount, so a row scrolled out
+      // `begin` only matters at mount. begin == end means a row scrolled out
       // and back in (fresh State) renders at its value instantly instead of
       // replaying a 0→value sweep; real value changes still animate.
-      tween: Tween(begin: value, end: value),
-      duration: duration,
+      tween: Tween(begin: sweepIn ? 0 : value, end: value),
+      duration: motionDuration(context, duration),
       curve: Curves.easeOutCubic,
       builder: (context, v, _) => SizedBox(
         width: size,
@@ -195,7 +250,7 @@ class AnimatedProgress extends StatelessWidget {
       child: TweenAnimationBuilder<double>(
         // begin == end: see RingProgress — no 0→value replay on remount.
         tween: Tween(begin: value.clamp(0.0, 1.0), end: value.clamp(0.0, 1.0)),
-        duration: const Duration(milliseconds: 600),
+        duration: motionDuration(context, const Duration(milliseconds: 600)),
         curve: Curves.easeOutCubic,
         builder: (_, v, _) => LinearProgressIndicator(
           value: v,

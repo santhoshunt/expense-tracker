@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../utils/app_theme.dart';
+import '../utils/haptics.dart';
 
 /// Tones for [showAppToast]: each picks the icon's tint and a fallback icon.
 /// Call sites pass the operation's own icon; the tone says what kind of
@@ -105,12 +106,16 @@ void showUndoSnackBar(
   VoidCallback onUndo, {
   required IconData icon,
   AppToastTone tone = AppToastTone.change,
-}) => showAppToast(
-  context,
-  message,
-  tone: tone,
-  icon: icon,
-  actionLabel: 'Undo',
-  onAction: onUndo,
-  duration: const Duration(seconds: 5),
-);
+}) {
+  // Every delete comes through here, so this is the one place it is felt.
+  if (tone == AppToastTone.removal) Haptics.thud();
+  showAppToast(
+    context,
+    message,
+    tone: tone,
+    icon: icon,
+    actionLabel: 'Undo',
+    onAction: onUndo,
+    duration: const Duration(seconds: 5),
+  );
+}

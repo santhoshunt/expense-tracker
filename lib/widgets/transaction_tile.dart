@@ -6,6 +6,7 @@ import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
 import 'glossy.dart';
+import 'motion.dart';
 
 class TransactionTile extends StatelessWidget {
   final Tx tx;
@@ -42,19 +43,32 @@ class TransactionTile extends StatelessWidget {
     // the full form crowded the note off the line at large font scales.
     final dateLabel = fmtDateCompact(tx.date);
 
+    // One timing for every selection change on the row, so the border, the
+    // fill and the icon swap move together.
+    final selectMotion = motionDuration(
+      context,
+      const Duration(milliseconds: 160),
+    );
+
     // No swipe-to-delete: an accidental horizontal drag while scrolling
     // kept deleting rows. Deleting lives in the edit sheet (with Undo).
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: Container(
+      child: AnimatedContainer(
+        duration: selectMotion,
+        curve: Curves.easeOutCubic,
         // Selection is marked with a border rather than a fill so the
-        // amount/category colours stay legible.
-        foregroundDecoration: selected
-            ? BoxDecoration(
-                border: Border.all(color: scheme.primary, width: 1.5),
-                borderRadius: BorderRadius.circular(16),
-              )
-            : null,
+        // amount/category colours stay legible. The border is always there,
+        // transparent when unselected, so it fades rather than popping in.
+        foregroundDecoration: BoxDecoration(
+          border: Border.all(
+            color: selected
+                ? scheme.primary
+                : scheme.primary.withValues(alpha: 0),
+            width: 1.5,
+          ),
+          borderRadius: BorderRadius.circular(16),
+        ),
         child: FrostedPanel(
           radius: BorderRadius.circular(16),
           // Selection is otherwise only a border + icon swap — invisible to
@@ -77,8 +91,11 @@ class TransactionTile extends StatelessWidget {
                 child: Row(
                   children: [
                     // Rounded-square category icon; flips to a check while
-                    // selected.
-                    Container(
+                    // selected, the fill easing over and the glyphs
+                    // swapping with a small pop.
+                    AnimatedContainer(
+                      duration: selectMotion,
+                      curve: Curves.easeOutCubic,
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(
@@ -87,15 +104,37 @@ class TransactionTile extends StatelessWidget {
                             : cat.color.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      // categoryGlyphColor: the raw dark-kit hue washed out
-                      // to 1.6–2.4:1 over its own tint on light surfaces.
-                      child: selected
-                          ? Icon(Icons.check, color: scheme.onPrimary, size: 22)
-                          : Icon(
-                              cat.icon,
-                              color: categoryGlyphColor(context, cat.color),
-                              size: 22,
-                            ),
+                      child: AnimatedSwitcher(
+                        duration: selectMotion,
+                        switchInCurve: Curves.easeOutCubic,
+                        switchOutCurve: Curves.easeInCubic,
+                        transitionBuilder: (child, animation) => FadeTransition(
+                          opacity: animation,
+                          child: ScaleTransition(
+                            scale: Tween(
+                              begin: 0.6,
+                              end: 1.0,
+                            ).animate(animation),
+                            child: child,
+                          ),
+                        ),
+                        // categoryGlyphColor: the raw dark-kit hue washed
+                        // out to 1.6–2.4:1 over its own tint on light
+                        // surfaces.
+                        child: selected
+                            ? Icon(
+                                Icons.check,
+                                key: const ValueKey(true),
+                                color: scheme.onPrimary,
+                                size: 22,
+                              )
+                            : Icon(
+                                cat.icon,
+                                key: const ValueKey(false),
+                                color: categoryGlyphColor(context, cat.color),
+                                size: 22,
+                              ),
+                      ),
                     ),
                     const SizedBox(width: 12),
                     // Category title over "note · date". The note shrinks and

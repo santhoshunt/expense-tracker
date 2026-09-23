@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:provider/provider.dart';
 
 import '../models/transaction.dart';
@@ -13,7 +14,9 @@ import '../services/notification_service.dart';
 import '../services/sms_import_service.dart';
 import '../services/sms_source.dart';
 import '../services/upcoming_monitor.dart';
+import '../utils/haptics.dart';
 import '../widgets/glossy.dart';
+import '../widgets/motion.dart';
 import '../widgets/undo_snackbar.dart';
 import 'accounts_screen.dart';
 import 'add_transaction_sheet.dart';
@@ -33,6 +36,10 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _index = 0;
   bool _importing = false;
+
+  // The Add button folds to its icon while a list scrolls down, so it
+  // covers less of the rows; scrolling up or switching tab brings it back.
+  bool _fabExtended = true;
   final _smsImport = SmsImportService();
   final _budgetMonitor = BudgetMonitor();
   final _upcomingMonitor = UpcomingMonitor();
@@ -78,7 +85,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _openTransactions(TxFilterRequest req) => setState(() {
     _request = req;
     _filterToken++;
-    _index = 1;
+    _showTab(1);
   });
 
   void _viewTransactions(TxType type, DateTime month) =>
@@ -119,11 +126,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     AppNav.instance.attachHome(
       this,
       setTab: (i) {
-        if (mounted) setState(() => _index = i);
+        if (mounted) setState(() => _showTab(i));
       },
       openTransactions: (req) {
         if (mounted) _openTransactions(req);
       },
+      importSms: _smsImport.isSupported
+          ? () {
+              if (mounted && !_importing) _importFromSms();
+            }
+          : null,
     );
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -404,7 +416,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           tone: parts.isEmpty ? AppToastTone.info : AppToastTone.success,
           icon: Icons.sms_outlined,
         );
-        if (result.imported > 0) setState(() => _index = 1);
+        if (result.imported > 0) setState(() => _showTab(1));
       }
     } catch (e) {
       // Without this a mid-scan platform error just cleared the spinner —
@@ -452,6 +464,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       ),
     );
     if (openSettings == true) await _smsImport.openAppSettings();
+  }
+
+  /// Every tab switch, by tap or by a link, lands with the Add button
+  /// unfolded. Call inside setState.
+  void _showTab(int i) {
+    _index = i;
+    _fabExtended = true;
+  }
+
+  /// Vertical drags only: the pagers and the stat-card strip scroll
+  /// sideways.
+  bool _onUserScroll(UserScrollNotification n) {
+    if (n.metrics.axis != Axis.vertical) return false;
+    final extend = switch (n.direction) {
+      ScrollDirection.reverse => false,
+      ScrollDirection.forward => true,
+      ScrollDirection.idle => _fabExtended,
+    };
+    if (extend != _fabExtended) setState(() => _fabExtended = extend);
+    return false;
   }
 
   @override
@@ -519,9 +551,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           children: [
             const _StorageWarningBanners(),
             Expanded(
-              child: _FadeThroughIndexedStack(
-                index: _index,
-                children: [_dashboardTab, _transactionsTabWidget, _accountsTab],
+              child: NotificationListener<UserScrollNotification>(
+                onNotification: _onUserScroll,
+                child: _FadeThroughIndexedStack(
+                  index: _index,
+                  children: [
+                    _dashboardTab,
+                    _transactionsTabWidget,
+                    _accountsTab,
+                  ],
+                ),
               ),
             ),
           ],
@@ -529,6 +568,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         floatingActionButton: GlassButton(
           icon: Icons.add,
           label: onAccounts ? 'New account' : 'Add',
+          extended: _fabExtended,
           onPressed: () => onAccounts
               ? showAddAccountDialog(context)
               : showAddTransactionSheet(context),
@@ -539,7 +579,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           // the always-shown labels again at a large enough scale.
           height: MediaQuery.textScalerOf(context).scale(76),
           selectedIndex: _index,
-          onDestinationSelected: (i) => setState(() => _index = i),
+          onDestinationSelected: (i) {
+            if (i != _index) Haptics.tick();
+            setState(() => _showTab(i));
+          },
           destinations: const [
             NavigationDestination(
               icon: Icon(Icons.dashboard_outlined),
@@ -682,7 +725,10 @@ class _FadeThroughIndexedStackState extends State<_FadeThroughIndexedStack> {
           excluding: !active,
           child: AnimatedOpacity(
             opacity: active ? 1 : 0,
-            duration: const Duration(milliseconds: 220),
+            duration: motionDuration(
+              context,
+              const Duration(milliseconds: 220),
+            ),
             // True fade-through (Material spec): the outgoing tab is gone in
             // the first ~90ms, the incoming one only starts appearing after
             // that. Simultaneous cross-fading double-exposed both tabs'
@@ -697,7 +743,10 @@ class _FadeThroughIndexedStackState extends State<_FadeThroughIndexedStack> {
             },
             child: AnimatedScale(
               scale: active ? 1 : 0.98,
-              duration: const Duration(milliseconds: 220),
+              duration: motionDuration(
+                context,
+                const Duration(milliseconds: 220),
+              ),
               curve: Curves.easeOut,
               // Inside the fade widgets so a settling tab still animates;
               // only the tab's own tickers freeze while it is hidden.

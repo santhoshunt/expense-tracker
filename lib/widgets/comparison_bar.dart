@@ -1,4 +1,6 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
+
+import 'motion.dart';
 
 /// A spend bar with a notch marking what it is being measured against, so
 /// "over" or "under" reads before any number does. One primitive at two
@@ -41,7 +43,7 @@ class ComparisonBar extends StatelessWidget {
       // the grow-in. Real value changes still animate. Same trick as
       // RingProgress (motion.dart:90).
       tween: Tween(begin: actual, end: actual),
-      duration: duration,
+      duration: motionDuration(context, duration),
       curve: Curves.easeOutCubic,
       builder: (context, v, _) => SizedBox(
         // The notch overhangs the track, so the box is taller than the bar.

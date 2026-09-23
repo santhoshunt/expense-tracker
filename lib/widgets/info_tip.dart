@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
+import 'motion.dart';
 
 /// The outlined "i" that explains the label next to it. A tap opens an
 /// anchored bubble: [title], [message], and — for computed figures — an
@@ -66,14 +67,10 @@ class InfoTip extends StatelessWidget {
     final box = context.findRenderObject()! as RenderBox;
     final anchor = box.localToGlobal(Offset.zero) & box.size;
     final exampleText = example?.call();
-    showGeneralDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'Close',
-      barrierColor: Colors.transparent,
-      transitionDuration: const Duration(milliseconds: 150),
-      pageBuilder: (ctx, _, _) => _InfoBubble(
-        anchor: anchor,
+    showAnchoredBubble(
+      context,
+      anchor: anchor,
+      content: (ctx) => _TipContent(
         title: title,
         message: message,
         example: exampleText,
@@ -82,19 +79,6 @@ class InfoTip extends StatelessWidget {
         // bubble's own route, which is gone by then.
         host: context,
       ),
-      transitionBuilder: (ctx, animation, _, child) {
-        final curved = CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-        );
-        return FadeTransition(
-          opacity: curved,
-          child: ScaleTransition(
-            scale: Tween(begin: 0.96, end: 1.0).animate(curved),
-            child: child,
-          ),
-        );
-      },
     );
   }
 }
@@ -128,20 +112,101 @@ class InfoLabel extends StatelessWidget {
   );
 }
 
+/// Opens [content] in a card pointing at [anchor] (global coordinates),
+/// under it or, without room, above it. Tapping outside or the back gesture
+/// closes it; the future completes once it is gone. [content] supplies its
+/// own padding.
+Future<void> showAnchoredBubble(
+  BuildContext context, {
+  required Rect anchor,
+  required WidgetBuilder content,
+  double maxWidth = 340,
+}) => showGeneralDialog<void>(
+  context: context,
+  barrierDismissible: true,
+  barrierLabel: 'Close',
+  barrierColor: Colors.transparent,
+  transitionDuration: motionDuration(
+    context,
+    const Duration(milliseconds: 150),
+  ),
+  pageBuilder: (ctx, _, _) =>
+      _AnchoredBubble(anchor: anchor, maxWidth: maxWidth, child: content(ctx)),
+  transitionBuilder: (ctx, animation, _, child) {
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Curves.easeOutCubic,
+    );
+    return FadeTransition(
+      opacity: curved,
+      child: ScaleTransition(
+        scale: Tween(begin: 0.96, end: 1.0).animate(curved),
+        child: child,
+      ),
+    );
+  },
+);
+
+/// The accent "label →" link row, closing the bubble before [InfoLink.onTap]
+/// runs from [host] (the screen that opened it).
+class InfoLinkRow extends StatelessWidget {
+  final InfoLink link;
+  final BuildContext host;
+
+  const InfoLinkRow({super.key, required this.link, required this.host});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 10),
+        Divider(height: 1, color: scheme.outlineVariant),
+        const SizedBox(height: 8),
+        if (link.prompt case final prompt?)
+          Text(
+            prompt,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: () {
+            Navigator.pop(context);
+            if (host.mounted) link.onTap(host);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Text(
+              '${link.label} →',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: accentTextColor(context),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 const _gutter = 16.0;
 const _gap = 4.0;
 const _arrow = 12.0;
 
-class _InfoBubble extends StatelessWidget {
-  final Rect anchor;
+class _TipContent extends StatelessWidget {
   final String title;
   final String message;
   final String? example;
   final InfoLink? link;
   final BuildContext host;
 
-  const _InfoBubble({
-    required this.anchor,
+  const _TipContent({
     required this.title,
     required this.message,
     required this.example,
@@ -153,6 +218,75 @@ class _InfoBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w600,
+              color: scheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            message,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              height: 1.45,
+              color: scheme.onSurface,
+            ),
+          ),
+          if (example != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: scheme.surface,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                example!,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+          if (link case final link?) InfoLinkRow(link: link, host: host),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: () => Navigator.pop(context),
+              style: TextButton.styleFrom(
+                foregroundColor: accentTextColor(context),
+              ),
+              child: const Text('Got it'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AnchoredBubble extends StatelessWidget {
+  final Rect anchor;
+  final double maxWidth;
+  final Widget child;
+
+  const _AnchoredBubble({
+    required this.anchor,
+    required this.maxWidth,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final fill = scheme.surfaceContainerHigh;
     final border = scheme.outlineVariant;
     // A diamond with borders on two sides; its outer half pokes out of the
@@ -186,92 +320,12 @@ class _InfoBubble extends StatelessWidget {
             ),
           ],
         ),
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 4),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              title,
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: scheme.onSurface,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              message,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                height: 1.45,
-                color: scheme.onSurface,
-              ),
-            ),
-            if (example != null) ...[
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 7,
-                ),
-                decoration: BoxDecoration(
-                  color: scheme.surface,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  example!,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            ],
-            if (link case final link?) ...[
-              const SizedBox(height: 10),
-              Divider(height: 1, color: border),
-              const SizedBox(height: 8),
-              if (link.prompt case final prompt?)
-                Text(
-                  prompt,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              InkWell(
-                borderRadius: BorderRadius.circular(6),
-                onTap: () {
-                  Navigator.pop(context);
-                  if (host.mounted) link.onTap(host);
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Text(
-                    '${link.label} →',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: accentTextColor(context),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () => Navigator.pop(context),
-                style: TextButton.styleFrom(
-                  foregroundColor: accentTextColor(context),
-                ),
-                child: const Text('Got it'),
-              ),
-            ),
-          ],
-        ),
+        child: child,
       ),
     );
 
     return CustomMultiChildLayout(
-      delegate: _BubbleLayout(anchor, MediaQuery.paddingOf(context)),
+      delegate: _BubbleLayout(anchor, MediaQuery.paddingOf(context), maxWidth),
       children: [
         // Scrolls rather than overflows on a short screen; unclipped so
         // the shadow still shows.
@@ -298,11 +352,12 @@ class _BubbleLayout extends MultiChildLayoutDelegate {
 
   /// Status and gesture bars: the bubble stays clear of both.
   final EdgeInsets safe;
-  _BubbleLayout(this.anchor, this.safe);
+  final double maxWidth;
+  _BubbleLayout(this.anchor, this.safe, this.maxWidth);
 
   @override
   void performLayout(Size size) {
-    final width = math.min(340.0, size.width - 2 * _gutter);
+    final width = math.min(maxWidth, size.width - 2 * _gutter);
     final bubble = layoutChild(
       _Slot.bubble,
       BoxConstraints(
@@ -348,5 +403,5 @@ class _BubbleLayout extends MultiChildLayoutDelegate {
 
   @override
   bool shouldRelayout(_BubbleLayout old) =>
-      old.anchor != anchor || old.safe != safe;
+      old.anchor != anchor || old.safe != safe || old.maxWidth != maxWidth;
 }

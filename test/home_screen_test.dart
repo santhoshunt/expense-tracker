@@ -60,7 +60,10 @@ void main() {
 
     await tester.tap(find.byTooltip('Settings'));
     await pumpThrough(tester);
-    // The settings list mounts lazily — scroll the Data section into view.
+    // Data sits on the Backup and data page, below Cloud backup: open the
+    // page, then scroll the Data section into view.
+    await tester.tap(find.text('Backup and data'));
+    await pumpThrough(tester);
     await tester.scrollUntilVisible(
       find.text('Export…'),
       300,
@@ -93,6 +96,8 @@ void main() {
     await tester.pumpWidget(app(p));
 
     await tester.tap(find.byTooltip('Settings'));
+    await pumpThrough(tester);
+    await tester.tap(find.text('Backup and data'));
     await pumpThrough(tester);
     await tester.scrollUntilVisible(
       find.text('Delete all data'),
@@ -152,6 +157,8 @@ void main() {
     await tester.pumpWidget(app(p));
 
     await tester.tap(find.byTooltip('Settings'));
+    await pumpThrough(tester);
+    await tester.tap(find.text('Backup and data'));
     await pumpThrough(tester);
     await tester.scrollUntilVisible(
       find.text('Import…'),

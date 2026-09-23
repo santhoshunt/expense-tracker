@@ -8,6 +8,7 @@ import 'screens/home_screen.dart';
 import 'services/drive_backup_service.dart';
 import 'services/notification_service.dart';
 import 'utils/app_theme.dart';
+import 'widgets/glow_tilt.dart';
 import 'widgets/keyboard_unfocus.dart';
 import 'widgets/lock_gate.dart';
 
@@ -68,8 +69,9 @@ class ExpenseTrackerApp extends StatelessWidget {
           // handle keeps painting — see UnfocusOnKeyboardDismiss).
           // The lock gate wraps the Navigator, so its screen covers every
           // route (pages, sheets, dialogs, tooltips), not just the home page.
+          // The glow's tilt sits inside it: locked, its sensor stops.
           builder: (context, child) => UnfocusOnKeyboardDismiss(
-            child: LockGate(child: child ?? const SizedBox()),
+            child: LockGate(child: GlowTilt(child: child ?? const SizedBox())),
           ),
           home: const _Root(),
         ),

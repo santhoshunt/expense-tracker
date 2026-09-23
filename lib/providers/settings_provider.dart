@@ -68,6 +68,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kLegacyUpcomingCollapsed = 'upcoming_collapsed_v1';
   static const _kAppLock = 'app_lock_enabled_v1';
   static const _kHideIncome = 'hide_income_v1';
+  static const _kTiltGlow = 'tilt_glow_v1';
   static const _kDismissedPairs = 'pair_dismissed_v1';
   static const _kCategoryOrder = 'category_order_v1';
   static const _kCategorySort = 'category_sort_v1';
@@ -88,6 +89,7 @@ class SettingsProvider extends ChangeNotifier {
   Set<String> _dismissedPairs = {};
   bool _appLock = false;
   bool _hideIncome = false;
+  bool _tiltGlow = true;
   CategoryOrder _categoryOrder = CategoryOrder.mostUsed;
   CategorySort _categorySort = CategorySort.biggestChange;
   bool _loaded = false;
@@ -124,6 +126,10 @@ class SettingsProvider extends ChangeNotifier {
   /// month-header and breakdown totals show a mask. Individual transaction
   /// rows keep their amounts.
   bool get hideIncome => _hideIncome;
+
+  /// The screen glow drifts with the phone's tilt. Per device, like the app
+  /// lock: backups leave it out.
+  bool get tiltGlow => _tiltGlow;
 
   /// Transfer-pair suggestions the user rejected ("Not a transfer"), keyed
   /// by pairSuggestionKey (two row ids). Backed up: the judgement is about
@@ -197,6 +203,7 @@ class SettingsProvider extends ChangeNotifier {
     }
     _appLock = tryRead(() => prefs.getBool(_kAppLock) ?? false, false);
     _hideIncome = tryRead(() => prefs.getBool(_kHideIncome) ?? false, false);
+    _tiltGlow = tryRead(() => prefs.getBool(_kTiltGlow) ?? true, true);
     _dismissedPairs = tryRead(
       () => (prefs.getStringList(_kDismissedPairs) ?? const []).toSet(),
       <String>{},
@@ -381,6 +388,13 @@ class SettingsProvider extends ChangeNotifier {
     _hideIncome = enabled;
     notifyListeners();
     await _persistPref(_kHideIncome, (p) => p.setBool(_kHideIncome, enabled));
+  }
+
+  Future<void> setTiltGlow(bool enabled) async {
+    if (enabled == _tiltGlow) return;
+    _tiltGlow = enabled;
+    notifyListeners();
+    await _persistPref(_kTiltGlow, (p) => p.setBool(_kTiltGlow, enabled));
   }
 
   Future<void> setAutoImport(AutoImportFrequency frequency) async {

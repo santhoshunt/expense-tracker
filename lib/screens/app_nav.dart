@@ -25,6 +25,7 @@ class AppNav {
   Object? _homeOwner;
   void Function(int tab)? _setHomeTab;
   void Function(TxFilterRequest request)? _openTransactions;
+  VoidCallback? _importSms;
 
   Object? _accountsOwner;
   void Function(AccountType? type)? _showAccountType;
@@ -33,10 +34,12 @@ class AppNav {
     Object owner, {
     required void Function(int tab) setTab,
     required void Function(TxFilterRequest request) openTransactions,
+    VoidCallback? importSms,
   }) {
     _homeOwner = owner;
     _setHomeTab = setTab;
     _openTransactions = openTransactions;
+    _importSms = importSms;
   }
 
   /// Only the registering screen may detach, so a newer one survives an
@@ -46,6 +49,7 @@ class AppNav {
     _homeOwner = null;
     _setHomeTab = null;
     _openTransactions = null;
+    _importSms = null;
   }
 
   void attachAccounts(
@@ -82,6 +86,15 @@ class AppNav {
   void openAccounts(BuildContext context, {AccountType? type}) {
     openHomeTab(context, kHomeTabAccounts);
     _showAccountType?.call(type);
+  }
+
+  /// Whether [importSms] can run: Home registered an SMS import.
+  bool get canImportSms => _importSms != null;
+
+  /// Runs Home's SMS import (the top bar's message button).
+  void importSms(BuildContext context) {
+    _toRoot(context);
+    _importSms?.call();
   }
 
   /// Cockpit tab [tab] (a kCockpitTab* index): switches in place when

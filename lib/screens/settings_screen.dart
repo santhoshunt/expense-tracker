@@ -28,282 +28,89 @@ import '../widgets/info_tip.dart';
 import 'app_nav.dart';
 import 'classifiers_screen.dart';
 
+part 'settings_pages.dart';
+
+/// List padding shared by the Settings root and its group pages. The bottom
+/// inset lets the last tile clear the system gesture bar on edge-to-edge
+/// devices.
+EdgeInsets _settingsPadding(BuildContext context) => EdgeInsets.fromLTRB(
+  16,
+  16,
+  16,
+  16 + MediaQuery.viewPaddingOf(context).bottom,
+);
+
+/// Settings root: one row per group, each opening a [SettingsGroupPage]
+/// (built in settings_pages.dart). A group with no supported section on
+/// this device is left out.
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final settings = context.watch<SettingsProvider>();
+    final groups = <(IconData, String, String, WidgetBuilder)>[
+      (
+        Icons.palette_outlined,
+        'Appearance',
+        AppIconService().isSupported
+            ? 'Theme, accent colour, glow, app icon'
+            : 'Theme, accent colour, glow',
+        (_) => const _AppearancePage(),
+      ),
+      if (SmsSource().isSupported)
+        (
+          Icons.sms_outlined,
+          'SMS import',
+          'Scan frequency, notification capture',
+          (_) => const _SmsImportPage(),
+        ),
+      (
+        Icons.cloud_outlined,
+        'Backup and data',
+        'Google Drive, export, import, delete',
+        (_) => const _BackupDataPage(),
+      ),
+      (
+        Icons.lock_outline,
+        'Privacy',
+        'App lock, hide income',
+        (_) => const _PrivacyPage(),
+      ),
+      (
+        Icons.category_outlined,
+        'Categories and rules',
+        'Category order, Cockpit',
+        (_) => const _CategoriesRulesPage(),
+      ),
+      (
+        Icons.info_outline,
+        'About',
+        'Version, updates',
+        (_) => const _AboutPage(),
+      ),
+    ];
 
     return AmbientBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(title: const Text('Settings')),
         body: ListView(
-          // Keep every child laid out: with the default cache extent,
-          // stateful children (RCS tile, app icons, budget) are destroyed on
-          // scroll-out and re-created on scroll-in, re-running their async
-          // initState checks. The late setState changes their height, which
-          // shifts the layout enough to evict them again — a destroy/recreate
-          // loop that snaps the scroll position ~60lp every ~150ms while
-          // dragging (the "heavy glitch"). The page is ~25 light children,
-          // so laying them all out permanently is cheap. 100k px, not
-          // double.infinity: the viewport inflates its SEMANTICS clip by the
-          // cache extent, and an infinite rect trips a semantics assertion
-          // (seen under widget tests). The page is a few thousand px tall,
-          // so 100k keeps every child alive just the same.
-          scrollCacheExtent: const ScrollCacheExtent.pixels(100000),
-          // Release focus as soon as a drag starts: a focused text field
-          // (budget cap) keeps re-scrolling itself into view on every
-          // keyboard-inset change, which fights the user's gesture.
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          // Bottom inset so the last tile clears the system gesture bar on
-          // edge-to-edge devices.
-          padding: EdgeInsets.fromLTRB(
-            16,
-            16,
-            16,
-            16 + MediaQuery.viewPaddingOf(context).bottom,
-          ),
+          padding: _settingsPadding(context),
           children: [
-            InfoLabel(
-              label: Text(
-                'Theme',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              tip: const InfoTip(
-                title: 'Theme',
-                message:
-                    "System follows your phone's light or dark setting. A "
-                    'new install starts in Dark.',
-              ),
-            ),
-            _RadioSetting<ThemeMode>(
-              options: const [
-                (ThemeMode.system, 'System'),
-                (ThemeMode.light, 'Light'),
-                (ThemeMode.dark, 'Dark'),
-              ],
-              selected: settings.mode,
-              onChanged: (m) => context.read<SettingsProvider>().setMode(m),
-            ),
-            const SizedBox(height: 24),
-            InfoLabel(
-              label: Text(
-                'Dark theme',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              tip: const InfoTip(
-                title: 'Dark theme',
-                message:
-                    'Changes backgrounds, cards and text in dark mode. '
-                    "Picking a theme also replaces your accent colour with the "
-                    "theme's own, even a custom one.",
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Used in dark mode. Picking one also sets its accent colour.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                for (final p in AppPalette.values)
-                  _PaletteTile(
-                    palette: p,
-                    selected: p == settings.palette,
-                    onTap: () => context.read<SettingsProvider>().setPalette(p),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            InfoLabel(
-              label: Text(
-                'Accent colour',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              tip: const InfoTip(
-                title: 'Accent colour',
-                message:
-                    'Colours buttons, highlights and selected items in light '
-                    "and dark mode. Theme uses the current dark theme's "
-                    'accent. Picking another dark theme later resets the '
-                    "accent to that theme's.",
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Used for buttons, highlights and selected states. Theme '
-              'follows the dark theme\'s own accent.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            HueColorPicker(
-              title: 'Accent',
-              value: settings.accent,
-              onChanged: (c) => context.read<SettingsProvider>().setAccent(c),
-              none: settings.palette.colors.accent,
-              noneLabel: 'Theme',
-              noneIsNeutral: false,
-              customTitle: 'Accent colour',
-              cell: 42,
-            ),
-            if (SmsSource().isSupported) ...[
-              const SizedBox(height: 24),
-              InfoLabel(
-                label: Text(
-                  'Automatic SMS import',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                tip: const InfoTip(
-                  title: 'Automatic SMS import',
-                  link: InfoLink(
-                    prompt: 'Imports landing in the wrong category?',
-                    label: 'Open transaction rules',
-                    onTap: goCockpitRules,
-                  ),
-                  message:
-                      'Scans your SMS inbox when you open or return to the '
-                      'app, as often as this setting allows. Daily: the first '
-                      'open each day. Weekly: 7 days after the last automatic '
-                      'scan. The first scan reaches back 30 days. It needs SMS '
-                      'permission; without it, the scan is skipped. New rows '
-                      'wait in the review queue, and duplicates are skipped.',
+            for (final (i, (icon, title, gist, page)) in groups.indexed) ...[
+              if (i > 0) const SizedBox(height: 12),
+              FrostedPanel(
+                radius: BorderRadius.circular(20),
+                child: ListTile(
+                  leading: Icon(icon),
+                  title: Text(title),
+                  subtitle: Text(gist),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () =>
+                      Navigator.push(context, MaterialPageRoute(builder: page)),
                 ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                'Scans new bank messages when you open the app. Daily runs '
-                'on the first launch of each day, weekly every 7 days. '
-                'Imports still land in the review queue.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              _RadioSetting<AutoImportFrequency>(
-                options: [
-                  for (final f in AutoImportFrequency.values) (f, f.label),
-                ],
-                selected: settings.autoImport,
-                onChanged: (f) =>
-                    context.read<SettingsProvider>().setAutoImport(f),
-              ),
-              const SizedBox(height: 12),
-              const _NotificationCaptureTile(),
             ],
-            if (AppIconService().isSupported) ...[
-              const SizedBox(height: 24),
-              Text('App icon', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 4),
-              Text(
-                'The launcher icon on your home screen. Switching may briefly '
-                'close the app on some devices.',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 12),
-              const _AppIconSection(),
-            ],
-            const SizedBox(height: 24),
-            InfoLabel(
-              label: Text(
-                'Cloud backup',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              tip: const InfoTip(
-                title: 'Cloud backup',
-                message:
-                    'Uploads a backup file to the Expense Tracker Backups '
-                    'folder in your Google Drive. It holds transactions, '
-                    'accounts, rules, categories, budgets and most settings, '
-                    'but not SMS text, app lock, the app icon or this '
-                    'schedule. The newest 7 backups are kept; older ones are '
-                    'deleted.',
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Backs up your data to an "Expense Tracker Backups" folder in '
-              'your Google Drive on the chosen schedule. Backups include '
-              'transactions, rules and settings, but not the original SMS '
-              'text. Restore from Data, Import, From Google Drive.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            const _DriveBackupSection(),
-            const SizedBox(height: 24),
-            Text('Data', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 4),
-            Text(
-              'Export or import your data as files, or wipe everything.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            const _DataSection(),
-            const SizedBox(height: 24),
-            Text('Privacy', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 4),
-            Text(
-              'The lock re-arms on launch and after the app has been in the '
-              'background for a couple of minutes.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            const SizedBox(height: 12),
-            const _PrivacySection(),
-            const SizedBox(height: 24),
-            InfoLabel(
-              label: Text(
-                'Category order',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              tip: const InfoTip(
-                title: 'Category order',
-                link: InfoLink(
-                  prompt: 'Want different categories?',
-                  label: 'Edit categories',
-                  onTap: goCockpitCategories,
-                ),
-                message:
-                    'Sets the order of the category list when you add or edit '
-                    'a transaction. The first category in the list is picked '
-                    'by default for a new transaction.',
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'How the category list is ordered when adding or editing a '
-              'transaction. "Most used" ranks by the amounts of the last '
-              'three months.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-            _RadioSetting<CategoryOrder>(
-              options: [for (final o in CategoryOrder.values) (o, o.label)],
-              selected: settings.categoryOrder,
-              onChanged: (o) =>
-                  context.read<SettingsProvider>().setCategoryOrder(o),
-            ),
-            const SizedBox(height: 24),
-            Text('Cockpit', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            FrostedPanel(
-              radius: BorderRadius.circular(20),
-              child: ListTile(
-                leading: const Icon(Icons.tune),
-                title: const Text('Open Cockpit'),
-                subtitle: const Text(
-                  'Rules, import filters, categories, budgets and reminders',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text('About', style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 12),
-            const _AboutSection(),
           ],
         ),
       ),
@@ -311,10 +118,6 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-/// Google Drive backup: connect / status / frequency / back-up-now.
-/// Mirrors the Orbit app's section. Scheduled uploads run silently from
-/// app launch, so the one thing this section must never hide is a recorded
-/// failure — hence the amber banner.
 /// Radio rows for a choice-type setting: one dense row per option. Replaced
 /// the line-tab GlassSegmented here — tabs read as navigation, not as
 /// picking a stored option.
@@ -356,6 +159,10 @@ class _RadioSetting<T> extends StatelessWidget {
   );
 }
 
+/// Google Drive backup: connect / status / frequency / back-up-now.
+/// Mirrors the Orbit app's section. Scheduled uploads run silently from
+/// app launch, so the one thing this section must never hide is a recorded
+/// failure — hence the amber banner.
 class _DriveBackupSection extends StatefulWidget {
   const _DriveBackupSection();
 

@@ -52,13 +52,14 @@ void main() {
     await pumpThrough(tester);
     expect(find.text('Monthly cap'), findsOneWidget);
     expect(find.text('No custom budgets yet.'), findsOneWidget);
-    expect(find.text('Add budget'), findsOneWidget);
+    // The FAB is the only add flow; the inline button duplicated it.
+    expect(find.text('Add budget'), findsNothing);
     expect(find.text('New budget'), findsOneWidget, reason: 'FAB follows tab');
 
     await tester.tap(find.text('Reminders'));
     await pumpThrough(tester);
     expect(find.text('No reminders yet.'), findsOneWidget);
-    expect(find.text('Add reminder'), findsOneWidget);
+    expect(find.text('Add reminder'), findsNothing);
     expect(find.text('New reminder'), findsOneWidget);
   });
 
@@ -80,10 +81,26 @@ void main() {
     await tester.tap(find.byTooltip('Settings'));
     await pumpThrough(tester);
 
-    expect(find.text('Monthly cap', skipOffstage: false), findsNothing);
-    expect(find.text('Custom budgets', skipOffstage: false), findsNothing);
-    expect(find.text('Add reminder', skipOffstage: false), findsNothing);
-    // The pointer row sits near the bottom, offstage in the cache extent.
+    // Every group page, since the root list builds no sections itself.
+    for (final group in [
+      'Appearance',
+      'SMS import',
+      'Backup and data',
+      'Privacy',
+      'Categories and rules',
+      'About',
+    ]) {
+      await tester.tap(find.text(group));
+      await pumpThrough(tester);
+      expect(find.text('Monthly cap', skipOffstage: false), findsNothing);
+      expect(find.text('Custom budgets', skipOffstage: false), findsNothing);
+      expect(find.text('Add reminder', skipOffstage: false), findsNothing);
+      await tester.pageBack();
+      await pumpThrough(tester);
+    }
+    // The pointer row lives on the Categories and rules page.
+    await tester.tap(find.text('Categories and rules'));
+    await pumpThrough(tester);
     await tester.scrollUntilVisible(
       find.text('Rules, import filters, categories, budgets and reminders'),
       300,
