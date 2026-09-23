@@ -17,6 +17,7 @@ import '../widgets/glossy.dart';
 import '../widgets/undo_snackbar.dart';
 import 'accounts_screen.dart';
 import 'add_transaction_sheet.dart';
+import 'app_nav.dart';
 import 'classifiers_screen.dart';
 import 'dashboard_screen.dart';
 import 'settings_screen.dart';
@@ -114,6 +115,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    // Tooltip links and pushed routes jump back here through AppNav.
+    AppNav.instance.attachHome(
+      this,
+      setTab: (i) {
+        if (mounted) setState(() => _index = i);
+      },
+      openTransactions: (req) {
+        if (mounted) _openTransactions(req);
+      },
+    );
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _autoImport();
@@ -179,6 +190,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    AppNav.instance.detachHome(this);
     WidgetsBinding.instance.removeObserver(this);
     _finance?.removeListener(_checkBudget);
     _settings?.removeListener(_syncBudgetWidgets);

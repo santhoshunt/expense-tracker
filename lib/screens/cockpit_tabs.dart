@@ -14,6 +14,7 @@ import '../widgets/budget_dialog.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/glossy.dart';
+import 'app_nav.dart';
 
 /// The Budgets and Reminders tabs of the Cockpit screen. The sections moved
 /// here from Settings (2026-09) so all recurring money management lives in
@@ -71,6 +72,11 @@ class RemindersTab extends StatelessWidget {
             message:
                 'Reminders notify only when Payment reminders is on, in the '
                 'Budgets tab.',
+            link: InfoLink(
+              prompt: 'Notifications not arriving?',
+              label: 'Check Payment reminders',
+              onTap: goCockpitBudgets,
+            ),
           ),
         ),
         const SizedBox(height: 4),
@@ -247,6 +253,11 @@ class _BudgetSectionState extends State<_BudgetSection>
                       'transfers and card bill payments are left out, and a '
                       'split bill counts only your share.',
                   example: _capExample,
+                  link: const InfoLink(
+                    prompt: 'Where does this show?',
+                    label: 'Open the dashboard',
+                    onTap: goDashboard,
+                  ),
                 ),
               ),
               // Unfocus (not just commit): pressing Done closes the keyboard
@@ -369,6 +380,11 @@ class _BudgetSectionState extends State<_BudgetSection>
                     'before the due date. Detected recurring payments and '
                     'your reminders notify from 2 days before. Each notifies '
                     'once per due month, when you open the app.',
+                link: InfoLink(
+                  prompt: 'A bill the app cannot detect?',
+                  label: 'Add a reminder',
+                  onTap: goNewReminder,
+                ),
               ),
               child: SwitchListTile(
                 contentPadding: EdgeInsets.zero,

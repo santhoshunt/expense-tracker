@@ -304,7 +304,9 @@ void main() {
           DateTime(2026, 9),
           now: DateTime(2026, 9, 17),
         );
-        expect(c.vsPrevious.state, CompareState.newThisMonth);
+        // August is not on record at all, so there is no last-month
+        // comparison; the projection falls back to the flat pace.
+        expect(c.vsPrevious.state, CompareState.notEnoughHistory);
         expect(c.vsPrevious.actualFull, closeTo(1700 * 30 / 17, 0.001));
       },
     );
@@ -435,6 +437,81 @@ void main() {
       expect(deltaPhrase(c(1200, 1000)), contains('20%'));
       expect(deltaPhrase(c(800, 1000)), contains('less'));
       expect(deltaPhrase(c(1000.4, 1000)), 'the same');
+    });
+  });
+
+  group('records that start recently', () {
+    test('records starting this month: no last-month comparison, and the '
+        'pace divides by the days on record', () async {
+      final p = await loaded();
+      await spend(p, DateTime(2026, 9, 10), 1600);
+      final c = buildMonthComparison(
+        p,
+        DateTime(2026, 9),
+        now: DateTime(2026, 9, 25),
+      );
+      expect(c.vsPrevious.state, CompareState.notEnoughHistory);
+      expect(c.paceDays, 16, reason: '10th to 25th');
+      // 1600 over 16 days, across a 30-day month.
+      expect(c.vsPrevious.actualFull, closeTo(1600 * 30 / 16, 0.01));
+    });
+
+    test('fewer than 14 days on record: no projection yet', () async {
+      final p = await loaded();
+      await spend(p, DateTime(2026, 9, 20), 600);
+      final c = buildMonthComparison(
+        p,
+        DateTime(2026, 9),
+        now: DateTime(2026, 9, 25),
+      );
+      expect(c.paceDays, 6);
+      expect(c.vsPrevious.actualFull, isNull);
+    });
+
+    test('records starting part-way through last month leave no '
+        'reference', () async {
+      final p = await loaded();
+      await spend(p, DateTime(2026, 8, 20), 5000);
+      await spend(p, DateTime(2026, 9, 3), 900);
+      final c = buildMonthComparison(
+        p,
+        DateTime(2026, 9),
+        now: DateTime(2026, 9, 25),
+      );
+      expect(c.vsPrevious.state, CompareState.notEnoughHistory);
+      expect(c.vsPrevious.reference, 0);
+      // Whole of September is on record, so the flat pace uses all 25 days.
+      expect(c.paceDays, 25);
+      expect(c.vsPrevious.actualFull, closeTo(900 * 30 / 25, 0.01));
+    });
+
+    test('a long-running ledger keeps the reference month curve', () async {
+      final p = await sixMonths();
+      final c = buildMonthComparison(
+        p,
+        DateTime(2026, 9),
+        now: DateTime(2026, 9, 10),
+      );
+      expect(c.vsPrevious.state, isNot(CompareState.notEnoughHistory));
+      expect(c.paceDays, 10);
+      // August reached 1000 by the 10th of 1500: 1400 × 1500 / 1000.
+      expect(c.vsPrevious.actualFull, closeTo(2100, 0.01));
+    });
+
+    test("a category's usual starts at its own first spend", () async {
+      final p = await sixMonths();
+      // Taxi first appears in August: its usual is August alone, not a
+      // median dragged to zero by the five months before it existed.
+      await spend(p, DateTime(2026, 8, 12), 800, category: 'transport');
+      await spend(p, DateTime(2026, 9, 12), 300, category: 'transport');
+      final c = buildMonthComparison(
+        p,
+        DateTime(2026, 9),
+        now: DateTime(2026, 9, 30),
+      );
+      final taxi = c.categories.firstWhere((r) => r.category.id == 'transport');
+      expect(taxi.usual, 800);
+      expect(taxi.state, CompareState.ok);
     });
   });
 }

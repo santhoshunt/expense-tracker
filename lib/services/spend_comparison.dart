@@ -44,7 +44,9 @@ enum CompareState {
   /// Spent in the reference window, nothing so far this time.
   noneThisMonth,
 
-  /// Fewer than [kMinUsualMonths] complete months on record.
+  /// The reference is not on record in full: fewer than [kMinUsualMonths]
+  /// complete months for "usual", or a previous month the records only
+  /// start part-way through (or after).
   notEnoughHistory,
 }
 
@@ -124,6 +126,11 @@ class MonthComparison {
   /// How many complete months fed the median, for the shortfall copy.
   final int usualMonths;
 
+  /// Days of this month the records cover, up to [throughDay]: fewer than
+  /// [throughDay] when the ledger's first transaction falls inside it. The
+  /// flat-pace projection divides by this, not by the day of the month.
+  final int paceDays;
+
   final SpendCompare vsPrevious;
   final SpendCompare vsUsual;
 
@@ -137,6 +144,7 @@ class MonthComparison {
     required this.throughDay,
     required this.partial,
     required this.usualMonths,
+    required this.paceDays,
     required this.vsPrevious,
     required this.vsUsual,
     required this.categories,
@@ -194,6 +202,17 @@ MonthComparison buildMonthComparison(
   final partial = throughDay < days;
   final previous = DateTime(anchor.year, anchor.month - 1);
   final window = usualWindow(finance, anchor);
+  final first = finance.firstTransactionDate;
+  // Last month only counts as a reference when the records cover all of it:
+  // started part-way through, its "same day" figure is a few days of data.
+  final previousCovered =
+      first != null &&
+      !DateTime(first.year, first.month, first.day).isAfter(previous);
+  // This month's own span on record, for the flat pace.
+  final paceDays =
+      first != null && first.year == anchor.year && first.month == anchor.month
+      ? (throughDay - first.day + 1).clamp(0, throughDay)
+      : throughDay;
 
   // Day-alignment only applies while the compared month is still running.
   // Once it has ended, every side is taken whole: cutting a 31-day reference
@@ -205,8 +224,8 @@ MonthComparison buildMonthComparison(
 
   final actual = spent(anchor);
 
-  final prevRef = spent(previous);
-  final prevFull = finance.expenseInMonth(previous);
+  final prevRef = previousCovered ? spent(previous) : 0.0;
+  final prevFull = previousCovered ? finance.expenseInMonth(previous) : 0.0;
   final usualRef = median([for (final m in window) spent(m)]);
   final usualFull = median([for (final m in window) finance.expenseInMonth(m)]);
 
@@ -216,6 +235,7 @@ MonthComparison buildMonthComparison(
     throughDay: throughDay,
     partial: partial,
     usualMonths: window.length,
+    paceDays: paceDays,
     vsPrevious: SpendCompare(
       actual: actual,
       reference: prevRef,
@@ -224,10 +244,13 @@ MonthComparison buildMonthComparison(
         reference: prevRef,
         referenceFull: prevFull,
         throughDay: throughDay,
+        paceDays: paceDays,
         days: days,
       ),
       referenceFull: prevFull,
-      state: _stateFor(actual, prevRef),
+      state: previousCovered
+          ? _stateFor(actual, prevRef)
+          : CompareState.notEnoughHistory,
     ),
     vsUsual: SpendCompare(
       actual: actual,
@@ -237,6 +260,7 @@ MonthComparison buildMonthComparison(
         reference: usualRef,
         referenceFull: usualFull,
         throughDay: throughDay,
+        paceDays: paceDays,
         days: days,
       ),
       referenceFull: usualFull,
@@ -269,17 +293,23 @@ String deltaPhrase(SpendCompare c) {
 /// headline delta by construction (projected / referenceFull equals
 /// actual / reference): a flat daily pace could beat a front-loaded month
 /// while the headline said "less". The flat pace remains only as the
-/// fallback when there is no reference window to take a shape from.
+/// fallback when there is no reference window to take a shape from, and it
+/// divides by the [paceDays] actually on record, waiting for
+/// [kMinDaysOfData] of them.
 double? _project({
   required double actual,
   required double reference,
   required double referenceFull,
   required int throughDay,
+  required int paceDays,
   required int days,
 }) {
   if (throughDay >= days) return actual;
   if (throughDay < kMinDaysForProjection) return null;
-  if (reference <= 0 || referenceFull <= 0) return actual * days / throughDay;
+  if (reference <= 0 || referenceFull <= 0) {
+    if (paceDays < kMinDaysOfData) return null;
+    return actual * days / paceDays;
+  }
   return actual * referenceFull / reference;
 }
 
@@ -314,16 +344,31 @@ List<CategoryCompare> _categories(
   }
 
   final actual = byId(month);
-  final history = [for (final m in window) byId(m)];
-  final ids = {...actual.keys, for (final h in history) ...h.keys};
+  final history = [for (final m in window) (m, byId(m))];
+  final ids = {...actual.keys, for (final (_, h) in history) ...h.keys};
+
+  // Each category's usual starts at its own first spend: months before it
+  // existed say nothing about it.
+  final firstSpend = <String, DateTime>{};
+  for (final t in finance.transactions) {
+    if (t.type != TxType.expense) continue;
+    final m = DateTime(t.date.year, t.date.month);
+    final seen = firstSpend[t.categoryId];
+    if (seen == null || m.isBefore(seen)) firstSpend[t.categoryId] = m;
+  }
 
   final out = [
     for (final id in ids)
       () {
         final a = actual[id] ?? 0;
-        // Absent months count as zero, not as missing: a category bought
-        // once in six months is unusual, and that is the point.
-        final usual = median([for (final h in history) h[id] ?? 0]);
+        final start = firstSpend[id];
+        // Absent months after the first spend count as zero, not as
+        // missing: a category bought once in six months is unusual, and
+        // that is the point.
+        final usual = median([
+          for (final (m, h) in history)
+            if (start != null && !m.isBefore(start)) h[id] ?? 0,
+        ]);
         return CategoryCompare(
           category: labels[id]!,
           actual: a,

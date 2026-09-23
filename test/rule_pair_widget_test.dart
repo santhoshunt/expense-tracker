@@ -70,7 +70,24 @@ void main() {
         find.text('↑ Food & Dining (expense) · ↓ Salary (income)'),
         findsOneWidget,
       );
-      expect(find.byIcon(Icons.swap_vert), findsOneWidget);
+      // The pair row shows its primary rule's category icon (one of the
+      // pair's two), not a two-way arrow.
+      expect(find.byIcon(Icons.swap_vert), findsNothing);
+      final pairTile = find.ancestor(
+        of: find.text('contains "amma"'),
+        matching: find.byType(ListTile),
+      );
+      final pairIcons = {
+        for (final id in ['food', 'salary']) categoryById(id).icon,
+      };
+      expect(
+        tester
+            .widgetList<Icon>(
+              find.descendant(of: pairTile, matching: find.byType(Icon)),
+            )
+            .where((i) => pairIcons.contains(i.icon)),
+        hasLength(1),
+      );
 
       // Editing the pair pre-fills the second slot.
       await tester.tap(find.text('contains "amma"'));

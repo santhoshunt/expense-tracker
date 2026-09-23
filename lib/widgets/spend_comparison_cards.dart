@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../providers/settings_provider.dart' show CategorySort;
+import '../screens/app_nav.dart' show goCockpitRules;
 import '../services/spend_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
@@ -39,13 +40,47 @@ class PreviousMonthCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = comparison.vsPrevious;
     final name = _monthName.format(comparison.previousMonth);
+    final tip =
+        'While the month is running, compares spending up to the same day '
+        "of last month. The projection scales this month's spending by how "
+        'last month grew from this day to its end, and appears from day '
+        '$kMinDaysForProjection. When last month is not fully on record, it '
+        "uses this month's daily pace instead, once $kMinDaysOfData days are "
+        'on record.';
+
+    // Records that start part-way through last month (or later) leave no
+    // fair "same day" figure; say so rather than compare a few days.
+    if (c.state == CompareState.notEnoughHistory) {
+      final projected = c.actualFull;
+      final muted = Theme.of(context).textTheme.bodySmall;
+      return _Section(
+        title: 'This month vs last month',
+        tip: tip,
+        example: () => projectionExample(comparison),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$name is not fully on record, so there is no fair comparison '
+              'yet.',
+              style: muted,
+            ),
+            if (comparison.partial && projected != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                'At its current pace this month is on track for '
+                '${fmtMoney(projected)}.',
+                style: muted,
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
     return _Section(
       title: 'This month vs last month',
-      tip:
-          'While the month is running, compares spending up to the same day '
-          'of last month. The projection scales this month\'s spending by '
-          'how last month grew from this day to its end. It appears from '
-          'day $kMinDaysForProjection.',
+      tip: tip,
       example: () => projectionExample(comparison),
       child: _CompareBody(
         comparison: comparison,
@@ -78,7 +113,7 @@ String? projectionExample(MonthComparison comparison) {
   if (!comparison.partial || projected == null || c.empty) return null;
   final days = daysInMonth(comparison.month.year, comparison.month.month);
   final ratio = c.reference <= 0 || c.referenceFull <= 0
-      ? '$days days ÷ ${comparison.throughDay} days'
+      ? '$days days ÷ ${comparison.paceDays} days on record'
       : '${fmtMoney(c.referenceFull)} ÷ ${fmtMoney(c.reference)}';
   return '${fmtMoney(c.actual)} so far × ($ratio) = '
       '${fmtMoney(projected)} projected';
@@ -101,10 +136,24 @@ class UsualSpendCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = comparison.vsUsual;
     final months = comparison.usualMonths;
+    const tip =
+        '"Usual" is the middle value of up to 6 complete months before '
+        'this one, so one unusual month does not move it the way an average '
+        'would. While the month is running, both sides count only up to '
+        "today's date. It needs at least 2 complete months.";
+    String? example() {
+      if (c.state == CompareState.notEnoughHistory || c.reference <= 0) {
+        return null;
+      }
+      final d = c.actual - c.reference;
+      return 'This month ${fmtMoney(c.actual)} vs usual '
+          '${fmtMoney(c.reference)} = ${d < 0 ? '−' : '+'}${fmtMoney(d.abs())}';
+    }
 
     if (c.state == CompareState.notEnoughHistory) {
       return _Section(
         title: 'This month vs usual',
+        tip: tip,
         child: Text(
           usualShortfallNote(months),
           style: Theme.of(context).textTheme.bodySmall,
@@ -116,6 +165,8 @@ class UsualSpendCard extends StatelessWidget {
       // "This month" leads in every comparison title, so the two headline
       // cards read as one series instead of juggling the order.
       title: 'This month vs usual',
+      tip: tip,
+      example: example,
       subtitle:
           'The middle of your last $months complete '
           '${months == 1 ? 'month' : 'months'}, so one unusual bill does not '
@@ -357,6 +408,7 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
       return _Section(
         title: title,
         tip: tip,
+        link: _rulesLink,
         child: Text(
           usualShortfallNote(widget.comparison.usualMonths),
           style: Theme.of(context).textTheme.bodySmall,
@@ -368,6 +420,7 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
       return _Section(
         title: title,
         tip: tip,
+        link: _rulesLink,
         child: Text('No category spending to compare yet.', style: muted),
       );
     }
@@ -380,6 +433,7 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
       title: title,
       tip: tip,
       example: example,
+      link: _rulesLink,
       subtitle: _effectiveSort.subtitle,
       // Compact rounded menu with a small trailing check — the stock
       // CheckedPopupMenuItem reserves a full leading slot for its tick,
@@ -611,6 +665,13 @@ class _ReferenceLine extends StatelessWidget {
   }
 }
 
+/// Categories vs usual: a surprising row is often a misclassified one.
+const _rulesLink = InfoLink(
+  prompt: 'A category looks wrong?',
+  label: 'Set up transaction rules',
+  onTap: goCockpitRules,
+);
+
 /// The dashboard's section recipe: spacing, a titleMedium heading, then the
 /// body in a Card with the shared all(16) inset.
 class _Section extends StatelessWidget {
@@ -623,6 +684,7 @@ class _Section extends StatelessWidget {
   /// The heading's "i", titled with [title].
   final String? tip;
   final String? Function()? example;
+  final InfoLink? link;
   final Widget child;
 
   const _Section({
@@ -631,6 +693,7 @@ class _Section extends StatelessWidget {
     this.trailing,
     this.tip,
     this.example,
+    this.link,
     required this.child,
   });
 
@@ -643,7 +706,12 @@ class _Section extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: InfoLabel(
               label: text,
-              tip: InfoTip(title: title, message: tip!, example: example),
+              tip: InfoTip(
+                title: title,
+                message: tip!,
+                example: example,
+                link: link,
+              ),
             ),
           );
     return Column(

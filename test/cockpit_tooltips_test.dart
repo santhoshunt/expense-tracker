@@ -78,9 +78,8 @@ void main() {
     expect(find.textContaining(messageStart), findsNothing);
   }
 
-  testWidgets('rules tab: ordering tip on the first header, pair tip', (
-    tester,
-  ) async {
+  testWidgets('rules tab: ordering tip on the first header; the pair tip '
+      'lives in the editor', (tester) async {
     final p = FinanceProvider();
     await p.load();
     await p.addRule('amma', 'food');
@@ -91,13 +90,30 @@ void main() {
     expect(find.text('BUILT-IN'), findsOneWidget);
     await expectTip(tester, 'Your rules', 'Rules are checked top to bottom');
     expect(tipFinder('Built-in'), findsNothing);
-    await expectTip(tester, 'Rule pair', 'One pattern, two rules');
 
-    // The tile itself still opens the pair editor, whose fields carry
-    // their own tips.
+    // The pair row shows its primary rule's category icon, not a
+    // two-way arrow, and carries no tip of its own.
+    expect(tipFinder('Rule pair'), findsNothing);
+    expect(find.byIcon(Icons.swap_vert), findsNothing);
+    final pairTile = find.ancestor(
+      of: find.text('contains "amma"'),
+      matching: find.byType(ListTile),
+    );
+    final primary = p.rules.firstWhere((r) => r.pattern == 'amma');
+    expect(
+      find.descendant(
+        of: pairTile,
+        matching: find.byIcon(categoryById(primary.categoryId).icon),
+      ),
+      findsOneWidget,
+    );
+
+    // The tile opens the pair editor, where the pair is explained next to
+    // the Other direction field.
     await tester.tap(find.text('contains "amma"'));
     await pumpThrough(tester);
     expect(find.text('Edit rule pair'), findsOneWidget);
+    await expectTip(tester, 'Rule pair', 'Picking a category here makes a');
     await expectTip(
       tester,
       'If the SMS contains…',

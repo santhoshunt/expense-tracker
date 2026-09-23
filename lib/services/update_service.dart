@@ -33,6 +33,10 @@ class UpdateService {
   static const releasesLatestUrl =
       'https://api.github.com/repos/santhoshunt/expense-tracker/releases/latest';
 
+  /// The human-facing list of every release, for the browser.
+  static const releasesPageUrl =
+      'https://github.com/santhoshunt/expense-tracker/releases';
+
   /// Injectable so tests can supply a MockClient.
   final http.Client Function() _clientFactory;
 

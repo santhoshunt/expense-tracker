@@ -176,6 +176,7 @@ void main() {
       throughDay: 17,
       partial: true,
       usualMonths: usualMonths,
+      paceDays: 17,
       vsPrevious: compare(1400, 1000),
       vsUsual: compare(1400, 1000, state: usualState),
       categories: categories,

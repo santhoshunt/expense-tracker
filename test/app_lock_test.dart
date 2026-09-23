@@ -133,5 +133,75 @@ void main() {
       expect(find.text('CONTENT'), findsOneWidget);
       expect(lock.attempts, 2);
     });
+
+    testWidgets('a re-lock covers popups over the page and unlocking '
+        'returns to them', (tester) async {
+      SharedPreferences.setMockInitialValues({'app_lock_enabled_v1': true});
+      final settings = SettingsProvider();
+      await settings.load();
+      final lock = FakeLock()..result = true;
+      var now = DateTime(2026, 9, 1, 12);
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: settings,
+          child: MaterialApp(
+            // As in main.dart: around the Navigator, so every route is
+            // behind the lock screen.
+            builder: (context, child) =>
+                LockGate(service: lock, clock: () => now, child: child!),
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showDialog<void>(
+                  context: context,
+                  builder: (_) => const AlertDialog(content: Text('POPUP')),
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.text('POPUP'), findsOneWidget);
+
+      // Away for 3 minutes, then back: locked, and the popup is hidden.
+      lock.result = false;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      now = now.add(const Duration(minutes: 3));
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(find.text('Unlock'), findsOneWidget);
+      expect(find.text('POPUP'), findsNothing);
+
+      // Unlocking brings back the same page with the popup still open.
+      lock.result = true;
+      await tester.tap(find.text('Unlock'));
+      await tester.pumpAndSettle();
+      expect(find.text('POPUP'), findsOneWidget);
+      expect(find.text('Unlock'), findsNothing);
+    });
+
+    testWidgets('waits for settings to load before deciding', (tester) async {
+      SharedPreferences.setMockInitialValues({'app_lock_enabled_v1': true});
+      final settings = SettingsProvider();
+      final lock = FakeLock();
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: settings,
+          child: MaterialApp(
+            builder: (context, child) => LockGate(service: lock, child: child!),
+            home: const Text('CONTENT'),
+          ),
+        ),
+      );
+      expect(lock.attempts, 0, reason: 'preference not known yet');
+      await settings.load();
+      await tester.pumpAndSettle();
+      expect(lock.attempts, 1);
+      expect(find.text('CONTENT'), findsNothing);
+      expect(find.text('Unlock'), findsOneWidget);
+    });
   });
 }

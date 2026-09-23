@@ -225,6 +225,7 @@ void main() {
       throughDay: 12,
       partial: true,
       usualMonths: usualMonths,
+      paceDays: 12,
       vsPrevious: previous,
       vsUsual: previous,
       categories: categories,
@@ -282,7 +283,7 @@ void main() {
       );
       expect(
         line,
-        '${fmtMoney(12000)} so far × (30 days ÷ 12 days) = '
+        '${fmtMoney(12000)} so far × (30 days ÷ 12 days on record) = '
         '${fmtMoney(30000)} projected',
       );
     });
@@ -414,15 +415,21 @@ void main() {
       expect(find.text('Balance breakdown'), findsNothing);
     });
 
-    testWidgets('only the first bank tile explains its balance', (
-      tester,
-    ) async {
+    testWidgets('every bank tile explains its balance and links to its own '
+        'balance dialog', (tester) async {
       final p = FinanceProvider();
       await p.load();
       await p.addAccount(name: 'Bank A', type: AccountType.bank);
       await p.addAccount(name: 'Bank B', type: AccountType.bank);
       await pumpAccounts(tester, p);
-      expect(find.bySemanticsLabel('About Balance'), findsOneWidget);
+      final tips = find.bySemanticsLabel('About Balance');
+      expect(tips, findsNWidgets(2));
+
+      await tester.tap(tips.last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Set the balance →'));
+      await tester.pumpAndSettle();
+      expect(find.text('Set balance'), findsOneWidget);
     });
 
     testWidgets('a card with an unknown outstanding says dues unknown', (

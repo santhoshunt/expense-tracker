@@ -156,7 +156,6 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
 
             val spent = entry.optDouble("spent", 0.0)
             val limit = entry.optDouble("limit", 0.0)
-            val over = spent > limit
             // The text keeps counting past 100 ("110% used"); only the bar
             // stops full, like the in-app budget ring.
             val pct =
@@ -185,7 +184,8 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
                 )
                 views.setTextColor(
                     R.id.widget_status,
-                    if (over) theme.over else theme.text
+                    // Red with the bar (above 95%), not only once over.
+                    if (pct > 95) theme.over else theme.text
                 )
                 views.setTextViewText(
                     R.id.widget_meta,

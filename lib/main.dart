@@ -66,8 +66,11 @@ class ExpenseTrackerApp extends StatelessWidget {
           // App-wide: kill the stray selection handle left behind when the
           // keyboard is minimized with the system gesture (field keeps focus,
           // handle keeps painting — see UnfocusOnKeyboardDismiss).
-          builder: (context, child) =>
-              UnfocusOnKeyboardDismiss(child: child ?? const SizedBox()),
+          // The lock gate wraps the Navigator, so its screen covers every
+          // route (pages, sheets, dialogs, tooltips), not just the home page.
+          builder: (context, child) => UnfocusOnKeyboardDismiss(
+            child: LockGate(child: child ?? const SizedBox()),
+          ),
           home: const _Root(),
         ),
       ),
@@ -86,8 +89,6 @@ class _Root extends StatelessWidget {
     if (!loaded) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    // Inside MaterialApp (theme, Navigator) and below the providers, so the
-    // gate can read SettingsProvider and its lock screen is themed.
-    return const LockGate(child: HomeScreen());
+    return const HomeScreen();
   }
 }
