@@ -15,6 +15,12 @@ const List<AppIconOption> kAppIcons = [
   AppIconOption('swoosh', 'Swoosh', 'assets/icon_previews/swoosh.png'),
   AppIconOption('classic', 'Classic ₹', 'assets/icon_previews/classic.png'),
   AppIconOption('midnight', 'Midnight', 'assets/icon_previews/midnight.png'),
+  AppIconOption('aurora', 'Aurora', 'assets/icon_previews/aurora.png'),
+  AppIconOption('sunset', 'Sunset coin', 'assets/icon_previews/sunset.png'),
+  AppIconOption('wallet', 'Wallet', 'assets/icon_previews/wallet.png'),
+  AppIconOption('piggy', 'Piggy', 'assets/icon_previews/piggy.png'),
+  AppIconOption('pie', 'Pie chart', 'assets/icon_previews/pie.png'),
+  AppIconOption('forest', 'Forest', 'assets/icon_previews/forest.png'),
 ];
 
 /// Switches the launcher icon by toggling Android activity-aliases. The
