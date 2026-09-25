@@ -10,6 +10,7 @@ import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
 import '../services/card_bill.dart';
 import '../services/merchant_stats.dart';
+import '../services/monthly_recap.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
 import '../services/spend_comparison.dart';
@@ -29,6 +30,7 @@ import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
 import '../widgets/category_donut_chart.dart';
 import '../widgets/monthly_bar_chart.dart';
+import '../widgets/monthly_recap_card.dart';
 import '../widgets/spend_comparison_cards.dart';
 import '../widgets/transaction_tile.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
@@ -97,10 +99,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   late final PageController _pageCtrl = PageController();
 
+  /// The Overview page's list, so a recap notification tap can bring its
+  /// top back into view.
+  final ScrollController _overviewScroll = ScrollController();
+
   @override
   void dispose() {
+    AppNav.instance.detachDashboard(this);
     _pageCtrl.dispose();
+    _overviewScroll.dispose();
     super.dispose();
+  }
+
+  /// Shows the Overview at its top, where the recap card sits.
+  void _showOverview() {
+    if (!mounted) return;
+    if (_view != DashboardView.overview) {
+      // Pages off screen are disposed, so the Overview mounts at its top.
+      _setView(DashboardView.overview);
+    } else if (_overviewScroll.hasClients) {
+      _overviewScroll.animateTo(
+        0,
+        duration: motionDuration(context, const Duration(milliseconds: 300)),
+        curve: Curves.easeOutCubic,
+      );
+    }
   }
 
   void _setView(DashboardView v) {
@@ -172,6 +195,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _compare = buildMonthComparison(finance, _month, now: now);
     }
     return _compare!;
+  }
+
+  /// Last month's recap — memoized on (revision, month of now, cap) since
+  /// it walks two months of totals and every row's SMS body for merchants.
+  Object? _recapRev;
+  DateTime? _recapFor;
+  double? _recapCap;
+  MonthlyRecap? _recap;
+
+  MonthlyRecap? _monthlyRecap(
+    FinanceProvider finance,
+    SettingsProvider settings,
+  ) {
+    final now = DateTime.now();
+    final thisMonth = DateTime(now.year, now.month);
+    if (!identical(_recapRev, finance.revision) ||
+        _recapFor != thisMonth ||
+        _recapCap != settings.monthlyBudget) {
+      _recapRev = finance.revision;
+      _recapFor = thisMonth;
+      _recapCap = settings.monthlyBudget;
+      _recap = buildMonthlyRecap(finance, settings, now: now);
+    }
+    return _recap;
   }
 
   /// Long-press on a Top-merchants row: give the payee a readable name.
@@ -247,6 +294,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     final now = DateTime.now();
     _month = DateTime(now.year, now.month);
+    AppNav.instance.attachDashboard(this, showOverview: _showOverview);
   }
 
   /// Steps one month, or one year in Year view (the month is kept so
@@ -510,6 +558,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // Card bills coming due + detected recurring payments. Not
       // month-scoped, so it sits above the month selector.
       _UpcomingCard(finance: finance, hits: _recurring(finance)),
+      // Last month's recap, all month long. Not month-scoped (it always
+      // covers the month before today), so it sits above the selector too.
+      Builder(
+        key: const ValueKey('presence-monthly-recap'),
+        builder: (context) {
+          // Selected so a cap edit re-evaluates "over budget".
+          context.select<SettingsProvider, double>((s) => s.monthlyBudget);
+          final recap = _monthlyRecap(
+            finance,
+            context.read<SettingsProvider>(),
+          );
+          return AnimatedPresence(
+            visible: recap != null,
+            child: recap == null
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: MonthlyRecapCard(
+                      recap: recap,
+                      hideIncome: hideIncome,
+                      onViewCategory: widget.onViewCategory,
+                      onViewMerchant: widget.onViewMerchant,
+                      onViewBudget: widget.onViewBudget,
+                      onViewSpending: widget.onViewTransactions == null
+                          ? null
+                          : (m) =>
+                                widget.onViewTransactions!(TxType.expense, m),
+                    ),
+                  ),
+          );
+        },
+      ),
       // Every view is month-scoped, the comparisons included, so the
       // selector is never left showing a month the content ignores.
       _monthSelector(context, finance, latestMonth),
@@ -1070,11 +1150,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             // keepAlive, zero cache extent), so every view change still
             // starts at the top instead of at a remembered offset.
             children: [
-              for (final page in [
+              for (final (i, page) in [
                 overviewChildren,
                 trendsChildren,
                 breakdownChildren,
-              ])
+              ].indexed)
                 // Transparent ColoredBox: a PageView only receives drags
                 // that hit its subtree, and blank regions need an opaque
                 // hit-test surface. The Builder defers each page's widget
@@ -1083,6 +1163,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   color: Colors.transparent,
                   child: Builder(
                     builder: (context) => ListView(
+                      controller: i == DashboardView.overview.index
+                          ? _overviewScroll
+                          : null,
                       padding: const EdgeInsets.all(16),
                       children: page(),
                     ),

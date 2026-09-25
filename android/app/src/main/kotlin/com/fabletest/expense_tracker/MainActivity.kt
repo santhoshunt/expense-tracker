@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.provider.Settings
 import android.provider.Telephony
 import android.service.notification.NotificationListenerService
@@ -18,6 +19,9 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val CHANNEL = "expense_tracker/sms"
+
+        /** Native to Dart: shortcut and tile actions (see QuickActions). */
+        private const val LAUNCH_CHANNEL = "expense_tracker/launch"
         private const val PERMISSION_REQUEST = 7301
 
         /** Rows read per provider query; pages continue until the window is
@@ -30,8 +34,53 @@ class MainActivity : FlutterFragmentActivity() {
 
     private var pendingPermissionResult: MethodChannel.Result? = null
 
+    /** The cold-start action, held until Dart asks for it once. */
+    private var pendingLaunchAction: String? = null
+    private var launchChannel: MethodChannel? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // Read before super: the engine may ask for it as soon as it starts.
+        // A recreated activity (savedInstanceState set) already handled the
+        // intent it was started with.
+        if (savedInstanceState == null) {
+            pendingLaunchAction = QuickActions.actionOf(intent)
+        }
+        super.onCreate(savedInstanceState)
+    }
+
+    /** singleTop: a shortcut or tile tap on a running app lands here. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val action = QuickActions.actionOf(intent) ?: return
+        val channel = launchChannel
+        if (channel != null) {
+            // The newer tap wins: an unclaimed cold-start action must not
+            // reach Dart after it and override it.
+            pendingLaunchAction = null
+            channel.invokeMethod("launchAction", action)
+        } else {
+            pendingLaunchAction = action
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        launchChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            LAUNCH_CHANNEL
+        ).also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "takeLaunchAction" -> {
+                        result.success(pendingLaunchAction)
+                        pendingLaunchAction = null
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
+        QuickActions.publishShortcuts(applicationContext)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -104,6 +153,8 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Cheap, and heals a publish that failed during an icon switch.
+        QuickActions.publishShortcuts(applicationContext)
         // After an APK update the granted notification listener frequently
         // stays UNBOUND until the device reboots or access is toggled off/on:
         // hasNotificationAccess() still reports true, but the service never
@@ -200,6 +251,8 @@ class MainActivity : FlutterFragmentActivity() {
                 PackageManager.DONT_KILL_APP
             )
         }
+        // The shortcuts pointed at the entry just disabled.
+        QuickActions.publishShortcuts(applicationContext)
     }
 
     /// Resolves to "granted", "denied", or "blocked". "blocked" means the OS

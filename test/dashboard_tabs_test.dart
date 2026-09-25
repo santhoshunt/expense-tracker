@@ -64,8 +64,9 @@ void main() {
 
       // Overview is the landing view. It carries copies of the
       // highest-signal sections (categories vs usual, the heatmap) so a
-      // glance there needs no tab switch — but not the rest.
-      expect(find.text('Spent'), findsOneWidget);
+      // glance there needs no tab switch — but not the rest. "Spent" is on
+      // the stat card and, with last month on record, the recap card too.
+      expect(find.text('Spent'), findsNWidgets(2));
       expect(find.text('This month vs last month'), findsNothing);
       expect(find.byType(CategoryDonutChart), findsNothing);
       await tester.scrollUntilVisible(
@@ -95,7 +96,8 @@ void main() {
 
     testWidgets('a horizontal swipe steps through the views', (tester) async {
       await pump(tester);
-      expect(find.text('Spent'), findsOneWidget);
+      // The stat card and the recap card: this is the Overview.
+      expect(find.text('Spent'), findsNWidgets(2));
 
       // Fling on page content — the month selector row, present on every
       // view. The tab labels sit on the pinned bar outside the pager now,

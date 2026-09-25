@@ -18,6 +18,11 @@ bool shouldLock({
   return now.difference(backgroundedAt) >= threshold;
 }
 
+/// Whether the app's content is hidden behind [LockGate] right now. True
+/// until the gate has decided, so work waiting on it (a quick-add shortcut
+/// opening its sheet) never runs under the lock screen or before it.
+final ValueNotifier<bool> appLocked = ValueNotifier<bool>(true);
+
 /// Gates [child] behind the system biometric/PIN prompt when app lock is
 /// enabled. Locks on cold start and re-locks after more than ~2 minutes in
 /// the background; quick app switches pass through.
@@ -50,7 +55,15 @@ class LockGate extends StatefulWidget {
 class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
   late final AppLockService _service = widget.service ?? AppLockService();
   late final SettingsProvider _settings;
-  bool _locked = false;
+  bool _lockedValue = false;
+  bool get _locked => _lockedValue;
+
+  /// Every change goes through here so [appLocked] never disagrees with the
+  /// gate.
+  set _locked(bool value) {
+    _lockedValue = value;
+    appLocked.value = value;
+  }
 
   /// False until SettingsProvider has loaded: only then is the app lock
   /// preference known. Until then the child is the app's loading screen,

@@ -6,6 +6,7 @@ import 'providers/finance_provider.dart';
 import 'providers/settings_provider.dart';
 import 'screens/home_screen.dart';
 import 'services/drive_backup_service.dart';
+import 'services/launch_actions.dart';
 import 'services/notification_service.dart';
 import 'utils/app_theme.dart';
 import 'widgets/glow_tilt.dart';
@@ -31,6 +32,11 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('Notification init failed: $e');
   }
+  // A shortcut, the Quick Settings tile or a notification tap may have
+  // started the app; Home runs the action once it is loaded and unlocked.
+  await LaunchActions.instance.init(
+    coldNotificationPayload: NotificationService.instance.launchPayload,
+  );
   runApp(const ExpenseTrackerApp());
 }
 

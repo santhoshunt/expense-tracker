@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
 import '../models/transaction.dart';
@@ -10,12 +11,15 @@ import '../providers/settings_provider.dart';
 import '../services/budget_monitor.dart';
 import '../services/budget_widget_service.dart';
 import '../services/drive_backup_service.dart';
+import '../services/launch_actions.dart';
+import '../services/monthly_recap.dart';
 import '../services/notification_service.dart';
 import '../services/sms_import_service.dart';
 import '../services/sms_source.dart';
 import '../services/upcoming_monitor.dart';
 import '../utils/haptics.dart';
 import '../widgets/glossy.dart';
+import '../widgets/lock_gate.dart';
 import '../widgets/motion.dart';
 import '../widgets/undo_snackbar.dart';
 import 'accounts_screen.dart';
@@ -138,7 +142,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           : null,
     );
     WidgetsBinding.instance.addObserver(this);
+    // Shortcut, tile and notification actions wait for Home and the lock.
+    LaunchActions.instance.pending.addListener(_scheduleLaunchAction);
+    appLocked.addListener(_scheduleLaunchAction);
+    _scheduleLaunchAction();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scheduleRecap();
       _autoImport();
       _ensureNotificationPermission();
       // Due reminders must run even on a quiet open — the budget listener
@@ -180,6 +189,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
+    // A process kept alive across midnight on the 1st must rebook.
+    _scheduleRecap();
+    // An action that arrived during the switch back waits for resumed.
+    _scheduleLaunchAction();
     final last = _lastAutoImportAt;
     if (last != null &&
         DateTime.now().difference(last) < const Duration(seconds: 5)) {
@@ -200,8 +213,78 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _checkBudget();
   }
 
+  /// Runs the pending launch action after this frame, so a notifier firing
+  /// mid-build or mid-setState never opens a sheet from inside it. The
+  /// frame is requested too: a notifier set from a platform message or
+  /// notification tap schedules none, and the callback would sit waiting.
+  void _scheduleLaunchAction() {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _runLaunchAction());
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  /// Takes the pending action only when Home is mounted and the app is
+  /// unlocked; otherwise it waits for the next change. Nothing here pops
+  /// open routes: Navigator.popUntil skips the add sheet's unsaved-changes
+  /// guard, so whatever is open stays and the action lands on top.
+  void _runLaunchAction() {
+    if (!mounted || appLocked.value) return;
+    // Coming back to the front passes through inactive with frames running,
+    // before LockGate re-locks on resumed: wait for resumed (retried from
+    // didChangeAppLifecycleState). Null before the first lifecycle event.
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null && lifecycle != AppLifecycleState.resumed) return;
+    final action = LaunchActions.instance.pending.value;
+    if (action == null) return;
+    LaunchActions.instance.pending.value = null;
+    switch (action) {
+      case LaunchAction.addExpense:
+        showAddTransactionSheet(context);
+      case LaunchAction.importSms:
+        if (_smsImport.isSupported && !_importing) _importFromSms();
+      case LaunchAction.openRecap:
+        setState(() => _showTab(0));
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => AppNav.instance.showOverview(),
+        );
+    }
+  }
+
+  /// The booking last sent to the plugin, so the per-change calls below
+  /// only reach the platform when the answer moves.
+  String? _bookedRecap;
+
+  /// Books the note on the 1st that a month's recap is ready (see
+  /// [recapBooking]). Runs on open, on resume and on every data change, so
+  /// the first confirmed row of a month books it without a restart.
+  Future<void> _scheduleRecap() async {
+    if (!mounted) return;
+    final booking = recapBooking(
+      DateTime.now(),
+      context.read<FinanceProvider>().monthsWithData,
+    );
+    final key = booking == null ? 'none' : '${booking.when}|${booking.month}';
+    if (key == _bookedRecap) return;
+    _bookedRecap = key;
+    try {
+      if (booking != null) {
+        await NotificationService.instance.scheduleRecap(
+          booking.when,
+          DateFormat('MMMM').format(booking.month),
+        );
+      } else {
+        await NotificationService.instance.cancelRecap();
+      }
+    } catch (e) {
+      // Retry on the next call rather than trusting a booking that failed.
+      _bookedRecap = null;
+      debugPrint('Recap scheduling failed: $e');
+    }
+  }
+
   @override
   void dispose() {
+    LaunchActions.instance.pending.removeListener(_scheduleLaunchAction);
+    appLocked.removeListener(_scheduleLaunchAction);
     AppNav.instance.detachHome(this);
     WidgetsBinding.instance.removeObserver(this);
     _finance?.removeListener(_checkBudget);
@@ -223,6 +306,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // debit completes a recurring pattern) — re-evaluate alongside budgets.
     _checkUpcoming();
     _syncBudgetWidgets();
+    // A month's first confirmed row books its recap note.
+    _scheduleRecap();
   }
 
   void _checkUpcoming() {

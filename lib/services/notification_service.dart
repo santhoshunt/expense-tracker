@@ -1,5 +1,9 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+// Only tz.UTC is used (see scheduleRecap), which needs no zone database.
+import 'package:timezone/timezone.dart' as tz;
+
+import 'launch_actions.dart';
 
 /// Why a notification would or would not reach the user right now.
 ///
@@ -46,6 +50,14 @@ class NotificationService {
   static const _channelId = 'budget_alerts';
   static const _channelName = 'Budget alerts';
 
+  static const _recapChannelId = 'monthly_recap';
+  static const _recapChannelName = 'Monthly recap';
+  static const _recapChannelDescription =
+      "A note on the 1st that last month's recap is ready";
+
+  /// Fixed, so every reschedule replaces the one pending recap.
+  static const recapNotificationId = 97000;
+
   bool get _supported =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
@@ -60,6 +72,10 @@ class NotificationService {
     const ios = DarwinInitializationSettings();
     await _plugin.initialize(
       const InitializationSettings(android: android, iOS: ios),
+      // Taps while the app is running; a tap that starts the app is read
+      // from launchPayload() instead.
+      onDidReceiveNotificationResponse: (r) =>
+          LaunchActions.instance.onNotificationPayload(r.payload),
     );
     // Create the channel up front. Lazily-created-on-first-show meant the
     // channel didn't exist in system settings until the first threshold ever
@@ -75,6 +91,17 @@ class NotificationService {
               _channelName,
               description: 'Alerts when you approach or exceed your budget',
               importance: Importance.high,
+            ),
+          );
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.createNotificationChannel(
+            const AndroidNotificationChannel(
+              _recapChannelId,
+              _recapChannelName,
+              description: _recapChannelDescription,
             ),
           );
     }
@@ -201,5 +228,57 @@ class NotificationService {
       iOS: DarwinNotificationDetails(),
     );
     await _plugin.show(id, title, body, details);
+  }
+
+  /// The payload of the notification whose tap started the app, or null.
+  Future<String?> launchPayload() async {
+    if (!_supported) return null;
+    await init();
+    final details = await _plugin.getNotificationAppLaunchDetails();
+    if (details == null || !details.didNotificationLaunchApp) return null;
+    return details.notificationResponse?.payload;
+  }
+
+  /// Schedules the "recap is ready" note for [when], replacing any pending
+  /// one (same id). [monthName] is the month the recap will cover. The text
+  /// carries no figures: it shows on the lock screen, and Hide income exists.
+  ///
+  /// No cancel first: the plugin's cancel also removes a note already
+  /// showing, and rebooking the same id replaces the alarm anyway.
+  ///
+  /// [when] is converted to UTC, keeping the same moment, so the device's
+  /// zone never has to be looked up by name. Inexact: Android may deliver
+  /// it a little late, and needs no exact-alarm permission for that.
+  Future<void> scheduleRecap(DateTime when, String monthName) async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
+    await init();
+    await _plugin.zonedSchedule(
+      recapNotificationId,
+      'Your $monthName recap',
+      'See how $monthName went.',
+      tz.TZDateTime.from(when, tz.UTC),
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _recapChannelId,
+          _recapChannelName,
+          channelDescription: _recapChannelDescription,
+        ),
+      ),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      uiLocalNotificationDateInterpretation:
+          UILocalNotificationDateInterpretation.absoluteTime,
+      payload: kRecapPayload,
+    );
+  }
+
+  /// Drops the booked recap note, if any. One already showing stays: the
+  /// plugin's cancel removes both, so it runs only while still booked.
+  Future<void> cancelRecap() async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
+    await init();
+    final pending = await _plugin.pendingNotificationRequests();
+    if (pending.any((r) => r.id == recapNotificationId)) {
+      await _plugin.cancel(recapNotificationId);
+    }
   }
 }
