@@ -66,7 +66,6 @@ void main() {
     expect(r.month, aug);
     expect(r.spent, f.expenseInMonth(aug));
     expect(r.spent, 2000);
-    expect(r.income, f.incomeInMonth(aug));
     expect(r.saved, f.savingsOutflowInMonth(aug));
     expect(r.saved, 5000);
   });
@@ -128,8 +127,69 @@ void main() {
       ['Monthly budget', 'Eating out'],
     );
     expect(r.budgetsOver.first.budgetId, isNull);
-    expect(r.budgetsOver.first.pct, closeTo(1.2, 1e-9));
+    expect(r.budgetsOver.first.spent, 1200);
+    expect(r.budgetsOver.first.limit, 1000);
     expect(r.budgetsOver.last.budgetId, isNotNull);
+  });
+
+  test('the recap shows for the first 7 days, the pace after', () {
+    expect(showsRecap(DateTime(2026, 9, 1)), isTrue);
+    expect(showsRecap(DateTime(2026, 9, 7, 23)), isTrue);
+    expect(showsRecap(DateTime(2026, 9, 8)), isFalse);
+    expect(showsRecap(DateTime(2026, 9, 26)), isFalse);
+  });
+
+  group('buildMonthPace', () {
+    final day26 = DateTime(2026, 9, 26, 10);
+
+    test(
+      'this month through today against the same days of last month',
+      () async {
+        final (f, s) = await load();
+        await add(f, 'food', 400, DateTime(2026, 7, 5));
+        await add(f, 'food', 1000, DateTime(2026, 8, 10));
+        // After the 26th of August: not part of the comparison.
+        await add(f, 'food', 5000, DateTime(2026, 8, 28));
+        await add(f, 'food', 700, DateTime(2026, 9, 12));
+
+        final p = buildMonthPace(f, s, now: day26)!;
+        final c = p.comparison;
+        expect(c.month, DateTime(2026, 9));
+        expect(c.partial, isTrue);
+        expect(c.throughDay, 26);
+        expect(c.vsPrevious.actual, 700);
+        expect(c.vsPrevious.reference, 1000);
+      },
+    );
+
+    test('lists budgets at 80% or more, fullest first, at most three', () async {
+      final (f, s) = await load();
+      await s.setMonthlyBudget(10000);
+      for (final (name, limit) in [
+        ('Half', 2000.0),
+        ('Near', 1100.0),
+        ('Over', 800.0),
+        ('Full', 1000.0),
+      ]) {
+        await f.addBudget(
+          name: name,
+          limit: limit,
+          mode: BudgetMode.include,
+          categoryIds: {'food'},
+        );
+      }
+      await add(f, 'food', 1000, DateTime(2026, 9, 3));
+
+      final p = buildMonthPace(f, s, now: day26)!;
+      // Over 125%, Full 100%, Near 91%; Half (50%) and the cap (10%) left out.
+      expect([for (final b in p.budgets) b.label], ['Over', 'Full', 'Near']);
+    });
+
+    test('null before the month has any confirmed row', () async {
+      final (f, s) = await load();
+      await add(f, 'food', 100, DateTime(2026, 8, 3));
+      expect(buildMonthPace(f, s, now: day26), isNull);
+    });
   });
 
   group('recapBooking', () {

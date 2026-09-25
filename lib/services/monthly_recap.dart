@@ -4,18 +4,36 @@ import '../providers/settings_provider.dart';
 import 'merchant_stats.dart';
 import 'spend_comparison.dart';
 
-/// A budget that ended the month over its limit. [budgetId] is null for the
-/// overall monthly cap.
-typedef RecapBudgetOver = ({String? budgetId, String label, double pct});
+/// Days at the start of a month that show last month's recap. From the day
+/// after, the Overview shows the running month's pace instead: by the 26th,
+/// last month's totals are old news.
+const int kRecapDays = 7;
+
+/// Whether the Overview shows last month's recap (true) or this month's
+/// pace (false) on [now].
+bool showsRecap(DateTime now) => now.day <= kRecapDays;
+
+/// The clock the Overview's recap and pace cards read. Widget tests swap
+/// it to pick a day of the month; nothing else should.
+DateTime Function() recapClock = DateTime.now;
+
+/// A budget's standing for a month. [budgetId] is null for the overall
+/// monthly cap.
+typedef BudgetStanding = ({
+  String? budgetId,
+  String label,
+  double spent,
+  double limit,
+});
 
 /// Last month at a glance, for the Overview's recap card. Every figure comes
 /// from the same provider totals the Overview stat cards read, so the recap
-/// never disagrees with the month it summarises.
+/// never disagrees with the month it summarises. No income: the card is
+/// about spending and saving.
 class MonthlyRecap {
   /// First day of the summarised month.
   final DateTime month;
   final double spent;
-  final double income;
   final double saved;
 
   /// Spending against the month before, both taken whole.
@@ -24,12 +42,13 @@ class MonthlyRecap {
   /// Up to three categories, largest first.
   final List<MapEntry<TxCategory, double>> topCategories;
   final MerchantSpend? topMerchant;
-  final List<RecapBudgetOver> budgetsOver;
+
+  /// Budgets that ended the month over their limit.
+  final List<BudgetStanding> budgetsOver;
 
   const MonthlyRecap({
     required this.month,
     required this.spent,
-    required this.income,
     required this.saved,
     required this.vsPrevious,
     required this.topCategories,
@@ -37,6 +56,29 @@ class MonthlyRecap {
     required this.budgetsOver,
   });
 }
+
+/// Every budget with a limit, cap first, with its spending in [month].
+List<BudgetStanding> _standings(
+  FinanceProvider finance,
+  SettingsProvider settings,
+  DateTime month,
+) => [
+  if (settings.monthlyBudget > 0)
+    (
+      budgetId: null,
+      label: 'Monthly budget',
+      spent: finance.budgetSpentInMonth(month),
+      limit: settings.monthlyBudget,
+    ),
+  for (final b in finance.budgets)
+    if (b.limit > 0)
+      (
+        budgetId: b.id,
+        label: b.name,
+        spent: finance.budgetSpentFor(b, month),
+        limit: b.limit,
+      ),
+];
 
 /// The recap of the calendar month before [now], or null when that month
 /// holds no confirmed transactions.
@@ -48,22 +90,6 @@ MonthlyRecap? buildMonthlyRecap(
   final month = DateTime(now.year, now.month - 1);
   if (!finance.monthsWithData.contains(month)) return null;
 
-  final over = <RecapBudgetOver>[];
-  final cap = settings.monthlyBudget;
-  if (cap > 0) {
-    final spent = finance.budgetSpentInMonth(month);
-    if (spent > cap) {
-      over.add((budgetId: null, label: 'Monthly budget', pct: spent / cap));
-    }
-  }
-  for (final b in finance.budgets) {
-    if (b.limit <= 0) continue;
-    final spent = finance.budgetSpentFor(b, month);
-    if (spent > b.limit) {
-      over.add((budgetId: b.id, label: b.name, pct: spent / b.limit));
-    }
-  }
-
   final merchants = topMerchants(
     finance.transactions,
     month: month,
@@ -73,12 +99,51 @@ MonthlyRecap? buildMonthlyRecap(
   return MonthlyRecap(
     month: month,
     spent: finance.expenseInMonth(month),
-    income: finance.incomeInMonth(month),
     saved: finance.savingsOutflowInMonth(month),
     vsPrevious: buildMonthComparison(finance, month, now: now).vsPrevious,
     topCategories: finance.expenseByCategory(month).take(3).toList(),
     topMerchant: merchants.isEmpty ? null : merchants.first,
-    budgetsOver: over,
+    budgetsOver: [
+      for (final s in _standings(finance, settings, month))
+        if (s.spent > s.limit) s,
+    ],
+  );
+}
+
+/// Budgets worth a line on the pace card: at or past this share of their
+/// limit.
+const double kPaceBudgetShare = 0.8;
+const int kPaceBudgetLines = 3;
+
+/// The running month so far, for the Overview after [kRecapDays].
+class MonthPace {
+  /// Day-aligned: this month through today against last month through the
+  /// same day (see buildMonthComparison).
+  final MonthComparison comparison;
+
+  /// Up to [kPaceBudgetLines] budgets at or past [kPaceBudgetShare] of
+  /// their limit, fullest first.
+  final List<BudgetStanding> budgets;
+
+  const MonthPace({required this.comparison, required this.budgets});
+}
+
+/// This month's pace as of [now], or null when the month has no confirmed
+/// transactions yet.
+MonthPace? buildMonthPace(
+  FinanceProvider finance,
+  SettingsProvider settings, {
+  required DateTime now,
+}) {
+  final month = DateTime(now.year, now.month);
+  if (!finance.monthsWithData.contains(month)) return null;
+  final budgets = [
+    for (final s in _standings(finance, settings, month))
+      if (s.spent >= s.limit * kPaceBudgetShare) s,
+  ]..sort((a, b) => (b.spent / b.limit).compareTo(a.spent / a.limit));
+  return MonthPace(
+    comparison: buildMonthComparison(finance, month, now: now),
+    budgets: budgets.take(kPaceBudgetLines).toList(),
   );
 }
 

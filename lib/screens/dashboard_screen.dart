@@ -101,31 +101,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   late final PageController _pageCtrl = PageController();
 
-  /// The Overview page's list, so a recap notification tap can bring its
-  /// top back into view.
-  final ScrollController _overviewScroll = ScrollController();
+  /// The Overview's month card (recap or pace), so a recap notification
+  /// tap can scroll it into view: on a small phone it sits below the fold.
+  final GlobalKey _monthCardKey = GlobalKey();
 
   @override
   void dispose() {
     AppNav.instance.detachDashboard(this);
     _pageCtrl.dispose();
-    _overviewScroll.dispose();
     super.dispose();
   }
 
-  /// Shows the Overview at its top, where the recap card sits.
+  /// Shows the Overview with the month card in view.
   void _showOverview() {
     if (!mounted) return;
-    if (_view != DashboardView.overview) {
-      // Pages off screen are disposed, so the Overview mounts at its top.
-      _setView(DashboardView.overview);
-    } else if (_overviewScroll.hasClients) {
-      _overviewScroll.animateTo(
-        0,
+    _setView(DashboardView.overview);
+    // Off-screen pages are disposed, so after a page switch the card
+    // exists only once the Overview has slid in: try after this frame, and
+    // once more when the page animation is done.
+    void reveal({required bool retry}) {
+      final card = _monthCardKey.currentContext;
+      if (!mounted) return;
+      if (card == null) {
+        if (retry) {
+          Future.delayed(
+            const Duration(milliseconds: 350),
+            () => reveal(retry: false),
+          );
+        }
+        return;
+      }
+      Scrollable.ensureVisible(
+        card,
         duration: motionDuration(context, const Duration(milliseconds: 300)),
         curve: Curves.easeOutCubic,
+        alignment: 0.1,
       );
     }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => reveal(retry: true));
   }
 
   void _setView(DashboardView v) {
@@ -199,28 +213,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return _compare!;
   }
 
-  /// Last month's recap — memoized on (revision, month of now, cap) since
-  /// it walks two months of totals and every row's SMS body for merchants.
-  Object? _recapRev;
-  DateTime? _recapFor;
-  double? _recapCap;
-  MonthlyRecap? _recap;
+  /// The Overview's month card: last month's recap for the first
+  /// [kRecapDays] days, this month's pace after. Memoized on (revision,
+  /// day, cap) — the recap walks every row's SMS body for merchants, and
+  /// the pace is day-aligned, so the day belongs in the key.
+  Object? _monthCardRev;
+  DateTime? _monthCardDay;
+  double? _monthCardCap;
+  ({MonthlyRecap? recap, MonthPace? pace})? _monthCard;
 
-  MonthlyRecap? _monthlyRecap(
+  ({MonthlyRecap? recap, MonthPace? pace}) _monthCardFor(
     FinanceProvider finance,
     SettingsProvider settings,
   ) {
-    final now = DateTime.now();
-    final thisMonth = DateTime(now.year, now.month);
-    if (!identical(_recapRev, finance.revision) ||
-        _recapFor != thisMonth ||
-        _recapCap != settings.monthlyBudget) {
-      _recapRev = finance.revision;
-      _recapFor = thisMonth;
-      _recapCap = settings.monthlyBudget;
-      _recap = buildMonthlyRecap(finance, settings, now: now);
+    final now = recapClock();
+    final day = DateTime(now.year, now.month, now.day);
+    if (!identical(_monthCardRev, finance.revision) ||
+        _monthCardDay != day ||
+        _monthCardCap != settings.monthlyBudget) {
+      _monthCardRev = finance.revision;
+      _monthCardDay = day;
+      _monthCardCap = settings.monthlyBudget;
+      _monthCard = showsRecap(now)
+          ? (recap: buildMonthlyRecap(finance, settings, now: now), pace: null)
+          : (recap: null, pace: buildMonthPace(finance, settings, now: now));
     }
-    return _recap;
+    return _monthCard!;
   }
 
   /// Long-press on a Top-merchants row: give the payee a readable name.
@@ -459,8 +477,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // One children-list builder per view; called lazily from each page's
     // Builder so only mounted pages construct their widgets.
     List<Widget> overviewChildren() => [
-      _BalanceCard(finance: finance),
-      const SizedBox(height: 16),
       // First-run: the landing tab used to greet a new user with ₹0.00
       // everywhere and no hint of what to do next.
       if (!finance.hasTransactions) ...[
@@ -514,43 +530,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         const SizedBox(height: 16),
       ],
-      // Card bills coming due + detected recurring payments. Not
-      // month-scoped, so it sits above the month selector.
-      _UpcomingCard(finance: finance, hits: _recurring(finance)),
-      // Last month's recap, all month long. Not month-scoped (it always
-      // covers the month before today), so it sits above the selector too.
-      Builder(
-        key: const ValueKey('presence-monthly-recap'),
-        builder: (context) {
-          // Selected so a cap edit re-evaluates "over budget".
-          context.select<SettingsProvider, double>((s) => s.monthlyBudget);
-          final recap = _monthlyRecap(
-            finance,
-            context.read<SettingsProvider>(),
-          );
-          return AnimatedPresence(
-            visible: recap != null,
-            child: recap == null
-                ? const SizedBox.shrink()
-                : Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: MonthlyRecapCard(
-                      recap: recap,
-                      hideIncome: hideIncome,
-                      onViewCategory: widget.onViewCategory,
-                      onViewMerchant: widget.onViewMerchant,
-                      onViewBudget: widget.onViewBudget,
-                      onViewSpending: widget.onViewTransactions == null
-                          ? null
-                          : (m) =>
-                                widget.onViewTransactions!(TxType.expense, m),
-                    ),
-                  ),
-          );
-        },
-      ),
-      // Every view is month-scoped, the comparisons included, so the
-      // selector is never left showing a month the content ignores.
+      // The month's own figures lead the Overview. The month card,
+      // Upcoming and the balances below them are about today whatever month
+      // is selected; each names its own period.
       _monthSelector(context, finance, latestMonth),
       const SizedBox(height: 4),
       // Horizontally scrollable so each card is wide enough to show its
@@ -644,6 +626,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
           );
         },
       ),
+      // The month card: last month's recap for the first days of a month,
+      // this month's pace after. Always about today's month, not the one
+      // the selector shows; its title names the month.
+      Builder(
+        key: const ValueKey('presence-month-card'),
+        builder: (context) {
+          // Selected so a cap edit re-evaluates the budget lines.
+          context.select<SettingsProvider, double>((s) => s.monthlyBudget);
+          final card = _monthCardFor(finance, context.read<SettingsProvider>());
+          void Function(DateTime)? spending = widget.onViewTransactions == null
+              ? null
+              : (m) => widget.onViewTransactions!(TxType.expense, m);
+          final recap = card.recap;
+          final pace = card.pace;
+          return AnimatedPresence(
+            // Year view drops it with the budgets: its lines are monthly.
+            visible: (recap != null || pace != null) && !_yearMode,
+            child: Padding(
+              key: _monthCardKey,
+              padding: const EdgeInsets.only(top: 16),
+              child: recap != null
+                  ? MonthlyRecapCard(
+                      key: const ValueKey('recap'),
+                      recap: recap,
+                      onViewCategory: widget.onViewCategory,
+                      onViewMerchant: widget.onViewMerchant,
+                      onViewBudget: widget.onViewBudget,
+                      onViewSpending: spending,
+                    )
+                  : pace != null
+                  ? MonthPaceCard(
+                      key: const ValueKey('pace'),
+                      pace: pace,
+                      onViewBudget: widget.onViewBudget,
+                      onViewSpending: spending,
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          );
+        },
+      ),
+      // Card bills coming due + detected recurring payments. Not
+      // month-scoped, but below the month's own figures: those lead.
+      _UpcomingCard(finance: finance, hits: _recurring(finance)),
       // Custom spend limits, one compact progress row each — full ring
       // cards would dominate the page with several budgets. Budgets are
       // monthly, so the Year view skips them.
@@ -697,6 +723,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
+      ),
+      // Balances sit below the month's figures: the Overview leads with
+      // this month, and the balance card changes least from day to day.
+      Padding(
+        key: const ValueKey('balance'),
+        padding: const EdgeInsets.only(top: 24),
+        child: _BalanceCard(finance: finance),
       ),
       // Overview keeps the highest-signal sections even though Trends and
       // Breakdown also carry them: it is the landing tab, and a glance
@@ -1187,11 +1220,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
             // keepAlive, zero cache extent), so every view change still
             // starts at the top instead of at a remembered offset.
             children: [
-              for (final (i, page) in [
+              for (final page in [
                 overviewChildren,
                 trendsChildren,
                 breakdownChildren,
-              ].indexed)
+              ])
                 // Transparent ColoredBox: a PageView only receives drags
                 // that hit its subtree, and blank regions need an opaque
                 // hit-test surface. The Builder defers each page's widget
@@ -1200,9 +1233,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   color: Colors.transparent,
                   child: Builder(
                     builder: (context) => ListView(
-                      controller: i == DashboardView.overview.index
-                          ? _overviewScroll
-                          : null,
                       padding: const EdgeInsets.all(16),
                       children: page(),
                     ),
@@ -1337,186 +1367,193 @@ class _UpcomingCard extends StatelessWidget {
     entries.sort((a, b) => a.due.compareTo(b.due));
     final collapsed = settings.isSectionCollapsed('upcoming');
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Tappable header: the card can dominate the top of the dashboard,
-        // so it folds to this row (persisted per device).
-        InkWell(
-          borderRadius: BorderRadius.circular(AppRadius.control),
-          onTap: () =>
-              context.read<SettingsProvider>().toggleSection('upcoming'),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
+    // The gap lives here, not at the call site: an empty card renders
+    // nothing, and must not leave its gap behind.
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Tappable header: the card can dominate the top of the dashboard,
+          // so it folds to this row (persisted per device).
+          InkWell(
+            borderRadius: BorderRadius.circular(AppRadius.control),
+            onTap: () =>
+                context.read<SettingsProvider>().toggleSection('upcoming'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Text(
+                    'Upcoming',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(width: 8),
+                  // Static in both states. Fading the count in step with the
+                  // fold rendered its glyphs in two halves on Impeller, so the
+                  // header no longer animates any text.
+                  Text(
+                    '${entries.length}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  // A direct child of the header row, beside the count: the
+                  // row's own tap folds the card, the tip's tap stays its own.
+                  const InfoTip(
+                    title: 'Upcoming',
+                    message:
+                        'Card bills, your reminders from a week before to a '
+                        'week after their due day, and payments the app '
+                        'spotted repeating (from SMS or your notes), '
+                        'including regular income. A repeat is spotted after 3 '
+                        'payments to the same merchant about a month apart. '
+                        'Card icons: green not billed or paid, orange billed, '
+                        'red due within 5 days or overdue. Long-press a '
+                        'spotted payment to hide it.',
+                    link: InfoLink(
+                      prompt: 'A bill the app cannot detect?',
+                      label: 'Add a reminder',
+                      onTap: goNewReminder,
+                    ),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    tooltip: 'Add reminder',
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(
+                      Icons.add_alert_outlined,
+                      size: 20,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    onPressed: () => showReminderEditor(context),
+                  ),
+                  AnimatedRotation(
+                    turns: collapsed ? 0.5 : 0,
+                    duration: _foldDuration,
+                    curve: Curves.easeOutCubic,
+                    child: Icon(
+                      Icons.expand_less,
+                      size: 20,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Pure height reveal, no fade: cross-fading made the amounts appear
+          // half-transparent while the card expanded.
+          AnimatedFold(
+            collapsed: collapsed,
+            child: Column(
               children: [
-                Text(
-                  'Upcoming',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(width: 8),
-                // Static in both states. Fading the count in step with the
-                // fold rendered its glyphs in two halves on Impeller, so the
-                // header no longer animates any text.
-                Text(
-                  '${entries.length}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                // A direct child of the header row, beside the count: the
-                // row's own tap folds the card, the tip's tap stays its own.
-                const InfoTip(
-                  title: 'Upcoming',
-                  message:
-                      'Card bills, your reminders from a week before to a '
-                      'week after their due day, and payments the app '
-                      'spotted repeating (from SMS or your notes), '
-                      'including regular income. A repeat is spotted after 3 '
-                      'payments to the same merchant about a month apart. '
-                      'Card icons: green not billed or paid, orange billed, '
-                      'red due within 5 days or overdue. Long-press a '
-                      'spotted payment to hide it.',
-                  link: InfoLink(
-                    prompt: 'A bill the app cannot detect?',
-                    label: 'Add a reminder',
-                    onTap: goNewReminder,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  tooltip: 'Add reminder',
-                  visualDensity: VisualDensity.compact,
-                  icon: Icon(
-                    Icons.add_alert_outlined,
-                    size: 20,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  onPressed: () => showReminderEditor(context),
-                ),
-                AnimatedRotation(
-                  turns: collapsed ? 0.5 : 0,
-                  duration: _foldDuration,
-                  curve: Curves.easeOutCubic,
-                  child: Icon(
-                    Icons.expand_less,
-                    size: 20,
-                    color: scheme.onSurfaceVariant,
+                const SizedBox(height: 8),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      children: [
+                        if (entries.isEmpty)
+                          Text(
+                            'Nothing due soon.',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        for (final e in entries.take(6))
+                          InkWell(
+                            borderRadius: BorderRadius.circular(
+                              AppRadius.control,
+                            ),
+                            // Manual reminders: tap for mark paid / edit /
+                            // delete. Card bills: mark paid / record payment.
+                            onTap: e.reminder != null
+                                ? () => _showReminderActions(
+                                    context,
+                                    e.reminder!,
+                                    e.due,
+                                  )
+                                : e.card != null
+                                ? () => _showCardBillActions(context, e.card!)
+                                : null,
+                            // Detected patterns can be wrong — long-press hides one.
+                            // Card bills aren't hideable; clear the card's due day
+                            // instead.
+                            onLongPress: e.hideKey == null
+                                ? null
+                                : () => _confirmHide(
+                                    context,
+                                    e.label,
+                                    e.hideKey!,
+                                  ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              child: Row(
+                                children: [
+                                  // The icon keeps its color even on muted
+                                  // rows — for card bills the color itself
+                                  // carries the state (green/orange/red).
+                                  Icon(e.icon, size: 20, color: e.color),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          e.label,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        Text(
+                                          e.sub,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodySmall
+                                              ?.copyWith(
+                                                color: e.urgent
+                                                    ? scheme.error
+                                                    : null,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 120,
+                                    ),
+                                    child: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      child: Text(
+                                        e.amount == null
+                                            ? ''
+                                            : fmtMoney(e.amount!),
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          color: e.muted
+                                              ? scheme.onSurfaceVariant
+                                              : null,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ],
             ),
           ),
-        ),
-        // Pure height reveal, no fade: cross-fading made the amounts appear
-        // half-transparent while the card expanded.
-        AnimatedFold(
-          collapsed: collapsed,
-          child: Column(
-            children: [
-              const SizedBox(height: 8),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    children: [
-                      if (entries.isEmpty)
-                        Text(
-                          'Nothing due soon.',
-                          style: Theme.of(context).textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
-                        ),
-                      for (final e in entries.take(6))
-                        InkWell(
-                          borderRadius: BorderRadius.circular(
-                            AppRadius.control,
-                          ),
-                          // Manual reminders: tap for mark paid / edit /
-                          // delete. Card bills: mark paid / record payment.
-                          onTap: e.reminder != null
-                              ? () => _showReminderActions(
-                                  context,
-                                  e.reminder!,
-                                  e.due,
-                                )
-                              : e.card != null
-                              ? () => _showCardBillActions(context, e.card!)
-                              : null,
-                          // Detected patterns can be wrong — long-press hides one.
-                          // Card bills aren't hideable; clear the card's due day
-                          // instead.
-                          onLongPress: e.hideKey == null
-                              ? null
-                              : () =>
-                                    _confirmHide(context, e.label, e.hideKey!),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 6),
-                            child: Row(
-                              children: [
-                                // The icon keeps its color even on muted
-                                // rows — for card bills the color itself
-                                // carries the state (green/orange/red).
-                                Icon(e.icon, size: 20, color: e.color),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        e.label,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                      Text(
-                                        e.sub,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall
-                                            ?.copyWith(
-                                              color: e.urgent
-                                                  ? scheme.error
-                                                  : null,
-                                            ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                ConstrainedBox(
-                                  constraints: const BoxConstraints(
-                                    maxWidth: 120,
-                                  ),
-                                  child: FittedBox(
-                                    fit: BoxFit.scaleDown,
-                                    child: Text(
-                                      e.amount == null
-                                          ? ''
-                                          : fmtMoney(e.amount!),
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w700,
-                                        color: e.muted
-                                            ? scheme.onSurfaceVariant
-                                            : null,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-      ],
+        ],
+      ),
     );
   }
 
