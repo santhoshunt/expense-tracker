@@ -10,6 +10,7 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
+import 'package:expense_tracker/services/monthly_recap.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/budget_detail_sheet.dart';
@@ -25,10 +26,16 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
+    // Past the recap week, whatever today is: the recap card repeats the
+    // "Spent" label these tests tap.
+    final now = DateTime.now();
+    recapClock = () => DateTime(now.year, now.month, 20, 10);
     SharedPreferences.setMockInitialValues({});
     setCustomCategories(const []);
     setBuiltinOverrides(const {});
   });
+
+  tearDown(() => recapClock = DateTime.now);
 
   Future<void> pumpDashboard(
     WidgetTester tester,

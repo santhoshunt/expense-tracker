@@ -80,7 +80,7 @@ class AppNav {
     _showOverview = null;
   }
 
-  /// The Dashboard's Overview at its top, where the monthly recap sits.
+  /// The Dashboard's Overview, scrolled to the month card (the recap).
   /// Leaves open routes alone: callers switch the home tab themselves.
   void showOverview() => _showOverview?.call();
 

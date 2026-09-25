@@ -7,6 +7,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
+import 'package:expense_tracker/services/monthly_recap.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
@@ -18,11 +19,17 @@ import 'dashboard_test_utils.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  // Past the recap week, whatever today is: the pace card carries no "Spent"
+  // label, so counts of it stay put all month.
   setUp(() {
+    final now = DateTime.now();
+    recapClock = () => DateTime(now.year, now.month, 20, 10);
     SharedPreferences.setMockInitialValues({});
     setCustomCategories(const []);
     setBuiltinOverrides(const {});
   });
+
+  tearDown(() => recapClock = DateTime.now);
 
   group('sub-tabs', () {
     Future<void> pump(WidgetTester tester) async {
@@ -64,9 +71,8 @@ void main() {
 
       // Overview is the landing view. It carries copies of the
       // highest-signal sections (categories vs usual, the heatmap) so a
-      // glance there needs no tab switch — but not the rest. "Spent" is on
-      // the stat card and, with last month on record, the recap card too.
-      expect(find.text('Spent'), findsNWidgets(2));
+      // glance there needs no tab switch — but not the rest.
+      expect(find.text('Spent'), findsOneWidget);
       expect(find.text('This month vs last month'), findsNothing);
       expect(find.byType(CategoryDonutChart), findsNothing);
       await tester.scrollUntilVisible(
@@ -96,8 +102,7 @@ void main() {
 
     testWidgets('a horizontal swipe steps through the views', (tester) async {
       await pump(tester);
-      // The stat card and the recap card: this is the Overview.
-      expect(find.text('Spent'), findsNWidgets(2));
+      expect(find.text('Spent'), findsOneWidget);
 
       // Fling on page content — the month selector row, present on every
       // view. The tab labels sit on the pinned bar outside the pager now,
