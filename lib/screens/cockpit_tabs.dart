@@ -7,16 +7,22 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/notification_service.dart';
+import '../services/subscriptions.dart';
 import '../utils/contrast.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
+import '../widgets/animated_fold.dart';
 import '../widgets/budget_dialog.dart';
+import '../widgets/dispose_scope.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/info_tip.dart';
+import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/glossy.dart';
+import '../widgets/motion.dart';
 import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
+import 'transactions_screen.dart' show TxFilterRequest;
 
 /// The Budgets and Reminders tabs of the Cockpit screen. The sections moved
 /// here from Settings (2026-09) so all recurring money management lives in
@@ -93,6 +99,500 @@ class RemindersTab extends StatelessWidget {
         const _RemindersSection(),
       ],
     );
+  }
+}
+
+/// Every tag with its all-time spend, row count and date span. Tags are
+/// added from a transaction's sheet or the bulk Tag action, so there is no
+/// add button here; long-press renames (merging into an existing tag) or
+/// deletes.
+class TagsTab extends StatelessWidget {
+  const TagsTab({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.watch<FinanceProvider>();
+    final summaries = finance.tagSummaries;
+    final text = Theme.of(context).textTheme;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+      children: [
+        InfoLabel(
+          label: Text('Tags', style: text.titleMedium),
+          tip: const InfoTip(
+            title: 'Tags',
+            message:
+                'Labels that cut across categories, like a trip or '
+                '"Reimbursable". A row can carry up to 5. Spent counts money '
+                'out as the dashboard does: your share of a split bill, and '
+                'no transfers. Tap a tag for its transactions; long-press to '
+                'rename or delete it. Renaming to an existing tag merges the '
+                'two.',
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Totals since the first tagged transaction, across every month.',
+          style: text.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        FrostedPanel(
+          radius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (summaries.isEmpty)
+                  const EmptyState(
+                    compact: true,
+                    icon: Icons.sell_outlined,
+                    message: 'Add tags when you add or edit a transaction.',
+                  ),
+                for (final s in summaries)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.sell_outlined, size: 20),
+                    title: Text(s.tag),
+                    subtitle: Text(
+                      '${fmtMoney(s.spent)} spent · ${s.count} '
+                      '${s.count == 1 ? 'row' : 'rows'} · '
+                      '${fmtDateRange(DateTimeRange(start: s.first, end: s.last))}',
+                      style: text.bodySmall,
+                    ),
+                    onTap: () => AppNav.instance.openTransactions(
+                      context,
+                      TxFilterRequest(tag: s.tag),
+                    ),
+                    onLongPress: () => _actions(context, s.tag),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _actions(BuildContext context, String tag) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Rename'),
+              subtitle: const Text('To an existing tag to merge the two'),
+              onTap: () => Navigator.pop(ctx, 'rename'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Delete'),
+              subtitle: const Text('Takes it off every transaction'),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted || choice == null) return;
+    final finance = context.read<FinanceProvider>();
+    if (choice == 'delete') {
+      final before = await finance.deleteTag(tag);
+      if (!context.mounted || before.isEmpty) return;
+      showUndoSnackBar(
+        context,
+        'Deleted tag "$tag" from ${before.length} '
+        '${before.length == 1 ? 'transaction' : 'transactions'}',
+        () => finance.restoreEditedTransactions(before),
+        icon: Icons.delete_outline,
+        tone: AppToastTone.removal,
+      );
+      return;
+    }
+    final to = await _renameDialog(context, tag, [
+      for (final u in finance.allTags) u.tag,
+    ]);
+    if (to == null || !context.mounted) return;
+    final before = await finance.renameTag(tag, to);
+    if (!context.mounted || before.isEmpty) return;
+    showUndoSnackBar(
+      context,
+      'Renamed "$tag" to "$to"',
+      () => finance.restoreEditedTransactions(before),
+      icon: Icons.edit_outlined,
+    );
+  }
+
+  /// The new name, or null when cancelled or unchanged. Says so when the
+  /// name belongs to another tag, since saving merges the two.
+  static Future<String?> _renameDialog(
+    BuildContext context,
+    String tag,
+    List<String> existing,
+  ) async {
+    final ctrl = TextEditingController(text: tag);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => DisposeScope(
+        disposables: [ctrl],
+        child: StatefulBuilder(
+          builder: (ctx, setState) {
+            final name = normalizeTags([ctrl.text]).firstOrNull;
+            final merges = name == null || tagKey(name) == tagKey(tag)
+                ? null
+                : existing.where((e) => tagKey(e) == tagKey(name)).firstOrNull;
+            return AlertDialog(
+              title: const Text('Rename tag'),
+              content: TextField(
+                controller: ctrl,
+                autofocus: true,
+                maxLength: kMaxTagLength,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: InputDecoration(
+                  labelText: 'Name',
+                  helperText: merges == null
+                      ? null
+                      : 'Merges with the existing tag "$merges"',
+                  helperMaxLines: 2,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: name == null || name == tag
+                      ? null
+                      : () => Navigator.pop(ctx, name),
+                  child: Text(merges == null ? 'Rename' : 'Merge'),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    return result;
+  }
+}
+
+/// Regular monthly payments the app spotted: what each costs a month and a
+/// year, price rises, and the ones that stopped. Nothing is added by hand,
+/// so the tab has no add button; hiding shares the Upcoming card's list.
+class SubscriptionsTab extends StatefulWidget {
+  const SubscriptionsTab({super.key});
+
+  @override
+  State<SubscriptionsTab> createState() => _SubscriptionsTabState();
+}
+
+class _SubscriptionsTabState extends State<SubscriptionsTab> {
+  /// Folded by default and per visit: they are history, not the list.
+  bool _stoppedOpen = false;
+  bool _hiddenOpen = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.watch<FinanceProvider>();
+    // Selected by content, so other settings changes don't rebuild this.
+    context.select<SettingsProvider, String>(
+      (s) => hiddenListKey(s.hiddenUpcoming),
+    );
+    // Shared with the hub and the dashboard: one detection per change.
+    final summary = cachedSubscriptions(
+      finance,
+      context.read<SettingsProvider>().hiddenUpcoming,
+    );
+    final text = Theme.of(context).textTheme;
+    final muted = text.bodySmall?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+    final count = summary.active.length;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+      children: [
+        InfoLabel(
+          label: Text('Subscriptions', style: text.titleMedium),
+          tip: const InfoTip(
+            title: 'Subscriptions',
+            message:
+                'Payments the app spotted repeating: 3 or more to the same '
+                'merchant about a month apart, from SMS or your notes. A '
+                'yearly cost is the usual amount over a year. "Up" means the '
+                'last payment was more than the one before. A payment more '
+                'than a week past its date moves to Stopped. Hiding one here '
+                'also hides it from Upcoming.',
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          count == 0
+              ? 'Regular payments show here once the app spots them.'
+              : '$count regular ${count == 1 ? 'payment' : 'payments'} · '
+                    '${fmtMoney(summary.monthlyTotal)} a month · '
+                    '${fmtMoney(summary.yearlyTotal)} a year',
+          style: muted,
+        ),
+        const SizedBox(height: 12),
+        FrostedPanel(
+          radius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (summary.active.isEmpty)
+                  const EmptyState(
+                    compact: true,
+                    icon: Icons.autorenew,
+                    message: 'No regular payments spotted yet.',
+                  ),
+                for (final item in summary.active)
+                  _SubscriptionTile(item: item, kind: _SubKind.active),
+              ],
+            ),
+          ),
+        ),
+        if (summary.stopped.isNotEmpty)
+          _FoldSection(
+            title: 'Stopped (${summary.stopped.length})',
+            open: _stoppedOpen,
+            onToggle: () => setState(() => _stoppedOpen = !_stoppedOpen),
+            children: [
+              for (final item in summary.stopped)
+                _SubscriptionTile(item: item, kind: _SubKind.stopped),
+            ],
+          ),
+        if (summary.hidden.isNotEmpty)
+          _FoldSection(
+            title: 'Hidden (${summary.hidden.length})',
+            open: _hiddenOpen,
+            onToggle: () => setState(() => _hiddenOpen = !_hiddenOpen),
+            children: [
+              for (final item in summary.hidden)
+                _SubscriptionTile(item: item, kind: _SubKind.hidden),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+enum _SubKind { active, stopped, hidden }
+
+/// A tappable heading that folds a panel of rows away.
+class _FoldSection extends StatelessWidget {
+  final String title;
+  final bool open;
+  final VoidCallback onToggle;
+  final List<Widget> children;
+
+  const _FoldSection({
+    required this.title,
+    required this.open,
+    required this.onToggle,
+    required this.children,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Semantics(
+            button: true,
+            expanded: open,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: onToggle,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Text(title, style: Theme.of(context).textTheme.titleSmall),
+                    const Spacer(),
+                    AnimatedRotation(
+                      turns: open ? 0 : 0.5,
+                      duration: motionDuration(
+                        context,
+                        const Duration(milliseconds: 250),
+                      ),
+                      curve: Curves.easeOutCubic,
+                      child: Icon(
+                        Icons.expand_less,
+                        size: 20,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          AnimatedFold(
+            collapsed: !open,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: FrostedPanel(
+                radius: BorderRadius.circular(20),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: children,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SubscriptionTile extends StatelessWidget {
+  final SubscriptionItem item;
+  final _SubKind kind;
+
+  const _SubscriptionTile({required this.item, required this.kind});
+
+  @override
+  Widget build(BuildContext context) {
+    final hit = item.hit;
+    final category = categoryById(hit.categoryId, fallbackType: hit.type);
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final when = kind == _SubKind.active
+        ? 'next ${fmtDateCompact(hit.nextDue)}'
+        : 'last paid ${fmtDateCompact(hit.lastDate)}';
+    final rise = item.priceRise;
+
+    return ListTile(
+      dense: true,
+      onTap: () => AppNav.instance.openTransactions(
+        context,
+        TxFilterRequest(query: item.identity),
+      ),
+      onLongPress: () => _actions(context),
+      leading: CircleAvatar(
+        radius: 16,
+        backgroundColor: category.color.withValues(alpha: 0.15),
+        child: Icon(
+          category.icon,
+          color: categoryGlyphColor(context, category.color),
+          size: 18,
+        ),
+      ),
+      title: Text(hit.label),
+      subtitle: Text(
+        '${fmtMoney(hit.expectedAmount)} monthly · '
+        '${fmtMoney(item.yearly)} a year · $when',
+        style: text.bodySmall,
+      ),
+      trailing: kind == _SubKind.hidden
+          ? TextButton(
+              onPressed: () =>
+                  context.read<SettingsProvider>().unhideUpcoming(hit.key),
+              child: const Text('Unhide'),
+            )
+          : rise == null || kind != _SubKind.active
+          ? null
+          // Colour on the border and text only, never a filled badge.
+          : Tooltip(
+              message:
+                  'Up ${fmtMoney(rise.amount)} since '
+                  '${fmtDateCompact(rise.since)}',
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  border: Border.all(color: scheme.error),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'Up ${fmtMoney(rise.amount)}',
+                  style: text.labelSmall?.copyWith(color: scheme.error),
+                ),
+              ),
+            ),
+    );
+  }
+
+  /// Long-press: rename the payee, turn it into a reminder, or hide it.
+  Future<void> _actions(BuildContext context) async {
+    final hit = item.hit;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_outlined),
+              title: const Text('Rename'),
+              onTap: () => Navigator.pop(ctx, 'rename'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_alert_outlined),
+              title: const Text('Make a reminder'),
+              subtitle: const Text('For bills that may stop showing in SMS'),
+              onTap: () => Navigator.pop(ctx, 'reminder'),
+            ),
+            if (kind != _SubKind.hidden)
+              ListTile(
+                leading: const Icon(Icons.visibility_off_outlined),
+                title: const Text('Hide'),
+                subtitle: const Text('Also hides it from Upcoming'),
+                onTap: () => Navigator.pop(ctx, 'hide'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!context.mounted || choice == null) return;
+    switch (choice) {
+      case 'rename':
+        await showRenameMerchantDialog(
+          context,
+          identity: item.identity,
+          currentLabel: hit.label,
+        );
+      case 'reminder':
+        await showReminderEditor(
+          context,
+          name: hit.label,
+          dayOfMonth: hit.nextDue.day,
+          amount: hit.expectedAmount,
+          categoryId: hit.categoryId,
+        );
+      case 'hide':
+        final settings = context.read<SettingsProvider>();
+        // The toast first: hiding rebuilds the list, which can unmount this
+        // very tile before the preference write returns.
+        showUndoSnackBar(
+          context,
+          'Hid "${hit.label}"',
+          () => settings.unhideUpcoming(hit.key),
+          icon: Icons.visibility_off_outlined,
+          tone: AppToastTone.removal,
+        );
+        await settings.hideUpcoming(hit.key);
+    }
   }
 }
 

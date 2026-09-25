@@ -175,7 +175,27 @@ class _Derived {
   /// Gross per category over the last ~3 months — the "Most used" category
   /// picker ordering asks for this on every add-sheet open.
   Map<String, double>? categoryGross;
+
+  /// Tags in use and their all-time totals — the add sheet's suggestions,
+  /// the filter sheet and the Tags tab read these on every rebuild.
+  List<TagUse>? tagUses;
+  List<TagSummary>? tagSummaries;
 }
+
+/// A tag in use: its spelling, how many rows carry it (pending included)
+/// and the newest of those rows' dates.
+typedef TagUse = ({String tag, int count, DateTime lastUsed});
+
+/// A tag's all-time figures over confirmed rows: money out as the totals
+/// engine counts it (own share of a split, transfers left out), how many
+/// rows carry it, and the first and last of their dates.
+typedef TagSummary = ({
+  String tag,
+  double spent,
+  int count,
+  DateTime first,
+  DateTime last,
+});
 
 class FinanceProvider extends ChangeNotifier {
   static const _txKey = 'transactions_v1';
@@ -1341,6 +1361,7 @@ class FinanceProvider extends ChangeNotifier {
     required DateTime date,
     String sender = '',
     double? myShare,
+    List<String> tags = const [],
   }) async {
     final id = _newId();
     _transactions.add(
@@ -1353,6 +1374,7 @@ class FinanceProvider extends ChangeNotifier {
         date: date,
         sender: sender,
         myShare: myShare,
+        tags: normalizeTags(tags),
       ),
     );
     notifyListeners();
@@ -3084,6 +3106,136 @@ class FinanceProvider extends ChangeNotifier {
     return changed;
   }
 
+  // --- Tags ------------------------------------------------------------------
+
+  /// Every tag on a confirmed row, most recently used first. The spelling
+  /// shown is the oldest row's. Confirmed only, like [tagSummaries] and the
+  /// Transactions list, so the hub count, the filter chips and the Tags tab
+  /// always agree; a pending import's tags join once it is confirmed.
+  List<TagUse> get allTags => _d.tagUses ??= () {
+    final byKey = <String, TagUse>{};
+    for (final (t, _) in _ordered) {
+      for (final tag in t.tags) {
+        final k = tagKey(tag);
+        final seen = byKey[k];
+        byKey[k] = seen == null
+            ? (tag: tag, count: 1, lastUsed: t.date)
+            : (
+                tag: seen.tag,
+                count: seen.count + 1,
+                lastUsed: t.date.isAfter(seen.lastUsed)
+                    ? t.date
+                    : seen.lastUsed,
+              );
+      }
+    }
+    return List<TagUse>.unmodifiable(
+      byKey.values.toList()..sort((a, b) => b.lastUsed.compareTo(a.lastUsed)),
+    );
+  }();
+
+  /// All-time figures per tag over confirmed rows, most recently used
+  /// first — the Tags tab.
+  List<TagSummary> get tagSummaries => _d.tagSummaries ??= () {
+    // One spelling per tag everywhere: the one [allTags] shows.
+    final spelling = {for (final u in allTags) tagKey(u.tag): u.tag};
+    final byKey = <String, TagSummary>{};
+    for (final t in transactions) {
+      // The totals engine's money-out rule: expense rows outside the
+      // transfer categories, and only the user's share of a split.
+      final spend =
+          t.type == TxType.expense && !isTransferCategory(t.categoryId)
+          ? t.spendAmount
+          : 0.0;
+      for (final tag in t.tags) {
+        final k = tagKey(tag);
+        final s = byKey[k];
+        byKey[k] = s == null
+            ? (
+                tag: spelling[k] ?? tag,
+                spent: spend,
+                count: 1,
+                first: t.date,
+                last: t.date,
+              )
+            : (
+                tag: s.tag,
+                spent: s.spent + spend,
+                count: s.count + 1,
+                first: t.date.isBefore(s.first) ? t.date : s.first,
+                last: t.date.isAfter(s.last) ? t.date : s.last,
+              );
+      }
+    }
+    return List<TagSummary>.unmodifiable(
+      byKey.values.toList()..sort((a, b) => b.last.compareTo(a.last)),
+    );
+  }();
+
+  /// Rewrites the tags of every row [where] matches through [edit], in one
+  /// notification and one write. Returns the rows as they were, for Undo
+  /// via [restoreEditedTransactions].
+  Future<List<Tx>> _editTags(
+    bool Function(Tx t) where,
+    List<String> Function(List<String> tags) edit,
+  ) async {
+    final before = <Tx>[];
+    for (var i = 0; i < _transactions.length; i++) {
+      final t = _transactions[i];
+      if (!where(t)) continue;
+      final next = normalizeTags(edit(t.tags));
+      if (listEquals(next, t.tags)) continue;
+      before.add(t);
+      _transactions[i] = t.copyWith(tags: next);
+    }
+    if (before.isNotEmpty) {
+      notifyListeners();
+      await _persist(tx: true);
+    }
+    return before;
+  }
+
+  /// Adds [add] to and removes [remove] from every row in [ids] (the bulk
+  /// Tag action). A row already at [kMaxTagsPerTx] keeps its first ones.
+  Future<List<Tx>> setTagsForMany(
+    Set<String> ids, {
+    Set<String> add = const {},
+    Set<String> remove = const {},
+  }) {
+    final removeKeys = {for (final r in remove) tagKey(r)};
+    return _editTags(
+      (t) => ids.contains(t.id),
+      (tags) => [
+        for (final tag in tags)
+          if (!removeKeys.contains(tagKey(tag))) tag,
+        ...add,
+      ],
+    );
+  }
+
+  /// Renames tag [from] to [to] on every row. When [to] already exists the
+  /// two merge: its rows take [to]'s spelling too, and normalizeTags drops
+  /// the duplicate on rows that had both.
+  Future<List<Tx>> renameTag(String from, String to) {
+    final keys = {tagKey(from), tagKey(to)};
+    return _editTags(
+      (t) => t.tags.any((tag) => keys.contains(tagKey(tag))),
+      (tags) => [for (final tag in tags) keys.contains(tagKey(tag)) ? to : tag],
+    );
+  }
+
+  /// Removes tag [tag] from every row that carries it.
+  Future<List<Tx>> deleteTag(String tag) {
+    final k = tagKey(tag);
+    return _editTags(
+      (t) => t.tags.any((x) => tagKey(x) == k),
+      (tags) => [
+        for (final x in tags)
+          if (tagKey(x) != k) x,
+      ],
+    );
+  }
+
   /// Stamps the same date and time on every transaction in [ids]. Returns
   /// how many rows changed.
   Future<int> setDateTimeForMany(Set<String> ids, DateTime dateTime) async {
@@ -3297,6 +3449,8 @@ class FinanceProvider extends ChangeNotifier {
     if (t.balanceAfter != null && !t.balanceAfter!.isFinite) {
       t = t.copyWith(clearBalanceAfter: true);
     }
+    // copyWith normalizes: trims, dedupes and caps whatever the file held.
+    if (t.tags.isNotEmpty) t = t.copyWith(tags: t.tags);
     var tx = _sanitizeMyShare(t);
     final known = allCategories.any((c) => c.id == tx.categoryId);
     if (known) {
@@ -3419,7 +3573,8 @@ class FinanceProvider extends ChangeNotifier {
     // replace-mode restores only.
     // v12: `merchantAliases` (identity → display name).
     // v13: `reminders` collection; transactions may carry `pairId`.
-    'version': 13,
+    // v14: transactions may carry `tags` (a list of strings).
+    'version': 14,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),

@@ -26,6 +26,7 @@ import '../widgets/glossy.dart';
 import '../widgets/month_picker_sheet.dart';
 import '../widgets/motion.dart';
 import '../widgets/picker_sheet.dart';
+import '../widgets/tag_input.dart';
 import '../widgets/transaction_tile.dart';
 import '../widgets/undo_snackbar.dart';
 import '../widgets/info_tip.dart';
@@ -68,6 +69,9 @@ class TxFilterRequest {
   /// both are set).
   final DateTimeRange? range;
 
+  /// Rows carrying this tag (matched ignoring case) — the Tags tab's rows.
+  final String? tag;
+
   const TxFilterRequest({
     this.type,
     this.accountId,
@@ -77,6 +81,7 @@ class TxFilterRequest {
     this.groupId,
     this.query,
     this.range,
+    this.tag,
   });
 }
 
@@ -146,6 +151,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   /// Selected custom-budget ids — shows the rows counting toward any of them.
   final Set<String> _budgetFilter = {};
+
+  /// Selected tags, by tagKey — shows rows carrying any of them.
+  final Set<String> _tagFilter = {};
   double? _minAmount;
   double? _maxAmount;
   String? _accountId;
@@ -305,6 +313,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           label: categoryById(id).label,
           onDeleted: () => setState(() => _categoryFilter.remove(id)),
         ),
+      for (final u in finance.allTags)
+        if (_tagFilter.contains(tagKey(u.tag)))
+          chip(
+            avatar: const Icon(Icons.sell_outlined, size: 16),
+            label: 'Tag · ${u.tag}',
+            onDeleted: () => setState(() => _tagFilter.remove(tagKey(u.tag))),
+          ),
     ];
   }
 
@@ -312,6 +327,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       _categoryFilter.isNotEmpty ||
       _groupFilter.isNotEmpty ||
       _budgetFilter.isNotEmpty ||
+      _tagFilter.isNotEmpty ||
       _minAmount != null ||
       _maxAmount != null ||
       _accountId != null ||
@@ -333,6 +349,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       _categoryFilter.clear();
       _groupFilter.clear();
       _budgetFilter.clear();
+      _tagFilter.clear();
       _minAmount = null;
       _maxAmount = null;
       // Cancel any in-flight debounce or it re-applies the pre-reset text
@@ -349,6 +366,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (req?.categoryId != null) _categoryFilter.add(req!.categoryId!);
       if (req?.groupId != null) _groupFilter.add(req!.groupId!);
       if (req?.budgetId != null) _budgetFilter.add(req!.budgetId!);
+      if (req?.tag != null) _tagFilter.add(tagKey(req!.tag!));
       // A deep-link is a jump, not a sideways step. Post-frame because
       // didUpdateWidget runs during build and a synchronous jumpToPage
       // would mutate scroll positions mid-build.
@@ -441,6 +459,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           !budgetFilterList.any((b) => finance.countsTowardBudget(t, b))) {
         return false;
       }
+      if (_tagFilter.isNotEmpty &&
+          !t.tags.any((tag) => _tagFilter.contains(tagKey(tag)))) {
+        return false;
+      }
       if (_minAmount != null && t.amount < _minAmount!) return false;
       if (_maxAmount != null && t.amount > _maxAmount!) return false;
       if (q.isNotEmpty) {
@@ -465,6 +487,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     (_categoryFilter.toList()..sort()).join(','),
     (_groupFilter.toList()..sort()).join(','),
     (_budgetFilter.toList()..sort()).join(','),
+    (_tagFilter.toList()..sort()).join(','),
     _minAmount,
     _maxAmount,
     _accountId,
@@ -507,6 +530,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       _budgetFilter.removeWhere(
         (id) => !finance.budgets.any((b) => b.id == id),
       );
+      // A tag renamed, deleted or taken off its last row has no chip left
+      // to clear it with, and would keep the list empty.
+      final liveTags = {for (final u in finance.allTags) tagKey(u.tag)};
+      _tagFilter.removeWhere((k) => !liveTags.contains(k));
     }
     return _pageCache[f] ??= _buildPageData(f, finance, allConfirmed);
   }
@@ -764,7 +791,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         _rangeFilter != null ||
         _categoryFilter.isNotEmpty ||
         _groupFilter.isNotEmpty ||
-        _budgetFilter.isNotEmpty;
+        _budgetFilter.isNotEmpty ||
+        _tagFilter.isNotEmpty;
 
     // The cards and bars above the list fold in and out (AnimatedPresence)
     // so the list slides instead of jumping. Each child is built only while
@@ -843,6 +871,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   onCategory: () => _bulkCategory(filtered),
                   onAccount: _bulkAccount,
                   onDateTime: _bulkDateTime,
+                  onTags: _bulkTags,
                   // Pairing is a two-row concept — the button only exists at
                   // exactly two selected.
                   onPair: _selected.length == 2 ? _bulkPair : null,
@@ -912,6 +941,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                 _categoryFilter.clear();
                                 _groupFilter.clear();
                                 _budgetFilter.clear();
+                                _tagFilter.clear();
                                 _minAmount = null;
                                 _maxAmount = null;
                                 _accountId = null;
@@ -1242,6 +1272,62 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
   }
 
+  /// Bulk tags: add tags to every selected row, and take off tags some of
+  /// them carry. Returns the rows' tags to what they were on Undo.
+  Future<void> _bulkTags() async {
+    if (_selected.isEmpty) return;
+    final finance = context.read<FinanceProvider>();
+    final selectedTxs = _selectedSnapshot(finance);
+    // Tags on any selected row, in the order the rows list them. Not
+    // normalizeTags: its cap of five per row would hide the rest here.
+    final seen = <String>{};
+    final present = [
+      for (final t in selectedTxs)
+        for (final tag in t.tags)
+          if (seen.add(tagKey(tag))) tag,
+    ];
+    final result =
+        await showModalBottomSheet<({Set<String> add, Set<String> remove})>(
+          context: context,
+          isScrollControlled: true,
+          useSafeArea: true,
+          showDragHandle: true,
+          builder: (ctx) => Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            ),
+            child: _BulkTagSheet(
+              present: present,
+              suggestions: [for (final u in finance.allTags) u.tag],
+            ),
+          ),
+        );
+    if (result == null || !mounted) return;
+    if (result.add.isEmpty && result.remove.isEmpty) return;
+    final n = _selected.length;
+    final parts = [
+      if (result.add.isNotEmpty) 'adds ${result.add.join(', ')}',
+      if (result.remove.isNotEmpty) 'removes ${result.remove.join(', ')}',
+    ];
+    if (!await _confirmBulk(
+      'Tag $n transaction${n == 1 ? '' : 's'}?',
+      'This ${parts.join(' and ')} on the selected transactions.',
+    )) {
+      return;
+    }
+    final before = await finance.setTagsForMany(
+      Set.of(_selected),
+      add: result.add,
+      remove: result.remove,
+    );
+    _afterBulk(
+      before.length,
+      'Tags',
+      icon: Icons.sell_outlined,
+      onUndo: () => finance.restoreEditedTransactions(before),
+    );
+  }
+
   /// Exports exactly what the list is showing — same rows, same order.
   Future<void> _exportCsv() async {
     final rows = [for (final (_, tx) in _activeData.rows) ?tx];
@@ -1357,6 +1443,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final selected = Set<String>.from(_categoryFilter);
     final selectedGroups = Set<String>.from(_groupFilter);
     final selectedBudgets = Set<String>.from(_budgetFilter);
+    final selectedTags = Set<String>.from(_tagFilter);
     var accountId = _accountId;
     var month = _monthFilter;
     var range = _rangeFilter;
@@ -1368,6 +1455,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final monthsWithData = finance.monthsWithData;
     final groups = finance.groups;
     final budgets = finance.budgets;
+    final tags = finance.allTags;
     final minCtrl = TextEditingController(
       text: _minAmount == null ? '' : _minAmount!.toStringAsFixed(0),
     );
@@ -1426,6 +1514,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           selected.clear();
                           selectedGroups.clear();
                           selectedBudgets.clear();
+                          selectedTags.clear();
                           accountId = null;
                           month = null;
                           range = null;
@@ -1446,6 +1535,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           _budgetFilter
                             ..clear()
                             ..addAll(selectedBudgets);
+                          _tagFilter
+                            ..clear()
+                            ..addAll(selectedTags);
                           // parseAmount: "1,000" must filter, not silently
                           // clear the bound the user just typed.
                           _minAmount = parseAmount(minCtrl.text);
@@ -1505,6 +1597,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       final showOther =
                           has('Other') ||
                           selectedGroups.contains(kUngroupedFilterKey);
+                      final visTags = [
+                        for (final u in tags)
+                          if (has(u.tag) ||
+                              selectedTags.contains(tagKey(u.tag)))
+                            u.tag,
+                      ];
                       final visCategories = [
                         for (final c in allCategories)
                           if (has(c.label) || selected.contains(c.id)) c,
@@ -1699,6 +1797,36 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                 ],
                               ),
                             ],
+                            if (visTags.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                'Tags',
+                                style: Theme.of(ctx).textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 4,
+                                children: [
+                                  for (final tag in visTags)
+                                    FilterChip(
+                                      label: Text(tag),
+                                      avatar: const Icon(
+                                        Icons.sell_outlined,
+                                        size: 16,
+                                      ),
+                                      selected: selectedTags.contains(
+                                        tagKey(tag),
+                                      ),
+                                      onSelected: (on) => setSheetState(
+                                        () => on
+                                            ? selectedTags.add(tagKey(tag))
+                                            : selectedTags.remove(tagKey(tag)),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ],
                             if (visCategories.isNotEmpty) ...[
                               const SizedBox(height: 12),
                               Text(
@@ -1781,6 +1909,98 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 }
 
+/// The bulk Tag sheet: tags to add to every selected row, and the tags the
+/// rows already carry, each removable from all of them.
+class _BulkTagSheet extends StatefulWidget {
+  /// Tags on any of the selected rows.
+  final List<String> present;
+  final List<String> suggestions;
+
+  const _BulkTagSheet({required this.present, required this.suggestions});
+
+  @override
+  State<_BulkTagSheet> createState() => _BulkTagSheetState();
+}
+
+class _BulkTagSheetState extends State<_BulkTagSheet> {
+  List<String> _add = const [];
+  final Set<String> _remove = {};
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Tags', style: text.titleLarge),
+            const SizedBox(height: 12),
+            TagInput(
+              tags: _add,
+              controller: _ctrl,
+              suggestions: widget.suggestions,
+              onChanged: (t) => setState(() => _add = t),
+            ),
+            if (widget.present.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(
+                'On these rows · tap one to take it off all of them',
+                style: text.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final t in widget.present)
+                    FilterChip(
+                      label: Text('# $t', semanticsLabel: 'Tag $t'),
+                      selected: !_remove.contains(t),
+                      tooltip: _remove.contains(t) ? 'Keep $t' : 'Remove $t',
+                      onSelected: (keep) => setState(
+                        () => keep ? _remove.remove(t) : _remove.add(t),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, (
+                    add: pendingTagsOf(_add, _ctrl).toSet(),
+                    remove: Set.of(_remove),
+                  )),
+                  child: const Text('Apply'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Action bar shown while transactions are selected: count, select-all for
 /// the current filter, and the three bulk edits.
 class _SelectionBar extends StatelessWidget {
@@ -1789,6 +2009,7 @@ class _SelectionBar extends StatelessWidget {
   final VoidCallback onCategory;
   final VoidCallback onAccount;
   final VoidCallback onDateTime;
+  final VoidCallback onTags;
 
   /// Null hides the button (shown only with exactly two rows selected).
   final VoidCallback? onPair;
@@ -1801,6 +2022,7 @@ class _SelectionBar extends StatelessWidget {
     required this.onCategory,
     required this.onAccount,
     required this.onDateTime,
+    required this.onTags,
     required this.onPair,
     required this.onDelete,
     required this.onClose,
@@ -1830,43 +2052,69 @@ class _SelectionBar extends StatelessWidget {
                   color: scheme.primary,
                 ),
               ),
-              const Spacer(),
-              IconButton(
-                tooltip: 'Select all shown',
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.select_all, size: 20),
-                onPressed: onSelectAll,
-              ),
-              IconButton(
-                tooltip: 'Set category',
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.category_outlined, size: 20),
-                onPressed: onCategory,
-              ),
-              IconButton(
-                tooltip: 'Assign account',
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.account_balance_outlined, size: 20),
-                onPressed: onAccount,
-              ),
-              IconButton(
-                tooltip: 'Set date & time',
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.schedule, size: 20),
-                onPressed: onDateTime,
-              ),
-              if (onPair != null)
-                IconButton(
-                  tooltip: 'Pair as transfer',
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(Icons.link, size: 20),
-                  onPressed: onPair,
+              // Scrolls sideways rather than overflowing: seven or eight
+              // actions no longer fit a narrow phone's width. Reversed so
+              // the row sits at the end and Delete stays in view.
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  reverse: true,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Select all shown',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.select_all, size: 20),
+                        onPressed: onSelectAll,
+                      ),
+                      IconButton(
+                        tooltip: 'Set category',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.category_outlined, size: 20),
+                        onPressed: onCategory,
+                      ),
+                      IconButton(
+                        tooltip: 'Tags',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.sell_outlined, size: 20),
+                        onPressed: onTags,
+                      ),
+                      IconButton(
+                        tooltip: 'Assign account',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(
+                          Icons.account_balance_outlined,
+                          size: 20,
+                        ),
+                        onPressed: onAccount,
+                      ),
+                      IconButton(
+                        tooltip: 'Set date & time',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.schedule, size: 20),
+                        onPressed: onDateTime,
+                      ),
+                      if (onPair != null)
+                        IconButton(
+                          tooltip: 'Pair as transfer',
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.link, size: 20),
+                          onPressed: onPair,
+                        ),
+                      IconButton(
+                        tooltip: 'Delete',
+                        visualDensity: VisualDensity.compact,
+                        icon: Icon(
+                          Icons.delete_outline,
+                          size: 20,
+                          color: scheme.error,
+                        ),
+                        onPressed: onDelete,
+                      ),
+                    ],
+                  ),
                 ),
-              IconButton(
-                tooltip: 'Delete',
-                visualDensity: VisualDensity.compact,
-                icon: Icon(Icons.delete_outline, size: 20, color: scheme.error),
-                onPressed: onDelete,
               ),
             ],
           ),

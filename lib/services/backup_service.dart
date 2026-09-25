@@ -142,6 +142,8 @@ class BackupService {
     'userCategorized',
     // Appended last so older column positions are unchanged.
     'pairId',
+    // Joined with " | "; normalizeTags keeps `|` out of any one tag.
+    'tags',
   ];
 
   /// Quote-escapes [v]; a leading formula trigger (`= + - @`, per OWASP)
@@ -239,6 +241,7 @@ class BackupService {
           t.balanceAfter?.toStringAsFixed(2) ?? '',
           t.userCategorized.toString(),
           _csvEscape(t.pairId ?? ''),
+          _csvEscape(t.tags.join(' | ')),
         ].join(','),
       );
     }
@@ -373,6 +376,7 @@ class BackupService {
     final myShareCol = col('myshare');
     final userCategorizedCol = col('usercategorized');
     final pairIdCol = col('pairid');
+    final tagsCol = col('tags');
 
     String cell(List<String> r, int? c) {
       final v = c == null || c >= r.length ? '' : r[c].trim();
@@ -451,6 +455,7 @@ class BackupService {
           '' => null,
           final p => p,
         },
+        tags: normalizeTags(cell(r, tagsCol).split('|')),
       );
       // CSVs written before the smsBody column existed kept the raw SMS in
       // the note, so that note has to be moved. Files with either the

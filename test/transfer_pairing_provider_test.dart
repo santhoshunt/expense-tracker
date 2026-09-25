@@ -271,7 +271,8 @@ void main() {
     expect(viaJson.transactions.where((t) => t.pairId == pairId), hasLength(2));
 
     final csv = BackupService.buildCsv(p);
-    expect(csv.split('\r\n').first, endsWith(',pairId'));
+    // pairId was appended last in its release; tags came after it.
+    expect(csv.split('\r\n').first, endsWith(',pairId,tags'));
     final rows = BackupService.txsFromCsv(csv);
     expect(rows.where((t) => t.pairId == pairId), hasLength(2));
   });

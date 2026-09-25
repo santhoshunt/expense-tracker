@@ -209,6 +209,18 @@ class TransactionTile extends StatelessWidget {
                               ),
                             ],
                           ),
+                          // Only rows with tags grow a third line.
+                          if (tx.tags.isNotEmpty)
+                            Text(
+                              tx.tags.map((t) => '# $t').join('  '),
+                              // TalkBack would read each "#" as "number".
+                              semanticsLabel: 'tags ${tx.tags.join(', ')}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: textTheme.bodySmall?.copyWith(
+                                color: accentTextColor(context),
+                              ),
+                            ),
                         ],
                       ),
                     ),

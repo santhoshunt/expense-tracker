@@ -12,19 +12,26 @@ import 'picker_sheet.dart';
 /// Create/edit dialog for a manual [Reminder]: name, day of month, optional
 /// expected amount, expense category. Shared by Settings ("Reminders") and
 /// the dashboard's Upcoming card.
+///
+/// The [name], [dayOfMonth], [amount] and [categoryId] prefill a NEW
+/// reminder (the Subscriptions list's "Make a reminder"); [existing] wins
+/// over them when editing.
 Future<void> showReminderEditor(
   BuildContext context, {
   Reminder? existing,
+  String? name,
+  int? dayOfMonth,
+  double? amount,
+  String? categoryId,
 }) async {
   final finance = context.read<FinanceProvider>();
-  final nameCtrl = TextEditingController(text: existing?.name ?? '');
+  final nameCtrl = TextEditingController(text: existing?.name ?? name ?? '');
+  final startAmount = existing == null ? amount : existing.expectedAmount;
   final amountCtrl = TextEditingController(
-    text: existing?.expectedAmount == null
-        ? ''
-        : existing!.expectedAmount!.toStringAsFixed(0),
+    text: startAmount == null ? '' : startAmount.toStringAsFixed(0),
   );
-  var day = existing?.dayOfMonth ?? 1;
-  var categoryId = existing?.categoryId ?? 'other_expense';
+  var day = (existing?.dayOfMonth ?? dayOfMonth ?? 1).clamp(1, 31);
+  var selectedCategory = existing?.categoryId ?? categoryId ?? 'other_expense';
 
   // Money-out categories only; transfer ones are tagged so "To savings"
   // reads as what it is.
@@ -46,8 +53,8 @@ Future<void> showReminderEditor(
           leading: Icon(c.icon, color: c.color, size: 20),
         ),
   ];
-  if (!categoryItems.any((i) => i.value == categoryId)) {
-    categoryId = 'other_expense';
+  if (!categoryItems.any((i) => i.value == selectedCategory)) {
+    selectedCategory = 'other_expense';
   }
 
   await showDialog(
@@ -124,10 +131,10 @@ Future<void> showReminderEditor(
                       Expanded(
                         child: AppDropdownField<String>(
                           label: 'Category',
-                          value: categoryId,
+                          value: selectedCategory,
                           items: categoryItems,
                           onChanged: (v) {
-                            if (v != null) setState(() => categoryId = v);
+                            if (v != null) setState(() => selectedCategory = v);
                           },
                         ),
                       ),
@@ -164,7 +171,7 @@ Future<void> showReminderEditor(
                             name: nameCtrl.text.trim(),
                             dayOfMonth: day,
                             expectedAmount: amount,
-                            categoryId: categoryId,
+                            categoryId: selectedCategory,
                           );
                         } else {
                           finance.updateReminder(
@@ -173,7 +180,7 @@ Future<void> showReminderEditor(
                               dayOfMonth: day,
                               expectedAmount: amount,
                               clearExpectedAmount: amount == null,
-                              categoryId: categoryId,
+                              categoryId: selectedCategory,
                             ),
                           );
                         }

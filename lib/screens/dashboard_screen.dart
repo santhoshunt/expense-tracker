@@ -14,6 +14,7 @@ import '../services/monthly_recap.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
 import '../services/spend_comparison.dart';
+import '../services/subscriptions.dart';
 import '../utils/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
@@ -31,6 +32,7 @@ import '../widgets/motion.dart';
 import '../widgets/category_donut_chart.dart';
 import '../widgets/monthly_bar_chart.dart';
 import '../widgets/monthly_recap_card.dart';
+import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/spend_comparison_cards.dart';
 import '../widgets/transaction_tile.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
@@ -222,55 +224,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   /// Long-press on a Top-merchants row: give the payee a readable name.
-  /// Parsed identities can be a VPA fragment or an FD reference ("Fd No"),
-  /// and the alias follows the identity into Upcoming and search too.
-  Future<void> _renameMerchant(
-    BuildContext context,
-    FinanceProvider finance,
-    MerchantSpend m,
-  ) async {
-    final identity = m.key.substring(m.key.indexOf('|') + 1);
-    final existing = finance.merchantAlias(identity);
-    final ctrl = TextEditingController(text: m.label);
-    final result = await showDialog<String?>(
-      context: context,
-      builder: (ctx) => DisposeScope(
-        disposables: [ctrl],
-        child: AlertDialog(
-          title: const Text('Rename merchant'),
-          content: TextField(
-            controller: ctrl,
-            autofocus: true,
-            textCapitalization: TextCapitalization.words,
-            decoration: InputDecoration(
-              labelText: 'Display name',
-              helperText: 'Detected as "$identity"',
-              helperMaxLines: 2,
-            ),
-            onSubmitted: (v) => Navigator.pop(ctx, v),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            if (existing != null)
-              TextButton(
-                // Empty string = clear the alias (distinct from Cancel's null).
-                onPressed: () => Navigator.pop(ctx, ''),
-                child: const Text('Reset'),
-              ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text),
-              child: const Text('Save'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (result == null) return;
-    await finance.setMerchantAlias(identity, result);
-  }
+  Future<void> _renameMerchant(BuildContext context, MerchantSpend m) =>
+      showRenameMerchantDialog(
+        context,
+        identity: m.key.substring(m.key.indexOf('|') + 1),
+        currentLabel: m.label,
+      );
 
   /// The budget that caps exactly this one category (include mode, single
   /// id), if the user made one — the category row's long-press edits it
@@ -963,7 +922,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             m.key.substring(m.key.indexOf('|') + 1),
                             _month,
                           ),
-                    onLongPress: () => _renameMerchant(context, finance, m),
+                    onLongPress: () => _renameMerchant(context, m),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 6),
                       child: Row(
@@ -1014,6 +973,84 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
       ],
+      // Regular payments at a glance; the list lives in the Cockpit. Not
+      // month-scoped (it reads the last year), so it shows in both views.
+      Builder(
+        key: const ValueKey('presence-subscriptions'),
+        builder: (context) {
+          context.select<SettingsProvider, String>(
+            (s) => hiddenListKey(s.hiddenUpcoming),
+          );
+          final subs = cachedSubscriptions(
+            finance,
+            context.read<SettingsProvider>().hiddenUpcoming,
+          );
+          final n = subs.active.length;
+          return AnimatedPresence(
+            visible: n > 0,
+            child: n == 0
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: 24),
+                    child: Card(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(AppRadius.card),
+                        onTap: () => goCockpitSubscriptions(context),
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.autorenew,
+                                size: 20,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Subscriptions',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.titleSmall,
+                                    ),
+                                    Text(
+                                      '$n regular '
+                                      '${n == 1 ? 'payment' : 'payments'}',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    '${fmtMoney(subs.monthlyTotal)} a month',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Icon(
+                                Icons.chevron_right,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+          );
+        },
+      ),
       // Spending per parent group (Needs/Wants/…). Grouped transfer
       // outflows are included in their group's sum; "Other" collects
       // ungrouped categories (ungrouped transfers stay out of it).

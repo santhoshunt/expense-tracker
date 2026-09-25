@@ -153,11 +153,22 @@ void main() {
     await tester.pageBack();
     await tester.pumpAndSettle();
 
-    // A one-tab group: its page has no tab bar.
+    // Organise now holds Categories and Tags: the tab bar opens on the
+    // requested one, with its add button.
     AppNav.instance.openCockpit(home, kCockpitTabCategories);
     await tester.pumpAndSettle();
     expect(find.text('Organise'), findsOneWidget);
-    expect(find.byType(TabBar), findsNothing);
+    expect(selectedTab(tester), 'Categories');
     expect(find.text('New category'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+
+    AppNav.instance.openCockpit(home, kCockpitTabSubscriptions);
+    await tester.pumpAndSettle();
+    expect(find.text('Plan'), findsOneWidget);
+    expect(selectedTab(tester), 'Subscriptions');
+    // Nothing is added by hand there, so no add button.
+    expect(find.text('New reminder'), findsNothing);
+    expect(find.text('New budget'), findsNothing);
   });
 }
