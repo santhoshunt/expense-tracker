@@ -34,6 +34,15 @@ class FakeNotifications implements NotificationService {
   }) async {
     shown.add((id, title, body));
   }
+
+  @override
+  Future<String?> launchPayload() async => null;
+
+  @override
+  Future<void> scheduleRecap(DateTime when, String monthName) async {}
+
+  @override
+  Future<void> cancelRecap() async {}
 }
 
 void main() {

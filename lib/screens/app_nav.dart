@@ -30,6 +30,9 @@ class AppNav {
   Object? _accountsOwner;
   void Function(AccountType? type)? _showAccountType;
 
+  Object? _dashboardOwner;
+  VoidCallback? _showOverview;
+
   void attachHome(
     Object owner, {
     required void Function(int tab) setTab,
@@ -65,6 +68,21 @@ class AppNav {
     _accountsOwner = null;
     _showAccountType = null;
   }
+
+  void attachDashboard(Object owner, {required VoidCallback showOverview}) {
+    _dashboardOwner = owner;
+    _showOverview = showOverview;
+  }
+
+  void detachDashboard(Object owner) {
+    if (_dashboardOwner != owner) return;
+    _dashboardOwner = null;
+    _showOverview = null;
+  }
+
+  /// The Dashboard's Overview at its top, where the monthly recap sits.
+  /// Leaves open routes alone: callers switch the home tab themselves.
+  void showOverview() => _showOverview?.call();
 
   void _toRoot(BuildContext context) =>
       Navigator.of(context).popUntil((r) => r.isFirst);

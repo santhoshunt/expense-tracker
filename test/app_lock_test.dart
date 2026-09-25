@@ -106,6 +106,7 @@ void main() {
       final (lock, _) = await pumpGate(tester, enabled: false);
       expect(find.text('CONTENT'), findsOneWidget);
       expect(lock.attempts, 0);
+      expect(appLocked.value, isFalse, reason: 'launch actions may run');
     });
 
     testWidgets(
@@ -126,12 +127,14 @@ void main() {
     testWidgets('retry via the Unlock button', (tester) async {
       final (lock, _) = await pumpGate(tester, enabled: true);
       expect(find.text('CONTENT'), findsNothing);
+      expect(appLocked.value, isTrue);
 
       lock.result = true;
       await tester.tap(find.text('Unlock'));
       await tester.pumpAndSettle();
       expect(find.text('CONTENT'), findsOneWidget);
       expect(lock.attempts, 2);
+      expect(appLocked.value, isFalse);
     });
 
     testWidgets('a re-lock covers popups over the page and unlocking '
@@ -174,6 +177,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Unlock'), findsOneWidget);
       expect(find.text('POPUP'), findsNothing);
+      expect(appLocked.value, isTrue, reason: 'the re-lock is announced');
 
       // Unlocking brings back the same page with the popup still open.
       lock.result = true;
@@ -181,6 +185,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('POPUP'), findsOneWidget);
       expect(find.text('Unlock'), findsNothing);
+      expect(appLocked.value, isFalse);
     });
 
     testWidgets('waits for settings to load before deciding', (tester) async {
