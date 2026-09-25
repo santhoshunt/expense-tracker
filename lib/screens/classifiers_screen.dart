@@ -9,6 +9,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/sms_parser.dart';
+import '../services/subscriptions.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
@@ -35,6 +36,8 @@ const int kCockpitTabTransactions = 2;
 const int kCockpitTabCategories = 3;
 const int kCockpitTabBudgets = 4;
 const int kCockpitTabReminders = 5;
+const int kCockpitTabSubscriptions = 6;
+const int kCockpitTabTags = 7;
 
 /// The Cockpit's three groups, each one page holding the tabs in [tabs]
 /// (kCockpitTab* ids, in tab order). Six tabs on one bar were too many to
@@ -45,12 +48,14 @@ enum CockpitGroup {
     kCockpitTabImport,
     kCockpitTabTransactions,
   ]),
-  organise('Organise', 'Categories and groups', Icons.category_outlined, [
+  organise('Organise', 'Categories, groups and tags', Icons.category_outlined, [
     kCockpitTabCategories,
+    kCockpitTabTags,
   ]),
-  plan('Plan', 'Budgets and reminders', Icons.track_changes, [
+  plan('Plan', 'Budgets, reminders and subscriptions', Icons.track_changes, [
     kCockpitTabBudgets,
     kCockpitTabReminders,
+    kCockpitTabSubscriptions,
   ]);
 
   const CockpitGroup(this.title, this.gist, this.icon, this.tabs);
@@ -75,6 +80,8 @@ const Map<int, String> _kCockpitTabLabels = {
   kCockpitTabCategories: 'Categories',
   kCockpitTabBudgets: 'Budgets',
   kCockpitTabReminders: 'Reminders',
+  kCockpitTabSubscriptions: 'Subscriptions',
+  kCockpitTabTags: 'Tags',
 };
 
 /// The Cockpit: everything that steers the app — rules, import checks, the
@@ -148,6 +155,15 @@ class _CockpitHub extends StatelessWidget {
     final ownRules = finance.rules
         .where((r) => !r.isBuiltIn && !pairTwins.contains(r.id))
         .length;
+    // What the Subscriptions tab lists as still charging. Selected by
+    // content: the getter returns a fresh set on every call.
+    context.select<SettingsProvider, String>(
+      (s) => hiddenListKey(s.hiddenUpcoming),
+    );
+    final subscriptions = cachedSubscriptions(
+      finance,
+      context.read<SettingsProvider>().hiddenUpcoming,
+    ).active.length;
     final counts = {
       CockpitGroup.classify: [
         _count(ownRules, 'rule', 'rules'),
@@ -160,11 +176,13 @@ class _CockpitHub extends StatelessWidget {
           'category',
           'categories',
         ),
+        _count(finance.allTags.length, 'tag', 'tags'),
       ],
       CockpitGroup.plan: [
         if (cap > 0) 'Monthly cap set',
         _count(finance.budgets.length, 'budget', 'budgets'),
         _count(finance.reminders.length, 'reminder', 'reminders'),
+        _count(subscriptions, 'subscription', 'subscriptions'),
         if (over > 0) '$over over',
       ],
     };
@@ -290,6 +308,8 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
     kCockpitTabTransactions => _TransactionsTab(),
     kCockpitTabCategories => const CategoriesTab(),
     kCockpitTabBudgets => const BudgetsTab(),
+    kCockpitTabSubscriptions => const SubscriptionsTab(),
+    kCockpitTabTags => const TagsTab(),
     _ => const RemindersTab(),
   };
 

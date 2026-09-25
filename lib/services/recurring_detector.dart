@@ -31,6 +31,10 @@ class RecurringHit {
   /// Predicted next occurrence: [lastDate] + [intervalDays].
   final DateTime nextDue;
 
+  /// Every occurrence the pattern is built from, one per day, oldest first
+  /// — what a price rise is read from.
+  final List<({DateTime date, double amount})> history;
+
   const RecurringHit({
     required this.key,
     required this.label,
@@ -40,6 +44,7 @@ class RecurringHit {
     required this.lastDate,
     required this.intervalDays,
     required this.nextDue,
+    this.history = const [],
   });
 
   /// Calendar days from [now] to [nextDue]; negative = overdue.
@@ -87,19 +92,31 @@ String? merchantIdentityOf(Tx t) {
 /// chosen display name; null when the payee has no alias.
 typedef MerchantAliasLookup = String? Function(String identity);
 
-/// Scans [confirmed] (any order) for monthly patterns as of [now].
-///
-/// Qualifies a group when, over the last 12 months and after collapsing
-/// same-day repeats: ≥3 occurrences, every consecutive gap 20–40 days, and
-/// the median gap 25–35 days. Returned hits are limited to those whose
-/// predicted date is within 14 days ahead or 7 days past (older misses mean
-/// the pattern likely ended), sorted soonest first.
+/// Scans [confirmed] (any order) for monthly patterns as of [now], limited
+/// to those whose predicted date is within 14 days ahead or 7 days past
+/// (older misses mean the pattern likely ended), sorted soonest first. The
+/// Upcoming card and the reminder monitor read this.
 List<RecurringHit> detectRecurring(
   List<Tx> confirmed, {
   required DateTime now,
   MerchantAliasLookup? alias,
+}) => [
+  for (final h in detectRecurringPatterns(confirmed, now: now, alias: alias))
+    if (h.daysUntil(now) <= 14 && h.daysUntil(now) >= -7) h,
+];
+
+/// Every monthly pattern in [confirmed] as of [now], whatever its predicted
+/// date — the Subscriptions list also shows ones that stopped. Sorted by
+/// predicted date, soonest first.
+///
+/// Qualifies a group when, over the last 12 months and after collapsing
+/// same-day repeats: ≥3 occurrences, every consecutive gap 20–40 days, and
+/// the median gap 25–35 days.
+List<RecurringHit> detectRecurringPatterns(
+  List<Tx> confirmed, {
+  required DateTime now,
+  MerchantAliasLookup? alias,
 }) {
-  final today = DateTime(now.year, now.month, now.day);
   final horizon = DateTime(now.year - 1, now.month, now.day);
 
   final groups = <String, List<Tx>>{};
@@ -133,8 +150,6 @@ List<RecurringHit> detectRecurring(
     final latest = ordered.last;
     final lastDay = days.last;
     final nextDue = lastDay.add(Duration(days: interval));
-    final daysUntil = nextDue.difference(today).inDays;
-    if (daysUntil > 14 || daysUntil < -7) return;
 
     final recentAmounts = [
       for (final t in ordered.skip(
@@ -152,11 +167,20 @@ List<RecurringHit> detectRecurring(
         lastDate: lastDay,
         intervalDays: interval,
         nextDue: nextDue,
+        history: [
+          for (final (i, t) in ordered.indexed)
+            (date: days[i], amount: t.amount),
+        ],
       ),
     );
   });
 
-  hits.sort((a, b) => a.nextDue.compareTo(b.nextDue));
+  // Key as tie-break: sorting every pattern (not just the in-window ones)
+  // must not reshuffle same-day hits between runs.
+  hits.sort((a, b) {
+    final byDate = a.nextDue.compareTo(b.nextDue);
+    return byDate != 0 ? byDate : a.key.compareTo(b.key);
+  });
   return hits;
 }
 

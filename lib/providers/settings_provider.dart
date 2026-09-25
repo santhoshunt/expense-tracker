@@ -352,6 +352,17 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  /// Brings back one payment hidden via [hideUpcoming] (the Subscriptions
+  /// list's Unhide, and Undo after a hide).
+  Future<void> unhideUpcoming(String key) async {
+    if (!_upcomingHidden.remove(key)) return;
+    notifyListeners();
+    await _persistPref(
+      _kUpcomingHidden,
+      (p) => p.setStringList(_kUpcomingHidden, _upcomingHidden.toList()),
+    );
+  }
+
   Future<void> toggleSection(String id) async {
     if (!_collapsedSections.add(id)) _collapsedSections.remove(id);
     notifyListeners();

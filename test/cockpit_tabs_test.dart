@@ -78,14 +78,15 @@ void main() {
       ),
       (
         'Organise',
-        'Categories and groups',
-        '${customCategories.length + kCategories.length} categories',
+        'Categories, groups and tags',
+        '${customCategories.length + kCategories.length} categories · '
+            '0 tags',
         'New category',
       ),
       (
         'Plan',
-        'Budgets and reminders',
-        '1 budget · 1 reminder · 1 over',
+        'Budgets, reminders and subscriptions',
+        '1 budget · 1 reminder · 0 subscriptions · 1 over',
         'Budgets',
       ),
     ];

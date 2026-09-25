@@ -449,6 +449,10 @@ class Tx {
   /// Null for the ordinary single-row case.
   final String? pairId;
 
+  /// User labels that cut across categories ("Goa trip", "Reimbursable"),
+  /// already normalized by [normalizeTags]. Empty for most rows.
+  final List<String> tags;
+
   const Tx({
     required this.id,
     required this.type,
@@ -467,6 +471,7 @@ class Tx {
     this.balanceAfter,
     this.myShare,
     this.pairId,
+    this.tags = const [],
   });
 
   TxCategory get category => categoryById(categoryId, fallbackType: type);
@@ -512,6 +517,7 @@ class Tx {
       balanceAfter: balanceAfter,
       myShare: myShare,
       pairId: pairId,
+      tags: tags,
     );
   }
 
@@ -536,6 +542,7 @@ class Tx {
     bool clearMyShare = false,
     String? pairId,
     bool clearPairId = false,
+    List<String>? tags,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -557,6 +564,7 @@ class Tx {
         : (balanceAfter ?? this.balanceAfter),
     myShare: clearMyShare ? null : (myShare ?? this.myShare),
     pairId: clearPairId ? null : (pairId ?? this.pairId),
+    tags: tags == null ? this.tags : normalizeTags(tags),
   );
 
   Map<String, dynamic> toJson() => {
@@ -577,6 +585,7 @@ class Tx {
     if (balanceAfter != null) 'balanceAfter': balanceAfter,
     if (myShare != null) 'myShare': myShare,
     if (pairId != null) 'pairId': pairId,
+    if (tags.isNotEmpty) 'tags': tags,
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) => Tx(
@@ -597,8 +606,43 @@ class Tx {
     balanceAfter: (json['balanceAfter'] as num?)?.toDouble(),
     myShare: (json['myShare'] as num?)?.toDouble(),
     pairId: json['pairId'] as String?,
+    // Tolerant: a hand-edited or foreign backup may hold anything here.
+    tags: switch (json['tags']) {
+      final List<dynamic> list => normalizeTags(list.whereType<String>()),
+      _ => const [],
+    },
   );
 }
+
+/// Most tags one transaction can carry.
+const int kMaxTagsPerTx = 5;
+
+/// Longest tag, in characters.
+const int kMaxTagLength = 30;
+
+/// Tags as stored: whitespace collapsed, `|` removed (the CSV separator),
+/// blanks dropped, each capped at [kMaxTagLength], duplicates dropped
+/// ignoring case (the first spelling wins), at most [kMaxTagsPerTx].
+List<String> normalizeTags(Iterable<String> raw) {
+  final out = <String>[];
+  final seen = <String>{};
+  for (final r in raw) {
+    var t = r.replaceAll('|', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (t.isEmpty) continue;
+    // By grapheme, as the text field counts: cutting UTF-16 units could
+    // split an emoji and store a lone surrogate.
+    if (t.characters.length > kMaxTagLength) {
+      t = t.characters.take(kMaxTagLength).toString().trim();
+    }
+    if (!seen.add(tagKey(t))) continue;
+    out.add(t);
+    if (out.length == kMaxTagsPerTx) break;
+  }
+  return List.unmodifiable(out);
+}
+
+/// How tags are matched: "goa trip" and "Goa Trip" are one tag.
+String tagKey(String tag) => tag.toLowerCase();
 
 /// Special classifier target: a matching SMS is confirmed spam and is never
 /// imported at all.

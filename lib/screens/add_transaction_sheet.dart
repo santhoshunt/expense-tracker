@@ -6,6 +6,7 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/format.dart';
 import '../widgets/picker_sheet.dart';
+import '../widgets/tag_input.dart';
 import '../widgets/undo_snackbar.dart';
 
 Future<void> showAddTransactionSheet(BuildContext context, {Tx? existing}) {
@@ -59,6 +60,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   bool _isSplit = false;
   late final TextEditingController _shareCtrl;
 
+  /// Tags chosen so far, and the field's not-yet-added text.
+  late List<String> _tags;
+  final _tagCtrl = TextEditingController();
+
   bool get isEditing => widget.existing != null;
 
   /// Re-entrancy latch: a save on a large ledger runs a multi-MB encode on
@@ -80,6 +85,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _senderCtrl.text,
     _isSplit.toString(),
     _shareCtrl.text,
+    pendingTagsOf(_tags, _tagCtrl).join('|'),
     _accountId ?? '',
     _date.toIso8601String(),
   ].join('|');
@@ -103,6 +109,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _noteCtrl = TextEditingController(text: e?.note ?? '');
     _senderCtrl = TextEditingController(text: e?.sender ?? '');
     _isSplit = e?.myShare != null;
+    _tags = [...?e?.tags];
     _shareCtrl = TextEditingController(
       text: e?.myShare == null ? '' : e!.myShare!.toStringAsFixed(2),
     );
@@ -123,6 +130,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _noteCtrl.dispose();
     _senderCtrl.dispose();
     _shareCtrl.dispose();
+    _tagCtrl.dispose();
     super.dispose();
   }
 
@@ -190,6 +198,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         : null;
     final finance = context.read<FinanceProvider>();
     final navigator = Navigator.of(context);
+    // Text typed in the tag field but not yet added is saved too.
+    final tags = pendingTagsOf(_tags, _tagCtrl);
     setState(() => _busy = true);
 
     try {
@@ -204,6 +214,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             sender: _senderCtrl.text.trim(),
             myShare: myShare,
             clearMyShare: myShare == null,
+            tags: tags,
           ),
         );
         if (_accountId != null && _accountId != _initialAccountId) {
@@ -218,6 +229,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           date: _date,
           sender: _senderCtrl.text.trim(),
           myShare: myShare,
+          tags: tags,
         );
         if (_accountId != null) await finance.assignAccount(id, _accountId!);
       }
@@ -505,6 +517,16 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   decoration: const InputDecoration(
                     labelText: 'Note (optional)',
                   ),
+                ),
+                const SizedBox(height: 16),
+                TagInput(
+                  tags: _tags,
+                  controller: _tagCtrl,
+                  suggestions: [
+                    for (final u in context.read<FinanceProvider>().allTags)
+                      u.tag,
+                  ],
+                  onChanged: (t) => setState(() => _tags = t),
                 ),
                 const SizedBox(height: 16),
                 // The raw alert an SMS row was imported from — read-only so the
