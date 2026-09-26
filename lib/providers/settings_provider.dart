@@ -73,6 +73,10 @@ class SettingsProvider extends ChangeNotifier {
   static const _kCategoryOrder = 'category_order_v1';
   static const _kCategorySort = 'category_sort_v1';
   static const _kPalette = 'palette_v1';
+  static const _kUpdateOnLaunch = 'update_check_on_launch_v1';
+  static const _kUpdateLastCheck = 'update_last_check_v1';
+  static const _kUpdateDismissed = 'update_dismissed_tag_v1';
+  static const _kUpdateInstalling = 'update_installing_tag_v1';
 
   ThemeMode _mode = ThemeMode.dark; // the app's native look
   Color _accent = FigmaPalette.primary;
@@ -92,6 +96,10 @@ class SettingsProvider extends ChangeNotifier {
   bool _tiltGlow = true;
   CategoryOrder _categoryOrder = CategoryOrder.mostUsed;
   CategorySort _categorySort = CategorySort.biggestChange;
+  bool _updateOnLaunch = true;
+  DateTime? _updateLastCheck;
+  String? _updateDismissedTag;
+  String? _updateInstallingTag;
   bool _loaded = false;
 
   ThemeMode get mode => _mode;
@@ -142,8 +150,20 @@ class SettingsProvider extends ChangeNotifier {
   /// Ordering of the "Categories vs usual" card's rows.
   CategorySort get categorySort => _categorySort;
 
-  bool get loaded => _loaded;
+  /// Look for a newer release once a day on launch. Per device, like the
+  /// rest of the update state: backups leave it out.
+  bool get updateOnLaunch => _updateOnLaunch;
+  DateTime? get updateLastCheck => _updateLastCheck;
 
+  /// The newest release the user answered "Not now" to; the banner stays
+  /// away until a newer one appears.
+  String? get updateDismissedTag => _updateDismissedTag;
+
+  /// The release an install was started for, so the next launch on that
+  /// version can say it worked.
+  String? get updateInstallingTag => _updateInstallingTag;
+
+  bool get loaded => _loaded;
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     // Every read is individually guarded: a wrongly-typed stored value
@@ -226,8 +246,64 @@ class SettingsProvider extends ChangeNotifier {
           AppPalette.standard,
       AppPalette.standard,
     );
+    _updateOnLaunch = tryRead(
+      () => prefs.getBool(_kUpdateOnLaunch) ?? true,
+      true,
+    );
+    _updateLastCheck = tryRead(() {
+      final ms = prefs.getInt(_kUpdateLastCheck);
+      return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
+    }, null);
+    _updateDismissedTag = tryRead(
+      () => prefs.getString(_kUpdateDismissed),
+      null,
+    );
+    _updateInstallingTag = tryRead(
+      () => prefs.getString(_kUpdateInstalling),
+      null,
+    );
     _loaded = true;
     notifyListeners();
+  }
+
+  Future<void> setUpdateOnLaunch(bool value) async {
+    if (value == _updateOnLaunch) return;
+    _updateOnLaunch = value;
+    notifyListeners();
+    await _persistPref(
+      _kUpdateOnLaunch,
+      (p) => p.setBool(_kUpdateOnLaunch, value),
+    );
+  }
+
+  /// Not a listened-for change: only the launch throttle reads it.
+  Future<void> markUpdateChecked(DateTime when) async {
+    _updateLastCheck = when;
+    await _persistPref(
+      _kUpdateLastCheck,
+      (p) => p.setInt(_kUpdateLastCheck, when.millisecondsSinceEpoch),
+    );
+  }
+
+  Future<void> dismissUpdate(String tag) async {
+    if (tag == _updateDismissedTag) return;
+    _updateDismissedTag = tag;
+    notifyListeners();
+    await _persistPref(
+      _kUpdateDismissed,
+      (p) => p.setString(_kUpdateDismissed, tag),
+    );
+  }
+
+  /// [tag] null clears it.
+  Future<void> setUpdateInstallingTag(String? tag) async {
+    _updateInstallingTag = tag;
+    await _persistPref(
+      _kUpdateInstalling,
+      (p) => tag == null
+          ? p.remove(_kUpdateInstalling)
+          : p.setString(_kUpdateInstalling, tag),
+    );
   }
 
   Future<void> dismissPairSuggestion(String key) async {

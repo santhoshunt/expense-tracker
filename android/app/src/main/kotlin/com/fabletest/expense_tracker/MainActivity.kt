@@ -22,6 +22,9 @@ class MainActivity : FlutterFragmentActivity() {
 
         /** Native to Dart: shortcut and tile actions (see QuickActions). */
         private const val LAUNCH_CHANNEL = "expense_tracker/launch"
+
+        /** Dart to native: verify and install a downloaded update. */
+        private const val UPDATE_CHANNEL = "expense_tracker/update"
         private const val PERMISSION_REQUEST = 7301
 
         /** Rows read per provider query; pages continue until the window is
@@ -37,6 +40,7 @@ class MainActivity : FlutterFragmentActivity() {
     /** The cold-start action, held until Dart asks for it once. */
     private var pendingLaunchAction: String? = null
     private var launchChannel: MethodChannel? = null
+    private var updateInstaller: UpdateInstaller? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Read before super: the engine may ask for it as soon as it starts.
@@ -81,6 +85,14 @@ class MainActivity : FlutterFragmentActivity() {
             }
         }
         QuickActions.publishShortcuts(applicationContext)
+        val updateChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            UPDATE_CHANNEL
+        )
+        updateInstaller?.dispose()
+        updateInstaller = UpdateInstaller(this, updateChannel).also { installer ->
+            updateChannel.setMethodCallHandler(installer::handle)
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -149,6 +161,12 @@ class MainActivity : FlutterFragmentActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    override fun onDestroy() {
+        updateInstaller?.dispose()
+        updateInstaller = null
+        super.onDestroy()
     }
 
     override fun onResume() {

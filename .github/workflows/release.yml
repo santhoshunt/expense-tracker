@@ -4,19 +4,26 @@ on:
   push:
     tags: ['v*']
 
+# The in-app updater installs whatever this workflow publishes, signed with
+# the release key, so the key and the write token are kept away from code
+# the build runs: actions are pinned to commits, the tests run before the
+# key exists, the key is deleted right after the build, and only the
+# publish job (which runs no project code) can write to the repo.
 permissions:
-  contents: write # create the release and upload assets
+  contents: read
 
 jobs:
-  build-and-release:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '17' # AGP 9 needs JDK 17+; matches the local Zulu 21/17 setup
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: '3.44.1'
           channel: stable
@@ -34,6 +41,9 @@ jobs:
           kotlin.daemon.jvmargs=-Xmx2G
           EOF
 
+      - run: flutter pub get
+      - run: flutter test # never ship a red build; runs before the key exists
+
       - name: Restore release keystore
         run: printf '%s' "$KEYSTORE_B64" | base64 --decode > android/app/expense_tracker.jks
         env:
@@ -50,23 +60,40 @@ jobs:
           keyAlias=expense_tracker
           EOF
 
-      - run: flutter pub get
-      - run: flutter test # never ship a red build
-
-      # One universal APK: matches the hand-published v1.0.0 asset and keeps
-      # the in-app "Check for updates" flow (release page → single download).
+      # One universal APK: the in-app updater downloads this single asset.
       - run: flutter build apk --release
+
+      - name: Remove the release key
+        if: always()
+        run: rm -f android/app/expense_tracker.jks android/key.properties
 
       # The gradle script silently falls back to debug signing when
       # key.properties is unusable (e.g. a typo'd secret). Fail loudly instead
       # of publishing a debug-signed "release". APKs carry v2+ signatures that
-      # keytool cannot read, so this must be apksigner.
+      # keytool cannot read, so this must be apksigner. The certificate's
+      # digest is pinned, not its name: the in-app updater installs only an
+      # APK signed with the installed app's key, and this is that key.
       - name: Verify release signature
         run: |
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          "$BT/apksigner" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -q 'CN=Expense Tracker'
+          "$BT/apksigner" verify --print-certs build/app/outputs/flutter-apk/app-release.apk | grep -q 'SHA-256 digest: bc3f14568ae909f50593f40cf3d84960372b1c3bbf8cd5176a864512b486e8d8'
 
-      - uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          files: build/app/outputs/flutter-apk/app-release.apk
+          name: apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload assets
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: apk
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          files: app-release.apk
           generate_release_notes: true
