@@ -15,8 +15,8 @@ import 'package:expense_tracker/widgets/monthly_recap_card.dart';
 
 import 'dashboard_test_utils.dart';
 
-/// The Overview's month card: last month's recap for the first week, this
-/// month's pace after, and where it sits on the page.
+/// The month cards: last month's recap on the Month view for the first
+/// week, this month's pace on Trends after, and where the views put them.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -33,10 +33,12 @@ void main() {
   final lastName = DateFormat('MMMM').format(lastMonth);
   final thisName = DateFormat('MMMM').format(DateTime(now.year, now.month));
 
-  /// Pumps the dashboard as if today were day [day] of this month.
+  /// Pumps the dashboard as if today were day [day] of this month, on
+  /// [view].
   Future<void> pump(
     WidgetTester tester, {
     required int day,
+    String view = 'Month',
     bool lastMonthData = true,
     void Function(String id, DateTime month)? onViewCategory,
   }) async {
@@ -81,6 +83,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    if (view != 'Today') await openDashboardView(tester, view);
   }
 
   Finder inRecap(Finder f) =>
@@ -96,6 +99,20 @@ void main() {
     expect(inRecap(find.text('Income')), findsNothing);
     expect(inRecap(find.text(fmtMoney(3000))), findsNothing);
     expect(inRecap(find.byIcon(Icons.close)), findsNothing);
+
+    // Under another month's totals it would read as that month's: browsing
+    // back puts it away, coming back brings it back.
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MonthlyRecapCard), findsNothing);
+    await tester.tap(find.byTooltip('Next month'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MonthlyRecapCard), findsOneWidget);
+
+    // Year view drops it with the other monthly sections.
+    await tester.tap(find.text('Year'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MonthlyRecapCard), findsNothing);
   });
 
   testWidgets('no recap without last month data', (tester) async {
@@ -103,10 +120,16 @@ void main() {
     expect(find.byType(MonthlyRecapCard), findsNothing);
   });
 
-  testWidgets('after the first week, this month so far against last', (
+  testWidgets('the recap week keeps the pace off Trends', (tester) async {
+    await pump(tester, day: 3, view: 'Trends');
+    expect(find.byType(MonthPaceCard), findsNothing);
+    expect(find.byType(MonthlyRecapCard), findsNothing);
+  });
+
+  testWidgets('after the first week, Trends leads with this month so far', (
     tester,
   ) async {
-    await pump(tester, day: 20);
+    await pump(tester, day: 20, view: 'Trends');
     expect(find.byType(MonthlyRecapCard), findsNothing);
     final pace = find.byType(MonthPaceCard);
     expect(pace, findsOneWidget);
@@ -115,6 +138,30 @@ void main() {
     expect(inPace(find.textContaining('1 to 20')), findsOneWidget);
     expect(inPace(find.text(fmtMoney(250))), findsOneWidget);
     expect(inPace(find.text(fmtMoney(400))), findsOneWidget);
+    // First on the page, above last month's comparison.
+    expect(
+      tester.getTopLeft(pace).dy,
+      lessThan(tester.getTopLeft(find.text('This month vs last month')).dy),
+    );
+
+    // It is about today's month: browsing back puts it away, and coming
+    // back brings it back.
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MonthPaceCard), findsNothing);
+    await tester.tap(find.byTooltip('Next month'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MonthPaceCard), findsOneWidget);
+
+    await tester.tap(find.text('Year'));
+    await tester.pumpAndSettle();
+    expect(find.byType(MonthPaceCard), findsNothing, reason: 'Year view');
+  });
+
+  testWidgets('the Month view has no pace card', (tester) async {
+    await pump(tester, day: 20);
+    expect(find.byType(MonthPaceCard), findsNothing);
+    expect(find.byType(MonthlyRecapCard), findsNothing);
   });
 
   testWidgets('a long budget name wraps instead of overflowing', (
@@ -151,6 +198,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Month');
     expect(
       inRecap(find.textContaining('over by ${fmtMoney(300)}')),
       findsOneWidget,
@@ -177,19 +225,18 @@ void main() {
     expect(month, lastMonth);
   });
 
-  testWidgets('the month leads: selector, then the month card, balances '
-      'lower down', (tester) async {
-    await pump(tester, day: 3);
+  testWidgets('Today leads with the balance; the recap sits on Month under '
+      'the selector', (tester) async {
+    await pump(tester, day: 3, view: 'Today');
     double top(Finder f) => tester.getTopLeft(f).dy;
-    final selector = find.byTooltip('Previous month');
-    final card = find.byType(MonthlyRecapCard);
-    expect(top(selector), lessThan(top(card)));
     final balance = find.byKey(const ValueKey('balance'));
-    await tester.scrollUntilVisible(
-      balance,
-      300,
-      scrollable: verticalScrollable(),
-    );
-    expect(top(balance), greaterThan(top(card)));
+    expect(balance, findsOneWidget);
+    expect(find.byType(MonthlyRecapCard), findsNothing);
+    expect(find.byTooltip('Previous month'), findsNothing);
+
+    await openDashboardView(tester, 'Month');
+    expect(balance, findsNothing);
+    final selector = find.byTooltip('Previous month');
+    expect(top(selector), lessThan(top(find.byType(MonthlyRecapCard))));
   });
 }

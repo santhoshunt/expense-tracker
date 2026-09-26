@@ -146,6 +146,7 @@ void main() {
         p,
         onViewTransactions: (t, _) => opened.add(t),
       );
+      await openDashboardView(tester, 'Month');
 
       await openTip(tester, 'Spent');
       expect(find.textContaining('a split bill counts only'), findsOneWidget);
@@ -172,9 +173,7 @@ void main() {
 
       await openTip(tester, 'Recent transactions');
       expect(
-        find.text(
-          'Your 5 newest confirmed transactions, whatever month is selected.',
-        ),
+        find.text('Your 5 newest confirmed transactions.'),
         findsOneWidget,
       );
     });

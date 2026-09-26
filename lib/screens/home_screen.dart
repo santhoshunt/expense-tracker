@@ -244,7 +244,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       case LaunchAction.openRecap:
         setState(() => _showTab(0));
         WidgetsBinding.instance.addPostFrameCallback(
-          (_) => AppNav.instance.showOverview(),
+          (_) => AppNav.instance.showRecap(),
         );
     }
   }

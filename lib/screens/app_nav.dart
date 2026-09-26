@@ -31,7 +31,7 @@ class AppNav {
   void Function(AccountType? type)? _showAccountType;
 
   Object? _dashboardOwner;
-  VoidCallback? _showOverview;
+  VoidCallback? _showRecap;
 
   void attachHome(
     Object owner, {
@@ -69,20 +69,21 @@ class AppNav {
     _showAccountType = null;
   }
 
-  void attachDashboard(Object owner, {required VoidCallback showOverview}) {
+  void attachDashboard(Object owner, {required VoidCallback showRecap}) {
     _dashboardOwner = owner;
-    _showOverview = showOverview;
+    _showRecap = showRecap;
   }
 
   void detachDashboard(Object owner) {
     if (_dashboardOwner != owner) return;
     _dashboardOwner = null;
-    _showOverview = null;
+    _showRecap = null;
   }
 
-  /// The Dashboard's Overview, scrolled to the month card (the recap).
-  /// Leaves open routes alone: callers switch the home tab themselves.
-  void showOverview() => _showOverview?.call();
+  /// The Dashboard's recap on the Month page, or after the recap week this
+  /// month so far on Trends, scrolled into view. Leaves open routes alone:
+  /// callers switch the home tab themselves.
+  void showRecap() => _showRecap?.call();
 
   void _toRoot(BuildContext context) =>
       Navigator.of(context).popUntil((r) => r.isFirst);

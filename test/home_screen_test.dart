@@ -211,6 +211,7 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Month');
 
     await tester.ensureVisible(find.text('Eating out'));
     await tester.pumpAndSettle();
@@ -259,6 +260,7 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Month');
     await tester.ensureVisible(find.text('Eating out'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Eating out'));
@@ -798,6 +800,7 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Month');
     final year = DateTime.now().year;
     final list = verticalScrollable();
     final monthLabel = find.text(
@@ -840,9 +843,10 @@ void main() {
     expect(find.text('Spending heatmap'), findsNothing);
 
     // Back to Month: the month-only sections return.
-    await tester.scrollUntilVisible(find.text('Month'), -300, scrollable: list);
+    final toMonth = find.text('Month view');
+    await tester.scrollUntilVisible(toMonth, -300, scrollable: list);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Month'));
+    await tester.tap(toMonth);
     await tester.pumpAndSettle();
     // Rows above the viewport count as offstage for finders even when built,
     // so bring the selector back on screen before asserting on it.

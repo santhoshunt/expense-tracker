@@ -15,7 +15,7 @@ import 'package:expense_tracker/widgets/spend_comparison_cards.dart';
 
 import 'dashboard_test_utils.dart';
 
-/// The dashboard's three sub-tabs, and the comparison cards' states.
+/// The dashboard's four sub-tabs, and the comparison cards' states.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -67,32 +67,45 @@ void main() {
       tester,
     ) async {
       await pump(tester);
-      final list = verticalScrollable();
 
-      // Overview is the landing view. It carries copies of the
-      // highest-signal sections (categories vs usual, the heatmap) so a
-      // glance there needs no tab switch — but not the rest.
+      // Today is the landing view: where things stand, no month selector,
+      // none of the month's figures.
+      final balance = find.byKey(const ValueKey('balance'));
+      expect(balance, findsOneWidget);
+      expect(find.byTooltip('Previous month'), findsNothing);
+      expect(find.text('Spent'), findsNothing);
+      // The balance leads, the newest rows follow.
+      final recent = find.text('Recent transactions');
+      await tester.scrollUntilVisible(
+        recent,
+        300,
+        scrollable: verticalScrollable(),
+      );
+      expect(
+        tester.getTopLeft(balance).dy,
+        lessThan(tester.getTopLeft(recent).dy),
+      );
+
+      await openDashboardView(tester, 'Month');
       expect(find.text('Spent'), findsOneWidget);
-      expect(find.text('This month vs last month'), findsNothing);
-      expect(find.byType(CategoryDonutChart), findsNothing);
-      await tester.scrollUntilVisible(
-        find.text('Categories vs usual'),
-        300,
-        scrollable: list,
-      );
-      expect(find.text('Categories vs usual'), findsOneWidget);
-      await tester.scrollUntilVisible(
-        find.text('Spending heatmap'),
-        300,
-        scrollable: list,
-      );
-      expect(find.text('Spending heatmap'), findsOneWidget);
+      expect(find.byKey(const ValueKey('balance')), findsNothing);
+      // Each section lives on one view: no copies of the comparisons or
+      // the heatmap here.
+      expect(find.text('Categories vs usual'), findsNothing);
+      expect(find.text('Spending heatmap'), findsNothing);
 
       await openDashboardView(tester, 'Trends');
       expect(find.text('This month vs last month'), findsOneWidget);
       expect(find.text('This month vs usual'), findsOneWidget);
       expect(find.text('Spent'), findsNothing);
       expect(find.byType(CategoryDonutChart), findsNothing);
+      // The one home of the categories comparison.
+      await tester.scrollUntilVisible(
+        find.text('Categories vs usual'),
+        300,
+        scrollable: verticalScrollable(),
+      );
+      expect(find.text('Categories vs usual'), findsOneWidget);
 
       await openDashboardView(tester, 'Breakdown');
       expect(find.byType(CategoryDonutChart), findsOneWidget);
@@ -102,11 +115,13 @@ void main() {
 
     testWidgets('a horizontal swipe steps through the views', (tester) async {
       await pump(tester);
+      await openDashboardView(tester, 'Month');
       expect(find.text('Spent'), findsOneWidget);
 
       // Fling on page content — the month selector row, present on every
-      // view. The tab labels sit on the pinned bar outside the pager now,
-      // and its buttons claim only taps, so the drag reaches the PageView.
+      // month-scoped view. The tab labels sit on the pinned bar outside the
+      // pager, and its buttons claim only taps, so the drag reaches the
+      // PageView.
       Future<void> swipe(double dx) async {
         await tester.fling(
           find.byTooltip('Previous month'),
@@ -126,14 +141,17 @@ void main() {
       await swipe(-300);
       expect(find.byType(CategoryDonutChart), findsOneWidget);
 
-      // And right goes back.
+      // And right goes back, as far as Today.
       await swipe(300);
       expect(find.text('This month vs last month'), findsOneWidget);
+      await swipe(300);
+      await swipe(300);
+      expect(find.byKey(const ValueKey('balance')), findsOneWidget);
     });
 
-    testWidgets('the month selector follows every view', (tester) async {
+    testWidgets('the month selector follows every month view', (tester) async {
       await pump(tester);
-      for (final view in ['Trends', 'Breakdown', 'Overview']) {
+      for (final view in ['Month', 'Trends', 'Breakdown']) {
         await tester.tap(find.text(view));
         await tester.pumpAndSettle();
         expect(

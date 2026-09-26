@@ -8,7 +8,7 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/monthly_recap.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
 
-/// Last month's recap: the same figures as the Overview, the change against
+/// Last month's recap: the same figures as the Month view, the change against
 /// the month before, the top categories and merchant, and budgets over.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
