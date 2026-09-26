@@ -13,7 +13,7 @@ class ReleaseOption {
   final DateTime? publishedAt;
   final int sizeBytes;
 
-  /// The release body, as GitHub wrote it (plain text / markdown).
+  /// The release body as plain text ([UpdateService.plainNotes]).
   final String notes;
   final String downloadUrl;
 
@@ -143,6 +143,35 @@ class UpdateService {
     return 0;
   }
 
+  /// GitHub's release body is Markdown ("**Full Changelog**: …", "* Fix by
+  /// @x in …"); the sheet shows plain text, so the markup goes: bold and
+  /// code marks, heading hashes, `[text](url)` down to its text, and list
+  /// markers become bullets.
+  static String plainNotes(String markdown) {
+    final lines = <String>[];
+    for (var line in markdown.replaceAll('\r\n', '\n').split('\n')) {
+      line = line.trimRight();
+      line = line.replaceFirst(RegExp(r'^\s{0,3}#{1,6}\s+'), '');
+      line = line.replaceFirstMapped(
+        RegExp(r'^(\s*)[*+-]\s+'),
+        (m) => '${m[1]}• ',
+      );
+      line = line.replaceAllMapped(
+        RegExp(r'\[([^\]]+)\]\([^)]*\)'),
+        (m) => m[1]!,
+      );
+      // Paired marks at word edges only, so FOO__BAR and a lone ** keep
+      // their text.
+      line = line.replaceAllMapped(
+        RegExp(r'(?<!\w)(\*\*|__)(?=\S)(.+?)(?<=\S)\1(?!\w)'),
+        (m) => m[2]!,
+      );
+      line = line.replaceAllMapped(RegExp(r'`([^`]*)`'), (m) => m[1]!);
+      lines.add(line);
+    }
+    return lines.join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+  }
+
   /// The releases in a GitHub `/releases` response that the app may offer,
   /// newest first. The response is data from the network, so anything that
   /// does not look exactly like this repo's own release is dropped: drafts
@@ -178,7 +207,7 @@ class UpdateService {
               ? DateTime.tryParse(published)?.toLocal()
               : null,
           sizeBytes: size,
-          notes: body is String ? body.trim() : '',
+          notes: body is String ? plainNotes(body) : '',
           downloadUrl: assetUrlFor(tag),
         ),
       );

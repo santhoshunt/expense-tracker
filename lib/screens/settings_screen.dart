@@ -1626,7 +1626,9 @@ class _AboutSectionState extends State<_AboutSection> {
               ),
             ),
             subtitle: Text(
-              'Compares with the latest GitHub release',
+              _installsInApp
+                  ? 'Lists newer releases on GitHub'
+                  : 'Compares with the latest GitHub release',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             trailing: _checking

@@ -1634,17 +1634,23 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// The undo half of edits that only rewrite row fields (bulk category,
-  /// bulk date & time, confirming a pending import): puts the captured
-  /// pre-edit copies back by id. Rows deleted in the meantime are skipped
-  /// rather than resurrected, and rows dropped as spam are re-added — the
-  /// snapshot is the user's data either way. Not suitable for account
-  /// assignment, which also rewrites account key sets.
-  Future<void> restoreEditedTransactions(List<Tx> snapshot) async {
+  /// bulk date & time, tags, confirming a pending import): puts the
+  /// captured pre-edit copies back by id. A row deleted in the meantime
+  /// stays deleted: undoing a tag edit must not bring back a transaction
+  /// removed after it. [reAddMissing] is for the Undos whose own action
+  /// removed the rows (a single delete, a spam rule's drops), which put
+  /// them back. Not suitable for account assignment, which also rewrites
+  /// account key sets.
+  Future<void> restoreEditedTransactions(
+    List<Tx> snapshot, {
+    bool reAddMissing = false,
+  }) async {
     var changed = 0;
     for (final snap in snapshot) {
       final old = _sanitizeSplit(snap);
       final i = _transactions.indexWhere((t) => t.id == old.id);
       if (i == -1) {
+        if (!reAddMissing) continue;
         _transactions.add(old);
       } else {
         _transactions[i] = old;
@@ -1652,6 +1658,9 @@ class FinanceProvider extends ChangeNotifier {
       changed++;
     }
     if (changed > 0) {
+      // A pair leg whose partner was deleted after the edit comes back with
+      // its old pairId; unlink it rather than point at a missing row.
+      _clearOrphanPairs();
       notifyListeners();
       await _persist(tx: true);
     }

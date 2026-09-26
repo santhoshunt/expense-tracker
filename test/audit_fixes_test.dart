@@ -78,7 +78,23 @@ void main() {
       }
     });
 
-    test('restore also re-adds rows deleted in the meantime', () async {
+    test('an edit Undo leaves a row deleted since then deleted', () async {
+      final p = await loaded();
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 100,
+        note: '',
+        date: DateTime(2026, 7, 3, 12),
+      );
+      final old = p.transactions.single;
+      final before = await p.setTagsForMany({old.id}, add: {'Trip'});
+      await p.deleteTransaction(old.id);
+      await p.restoreEditedTransactions(before);
+      expect(p.transactions, isEmpty, reason: 'the delete came later');
+    });
+
+    test('a delete Undo puts the row back', () async {
       final p = await loaded();
       await p.addTransaction(
         type: TxType.expense,
@@ -90,7 +106,7 @@ void main() {
       final old = p.transactions.single;
       await p.deleteTransaction(old.id);
       expect(p.transactions, isEmpty);
-      await p.restoreEditedTransactions([old]);
+      await p.restoreEditedTransactions([old], reAddMissing: true);
       expect(p.transactions.single.id, old.id);
     });
 
@@ -166,7 +182,7 @@ void main() {
       expect(applied.dropped.single.externalRef, 'A');
       expect(p.pendingTransactions.length, 1);
 
-      await p.restoreEditedTransactions(applied.dropped);
+      await p.restoreEditedTransactions(applied.dropped, reAddMissing: true);
       expect(p.pendingTransactions.length, 2);
     });
   });

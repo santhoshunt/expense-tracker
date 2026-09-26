@@ -405,7 +405,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     showUndoSnackBar(
       context,
       'Deleted ${tx.category.label} · ${fmtMoney(tx.amount)}',
-      () => finance.restoreEditedTransactions([tx, ?partner]),
+      () =>
+          finance.restoreEditedTransactions([tx, ?partner], reAddMissing: true),
       icon: Icons.delete_outline,
       tone: AppToastTone.removal,
     );

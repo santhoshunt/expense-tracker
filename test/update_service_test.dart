@@ -188,6 +188,31 @@ void main() {
     });
   });
 
+  group('plainNotes', () {
+    test("GitHub's generated notes read as plain text", () {
+      expect(
+        UpdateService.plainNotes(
+          "## What's Changed\r\n"
+          '* Fix the **toast** by @me in [#12](https://x/12)\r\n'
+          '- `Show all` lists\r\n'
+          '\r\n\r\n\r\n'
+          '**Full Changelog**: https://github.com/a/b/compare/v1...v2',
+        ),
+        "What's Changed\n"
+        '• Fix the toast by @me in #12\n'
+        '• Show all lists\n'
+        '\n'
+        'Full Changelog: https://github.com/a/b/compare/v1...v2',
+      );
+    });
+
+    test('marks inside words and unpaired ones stay', () {
+      expect(
+        UpdateService.plainNotes('Rename FOO__BAR, keep 2**3 and a - dash'),
+        'Rename FOO__BAR, keep 2**3 and a - dash',
+      );
+    });
+  });
   group('check', () {
     UpdateService service(MockClient client, {String current = '1.20.0'}) =>
         UpdateService(

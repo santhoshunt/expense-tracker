@@ -63,12 +63,28 @@ class BackupService {
   }
 
   /// The picked file's bytes, or null if the picker was cancelled.
+  ///
+  /// On Android the picker copies the chosen file into the app's cache
+  /// before handing it over, and never deletes that copy: a restored
+  /// backup would otherwise stay there as a plain-text copy of the whole
+  /// ledger. The copy goes as soon as the bytes are read.
   static Future<Uint8List?> _pick(List<String> extensions) async {
     final picked = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: extensions,
     );
-    return picked == null ? null : await picked.readAsBytes();
+    if (picked == null) return null;
+    try {
+      return await picked.readAsBytes();
+    } finally {
+      if (!kIsWeb) {
+        try {
+          await FilePicker.clearTemporaryFiles();
+        } catch (e) {
+          debugPrint('Could not clear the picker cache: $e');
+        }
+      }
+    }
   }
 
   // --- JSON ------------------------------------------------------------------

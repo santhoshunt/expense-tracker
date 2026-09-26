@@ -203,11 +203,24 @@ void main() {
       expect(partner?.pairId, pairId, reason: 'pre-unlink copy');
       expect(p.transactions.single.pairId, isNull);
 
-      await p.restoreEditedTransactions([out, partner!]);
+      await p.restoreEditedTransactions([out, partner!], reAddMissing: true);
       expect(p.transactions.where((t) => t.pairId == pairId), hasLength(2));
 
       // Unpaired rows report no partner.
       expect(await p.deleteTransaction('nope'), isNull);
+    },
+  );
+
+  test(
+    'an edit Undo after a leg was deleted leaves the other unpaired',
+    () async {
+      final p = await seeded();
+      await p.pairTransactions('out', 'in');
+      final before = await p.setTagsForMany({'out', 'in'}, add: {'Trip'});
+      await p.deleteTransaction('in');
+      await p.restoreEditedTransactions(before);
+      expect(p.transactions.single.id, 'out');
+      expect(p.transactions.single.pairId, isNull);
     },
   );
 

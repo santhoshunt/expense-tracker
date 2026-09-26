@@ -453,7 +453,10 @@ class _RulesTabState extends State<_RulesTab> {
       onAction: () {
         finance.restoreRules(before);
         if (applied.dropped.isNotEmpty) {
-          finance.restoreEditedTransactions(applied.dropped);
+          finance.restoreEditedTransactions(
+            applied.dropped,
+            reAddMissing: true,
+          );
         }
       },
     );
@@ -2032,8 +2035,10 @@ Future<void> _showRuleDialog(
                           actionLabel: dropped.isEmpty ? null : 'Restore',
                           onAction: dropped.isEmpty
                               ? null
-                              : () =>
-                                    finance.restoreEditedTransactions(dropped),
+                              : () => finance.restoreEditedTransactions(
+                                  dropped,
+                                  reAddMissing: true,
+                                ),
                         );
                       }
                     },
