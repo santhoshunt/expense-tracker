@@ -144,7 +144,47 @@ class BackupService {
     'pairId',
     // Joined with " | "; normalizeTags keeps `|` out of any one tag.
     'tags',
+    // "Name:amount" per person (":settled" appended when settled, then
+    // ":paid" when repayments had paid part of it), joined with " | ";
+    // normalizePersonName keeps both separators out of names.
+    'people',
+    'repaidBy',
   ];
+
+  /// A split's people as one CSV cell:
+  /// `Arun:1400.00 | Priya:800.00:settled | Ravi:500.00:settled:200.00`.
+  static String _peopleCell(List<SplitShare> people) => [
+    for (final p in people)
+      [
+        p.name,
+        p.amount.toStringAsFixed(2),
+        if (p.settled) 'settled',
+        if (p.settled && p.paid > 0) p.paid.toStringAsFixed(2),
+      ].join(':'),
+  ].join(' | ');
+
+  /// The reverse of [_peopleCell]. Parts without a name and a number are
+  /// skipped; range and duplicate rules are the provider sanitizer's.
+  static List<SplitShare> _parsePeopleCell(String v) {
+    final out = <SplitShare>[];
+    for (final part in v.split('|')) {
+      final bits = part.split(':').map((s) => s.trim()).toList();
+      if (bits.length < 2 || bits[0].isEmpty) continue;
+      final amount = _parseMoneyCell(bits[1]);
+      if (amount == null || !amount.isFinite) continue;
+      final settled = bits.length > 2 && bits[2].toLowerCase() == 'settled';
+      final paid = settled && bits.length > 3 ? _parseMoneyCell(bits[3]) : 0.0;
+      out.add(
+        SplitShare(
+          name: bits[0],
+          amount: amount,
+          settled: settled,
+          paid: paid ?? 0,
+        ),
+      );
+    }
+    return out;
+  }
 
   /// Quote-escapes [v]; a leading formula trigger (`= + - @`, per OWASP)
   /// additionally gets a `'` prefix — spreadsheets evaluate such cells even
@@ -242,6 +282,8 @@ class BackupService {
           t.userCategorized.toString(),
           _csvEscape(t.pairId ?? ''),
           _csvEscape(t.tags.join(' | ')),
+          _csvEscape(_peopleCell(t.people)),
+          _csvEscape(t.repaidBy ?? ''),
         ].join(','),
       );
     }
@@ -377,6 +419,8 @@ class BackupService {
     final userCategorizedCol = col('usercategorized');
     final pairIdCol = col('pairid');
     final tagsCol = col('tags');
+    final peopleCol = col('people');
+    final repaidByCol = col('repaidby');
 
     String cell(List<String> r, int? c) {
       final v = c == null || c >= r.length ? '' : r[c].trim();
@@ -456,6 +500,11 @@ class BackupService {
           final p => p,
         },
         tags: normalizeTags(cell(r, tagsCol).split('|')),
+        people: _parsePeopleCell(cell(r, peopleCol)),
+        repaidBy: switch (cell(r, repaidByCol)) {
+          '' => null,
+          final p => p,
+        },
       );
       // CSVs written before the smsBody column existed kept the raw SMS in
       // the note, so that note has to be moved. Files with either the

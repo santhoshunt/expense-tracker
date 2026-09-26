@@ -180,7 +180,31 @@ class _Derived {
   /// the filter sheet and the Tags tab read these on every rebuild.
   List<TagUse>? tagUses;
   List<TagSummary>? tagSummaries;
+
+  /// Who owes what: the People page, the Today card and every split row's
+  /// "to get back" line read these.
+  List<PersonBalance>? people;
+  Map<String, double>? billOwed;
+  List<String>? knownPeople;
 }
+
+/// One person's share on one split bill, and how much of it is still to
+/// come back after their repayments.
+typedef ShareLeft = ({Tx bill, double share, double left});
+
+/// A person's running balance over confirmed rows. Repayments pay off
+/// their oldest open shares first; [credit] is what they paid beyond
+/// everything they owe.
+typedef PersonBalance = ({
+  String name,
+  String key,
+  double owed,
+  double credit,
+  List<ShareLeft> open,
+  List<ShareLeft> settled,
+  List<Tx> repayments,
+  DateTime last,
+});
 
 /// A tag in use: its spelling, how many rows carry it (pending included)
 /// and the newest of those rows' dates.
@@ -1128,6 +1152,14 @@ class FinanceProvider extends ChangeNotifier {
     // unlinked.
     if (_sanitizeReminders()) await _persist(reminders: true);
     if (_clearOrphanPairs()) await _persist(tx: true);
+    // Also final for the split rules: older builds left shares on rows that
+    // later became income or transfers. Not when the category registry
+    // failed to load: a reset override would make a category the user
+    // un-transferred a transfer again, and clear its real splits for good.
+    final registryIntact =
+        !_loadWarnings.contains('categories') &&
+        !_loadWarnings.contains('category styles');
+    if (registryIntact && _sanitizeAllSplits()) await _persist(tx: true);
     _loaded = true;
     notifyListeners();
   }
@@ -1362,19 +1394,25 @@ class FinanceProvider extends ChangeNotifier {
     String sender = '',
     double? myShare,
     List<String> tags = const [],
+    List<SplitShare> people = const [],
+    String? repaidBy,
   }) async {
     final id = _newId();
     _transactions.add(
-      Tx(
-        id: id,
-        type: type,
-        categoryId: categoryId,
-        amount: amount,
-        note: note,
-        date: date,
-        sender: sender,
-        myShare: myShare,
-        tags: normalizeTags(tags),
+      _sanitizeSplit(
+        Tx(
+          id: id,
+          type: type,
+          categoryId: categoryId,
+          amount: amount,
+          note: note,
+          date: date,
+          sender: sender,
+          myShare: myShare,
+          tags: normalizeTags(tags),
+          people: people,
+          repaidBy: repaidBy,
+        ),
       ),
     );
     notifyListeners();
@@ -1399,9 +1437,11 @@ class FinanceProvider extends ChangeNotifier {
         old.date.year != updated.date.year ||
         old.date.month != updated.date.month ||
         old.date.day != updated.date.day;
-    _transactions[i] = updated.copyWith(
-      userCategorized: categoryChanged ? true : null,
-      clearBalanceAfter: dayChanged && updated.balanceAfter != null,
+    _transactions[i] = _sanitizeSplit(
+      updated.copyWith(
+        userCategorized: categoryChanged ? true : null,
+        clearBalanceAfter: dayChanged && updated.balanceAfter != null,
+      ),
     );
     // A pair whose leg left the transfer categories is no longer a transfer.
     if (updated.pairId != null) _clearOrphanPairs();
@@ -1497,12 +1537,16 @@ class FinanceProvider extends ChangeNotifier {
     }
 
     final pairId = 'pair_${_newId()}';
-    Tx link(Tx t, String cat) => t.copyWith(
-      pairId: pairId,
-      categoryId: cat,
-      userCategorized: true,
-      pending: false,
-      clearMyShare: true,
+    // The sanitizer drops the split's people with the share, and a
+    // repayment's payer once the row leaves Repaid to me.
+    Tx link(Tx t, String cat) => _sanitizeSplit(
+      t.copyWith(
+        pairId: pairId,
+        categoryId: cat,
+        userCategorized: true,
+        pending: false,
+        clearMyShare: true,
+      ),
     );
     _transactions[_transactions.indexWhere((t) => t.id == out.id)] = link(
       out,
@@ -1560,7 +1604,8 @@ class FinanceProvider extends ChangeNotifier {
   /// list position — views sort by date — so appending is enough.
   Future<void> restoreTransaction(Tx tx) async {
     if (_transactions.any((t) => t.id == tx.id)) return;
-    _transactions.add(tx);
+    // Categories may have changed since the snapshot was taken.
+    _transactions.add(_sanitizeSplit(tx));
     notifyListeners();
     await _persist(tx: true);
   }
@@ -1572,7 +1617,7 @@ class FinanceProvider extends ChangeNotifier {
     var added = 0;
     for (final tx in rows) {
       if (existing.contains(tx.id)) continue;
-      _transactions.add(tx);
+      _transactions.add(_sanitizeSplit(tx));
       added++;
     }
     if (added == 0) return;
@@ -1588,7 +1633,8 @@ class FinanceProvider extends ChangeNotifier {
   /// assignment, which also rewrites account key sets.
   Future<void> restoreEditedTransactions(List<Tx> snapshot) async {
     var changed = 0;
-    for (final old in snapshot) {
+    for (final snap in snapshot) {
+      final old = _sanitizeSplit(snap);
       final i = _transactions.indexWhere((t) => t.id == old.id);
       if (i == -1) {
         _transactions.add(old);
@@ -1815,6 +1861,9 @@ class FinanceProvider extends ChangeNotifier {
     setCustomCategories([
       for (final c in customCategories) c.id == updated.id ? updated : c,
     ]);
+    // After the registry write, so the split rules see the new direction
+    // and transfer flag.
+    if (_sanitizeSplitsIn(updated.id)) txChanged = true;
     // A category edited into plain income can no longer be grouped or
     // budgeted — drop stale references so they don't linger invisibly.
     var detached = (groups: false, budgets: false);
@@ -1847,15 +1896,11 @@ class FinanceProvider extends ChangeNotifier {
                   ? 'other_expense'
                   : 'other_income',
             )
-          : t.copyWith(
-              categoryId: target.id,
-              type: target.type,
-              // Shares only exist on expense-typed non-transfer rows — a
-              // leftover share would silently resurface if the row later
-              // moved back out (same invariant as _sanitizeMyShare).
-              clearMyShare:
-                  target.type != TxType.expense ||
-                  isTransferCategory(target.id),
+          // Shares only exist on expense-typed non-transfer rows — a
+          // leftover share would silently resurface if the row later moved
+          // back out.
+          : _sanitizeSplit(
+              t.copyWith(categoryId: target.id, type: target.type),
             );
     }
     _rules.removeWhere((r) => r.categoryId == id);
@@ -1897,6 +1942,12 @@ class FinanceProvider extends ChangeNotifier {
   static bool isFallbackCategory(String id) =>
       id == 'other_expense' || id == 'other_income';
 
+  /// Built-ins whose direction and transfer flag can't be edited: the two
+  /// fallbacks, and Repaid to me, which must stay a money-in transfer so a
+  /// repayment never counts as income.
+  static bool hasLockedStructure(String id) =>
+      isFallbackCategory(id) || id == kRepaidToMeCategoryId;
+
   /// Edits a built-in category — fully: name, icon, colour, AND direction /
   /// transfer-ness (except the two fallback "Other" ids, whose structure is
   /// forced back to the built-in definition). A direction change re-types
@@ -1912,7 +1963,7 @@ class FinanceProvider extends ChangeNotifier {
     bool? isTransfer,
   }) async {
     final base = kCategories.firstWhere((c) => c.id == id);
-    final structural = !isFallbackCategory(id);
+    final structural = !hasLockedStructure(id);
     final updated = TxCategory(
       id: id,
       label: label.trim(),
@@ -1924,10 +1975,11 @@ class FinanceProvider extends ChangeNotifier {
           : base.isTransfer,
     );
     final previous = categoryById(id); // override-applied current definition
-    final txChanged = previous.type != updated.type
+    var txChanged = previous.type != updated.type
         ? _retypeRows(id, updated.type)
         : false;
     setBuiltinOverrides({...builtinOverrides, id: updated});
+    if (_sanitizeSplitsIn(id)) txChanged = true;
     var detached = (groups: false, budgets: false);
     if (!isGroupable(updated)) detached = _detachCategory(id);
     notifyListeners();
@@ -1946,10 +1998,11 @@ class FinanceProvider extends ChangeNotifier {
     if (!isBuiltinOverridden(id)) return;
     final previous = categoryById(id);
     final base = kCategories.firstWhere((c) => c.id == id);
-    final txChanged = previous.type != base.type
+    var txChanged = previous.type != base.type
         ? _retypeRows(id, base.type)
         : false;
     setBuiltinOverrides({...builtinOverrides}..remove(id));
+    if (_sanitizeSplitsIn(id)) txChanged = true;
     var detached = (groups: false, budgets: false);
     if (!isGroupable(base)) detached = _detachCategory(id);
     notifyListeners();
@@ -2915,6 +2968,9 @@ class FinanceProvider extends ChangeNotifier {
             t.type == TxType.expense &&
             t.pairId == null &&
             !t.suspectedSpam &&
+            // A split bill is a real expense, never a card bill's bank leg:
+            // pairing would wipe its share and people.
+            !t.isSplit &&
             (t.amount * 100).round() == cents &&
             t.date.difference(paidOn).abs() <= kPairDateWindow &&
             switch (accountForKey(t.acctKey)) {
@@ -3063,26 +3119,22 @@ class FinanceProvider extends ChangeNotifier {
   /// Returns how many rows changed.
   Future<int> setCategoryForMany(Set<String> ids, String categoryId) async {
     final catType = categoryById(categoryId).type;
-    // Shares only exist on expense-typed non-transfer rows — the same
-    // invariant deleteCategory's move-to branch and _sanitizeMyShare
-    // enforce. Without this, bulk-moving a split row into "To savings"
-    // kept a stale share that resurfaced if the row later moved back.
-    final clearShare = isTransferCategory(categoryId);
+    final intoTransfer = isTransferCategory(categoryId);
     var changed = 0;
     for (var i = 0; i < _transactions.length; i++) {
       final t = _transactions[i];
       if (!ids.contains(t.id) || t.type != catType) continue;
       if (t.categoryId == categoryId) continue;
-      _transactions[i] = t.copyWith(
-        categoryId: categoryId,
-        userCategorized: true,
-        clearMyShare: clearShare && t.myShare != null,
+      // Without the sanitizer, bulk-moving a split row into "To savings"
+      // kept a stale share that resurfaced if the row later moved back.
+      _transactions[i] = _sanitizeSplit(
+        t.copyWith(categoryId: categoryId, userCategorized: true),
       );
       changed++;
     }
     if (changed > 0) {
       // Legs moved out of the transfer categories stop being a pair.
-      if (!clearShare) _clearOrphanPairs();
+      if (!intoTransfer) _clearOrphanPairs();
       notifyListeners();
       await _persist(tx: true);
     }
@@ -3236,6 +3288,196 @@ class FinanceProvider extends ChangeNotifier {
     );
   }
 
+  // --- Who owes you ---------------------------------------------------------
+
+  static double _paise(double x) => (x * 100).round() / 100;
+
+  /// Everyone named on a confirmed split or repayment, largest balance first
+  /// (then most recent). Splits without names count toward nobody.
+  List<PersonBalance> get peopleBalances => _d.people ??= _computePeople();
+
+  List<PersonBalance> _computePeople() {
+    final shares = <String, List<(Tx, SplitShare)>>{};
+    final paid = <String, List<Tx>>{};
+    final names = <String, String>{};
+    final last = <String, DateTime>{};
+    // The newest row's spelling names the person.
+    void seen(String name, DateTime date) {
+      final k = personKey(name);
+      final prev = last[k];
+      if (prev != null && date.isBefore(prev)) return;
+      names[k] = name;
+      last[k] = date;
+    }
+
+    // Oldest first, so each person's shares queue up in the order
+    // repayments pay them off.
+    for (final (t, _) in _ordered) {
+      if (t.type == TxType.expense && !isTransferCategory(t.categoryId)) {
+        for (final p in t.people) {
+          (shares[personKey(p.name)] ??= []).add((t, p));
+          seen(p.name, t.date);
+        }
+      } else if (t.categoryId == kRepaidToMeCategoryId && t.repaidBy != null) {
+        (paid[personKey(t.repaidBy!)] ??= []).add(t);
+        seen(t.repaidBy!, t.date);
+      }
+    }
+    final out = <PersonBalance>[];
+    for (final k in names.keys) {
+      final repayments = paid[k] ?? const <Tx>[];
+      var pool = repayments.fold(0.0, (s, t) => s + t.amount);
+      final open = <ShareLeft>[];
+      final settled = <ShareLeft>[];
+      for (final (bill, s) in shares[k] ?? const <(Tx, SplitShare)>[]) {
+        if (s.settled) {
+          // It keeps what repayments had paid of it when it was settled.
+          pool -= pool < s.paid ? pool : s.paid;
+          settled.add((bill: bill, share: s.amount, left: 0.0));
+          continue;
+        }
+        final covered = pool < s.amount ? pool : s.amount;
+        pool -= covered;
+        final left = _paise(s.amount - covered);
+        if (left > 0.005) {
+          open.add((bill: bill, share: s.amount, left: left));
+        } else {
+          settled.add((bill: bill, share: s.amount, left: 0.0));
+        }
+      }
+      out.add((
+        name: names[k]!,
+        key: k,
+        owed: _paise(open.fold(0.0, (s, e) => s + e.left)),
+        credit: _paise(pool),
+        open: List.unmodifiable(open),
+        settled: List.unmodifiable(settled),
+        repayments: List.unmodifiable(repayments.reversed),
+        last: last[k]!,
+      ));
+    }
+    out.sort((a, b) {
+      final c = b.owed.compareTo(a.owed);
+      return c != 0 ? c : b.last.compareTo(a.last);
+    });
+    return List.unmodifiable(out);
+  }
+
+  /// Everything still owed back, across everyone.
+  double get totalOwed =>
+      _paise(peopleBalances.fold(0.0, (s, b) => s + b.owed));
+
+  /// What is still to come back on split bill [txId], across its people.
+  /// Zero for a bill paid off or settled, and for rows that aren't bills.
+  double billOwed(String txId) =>
+      (_d.billOwed ??= () {
+        final m = <String, double>{};
+        for (final b in peopleBalances) {
+          for (final s in b.open) {
+            m[s.bill.id] = _paise((m[s.bill.id] ?? 0) + s.left);
+          }
+        }
+        return m;
+      }())[txId] ??
+      0;
+
+  /// Names already used on splits and repayments, most recent first: the
+  /// add sheet's suggestions.
+  List<String> get knownPeople => _d.knownPeople ??= List.unmodifiable(
+    (peopleBalances.toList()..sort((a, b) => b.last.compareTo(a.last))).map(
+      (b) => b.name,
+    ),
+  );
+
+  /// Money-in rows from the last 90 days that could be a repayment, closest
+  /// to [near] first (then newest): income outside the transfer categories
+  /// plus unpaired "Transfer in" rows. Never a leg of a transfer pair, a
+  /// card payment or an existing repayment, so linking can't break a pair.
+  List<Tx> repaymentCandidates({required double near, DateTime? now}) {
+    final today = now ?? DateTime.now();
+    final from = DateTime(
+      today.year,
+      today.month,
+      today.day,
+    ).subtract(const Duration(days: 90));
+    final rows = [
+      for (final t in _transactions)
+        if (_canBeRepayment(t) && !t.date.isBefore(from)) t,
+    ];
+    rows.sort((a, b) {
+      final c = (a.amount - near).abs().compareTo((b.amount - near).abs());
+      return c != 0 ? c : b.date.compareTo(a.date);
+    });
+    return rows;
+  }
+
+  /// Whether [t] may be filed as a repayment: money in outside the transfer
+  /// categories, or an unpaired "Transfer in", and not flagged as spam.
+  bool _canBeRepayment(Tx t) =>
+      t.type == TxType.income &&
+      t.pairId == null &&
+      !t.suspectedSpam &&
+      (!isTransferCategory(t.categoryId) ||
+          t.categoryId == kTransferInCategoryId);
+
+  /// Files [txId] as a repayment from [person]: moved to Repaid to me,
+  /// confirmed, marked hand-categorized. Returns the row as it was, for
+  /// Undo via [restoreEditedTransactions]; null when the row is missing,
+  /// can't be a repayment (see [repaymentCandidates]), or the name is blank.
+  Future<Tx?> linkRepayment(String txId, String person) async {
+    final i = _transactions.indexWhere((t) => t.id == txId);
+    final name = normalizePersonName(person);
+    if (i == -1 || name.isEmpty) return null;
+    final before = _transactions[i];
+    if (!_canBeRepayment(before)) return null;
+    _transactions[i] = _sanitizeSplit(
+      before.copyWith(
+        categoryId: kRepaidToMeCategoryId,
+        repaidBy: name,
+        userCategorized: true,
+        pending: false,
+      ),
+    );
+    notifyListeners();
+    await _persist(tx: true);
+    return before;
+  }
+
+  /// Marks [person]'s open shares settled by hand: on bill [billId] only,
+  /// or on every bill. Returns the rows as they were, for Undo via
+  /// [restoreEditedTransactions]. A share repayments had paid part of keeps
+  /// that part ([SplitShare.paid]), so settling it never frees the payment
+  /// to count again against their next bill.
+  Future<List<Tx>> settleShares(String person, {String? billId}) async {
+    final k = personKey(person);
+    // Bill id → what repayments had paid of this person's share on it.
+    final paidOn = {
+      for (final b in peopleBalances)
+        if (b.key == k)
+          for (final s in b.open)
+            if (billId == null || s.bill.id == billId)
+              s.bill.id: _paise(s.share - s.left),
+    };
+    final before = <Tx>[];
+    for (var i = 0; i < _transactions.length; i++) {
+      final t = _transactions[i];
+      final paid = paidOn[t.id];
+      if (paid == null) continue;
+      before.add(t);
+      _transactions[i] = t.copyWith(
+        people: [
+          for (final p in t.people)
+            personKey(p.name) == k ? p.copyWith(settled: true, paid: paid) : p,
+        ],
+      );
+    }
+    if (before.isNotEmpty) {
+      notifyListeners();
+      await _persist(tx: true);
+    }
+    return before;
+  }
+
   /// Stamps the same date and time on every transaction in [ids]. Returns
   /// how many rows changed.
   Future<int> setDateTimeForMany(Set<String> ids, DateTime dateTime) async {
@@ -3297,7 +3539,9 @@ class FinanceProvider extends ChangeNotifier {
           dropped.add(t);
         }
       } else if (t.categoryId != rule.categoryId) {
-        _transactions[i] = t.copyWith(categoryId: rule.categoryId);
+        _transactions[i] = _sanitizeSplit(
+          t.copyWith(categoryId: rule.categoryId),
+        );
         reclassified++;
       }
     }
@@ -3451,33 +3695,132 @@ class FinanceProvider extends ChangeNotifier {
     }
     // copyWith normalizes: trims, dedupes and caps whatever the file held.
     if (t.tags.isNotEmpty) t = t.copyWith(tags: t.tags);
-    var tx = _sanitizeMyShare(t);
+    var tx = _sanitizeSplit(t);
     final known = allCategories.any((c) => c.id == tx.categoryId);
     if (known) {
       final cat = categoryById(tx.categoryId);
       tx = tx.type == cat.type ? tx : tx.copyWith(type: cat.type);
       // Re-typing can turn an expense row into income — re-check the share.
-      return _sanitizeMyShare(tx);
+      return _sanitizeSplit(tx);
     }
-    return tx.copyWith(
-      categoryId: tx.type == TxType.expense ? 'other_expense' : 'other_income',
+    return _sanitizeSplit(
+      tx.copyWith(
+        categoryId: tx.type == TxType.expense
+            ? 'other_expense'
+            : 'other_income',
+      ),
     );
   }
 
-  /// Enforces the [Tx.myShare] invariant on imported rows: only expense-typed
-  /// non-transfer rows may carry a share, and it must sit inside
-  /// `[0, amount]` — a hand-edited CSV must not mint negative spend.
-  Tx _sanitizeMyShare(Tx t) {
-    final share = t.myShare;
-    if (share == null) return t;
-    // NaN survives clamp (every comparison is false) — clear it outright.
-    if (!share.isFinite ||
-        t.type != TxType.expense ||
-        isTransferCategory(t.categoryId)) {
-      return t.copyWith(clearMyShare: true);
+  /// The split invariants, enforced on every path that writes a row:
+  /// - only expense rows outside the transfer categories carry a share or
+  ///   people;
+  /// - a share sits inside `[0, amount]` (a hand-edited CSV must not mint
+  ///   negative spend);
+  /// - people have a name and a positive amount, one entry per person
+  ///   (duplicates merge), at most [kMaxSplitPeople];
+  /// - when people are named they are the record: the share is what they
+  ///   leave of the bill. People who no longer fit (the amount was edited
+  ///   down below what they owe) are dropped;
+  /// - only a Repaid to me row names a payer.
+  ///
+  /// Returns [t] itself when nothing changed.
+  Tx _sanitizeSplit(Tx t) {
+    var payer = t.repaidBy;
+    if (payer != null) {
+      final name = normalizePersonName(payer);
+      payer = t.categoryId == kRepaidToMeCategoryId && name.isNotEmpty
+          ? name
+          : null;
     }
-    final clamped = share.clamp(0.0, t.amount).toDouble();
-    return clamped == share ? t : t.copyWith(myShare: clamped);
+    final share = t.myShare;
+    var newShare = share;
+    var people = t.people;
+    if (t.type != TxType.expense || isTransferCategory(t.categoryId)) {
+      newShare = null;
+      people = const [];
+    } else {
+      final merged = <String, SplitShare>{};
+      for (final p in t.people) {
+        final name = normalizePersonName(p.name);
+        if (name.isEmpty || !p.amount.isFinite || p.amount <= 0) continue;
+        // What repayments had paid only means something on a settled share,
+        // and never more than the share.
+        final paid = p.settled && p.paid.isFinite
+            ? p.paid.clamp(0.0, p.amount).toDouble()
+            : 0.0;
+        final k = personKey(name);
+        final seen = merged[k];
+        if (seen != null) {
+          final settled = seen.settled && p.settled;
+          merged[k] = SplitShare(
+            name: seen.name,
+            amount: seen.amount + p.amount,
+            settled: settled,
+            paid: settled ? seen.paid + paid : 0,
+          );
+        } else if (merged.length < kMaxSplitPeople) {
+          merged[k] = SplitShare(
+            name: name,
+            amount: p.amount,
+            settled: p.settled,
+            paid: paid,
+          );
+        }
+      }
+      people = List.unmodifiable(merged.values);
+      final owed = people.fold(0.0, (s, p) => s + p.amount);
+      final left = ((t.amount - owed) * 100).round() / 100;
+      if (people.isNotEmpty && left >= 0) {
+        newShare = left;
+      } else {
+        people = const [];
+        // NaN survives clamp (every comparison is false) — clear it outright.
+        newShare = share == null || !share.isFinite
+            ? null
+            : share.clamp(0.0, t.amount).toDouble();
+      }
+    }
+    if (newShare == share &&
+        payer == t.repaidBy &&
+        listEquals(people, t.people)) {
+      return t;
+    }
+    return t.copyWith(
+      myShare: newShare,
+      clearMyShare: newShare == null,
+      people: people,
+      repaidBy: payer,
+      clearRepaidBy: payer == null,
+    );
+  }
+
+  /// [_sanitizeSplit] over the whole ledger. Caller persists when true.
+  bool _sanitizeAllSplits() {
+    var changed = false;
+    for (var i = 0; i < _transactions.length; i++) {
+      final t = _transactions[i];
+      final clean = _sanitizeSplit(t);
+      if (identical(clean, t)) continue;
+      _transactions[i] = clean;
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// [_sanitizeSplit] over [categoryId]'s rows, after that category's
+  /// direction or transfer flag changed. Caller persists when true.
+  bool _sanitizeSplitsIn(String categoryId) {
+    var changed = false;
+    for (var i = 0; i < _transactions.length; i++) {
+      final t = _transactions[i];
+      if (t.categoryId != categoryId) continue;
+      final clean = _sanitizeSplit(t);
+      if (identical(clean, t)) continue;
+      _transactions[i] = clean;
+      changed = true;
+    }
+    return changed;
   }
 
   Future<int> importTransactions(List<Tx> txs, {required bool replace}) async {
@@ -3574,7 +3917,8 @@ class FinanceProvider extends ChangeNotifier {
     // v12: `merchantAliases` (identity → display name).
     // v13: `reminders` collection; transactions may carry `pairId`.
     // v14: transactions may carry `tags` (a list of strings).
-    'version': 14,
+    // v15: transactions may carry `people` (split shares) and `repaidBy`.
+    'version': 15,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
@@ -3755,7 +4099,7 @@ class FinanceProvider extends ChangeNotifier {
         final parsed = TxCategory.fromJson(Map<String, dynamic>.from(e as Map));
         final base = kCategories.where((c) => c.id == parsed.id).firstOrNull;
         if (base == null) continue;
-        final structural = !isFallbackCategory(parsed.id);
+        final structural = !hasLockedStructure(parsed.id);
         importedOverrides[parsed.id] = TxCategory(
           id: parsed.id,
           label: parsed.label,
@@ -3956,6 +4300,11 @@ class FinanceProvider extends ChangeNotifier {
         }
       }
       setBuiltinOverrides({...builtinOverrides, ...newOverrides});
+      // And a flipped direction or transfer flag clears their splits, as a
+      // local category edit does.
+      for (final id in newOverrides.keys) {
+        _sanitizeSplitsIn(id);
+      }
     }
     _groups.addAll(newGroups);
     importedAssignments?.forEach((catId, gid) {

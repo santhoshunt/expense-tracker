@@ -567,6 +567,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       // Card bills coming due + detected recurring payments.
       _UpcomingCard(finance: finance, hits: _recurring(finance)),
+      // What friends still owe on split bills. All-time, so the Year view
+      // keeps it.
+      AnimatedPresence(
+        key: const ValueKey('presence-owed'),
+        visible: finance.totalOwed > 0,
+        child: finance.totalOwed > 0
+            ? _OwedCard(finance: finance)
+            : const SizedBox.shrink(),
+      ),
       if (recent.isNotEmpty) ...[
         const SizedBox(height: 24),
         _SectionHeading(
@@ -1254,6 +1263,74 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// "Owed to you": the total friends still owe on split bills and the two
+/// biggest balances, opening the People page.
+class _OwedCard extends StatelessWidget {
+  final FinanceProvider finance;
+  const _OwedCard({required this.finance});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final owing = [
+      for (final b in finance.peopleBalances)
+        if (b.owed > 0) b,
+    ];
+    final line = [
+      for (final b in owing.take(2)) '${b.name} ${fmtMoney(b.owed)}',
+      if (owing.length > 2) '+${owing.length - 2} more',
+    ].join(' · ');
+    return Padding(
+      padding: const EdgeInsets.only(top: 16),
+      child: Card(
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          onTap: () => goPeople(context),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Icon(Icons.group, size: 20, color: scheme.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Owed to you', style: text.titleSmall),
+                      Text(
+                        line,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: text.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      fmtMoney(finance.totalOwed),
+                      style: text.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+                Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

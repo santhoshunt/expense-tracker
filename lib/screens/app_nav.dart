@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/account.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import 'classifiers_screen.dart';
+import 'people_screen.dart';
 import 'transactions_screen.dart';
 
 /// Home tab indices (HomeScreen's bottom navigation).
@@ -152,6 +153,11 @@ void goAccounts(BuildContext c) => AppNav.instance.openAccounts(c);
 void goSavingsAccounts(BuildContext c) =>
     AppNav.instance.openAccounts(c, type: AccountType.savings);
 void goNewReminder(BuildContext c) => showReminderEditor(c);
+
+/// Who owes you, pushed over whatever is open.
+void goPeople(BuildContext c) => Navigator.of(
+  c,
+).push(MaterialPageRoute<void>(builder: (_) => const PeopleScreen()));
 
 /// Marks the inside of a Cockpit group page, so [AppNav.openCockpit]
 /// switches its tab instead of stacking a second copy of the page.

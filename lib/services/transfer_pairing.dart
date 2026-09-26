@@ -61,7 +61,8 @@ PairKind? pairKindFor({required Account? send, required Account? recv}) {
 
 /// Candidate pairs among [rows]: one expense and one income of the same
 /// amount, dated within [kPairDateWindow], on different accounts (at least
-/// one known), neither already paired nor spam, at least one still pending
+/// one known), neither already paired nor spam nor a split bill or a
+/// repayment from a friend, at least one still pending
 /// (the review queue is where the suggestion renders), the sending account
 /// not a card, and not previously dismissed. Greedy by date distance so each
 /// row appears in at most one suggestion.
@@ -73,6 +74,9 @@ List<PairSuggestion> suggestTransferPairs(
   final byAmount = <int, List<Tx>>{};
   for (final t in rows) {
     if (t.pairId != null || t.suspectedSpam) continue;
+    // A split bill and a friend's repayment are not own-account moves, and
+    // pairing would wipe their people and payer.
+    if (t.isSplit || t.categoryId == kRepaidToMeCategoryId) continue;
     (byAmount[(t.amount * 100).round()] ??= []).add(t);
   }
   final candidates = <(int distance, PairSuggestion s)>[];

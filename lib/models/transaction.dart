@@ -297,6 +297,16 @@ const List<TxCategory> kCategories = [
     type: TxType.income,
     isTransfer: true,
   ),
+  // A friend paying back their part of a split bill: money in, but a
+  // transfer, since the bill's friends' portion never counted as spend.
+  TxCategory(
+    id: kRepaidToMeCategoryId,
+    label: 'Repaid to me',
+    icon: Icons.group,
+    color: FigmaPalette.purple,
+    type: TxType.income,
+    isTransfer: true,
+  ),
   // Must stay last: categoryById falls back to kCategories.last.
   TxCategory(
     id: 'other_income',
@@ -453,6 +463,15 @@ class Tx {
   /// already normalized by [normalizeTags]. Empty for most rows.
   final List<String> tags;
 
+  /// Who else was in a group split and what each owes, summing to
+  /// [frontedAmount]. Empty for plain rows and for splits entered without
+  /// names, which count toward nobody's balance.
+  final List<SplitShare> people;
+
+  /// On a [kRepaidToMeCategoryId] row: the person paying back. Null
+  /// everywhere else.
+  final String? repaidBy;
+
   const Tx({
     required this.id,
     required this.type,
@@ -472,9 +491,14 @@ class Tx {
     this.myShare,
     this.pairId,
     this.tags = const [],
+    this.people = const [],
+    this.repaidBy,
   });
 
   TxCategory get category => categoryById(categoryId, fallbackType: type);
+
+  /// Whether this split names who owes what.
+  bool get tracksPeople => people.isNotEmpty;
 
   /// Whether this row is a group split (the user fronted the full [amount]
   /// but only [myShare] of it is their own spending).
@@ -518,6 +542,8 @@ class Tx {
       myShare: myShare,
       pairId: pairId,
       tags: tags,
+      people: people,
+      repaidBy: repaidBy,
     );
   }
 
@@ -543,6 +569,9 @@ class Tx {
     String? pairId,
     bool clearPairId = false,
     List<String>? tags,
+    List<SplitShare>? people,
+    String? repaidBy,
+    bool clearRepaidBy = false,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -565,6 +594,8 @@ class Tx {
     myShare: clearMyShare ? null : (myShare ?? this.myShare),
     pairId: clearPairId ? null : (pairId ?? this.pairId),
     tags: tags == null ? this.tags : normalizeTags(tags),
+    people: people == null ? this.people : List.unmodifiable(people),
+    repaidBy: clearRepaidBy ? null : (repaidBy ?? this.repaidBy),
   );
 
   Map<String, dynamic> toJson() => {
@@ -586,6 +617,8 @@ class Tx {
     if (myShare != null) 'myShare': myShare,
     if (pairId != null) 'pairId': pairId,
     if (tags.isNotEmpty) 'tags': tags,
+    if (people.isNotEmpty) 'people': [for (final p in people) p.toJson()],
+    if (repaidBy != null) 'repaidBy': repaidBy,
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) => Tx(
@@ -611,8 +644,105 @@ class Tx {
       final List<dynamic> list => normalizeTags(list.whereType<String>()),
       _ => const [],
     },
+    people: switch (json['people']) {
+      final List<dynamic> list => List.unmodifiable([
+        for (final e in list) ?SplitShare.tryFromJson(e),
+      ]),
+      _ => const [],
+    },
+    repaidBy: json['repaidBy'] is String ? json['repaidBy'] as String : null,
   );
 }
+
+/// One person's part of a group split ([Tx.people]).
+class SplitShare {
+  final String name;
+  final double amount;
+
+  /// Marked settled by hand (paid outside the app, or let go): left out of
+  /// the person's balance.
+  final bool settled;
+
+  /// On a settled share: how much of it their repayments had already paid
+  /// when it was settled. Those repayments stay spent on it, so settling a
+  /// part-paid bill never frees them to pay the next one.
+  final double paid;
+
+  const SplitShare({
+    required this.name,
+    required this.amount,
+    this.settled = false,
+    this.paid = 0,
+  });
+
+  SplitShare copyWith({
+    String? name,
+    double? amount,
+    bool? settled,
+    double? paid,
+  }) => SplitShare(
+    name: name ?? this.name,
+    amount: amount ?? this.amount,
+    settled: settled ?? this.settled,
+    paid: paid ?? this.paid,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'amount': amount,
+    if (settled) 'settled': true,
+    if (settled && paid > 0) 'paid': paid,
+  };
+
+  /// Null for anything that isn't a name with a number. Range and duplicate
+  /// rules are the provider's sanitizer's job.
+  static SplitShare? tryFromJson(Object? json) {
+    if (json is! Map) return null;
+    final name = json['name'];
+    final amount = json['amount'];
+    if (name is! String || amount is! num) return null;
+    final paid = json['paid'];
+    return SplitShare(
+      name: name,
+      amount: amount.toDouble(),
+      settled: json['settled'] == true,
+      paid: paid is num ? paid.toDouble() : 0,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is SplitShare &&
+      other.name == name &&
+      other.amount == amount &&
+      other.settled == settled &&
+      other.paid == paid;
+
+  @override
+  int get hashCode => Object.hash(name, amount, settled, paid);
+}
+
+/// Most people one split can name.
+const int kMaxSplitPeople = 10;
+
+/// Longest person name, in characters.
+const int kMaxPersonNameLength = 30;
+
+/// A person's name as stored: whitespace collapsed, `|` and `:` removed (the
+/// CSV cell's separators), capped at [kMaxPersonNameLength] characters.
+String normalizePersonName(String raw) {
+  var n = raw
+      .replaceAll(RegExp(r'[|:]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (n.characters.length > kMaxPersonNameLength) {
+    n = n.characters.take(kMaxPersonNameLength).toString().trim();
+  }
+  return n;
+}
+
+/// How people are matched: "arun" and "Arun" are one person.
+String personKey(String name) => name.toLowerCase();
 
 /// Most tags one transaction can carry.
 const int kMaxTagsPerTx = 5;
@@ -672,6 +802,10 @@ const String kSavingsTransferCategoryId = 'savings_out';
 /// count as spend — yet stays tracked, not unaccounted.
 const String kPaidForOthersCategoryId = 'paid_for_others';
 
+/// Money in from a friend paying back their part of a split ([Tx.repaidBy]).
+/// A transfer, never income: the fronted part it returns was never spend.
+const String kRepaidToMeCategoryId = 'repaid_to_me';
+
 /// Built-in categories that move money between the user's own accounts. They
 /// stay in the ledger for auditing (and per-account balances), but are
 /// excluded from every income/expense aggregate — counting them would inflate
@@ -683,6 +817,7 @@ const Set<String> kTransferCategoryIds = {
   kTransferInCategoryId,
   kSavingsTransferCategoryId,
   kPaidForOthersCategoryId,
+  kRepaidToMeCategoryId,
 };
 
 /// Effective transfer ids (override-applied built-ins + flagged customs),

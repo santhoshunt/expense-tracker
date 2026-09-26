@@ -11,15 +11,14 @@ import '../services/subscriptions.dart';
 import '../utils/contrast.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
-import '../widgets/animated_fold.dart';
 import '../widgets/budget_dialog.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/fold_section.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/glossy.dart';
-import '../widgets/motion.dart';
 import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
 import 'transactions_screen.dart' show TxFilterRequest;
@@ -364,7 +363,7 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
           ),
         ),
         if (summary.stopped.isNotEmpty)
-          _FoldSection(
+          FoldSection(
             title: 'Stopped (${summary.stopped.length})',
             open: _stoppedOpen,
             onToggle: () => setState(() => _stoppedOpen = !_stoppedOpen),
@@ -374,7 +373,7 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
             ],
           ),
         if (summary.hidden.isNotEmpty)
-          _FoldSection(
+          FoldSection(
             title: 'Hidden (${summary.hidden.length})',
             open: _hiddenOpen,
             onToggle: () => setState(() => _hiddenOpen = !_hiddenOpen),
@@ -389,80 +388,6 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
 }
 
 enum _SubKind { active, stopped, hidden }
-
-/// A tappable heading that folds a panel of rows away.
-class _FoldSection extends StatelessWidget {
-  final String title;
-  final bool open;
-  final VoidCallback onToggle;
-  final List<Widget> children;
-
-  const _FoldSection({
-    required this.title,
-    required this.open,
-    required this.onToggle,
-    required this.children,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(top: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Semantics(
-            button: true,
-            expanded: open,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: onToggle,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(
-                  children: [
-                    Text(title, style: Theme.of(context).textTheme.titleSmall),
-                    const Spacer(),
-                    AnimatedRotation(
-                      turns: open ? 0 : 0.5,
-                      duration: motionDuration(
-                        context,
-                        const Duration(milliseconds: 250),
-                      ),
-                      curve: Curves.easeOutCubic,
-                      child: Icon(
-                        Icons.expand_less,
-                        size: 20,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          AnimatedFold(
-            collapsed: !open,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: FrostedPanel(
-                radius: BorderRadius.circular(20),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: children,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _SubscriptionTile extends StatelessWidget {
   final SubscriptionItem item;

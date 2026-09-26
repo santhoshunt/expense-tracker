@@ -35,7 +35,10 @@ String fmtMonth(DateTime d) => _monthYear.format(d);
 double? parseAmount(String raw) {
   final cleaned = raw.replaceAll(RegExp(r'[₹,\s]'), '');
   if (cleaned.isEmpty) return null;
-  return double.tryParse(cleaned);
+  // tryParse accepts "NaN" and "Infinity"; neither is an amount, and NaN
+  // throws the moment anything rounds it.
+  final v = double.tryParse(cleaned);
+  return v != null && v.isFinite ? v : null;
 }
 
 /// Date alone at midnight, date + time otherwise.
