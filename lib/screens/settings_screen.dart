@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 // ScrollCacheExtent is not yet re-exported through material.dart.
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
@@ -16,6 +17,7 @@ import '../services/backup_service.dart';
 import '../services/drive_backup_service.dart';
 import '../services/sms_import_service.dart';
 import '../services/update_service.dart';
+import '../widgets/update_sheet.dart';
 import '../services/notification_source.dart';
 import '../services/sms_source.dart';
 import '../utils/app_palettes.dart';
@@ -1513,6 +1515,11 @@ class _AboutSectionState extends State<_AboutSection> {
     }
   }
 
+  /// Android downloads and installs in the app; elsewhere the check points
+  /// at the release page, as before.
+  static bool get _installsInApp =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
   Future<void> _checkForUpdates() async {
     if (_checking) return;
     setState(() => _checking = true);
@@ -1520,6 +1527,8 @@ class _AboutSectionState extends State<_AboutSection> {
     try {
       final result = await UpdateService().check();
       if (!mounted) return;
+      // The answer is in: the spinner stops before any sheet or dialog.
+      setState(() => _checking = false);
       switch (result) {
         case UpToDate(:final currentVersion):
           showAppToastOn(
@@ -1528,6 +1537,9 @@ class _AboutSectionState extends State<_AboutSection> {
             tone: AppToastTone.success,
             icon: Icons.verified_outlined,
           );
+        case UpdateAvailable(:final updates) when _installsInApp:
+          availableUpdate.value = updates;
+          await showUpdateSheet(context, updates);
         case UpdateAvailable(:final latestTag, :final htmlUrl):
           await showDialog<void>(
             context: context,
@@ -1580,10 +1592,14 @@ class _AboutSectionState extends State<_AboutSection> {
               label: const Text('Check for updates'),
               tip: InfoTip(
                 title: 'Check for updates',
-                message:
-                    'Compares this version with the latest release on GitHub. '
-                    'It does not download or install anything; View release '
-                    'opens the page in your browser.',
+                message: _installsInApp
+                    ? 'Lists the releases on GitHub newer than this version. '
+                          'Nothing downloads until you pick one and tap '
+                          "Download & install. The app installs only a newer "
+                          'Expense Tracker signed with its own key.'
+                    : 'Compares this version with the latest release on '
+                          'GitHub. It does not download or install anything; '
+                          'View release opens the page in your browser.',
                 link: InfoLink(
                   prompt: 'See what changed in each version?',
                   label: 'All releases on GitHub',
@@ -1607,6 +1623,23 @@ class _AboutSectionState extends State<_AboutSection> {
                 : const Icon(Icons.chevron_right),
             onTap: _checking ? null : _checkForUpdates,
           ),
+          if (_installsInApp)
+            Builder(
+              builder: (context) {
+                final settings = context.watch<SettingsProvider>();
+                return _TipSwitchTile(
+                  icon: Icons.update,
+                  label: 'Check for updates on launch',
+                  tip:
+                      'Once a day, on opening, the app asks GitHub for newer '
+                      'releases and shows a card on the Overview when it '
+                      'finds one. It never downloads without your tap.',
+                  subtitle: 'Once a day, on any network',
+                  value: settings.updateOnLaunch,
+                  onChanged: settings.setUpdateOnLaunch,
+                );
+              },
+            ),
         ],
       ),
     );

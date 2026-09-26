@@ -25,6 +25,7 @@ import '../widgets/budget_dialog.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/undo_snackbar.dart';
+import '../widgets/update_banner.dart';
 import '../widgets/spending_heatmap.dart';
 import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
@@ -514,6 +515,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // One children-list builder per view; called lazily from each page's
     // Builder so only mounted pages construct their widgets.
     List<Widget> overviewChildren() => [
+      // A newer release, offered by the launch check; empty otherwise.
+      const UpdateBanner(),
       // First-run: the landing tab used to greet a new user with ₹0.00
       // everywhere and no hint of what to do next.
       if (!finance.hasTransactions) ...[

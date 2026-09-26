@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
-    <!-- Google Drive backup (opt-in): the only network use in the app. -->
+    <!-- Google Drive backup (opt-in) and the GitHub update check. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Read bank/UPI alert SMS to auto-import transactions (opt-in at runtime). -->
     <uses-permission android:name="android.permission.READ_SMS"/>
@@ -11,6 +11,12 @@
     <!-- Monthly recap note: lets the notifications plugin re-book a
          scheduled notification after a reboot. Granted at install. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- In-app updates: installs a downloaded release of this app. The
+         native side installs only this package, signed with this app's own
+         key and newer than the installed build (UpdateInstaller.kt). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Android 12+: an app updating itself may skip the system confirm. -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION"/>
     <!-- No storage permission: exports go through the system save dialog
          (Storage Access Framework), which needs none on any API level.
          file_saver merges WRITE_EXTERNAL_STORAGE in for Android 9 and older,

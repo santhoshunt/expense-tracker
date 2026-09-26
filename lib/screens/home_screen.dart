@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:intl/intl.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
 import '../models/transaction.dart';
@@ -17,6 +19,9 @@ import '../services/notification_service.dart';
 import '../services/sms_import_service.dart';
 import '../services/sms_source.dart';
 import '../services/upcoming_monitor.dart';
+import '../services/update_downloader.dart';
+import '../services/update_installer.dart';
+import '../services/update_service.dart';
 import '../utils/haptics.dart';
 import '../widgets/glossy.dart';
 import '../widgets/lock_gate.dart';
@@ -164,6 +169,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // widget snapshot — the widget config screen then claimed "No budgets
       // yet" against a ledger full of them.
       _syncBudgetWidgets();
+      // A downloaded update never outlives the launch after it.
+      unawaited(UpdateDownloader().cleanup());
+      _reportUpdateResult();
+      _checkForUpdate();
       // Scheduled Drive backup — fire-and-forget, never blocks startup;
       // failures are recorded and surfaced in Settings.
       if (mounted) {
@@ -199,12 +208,87 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _scheduleRecap();
     // An action that arrived during the switch back waits for resumed.
     _scheduleLaunchAction();
+    _checkForUpdate();
     final last = _lastAutoImportAt;
     if (last != null &&
         DateTime.now().difference(last) < const Duration(seconds: 5)) {
       return;
     }
     _autoImport();
+  }
+
+  static bool get _updatesSupported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  bool _checkingForUpdate = false;
+
+  /// When a launch check last failed (offline, rate limited). In memory
+  /// only: a failure is retried after an hour, not on every resume.
+  static DateTime? _updateCheckFailedAt;
+
+  /// The daily launch check for a newer release (Settings can switch it
+  /// off). Only reads GitHub; what it finds waits in [availableUpdate] for
+  /// the Overview banner, and no further check runs while it is there.
+  /// Failures stay silent, since nobody asked.
+  Future<void> _checkForUpdate() async {
+    if (!mounted || !_updatesSupported || _checkingForUpdate) return;
+    if (availableUpdate.value != null) return;
+    final settings = context.read<SettingsProvider>();
+    final now = DateTime.now();
+    final failed = _updateCheckFailedAt;
+    if (failed != null && now.difference(failed) < const Duration(hours: 1)) {
+      return;
+    }
+    if (!shouldCheckForUpdate(
+      enabled: settings.updateOnLaunch,
+      lastCheck: settings.updateLastCheck,
+      now: now,
+    )) {
+      return;
+    }
+    _checkingForUpdate = true;
+    try {
+      final result = await UpdateService().check();
+      switch (result) {
+        case UpdateAvailable(:final updates):
+          availableUpdate.value = updates;
+          await settings.markUpdateChecked(now);
+        case UpToDate():
+          await settings.markUpdateChecked(now);
+        case CheckFailed():
+          _updateCheckFailedAt = now;
+      }
+    } finally {
+      _checkingForUpdate = false;
+    }
+  }
+
+  /// First launch after an in-app update: say it worked, and point to the
+  /// switch that allowed it, which the app cannot turn off itself.
+  Future<void> _reportUpdateResult() async {
+    if (!mounted || !_updatesSupported) return;
+    final settings = context.read<SettingsProvider>();
+    final tag = settings.updateInstallingTag;
+    if (tag == null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final String version;
+    try {
+      version = (await PackageInfo.fromPlatform()).version;
+    } catch (_) {
+      return;
+    }
+    await settings.setUpdateInstallingTag(null);
+    if (UpdateService.compareVersions(version, tag) != 0) return;
+    showAppToastOn(
+      messenger,
+      'Updated to $tag. You can turn off Install unknown apps for Expense '
+      'Tracker again.',
+      tone: AppToastTone.success,
+      icon: Icons.system_update_alt,
+      actionLabel: 'Settings',
+      onAction: ChannelUpdateInstaller.instance.openInstallSettings,
+      duration: const Duration(seconds: 10),
+    );
   }
 
   /// Budget alerts are on by default, so the Settings toggle (the other
