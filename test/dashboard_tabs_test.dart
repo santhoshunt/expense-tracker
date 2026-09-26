@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/account.dart';
+import 'package:expense_tracker/models/spend_budget.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -15,7 +17,7 @@ import 'package:expense_tracker/widgets/spend_comparison_cards.dart';
 
 import 'dashboard_test_utils.dart';
 
-/// The dashboard's four sub-tabs, and the comparison cards' states.
+/// The dashboard's three sub-tabs, and the comparison cards' states.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -68,29 +70,16 @@ void main() {
     ) async {
       await pump(tester);
 
-      // Today is the landing view: where things stand, no month selector,
-      // none of the month's figures.
-      final balance = find.byKey(const ValueKey('balance'));
-      expect(balance, findsOneWidget);
-      expect(find.byTooltip('Previous month'), findsNothing);
-      expect(find.text('Spent'), findsNothing);
-      // The balance leads, the newest rows follow.
-      final recent = find.text('Recent transactions');
-      await tester.scrollUntilVisible(
-        recent,
-        300,
-        scrollable: verticalScrollable(),
-      );
-      expect(
-        tester.getTopLeft(balance).dy,
-        lessThan(tester.getTopLeft(recent).dy),
-      );
-
-      await openDashboardView(tester, 'Month');
+      // The Overview is the landing view: the balance, then the month.
+      expect(find.byKey(const ValueKey('balance')), findsOneWidget);
+      expect(find.byTooltip('Previous month'), findsOneWidget);
       expect(find.text('Spent'), findsOneWidget);
-      expect(find.byKey(const ValueKey('balance')), findsNothing);
-      // Each section lives on one view: no copies of the comparisons or
-      // the heatmap here.
+      // Each section lives on one view: no copies of the comparisons or the
+      // heatmap here, and no recent rows (the Transactions tab has them).
+      // To the bottom first: the list builds lazily.
+      await tester.drag(verticalScrollable(), const Offset(0, -3000));
+      await tester.pumpAndSettle();
+      expect(find.text('Recent transactions'), findsNothing);
       expect(find.text('Categories vs usual'), findsNothing);
       expect(find.text('Spending heatmap'), findsNothing);
 
@@ -113,15 +102,68 @@ void main() {
       expect(find.text('Spent'), findsNothing);
     });
 
+    testWidgets('the Overview reads balance, month, Upcoming, Budgets, '
+        'then what friends owe', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      final now = DateTime.now();
+      await p.addBudget(
+        name: 'Eating out',
+        limit: 5000,
+        mode: BudgetMode.include,
+        categoryIds: {'food'},
+      );
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 900,
+        note: 'dinner',
+        date: DateTime(now.year, now.month, 1),
+        people: const [SplitShare(name: 'Arun', amount: 300)],
+      );
+      // A card bill due today, so Upcoming shows.
+      final card = await p.addAccount(
+        name: 'HDFC Card',
+        type: AccountType.creditCard,
+      );
+      await p.setManualBalance(card, 5000);
+      await p.setCardCycle(card, dueDay: now.day);
+      // Tall enough for the whole page at once: one top-to-bottom chain.
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: p),
+            ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
+          ],
+          child: const MaterialApp(home: Scaffold(body: DashboardScreen())),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final order = [
+        find.byKey(const ValueKey('balance')),
+        find.byTooltip('Previous month'),
+        find.text('Spent'),
+        find.text('Upcoming'),
+        find.text('Budgets'),
+        find.text('Owed to you'),
+      ];
+      final tops = [for (final f in order) tester.getTopLeft(f).dy];
+      for (var i = 1; i < tops.length; i++) {
+        expect(tops[i - 1], lessThan(tops[i]), reason: '${order[i]}');
+      }
+    });
+
     testWidgets('a horizontal swipe steps through the views', (tester) async {
       await pump(tester);
-      await openDashboardView(tester, 'Month');
       expect(find.text('Spent'), findsOneWidget);
 
       // Fling on page content — the month selector row, present on every
-      // month-scoped view. The tab labels sit on the pinned bar outside the
-      // pager, and its buttons claim only taps, so the drag reaches the
-      // PageView.
+      // view. The tab labels sit on the pinned bar outside the pager, and
+      // its buttons claim only taps, so the drag reaches the PageView.
       Future<void> swipe(double dx) async {
         await tester.fling(
           find.byTooltip('Previous month'),
@@ -141,17 +183,16 @@ void main() {
       await swipe(-300);
       expect(find.byType(CategoryDonutChart), findsOneWidget);
 
-      // And right goes back, as far as Today.
+      // And right goes back, as far as the Overview.
       await swipe(300);
       expect(find.text('This month vs last month'), findsOneWidget);
-      await swipe(300);
       await swipe(300);
       expect(find.byKey(const ValueKey('balance')), findsOneWidget);
     });
 
-    testWidgets('the month selector follows every month view', (tester) async {
+    testWidgets('the month selector follows every view', (tester) async {
       await pump(tester);
-      for (final view in ['Month', 'Trends', 'Breakdown']) {
+      for (final view in ['Trends', 'Breakdown', 'Overview']) {
         await tester.tap(find.text(view));
         await tester.pumpAndSettle();
         expect(

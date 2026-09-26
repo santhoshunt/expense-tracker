@@ -146,7 +146,6 @@ void main() {
         p,
         onViewTransactions: (t, _) => opened.add(t),
       );
-      await openDashboardView(tester, 'Month');
 
       await openTip(tester, 'Spent');
       expect(find.textContaining('a split bill counts only'), findsOneWidget);
@@ -157,25 +156,6 @@ void main() {
       await tester.tap(find.text('Spent'));
       await tester.pumpAndSettle();
       expect(opened, [TxType.expense], reason: 'the card itself still taps');
-    });
-
-    testWidgets('Recent transactions heading explains itself', (tester) async {
-      final p = FinanceProvider();
-      await p.load();
-      await p.addTransaction(
-        type: TxType.expense,
-        categoryId: 'food',
-        amount: 900,
-        note: 'lunch',
-        date: DateTime.now(),
-      );
-      await pumpDashboard(tester, p);
-
-      await openTip(tester, 'Recent transactions');
-      expect(
-        find.text('Your 5 newest confirmed transactions.'),
-        findsOneWidget,
-      );
     });
 
     testWidgets('the six-month chart ends at the selected month', (

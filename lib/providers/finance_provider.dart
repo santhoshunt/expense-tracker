@@ -181,7 +181,7 @@ class _Derived {
   List<TagUse>? tagUses;
   List<TagSummary>? tagSummaries;
 
-  /// Who owes what: the People page, the Today card and every split row's
+  /// Who owes what: the People page, the Overview card and every split row's
   /// "to get back" line read these.
   List<PersonBalance>? people;
   Map<String, double>? billOwed;

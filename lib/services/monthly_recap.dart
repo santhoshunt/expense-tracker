@@ -5,7 +5,7 @@ import 'merchant_stats.dart';
 import 'spend_comparison.dart';
 
 /// Days at the start of a month that show last month's recap (on the
-/// dashboard's Month view). From the day after, Trends shows the running
+/// dashboard's Overview). From the day after, Trends shows the running
 /// month's pace instead: by the 26th, last month's totals are old news.
 const int kRecapDays = 7;
 
@@ -26,8 +26,8 @@ typedef BudgetStanding = ({
   double limit,
 });
 
-/// Last month at a glance, for the Month view's recap card. Every figure
-/// comes from the same provider totals the Month view's stat cards read, so the recap
+/// Last month at a glance, for the Overview's recap card. Every figure comes
+/// from the same provider totals the Overview stat cards read, so the recap
 /// never disagrees with the month it summarises. No income: the card is
 /// about spending and saving.
 class MonthlyRecap {

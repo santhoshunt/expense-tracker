@@ -15,7 +15,7 @@ import 'package:expense_tracker/widgets/monthly_recap_card.dart';
 
 import 'dashboard_test_utils.dart';
 
-/// The month cards: last month's recap on the Month view for the first
+/// The month cards: last month's recap on the Overview for the first
 /// week, this month's pace on Trends after, and where the views put them.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -38,7 +38,7 @@ void main() {
   Future<void> pump(
     WidgetTester tester, {
     required int day,
-    String view = 'Month',
+    String view = 'Overview',
     bool lastMonthData = true,
     void Function(String id, DateTime month)? onViewCategory,
   }) async {
@@ -83,7 +83,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    if (view != 'Today') await openDashboardView(tester, view);
+    if (view != 'Overview') await openDashboardView(tester, view);
   }
 
   Finder inRecap(Finder f) =>
@@ -158,7 +158,7 @@ void main() {
     expect(find.byType(MonthPaceCard), findsNothing, reason: 'Year view');
   });
 
-  testWidgets('the Month view has no pace card', (tester) async {
+  testWidgets('the Overview has no pace card', (tester) async {
     await pump(tester, day: 20);
     expect(find.byType(MonthPaceCard), findsNothing);
     expect(find.byType(MonthlyRecapCard), findsNothing);
@@ -198,7 +198,6 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await openDashboardView(tester, 'Month');
     expect(
       inRecap(find.textContaining('over by ${fmtMoney(300)}')),
       findsOneWidget,
@@ -220,23 +219,21 @@ void main() {
         month = m;
       },
     );
+    // Below the balance card, so maybe below the fold.
+    await tester.ensureVisible(inRecap(find.textContaining('Transport')));
+    await tester.pumpAndSettle();
     await tester.tap(inRecap(find.textContaining('Transport')));
     expect(id, 'transport');
     expect(month, lastMonth);
   });
 
-  testWidgets('Today leads with the balance; the recap sits on Month under '
+  testWidgets('the Overview leads with the balance; the recap sits under '
       'the selector', (tester) async {
-    await pump(tester, day: 3, view: 'Today');
+    await pump(tester, day: 3);
     double top(Finder f) => tester.getTopLeft(f).dy;
     final balance = find.byKey(const ValueKey('balance'));
-    expect(balance, findsOneWidget);
-    expect(find.byType(MonthlyRecapCard), findsNothing);
-    expect(find.byTooltip('Previous month'), findsNothing);
-
-    await openDashboardView(tester, 'Month');
-    expect(balance, findsNothing);
     final selector = find.byTooltip('Previous month');
+    expect(top(balance), lessThan(top(selector)));
     expect(top(selector), lessThan(top(find.byType(MonthlyRecapCard))));
   });
 }

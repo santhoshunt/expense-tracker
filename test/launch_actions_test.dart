@@ -148,8 +148,12 @@ void main() {
       );
     }
 
+    /// Leaves the Dashboard on Trends, goes to Transactions, then taps the
+    /// note: the view it lands on is the one the note chose.
     Future<void> tapNotification(WidgetTester tester) async {
       await pumpHome(tester, seed: seed);
+      await tester.tap(find.text('Trends'));
+      await settle(tester);
       await tester.tap(find.text('Transactions').last);
       await settle(tester);
       expect(find.text('Breakdown'), findsNothing);
@@ -164,10 +168,13 @@ void main() {
       expect(LaunchActions.instance.pending.value, isNull);
     }
 
-    testWidgets('in the recap week opens the recap on Month', (tester) async {
+    testWidgets('in the recap week opens the recap on the Overview', (
+      tester,
+    ) async {
       recapClock = () => DateTime(now.year, now.month, 3, 10);
       await tapNotification(tester);
-      // The recap lives on the Month view only.
+      // Back from Trends: its comparison is gone, the recap is showing.
+      expect(find.text('This month vs last month'), findsNothing);
       expect(find.byType(MonthlyRecapCard), findsOneWidget);
     });
 

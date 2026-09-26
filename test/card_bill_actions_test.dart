@@ -30,6 +30,15 @@ void main() {
     child: const MaterialApp(home: Scaffold(body: DashboardScreen())),
   );
 
+  /// The Upcoming card sits below the balance and the month block, so the
+  /// surface is tall enough to keep it on screen for taps.
+  Future<void> pumpApp(WidgetTester tester, FinanceProvider finance) async {
+    tester.view.physicalSize = const Size(800, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(app(finance));
+  }
+
   /// A card due today with ₹5,000 outstanding (manual figure, stamped well
   /// in the past so a recorded payment dated "now" is strictly newer).
   /// [dueInDays] shifts the due day; [stmtDay] sets a statement day.
@@ -66,7 +75,7 @@ void main() {
     tester,
   ) async {
     final (finance, id) = await seeded();
-    await tester.pumpWidget(app(finance));
+    await pumpApp(tester, finance);
     await pumpThrough(tester);
 
     expect(find.text('HDFC Card bill'), findsOneWidget);
@@ -101,7 +110,7 @@ void main() {
     tester,
   ) async {
     final (finance, id) = await seeded();
-    await tester.pumpWidget(app(finance));
+    await pumpApp(tester, finance);
     await pumpThrough(tester);
 
     await tester.tap(find.text('HDFC Card bill'));
@@ -144,7 +153,7 @@ void main() {
     tester,
   ) async {
     final (finance, _) = await seeded();
-    await tester.pumpWidget(app(finance));
+    await pumpApp(tester, finance);
     await pumpThrough(tester);
 
     await tester.tap(find.text('HDFC Card bill'));
@@ -168,7 +177,7 @@ void main() {
       stmtDay: now.add(const Duration(days: 1)).day,
       dueInDays: 3,
     );
-    await tester.pumpWidget(app(finance));
+    await pumpApp(tester, finance);
     await pumpThrough(tester);
 
     expect(
@@ -197,7 +206,7 @@ void main() {
       stmtDay: now.subtract(const Duration(days: 15)).day,
       dueInDays: 8,
     );
-    await tester.pumpWidget(app(finance));
+    await pumpApp(tester, finance);
     await pumpThrough(tester);
 
     final ctx = tester.element(find.byIcon(Icons.credit_card));
@@ -213,7 +222,7 @@ void main() {
     final (finance, _) = await seeded(
       stmtDay: now.subtract(const Duration(days: 15)).day,
     );
-    await tester.pumpWidget(app(finance));
+    await pumpApp(tester, finance);
     await pumpThrough(tester);
 
     expect(find.textContaining('Billed '), findsOneWidget);

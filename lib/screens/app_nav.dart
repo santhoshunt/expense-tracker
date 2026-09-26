@@ -81,7 +81,7 @@ class AppNav {
     _showRecap = null;
   }
 
-  /// The Dashboard's recap on the Month page, or after the recap week this
+  /// The Dashboard's recap on the Overview, or after the recap week this
   /// month so far on Trends, scrolled into view. Leaves open routes alone:
   /// callers switch the home tab themselves.
   void showRecap() => _showRecap?.call();

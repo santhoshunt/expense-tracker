@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 // Only tz.UTC is used (see scheduleRecap), which needs no zone database.
+// Since timezone 0.11.1 its name is "Etc/UTC", which the plugin hands to
+// Android's ZoneId as it did "UTC"; both are valid there.
 import 'package:timezone/timezone.dart' as tz;
 
 import 'launch_actions.dart';
@@ -71,7 +73,7 @@ class NotificationService {
     const android = AndroidInitializationSettings('@drawable/ic_stat_notify');
     const ios = DarwinInitializationSettings();
     await _plugin.initialize(
-      const InitializationSettings(android: android, iOS: ios),
+      settings: const InitializationSettings(android: android, iOS: ios),
       // Taps while the app is running; a tap that starts the app is read
       // from launchPayload() instead.
       onDidReceiveNotificationResponse: (r) =>
@@ -227,7 +229,12 @@ class NotificationService {
       ),
       iOS: DarwinNotificationDetails(),
     );
-    await _plugin.show(id, title, body, details);
+    await _plugin.show(
+      id: id,
+      title: title,
+      body: body,
+      notificationDetails: details,
+    );
   }
 
   /// The payload of the notification whose tap started the app, or null.
@@ -253,11 +260,11 @@ class NotificationService {
     if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
     await init();
     await _plugin.zonedSchedule(
-      recapNotificationId,
-      'Your $monthName recap',
-      'See how $monthName went.',
-      tz.TZDateTime.from(when, tz.UTC),
-      const NotificationDetails(
+      id: recapNotificationId,
+      title: 'Your $monthName recap',
+      body: 'See how $monthName went.',
+      scheduledDate: tz.TZDateTime.from(when, tz.UTC),
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           _recapChannelId,
           _recapChannelName,
@@ -265,8 +272,6 @@ class NotificationService {
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
       payload: kRecapPayload,
     );
   }
@@ -278,7 +283,7 @@ class NotificationService {
     await init();
     final pending = await _plugin.pendingNotificationRequests();
     if (pending.any((r) => r.id == recapNotificationId)) {
-      await _plugin.cancel(recapNotificationId);
+      await _plugin.cancel(id: recapNotificationId);
     }
   }
 }

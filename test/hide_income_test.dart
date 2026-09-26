@@ -89,7 +89,6 @@ void main() {
     final (finance, settings) = await seeded();
     await tester.pumpWidget(dashboard(finance, settings));
     await tester.pump(const Duration(milliseconds: 700));
-    await openDashboardView(tester, 'Month');
 
     // The stat card at the top (the chart legend is lazy-built lower down).
     expect(find.text('Income'), findsOneWidget);
@@ -120,7 +119,7 @@ void main() {
     // The legend entry is back…
     expect(find.text('Income'), findsAtLeastNWidgets(1));
     // …and so is the stat card, which lives on the other sub-tab.
-    await openDashboardView(tester, 'Month');
+    await openDashboardView(tester, 'Overview');
     expect(find.text('Income'), findsOneWidget);
     expect(find.text(fmtMoney(50000)), findsOneWidget);
   });

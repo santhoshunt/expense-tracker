@@ -211,7 +211,6 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
-    await openDashboardView(tester, 'Month');
 
     await tester.ensureVisible(find.text('Eating out'));
     await tester.pumpAndSettle();
@@ -260,7 +259,6 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
-    await openDashboardView(tester, 'Month');
     await tester.ensureVisible(find.text('Eating out'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Eating out'));
@@ -400,6 +398,11 @@ void main() {
     );
     await p.setManualBalance(id, 5000); // outstanding → bill row appears
     await p.setCardCycle(id, dueDay: DateTime.now().day);
+    // Upcoming sits below the balance and the month block: a tall surface
+    // keeps it on screen.
+    tester.view.physicalSize = const Size(800, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
 
@@ -800,7 +803,6 @@ void main() {
     );
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
-    await openDashboardView(tester, 'Month');
     final year = DateTime.now().year;
     final list = verticalScrollable();
     final monthLabel = find.text(
