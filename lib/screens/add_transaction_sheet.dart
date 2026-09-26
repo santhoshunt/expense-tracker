@@ -9,8 +9,26 @@ import '../widgets/picker_sheet.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/undo_snackbar.dart';
 
-Future<void> showAddTransactionSheet(BuildContext context, {Tx? existing}) {
-  return showModalBottomSheet(
+/// What a new entry starts with, for callers that already know (the People
+/// page's "Record repayment"). The kind follows the category.
+class TxPrefill {
+  final String categoryId;
+  final double? amount;
+
+  /// The payer, on a Repaid to me entry.
+  final String? person;
+
+  const TxPrefill({required this.categoryId, this.amount, this.person});
+}
+
+/// Opens the add sheet, or the edit sheet for [existing]. Completes with the
+/// new row's id after an add, and null otherwise (edit, delete, dismiss).
+Future<String?> showAddTransactionSheet(
+  BuildContext context, {
+  Tx? existing,
+  TxPrefill? prefill,
+}) {
+  return showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
     // Keeps the sheet (and its drag handle) below the status bar / notch —
@@ -21,7 +39,7 @@ Future<void> showAddTransactionSheet(BuildContext context, {Tx? existing}) {
     // to the sheet's own MediaQuery.
     builder: (ctx) => Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-      child: _AddTransactionForm(existing: existing),
+      child: _AddTransactionForm(existing: existing, prefill: prefill),
     ),
   );
 }
@@ -31,9 +49,26 @@ Future<void> showAddTransactionSheet(BuildContext context, {Tx? existing}) {
 /// transaction's type always comes from the selected category.
 enum _EntryKind { expense, income, transfer }
 
+/// One "Who owes what" row: the person, their amount, and whether their
+/// share was already settled (kept through the edit).
+class _PersonEntry {
+  final TextEditingController name;
+  final TextEditingController amount;
+
+  _PersonEntry({String name = '', String amount = ''})
+    : name = TextEditingController(text: name),
+      amount = TextEditingController(text: amount);
+
+  void dispose() {
+    name.dispose();
+    amount.dispose();
+  }
+}
+
 class _AddTransactionForm extends StatefulWidget {
   final Tx? existing;
-  const _AddTransactionForm({this.existing});
+  final TxPrefill? prefill;
+  const _AddTransactionForm({this.existing, this.prefill});
 
   @override
   State<_AddTransactionForm> createState() => _AddTransactionFormState();
@@ -60,6 +95,14 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   bool _isSplit = false;
   late final TextEditingController _shareCtrl;
 
+  /// Who else was in the split and what each owes. With any row here the
+  /// share is what they leave of the bill; with none, [_shareCtrl] holds it
+  /// and nobody's balance is tracked.
+  final List<_PersonEntry> _people = [];
+
+  /// The payer, on a Repaid to me entry.
+  late final TextEditingController _fromCtrl;
+
   /// Tags chosen so far, and the field's not-yet-added text.
   late List<String> _tags;
   final _tagCtrl = TextEditingController();
@@ -85,6 +128,11 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _senderCtrl.text,
     _isSplit.toString(),
     _shareCtrl.text,
+    // Only what a save would keep: rows under an unticked split and a From
+    // on another category are ignored by the save, so by the guard too.
+    if (_kind == _EntryKind.expense && _isSplit)
+      for (final p in _people) '${p.name.text}:${p.amount.text}',
+    if (_categoryId == kRepaidToMeCategoryId) _fromCtrl.text,
     pendingTagsOf(_tags, _tagCtrl).join('|'),
     _accountId ?? '',
     _date.toIso8601String(),
@@ -94,18 +142,33 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   void initState() {
     super.initState();
     final e = widget.existing;
-    if (e == null) {
+    final prefill = e == null ? widget.prefill : null;
+    final startCategory =
+        e?.category ??
+        (prefill == null ? null : categoryById(prefill.categoryId));
+    if (startCategory == null) {
       _kind = _EntryKind.expense;
-    } else if (e.category.isTransfer) {
+    } else if (startCategory.isTransfer) {
       _kind = _EntryKind.transfer;
     } else {
-      _kind = e.type == TxType.income ? _EntryKind.income : _EntryKind.expense;
+      // The row's own type: a dangling category id falls back to an "Other"
+      // of either direction.
+      final type = e?.type ?? startCategory.type;
+      _kind = type == TxType.income ? _EntryKind.income : _EntryKind.expense;
     }
-    _categoryId = e?.categoryId ?? _categoriesFor(_kind).first.id;
+    _categoryId =
+        e?.categoryId ?? prefill?.categoryId ?? _categoriesFor(_kind).first.id;
     _date = e?.date ?? DateTime.now();
+    final startAmount = e?.amount ?? prefill?.amount;
     _amountCtrl = TextEditingController(
-      text: e == null ? '' : e.amount.toStringAsFixed(2),
+      text: startAmount == null ? '' : startAmount.toStringAsFixed(2),
     );
+    _fromCtrl = TextEditingController(text: e?.repaidBy ?? prefill?.person);
+    for (final p in e?.people ?? const <SplitShare>[]) {
+      _people.add(
+        _PersonEntry(name: p.name, amount: p.amount.toStringAsFixed(2)),
+      );
+    }
     _noteCtrl = TextEditingController(text: e?.note ?? '');
     _senderCtrl = TextEditingController(text: e?.sender ?? '');
     _isSplit = e?.myShare != null;
@@ -130,6 +193,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _noteCtrl.dispose();
     _senderCtrl.dispose();
     _shareCtrl.dispose();
+    _fromCtrl.dispose();
+    for (final p in _people) {
+      p.dispose();
+    }
     _tagCtrl.dispose();
     super.dispose();
   }
@@ -187,20 +254,97 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     return '${fmtMoney(total - share)} tracked as $label';
   }
 
+  static double _paise(double x) => (x * 100).round() / 100;
+
+  /// What the people rows add up to so far; rows without a number count 0.
+  double _peopleTotal() => _paise(
+    _people.fold(0.0, (s, p) => s + (parseAmount(p.amount.text) ?? 0)),
+  );
+
+  /// Adds a "Who owes what" row, named [name] when a suggestion was
+  /// tapped (filling an empty row first). The first row on a split that
+  /// only had a share starts with what that share left over.
+  void _addPerson([String name = '']) {
+    setState(() {
+      final blank = name.isEmpty
+          ? null
+          : _people.where((p) => p.name.text.trim().isEmpty).firstOrNull;
+      if (blank != null) {
+        blank.name.text = name;
+        return;
+      }
+      if (_people.length >= kMaxSplitPeople) return;
+      var amount = '';
+      if (_people.isEmpty) {
+        final total = parseAmount(_amountCtrl.text);
+        final share = parseAmount(_shareCtrl.text);
+        if (total != null && share != null && share >= 0 && share < total) {
+          amount = _paise(total - share).toStringAsFixed(2);
+        }
+      }
+      _people.add(_PersonEntry(name: name, amount: amount));
+    });
+  }
+
+  void _removePerson(_PersonEntry p) {
+    // A second tap before the next frame must not dispose it twice.
+    if (!_people.contains(p)) return;
+    setState(() => _people.remove(p));
+    // After the frame: the row's fields still hold the controllers.
+    WidgetsBinding.instance.addPostFrameCallback((_) => p.dispose());
+  }
+
+  /// Everyone gets the same whole-paise part of the bill, you included;
+  /// the paise that don't divide stay with your share.
+  void _splitEvenly() {
+    final total = parseAmount(_amountCtrl.text);
+    if (total == null || total <= 0 || _people.isEmpty) return;
+    final each = (total * 100).round() ~/ (_people.length + 1);
+    setState(() {
+      for (final p in _people) {
+        p.amount.text = (each / 100).toStringAsFixed(2);
+      }
+    });
+  }
+
   Future<void> _save() async {
     if (_busy) return;
     if (!_formKey.currentState!.validate()) return;
     final amount = parseAmount(_amountCtrl.text)!;
     // The share is only meaningful on plain expenses; income and transfer
     // kinds hide the checkbox, so saving them always clears it.
-    final myShare = _kind == _EntryKind.expense && _isSplit
-        ? parseAmount(_shareCtrl.text)
-        : null;
+    final split = _kind == _EntryKind.expense && _isSplit;
+    final tracked = split && _people.isNotEmpty;
+    // A share settled by hand stays settled through the edit.
+    final wasSettled = {
+      for (final p in widget.existing?.people ?? const <SplitShare>[])
+        if (p.settled) personKey(p.name),
+    };
+    final people = [
+      if (tracked)
+        for (final p in _people)
+          SplitShare(
+            name: normalizePersonName(p.name.text),
+            amount: parseAmount(p.amount.text)!,
+            settled: wasSettled.contains(
+              personKey(normalizePersonName(p.name.text)),
+            ),
+          ),
+    ];
+    final myShare = !split
+        ? null
+        : tracked
+        ? _paise(amount - _peopleTotal())
+        : parseAmount(_shareCtrl.text);
+    final from = _categoryId == kRepaidToMeCategoryId
+        ? normalizePersonName(_fromCtrl.text)
+        : '';
     final finance = context.read<FinanceProvider>();
     final navigator = Navigator.of(context);
     // Text typed in the tag field but not yet added is saved too.
     final tags = pendingTagsOf(_tags, _tagCtrl);
     setState(() => _busy = true);
+    String? newId;
 
     try {
       if (isEditing) {
@@ -215,6 +359,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             myShare: myShare,
             clearMyShare: myShare == null,
             tags: tags,
+            people: people,
+            repaidBy: from.isEmpty ? null : from,
+            clearRepaidBy: from.isEmpty,
           ),
         );
         if (_accountId != null && _accountId != _initialAccountId) {
@@ -230,14 +377,17 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           sender: _senderCtrl.text.trim(),
           myShare: myShare,
           tags: tags,
+          people: people,
+          repaidBy: from.isEmpty ? null : from,
         );
         if (_accountId != null) await finance.assignAccount(id, _accountId!);
+        newId = id;
       }
     } catch (_) {
       if (mounted) setState(() => _busy = false);
       rethrow;
     }
-    navigator.pop();
+    navigator.pop(newId);
   }
 
   Future<void> _delete() async {
@@ -314,6 +464,165 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         ],
       ),
     );
+  }
+
+  /// Names used before, as one-tap chips, leaving out anyone already on
+  /// this bill (or already in the From field). [onPick] defaults to adding
+  /// a people row.
+  List<Widget> _peopleSuggestions(
+    BuildContext context, {
+    void Function(String name)? onPick,
+  }) {
+    final taken = {
+      for (final p in _people) personKey(p.name.text.trim()),
+      if (onPick != null) personKey(_fromCtrl.text.trim()),
+    };
+    final names = [
+      for (final n in context.read<FinanceProvider>().knownPeople)
+        if (!taken.contains(personKey(n))) n,
+    ].take(6).toList();
+    if (names.isEmpty) return const [];
+    return [
+      const SizedBox(height: 4),
+      Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          for (final n in names)
+            ActionChip(
+              avatar: const Icon(Icons.person_outline, size: 16),
+              label: Text(n),
+              onPressed: () => (onPick ?? _addPerson)(n),
+            ),
+        ],
+      ),
+    ];
+  }
+
+  /// "Who owes what": a row per person, then Split evenly, the names used
+  /// before, and your share as what the rows leave of the bill.
+  List<Widget> _peopleRows(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final settled = {
+      for (final p in widget.existing?.people ?? const <SplitShare>[])
+        if (p.settled) personKey(p.name),
+    };
+    return [
+      const SizedBox(height: 8),
+      Row(
+        children: [
+          Expanded(child: Text('Who owes what', style: text.titleSmall)),
+          TextButton(
+            onPressed: _splitEvenly,
+            child: const Text('Split evenly'),
+          ),
+        ],
+      ),
+      for (final (i, p) in _people.indexed)
+        Padding(
+          // Keyed by the entry: removing a row mid-list must not hand its
+          // neighbour's field state to the wrong person.
+          key: ObjectKey(p),
+          padding: const EdgeInsets.only(top: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                flex: 3,
+                child: TextFormField(
+                  controller: p.name,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: InputDecoration(
+                    labelText: 'Name',
+                    helperText: settled.contains(personKey(p.name.text.trim()))
+                        ? 'Settled'
+                        : null,
+                  ),
+                  onChanged: (_) => setState(() {}),
+                  validator: (v) {
+                    final name = normalizePersonName(v ?? '');
+                    if (name.isEmpty) return 'Enter a name';
+                    final k = personKey(name);
+                    final earlier = _people
+                        .take(i)
+                        .any(
+                          (o) =>
+                              personKey(normalizePersonName(o.name.text)) == k,
+                        );
+                    return earlier ? '$name is listed twice' : null;
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: TextFormField(
+                  controller: p.amount,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Owes',
+                    prefixText: '₹ ',
+                  ),
+                  onChanged: (_) => setState(() {}),
+                  validator: (v) {
+                    final a = parseAmount(v ?? '');
+                    return a == null || a <= 0 ? 'Enter an amount' : null;
+                  },
+                ),
+              ),
+              IconButton(
+                tooltip:
+                    'Remove ${p.name.text.trim().isEmpty ? 'person' : p.name.text.trim()}',
+                onPressed: () => _removePerson(p),
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+        ),
+      if (_people.length < kMaxSplitPeople)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: _addPerson,
+            icon: const Icon(Icons.person_add_alt_1, size: 18),
+            label: const Text('Add person'),
+          ),
+        ),
+      ..._peopleSuggestions(context),
+      const SizedBox(height: 8),
+      // The share is derived, so the over-total check lives on its line.
+      FormField<void>(
+        validator: (_) {
+          final total = parseAmount(_amountCtrl.text);
+          if (total == null) return null;
+          return _peopleTotal() > total + 0.005
+              ? "People's amounts add up to more than the bill"
+              : null;
+        },
+        builder: (_) {
+          final total = parseAmount(_amountCtrl.text);
+          // Live, not only on save: a negative "your share" would read as a
+          // bug. The validator's same check blocks the save; its stored
+          // errorText would linger after the amounts were fixed.
+          final over = total != null && _peopleTotal() > total + 0.005;
+          final error = over
+              ? "People's amounts add up to more than the bill"
+              : null;
+          return Text(
+            error ??
+                (total == null
+                    ? 'Your share: what the others leave of the bill'
+                    : 'Your share ${fmtMoney(_paise(total - _peopleTotal()))}'),
+            style: text.bodyMedium?.copyWith(
+              color: error != null ? scheme.error : scheme.onSurfaceVariant,
+            ),
+          );
+        },
+      ),
+    ];
   }
 
   @override
@@ -480,7 +789,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
-                  if (_isSplit) ...[
+                  if (_isSplit && _people.isNotEmpty) ..._peopleRows(context),
+                  if (_isSplit && _people.isEmpty) ...[
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _shareCtrl,
@@ -505,9 +815,34 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                       },
                       onChanged: (_) => setState(() {}),
                     ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: _addPerson,
+                        icon: const Icon(Icons.person_add_alt_1, size: 18),
+                        label: const Text('Add who owes what'),
+                      ),
+                    ),
+                    ..._peopleSuggestions(context),
                   ],
                   // Same 16dp rhythm below the split block as between every
                   // other field.
+                  const SizedBox(height: 16),
+                ],
+                if (_categoryId == kRepaidToMeCategoryId) ...[
+                  TextFormField(
+                    controller: _fromCtrl,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(
+                      labelText: 'From',
+                      helperText: 'Name them to pay down what they owe',
+                    ),
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  ..._peopleSuggestions(
+                    context,
+                    onPick: (n) => setState(() => _fromCtrl.text = n),
+                  ),
                   const SizedBox(height: 16),
                 ],
                 TextFormField(

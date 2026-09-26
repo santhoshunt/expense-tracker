@@ -490,7 +490,8 @@ Future<void> showCategoryDialog(
   final finance = context.read<FinanceProvider>();
   final isBuiltIn = existing != null && finance.isBuiltinCategory(existing.id);
   final isFallback =
-      existing != null && FinanceProvider.isFallbackCategory(existing.id);
+      existing != null && FinanceProvider.hasLockedStructure(existing.id);
+  final isRepaid = existing?.id == kRepaidToMeCategoryId;
   final labelCtrl = TextEditingController(text: existing?.label ?? '');
   var type = existing?.type ?? TxType.expense;
   var isTransfer = existing?.isTransfer ?? false;
@@ -550,13 +551,19 @@ Future<void> showCategoryDialog(
                   const SizedBox(height: 16),
                   // Direction and transfer-ness are editable for everything
                   // except the fallback "Other" categories — those are the
-                  // app's hard-coded remap targets.
+                  // app's hard-coded remap targets — and Repaid to me, which
+                  // must stay a money-in transfer so repayments never count
+                  // as income.
                   if (isFallback)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        'Direction is fixed for the fallback "Other" '
-                        'categories.',
+                        isRepaid
+                            ? 'Repaid to me always stays a money-in '
+                                  'transfer, so repayments never count as '
+                                  'income.'
+                            : 'Direction is fixed for the fallback "Other" '
+                                  'categories.',
                         style: Theme.of(ctx).textTheme.bodySmall,
                       ),
                     ),

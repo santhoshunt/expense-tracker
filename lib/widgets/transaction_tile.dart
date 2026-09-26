@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../models/transaction.dart';
+import '../providers/finance_provider.dart';
 import '../screens/add_transaction_sheet.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
@@ -24,6 +26,32 @@ class TransactionTile extends StatelessWidget {
     this.selected = false,
     this.onToggleSelect,
   });
+
+  /// "₹2,200 to get back · Arun, Priya" (or "Settled · …") on a split that
+  /// names its people; "from Arun" on a repayment; null otherwise.
+  String? _peopleLine(BuildContext context) {
+    if (tx.categoryId == kRepaidToMeCategoryId && tx.repaidBy != null) {
+      return 'from ${tx.repaidBy}';
+    }
+    // Only a bill's people count: a row moved to income or a transfer by a
+    // path that hasn't cleaned it yet shows nothing.
+    if (!tx.tracksPeople ||
+        tx.type != TxType.expense ||
+        isTransferCategory(tx.categoryId)) {
+      return null;
+    }
+    // The figure leads, so a long list of names cuts off first.
+    final names = tx.people.map((p) => p.name).join(', ');
+    // Balances cover confirmed rows only; a pending bill shows its full
+    // friends' part until it is confirmed.
+    if (tx.pending) return '${fmtMoney(tx.frontedAmount)} to get back · $names';
+    final owed = context.select<FinanceProvider, double>(
+      (f) => f.billOwed(tx.id),
+    );
+    return owed > 0
+        ? '${fmtMoney(owed)} to get back · $names'
+        : 'Settled · $names';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -221,6 +249,17 @@ class TransactionTile extends StatelessWidget {
                                 color: accentTextColor(context),
                               ),
                             ),
+                          // Who owes what on a split, or who paid back on a
+                          // repayment.
+                          if (_peopleLine(context) case final line?)
+                            Text(
+                              line,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -248,7 +287,11 @@ class TransactionTile extends StatelessWidget {
                           // Group split: the full amount above mirrors the
                           // bank debit; this line shows what actually counts
                           // as the user's own spend.
-                          if (tx.isSplit)
+                          // Expense rows outside the transfers only, the
+                          // one place a share means anything.
+                          if (tx.isSplit &&
+                              tx.type == TxType.expense &&
+                              !isTransferCategory(tx.categoryId))
                             FittedBox(
                               fit: BoxFit.scaleDown,
                               child: Text(
