@@ -2,10 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data' show BytesBuilder;
 
-import 'package:extension_google_sign_in_as_googleapis_auth/extension_google_sign_in_as_googleapis_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:google_sign_in_platform_interface/google_sign_in_platform_interface.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
+import 'package:googleapis_auth/googleapis_auth.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/finance_provider.dart';
@@ -45,28 +47,171 @@ class CloudBackup {
   });
 }
 
+/// Shown when Drive access has to be granted again (revoked, or a 6.x
+/// connection Android didn't carry over). Settings offers Reconnect for it.
+const kDriveReconnectMessage =
+    'Reconnect Google Drive in Settings to keep backing up.';
+
+/// Why Drive access could not be had. [message] is shown as is.
+class DriveAuthException implements Exception {
+  final String message;
+  const DriveAuthException(this.message);
+  @override
+  String toString() => message;
+}
+
+/// Drive access tokens, behind a seam so tests can fake Google.
+abstract class DriveAuth {
+  /// A token for [scopes] without any UI, or null when the user has to
+  /// grant access first. [email] pins the account; without it Google Play
+  /// services picks one.
+  Future<String?> silentToken(List<String> scopes, {String? email});
+
+  /// Asks the user (account picker, then consent; with [email], that
+  /// account's consent only). Throws [DriveAuthException] when cancelled
+  /// or refused. Only from a tap.
+  Future<String> interactiveToken(List<String> scopes, {String? email});
+
+  /// Drops a token Google rejected, so the next request gets a fresh one.
+  Future<void> forget(String accessToken);
+
+  Future<void> signOut();
+}
+
+/// [DriveAuth] over google_sign_in 7's authorization client. Authorization
+/// only, no sign-in: that needs just the Android OAuth client (package +
+/// signing SHA-1), not the Web client ID a Credential Manager sign-in does.
+class GoogleDriveAuth implements DriveAuth {
+  Future<void>? _init;
+
+  Future<void> _ready() =>
+      _init ??= GoogleSignIn.instance.initialize().catchError((Object e) {
+        _init = null; // retry next time rather than cache the failure
+        throw e;
+      });
+
+  static const _cancelled = DriveAuthException(
+    'Google Drive access was cancelled.',
+  );
+  static const _notSetUp = DriveAuthException(
+    "Google Drive access isn't set up for this build of the app.",
+  );
+
+  /// Android's authorize path reports most failures as unknownError with
+  /// the Play services status code in the text ("SDK reported an
+  /// exception: 16: ..."): 16 is CANCELED, 10 DEVELOPER_ERROR (the OAuth
+  /// client's package or signing SHA-1 doesn't match this build).
+  @visibleForTesting
+  static DriveAuthException mapped(GoogleSignInException e) {
+    switch (e.code) {
+      case GoogleSignInExceptionCode.canceled:
+      case GoogleSignInExceptionCode.interrupted:
+        return _cancelled;
+      case GoogleSignInExceptionCode.clientConfigurationError:
+      case GoogleSignInExceptionCode.providerConfigurationError:
+        return _notSetUp;
+      default:
+        final status = RegExp(
+          r'exception: (\d+)',
+        ).firstMatch(e.description ?? '')?.group(1);
+        if (status == '16') return _cancelled;
+        if (status == '10') return _notSetUp;
+        debugPrint('Google Drive authorization failed: ${e.description}');
+        return const DriveAuthException(
+          "Google Drive access didn't go through. Try again.",
+        );
+    }
+  }
+
+  /// Through the platform interface rather than
+  /// `GoogleSignIn.instance.authorizationClient`, whose requests never name
+  /// an account: without one, Play services picks the app's default
+  /// account, which only a (never used) Credential Manager sign-in sets.
+  Future<String?> _authorize(
+    List<String> scopes, {
+    required String? email,
+    required bool prompt,
+  }) async {
+    await _ready();
+    try {
+      final data = await GoogleSignInPlatform.instance
+          .clientAuthorizationTokensForScopes(
+            ClientAuthorizationTokensForScopesParameters(
+              request: AuthorizationRequestDetails(
+                scopes: scopes,
+                userId: null,
+                email: email,
+                promptIfUnauthorized: prompt,
+              ),
+            ),
+          );
+      return data?.accessToken;
+    } on GoogleSignInException catch (e) {
+      throw mapped(e);
+    }
+  }
+
+  @override
+  Future<String?> silentToken(List<String> scopes, {String? email}) =>
+      _authorize(scopes, email: email, prompt: false);
+
+  @override
+  Future<String> interactiveToken(List<String> scopes, {String? email}) async {
+    final token = await _authorize(scopes, email: email, prompt: true);
+    if (token == null) throw _cancelled;
+    return token;
+  }
+
+  @override
+  Future<void> forget(String accessToken) async {
+    try {
+      await _ready();
+      await GoogleSignIn.instance.authorizationClient.clearAuthorizationToken(
+        accessToken: accessToken,
+      );
+    } catch (_) {
+      // Best effort: an unusable token simply fails again.
+    }
+  }
+
+  @override
+  Future<void> signOut() async {
+    try {
+      await _ready();
+      await GoogleSignIn.instance.signOut();
+    } catch (_) {
+      // Nothing signed in, or no plugin (tests).
+    }
+  }
+}
+
 /// Google Drive backup: daily/weekly/monthly auto-upload of the JSON backup
 /// (gzipped) into a visible "Expense Tracker Backups" folder in My Drive,
-/// plus restore of the newest one. Mirrors the Orbit app's service, with
-/// restore added.
+/// plus restore of the newest one.
 ///
 /// Prerequisites (one-time, Google Cloud Console):
-///  1. A project with the Drive API enabled and an OAuth consent screen in
-///     Testing mode listing the user's account.
+///  1. A project with the Drive API enabled and an OAuth consent screen
+///     listing the user's account.
 ///  2. An Android OAuth client for applicationId
 ///     `com.fabletest.expense_tracker` registered with the signing SHA-1
 ///     (release keystore, plus the debug keystore for `flutter run`).
-///     No google-services.json is needed. A missing/mismatched client makes
-///     signIn() return null with no further error.
+///     No google-services.json and no Web client ID: the app asks only for
+///     Drive access, never a Google sign-in. A missing or mismatched client
+///     shows as "isn't set up for this build".
 ///
 /// Scope is `drive.file`: the app can only see files it created — enough to
 /// manage its folder and backups, and that access survives reinstalls
 /// (identity is the OAuth client, not the install).
+///
+/// google_sign_in 7 keeps no signed-in user, so "connected" is the email
+/// stored at connect time. A connection made by 6.x (before 1.21) is
+/// adopted silently on first use when Android still holds the grant.
 class DriveBackupService {
   static const _freqKey = 'drive_backup_frequency';
   static const _lastKey = 'drive_last_backup_at';
   static const _folderIdKey = 'drive_backup_folder_id';
   static const _lastErrorKey = 'drive_last_error';
+  static const _emailKey = 'drive_connected_email';
 
   static const folderName = 'Expense Tracker Backups';
   static const _filePrefix = 'expense_tracker_backup_';
@@ -76,23 +221,81 @@ class DriveBackupService {
 
   static const _scopes = [drive.DriveApi.driveFileScope];
 
-  final GoogleSignIn _googleSignIn;
+  final DriveAuth _auth;
+  final http.Client Function() _httpClient;
 
-  DriveBackupService({GoogleSignIn? googleSignIn})
-    : _googleSignIn = googleSignIn ?? GoogleSignIn(scopes: _scopes);
+  DriveBackupService({DriveAuth? auth, http.Client Function()? httpClient})
+    : _auth = auth ?? GoogleDriveAuth(),
+      _httpClient = httpClient ?? http.Client.new;
 
-  // --- Auth -----------------------------------------------------------------
+  /// The token of the last Drive request, for [disconnect] to drop.
+  String? _lastToken;
 
-  /// Cached account, else a silent sign-in — never shows UI.
-  Future<GoogleSignInAccount?> get currentUser async =>
-      _googleSignIn.currentUser ?? await _googleSignIn.signInSilently();
+  // --- Connection -------------------------------------------------------------
 
-  /// Interactive sign-in; only call from an explicit user tap.
-  Future<GoogleSignInAccount?> signIn() => _googleSignIn.signIn();
-
-  Future<void> signOut() async {
-    await _googleSignIn.signOut();
+  /// The connected Google account's email, or null when Drive backup is
+  /// off. Never shows UI. A 6.x-era connection (a last backup or a folder,
+  /// but no stored email) is adopted here when Android still has its
+  /// grant; when it doesn't, the reconnect message lands in [lastError].
+  Future<String?> connectedEmail() async {
     final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_emailKey);
+    if (stored != null) return stored;
+    if (prefs.getString(_lastKey) == null &&
+        prefs.getString(_folderIdKey) == null) {
+      return null; // never connected
+    }
+    try {
+      final token = await _auth.silentToken(_scopes);
+      if (token == null) {
+        await prefs.setString(_lastErrorKey, kDriveReconnectMessage);
+        return null;
+      }
+      final email = await _emailFor(token);
+      await prefs.setString(_emailKey, email);
+      return email;
+    } on DriveAuthException catch (e) {
+      await prefs.setString(_lastErrorKey, e.message);
+      return null;
+    } on AccessDeniedException {
+      await prefs.setString(_lastErrorKey, kDriveReconnectMessage);
+      return null;
+    } catch (e) {
+      // Offline, most likely: the grant may be fine, so no reconnect
+      // prompt; the next launch tries again.
+      debugPrint('Drive connection check failed: $e');
+      return null;
+    }
+  }
+
+  /// Asks for Drive access (account picker, consent) and remembers the
+  /// account. Only call from an explicit user tap. Throws
+  /// [DriveAuthException] when it doesn't happen.
+  Future<String> connect() async {
+    try {
+      final token = await _auth.interactiveToken(_scopes);
+      final email = await _emailFor(token);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_emailKey, email);
+      await prefs.remove(_lastErrorKey);
+      return email;
+    } on DriveAuthException {
+      rethrow;
+    } catch (e) {
+      debugPrint('Drive connect failed: $e');
+      throw const DriveAuthException(
+        "Couldn't connect Google Drive. Check the connection and try again.",
+      );
+    }
+  }
+
+  Future<void> disconnect() async {
+    final token = _lastToken;
+    _lastToken = null;
+    if (token != null) await _auth.forget(token);
+    await _auth.signOut();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_emailKey);
     await prefs.remove(_folderIdKey);
     // Account-scoped state must not survive a disconnect: a stale error
     // banner would contradict "Off until connected", and a stale last-backup
@@ -102,16 +305,85 @@ class DriveBackupService {
     await prefs.remove(_lastErrorKey);
   }
 
-  Future<drive.DriveApi> _api() async {
-    final account = await currentUser;
-    if (account == null) {
-      throw Exception('Not signed in to Google');
+  /// The account behind [token], from Drive's own about.get (allowed under
+  /// `drive.file`), so no Google sign-in is needed to name it.
+  Future<String> _emailFor(String token) async {
+    final about = await _withDrive(
+      (api) => api.about.get($fields: 'user(emailAddress)'),
+      firstToken: token,
+    );
+    final email = about.user?.emailAddress;
+    if (email == null || email.isEmpty) {
+      throw const DriveAuthException(
+        "Couldn't read which Google account was connected.",
+      );
     }
-    final client = await _googleSignIn.authenticatedClient();
-    if (client == null) {
-      throw Exception('Could not get an authenticated Google client');
+    return email;
+  }
+
+  /// A fresh token for each operation (they last an hour; nothing here
+  /// tracks expiry), for the stored account. Null from the silent path
+  /// means access has to be granted again: a tap ([interactive]) asks for
+  /// it there and then; a scheduled run records the reconnect message.
+  Future<String> _token({bool interactive = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final email = prefs.getString(_emailKey);
+    var token = await _auth.silentToken(_scopes, email: email);
+    if (token == null && interactive) {
+      token = await _auth.interactiveToken(_scopes, email: email);
     }
-    return drive.DriveApi(client);
+    if (token == null) throw const DriveAuthException(kDriveReconnectMessage);
+    _lastToken = token;
+    return token;
+  }
+
+  Future<T> _run<T>(
+    String token,
+    Future<T> Function(drive.DriveApi api) op,
+  ) async {
+    final base = _httpClient();
+    final client = authenticatedClient(
+      base,
+      AccessCredentials(
+        AccessToken(
+          'Bearer',
+          token,
+          DateTime.now().toUtc().add(const Duration(minutes: 55)),
+        ),
+        null,
+        _scopes,
+      ),
+    );
+    try {
+      return await op(drive.DriveApi(client));
+    } finally {
+      client.close();
+      base.close();
+    }
+  }
+
+  /// Runs [op] against Drive. A token Google rejects is dropped and the
+  /// operation retried once with a fresh one. Google answers a bad token
+  /// with 401 plus `WWW-Authenticate`, which googleapis_auth turns into
+  /// [AccessDeniedException] before googleapis sees it; a bare 401 arrives
+  /// as [drive.DetailedApiRequestError].
+  Future<T> _withDrive<T>(
+    Future<T> Function(drive.DriveApi api) op, {
+    String? firstToken,
+    bool interactive = false,
+  }) async {
+    final token = firstToken ?? await _token(interactive: interactive);
+    _lastToken = token;
+    try {
+      return await _run(token, op);
+    } on Exception catch (e) {
+      final rejected =
+          e is AccessDeniedException ||
+          (e is drive.DetailedApiRequestError && e.status == 401);
+      if (!rejected) rethrow;
+      await _auth.forget(token);
+      return _run(await _token(interactive: interactive), op);
+    }
   }
 
   // --- Preferences ------------------------------------------------------------
@@ -191,13 +463,20 @@ class DriveBackupService {
 
   /// Uploads a fresh backup and prunes old ones down to [keepBackups].
   /// Returns the uploaded file name.
+  /// [interactive] (a tap) may ask for Drive access again when it was
+  /// lost; the scheduled run never does.
   Future<String> uploadNow(
     FinanceProvider finance, {
     Map<String, dynamic>? settings,
+    bool interactive = false,
   }) {
     return _inFlightUpload ??= () async {
       try {
-        return await _uploadNow(finance, settings: settings);
+        return await _uploadNow(
+          finance,
+          settings: settings,
+          interactive: interactive,
+        );
       } catch (e) {
         // Persist the failure so Settings shows it even when the caller
         // only toasts — a failed manual "Back up now" used to leave no
@@ -218,6 +497,7 @@ class DriveBackupService {
   Future<String> _uploadNow(
     FinanceProvider finance, {
     Map<String, dynamic>? settings,
+    required bool interactive,
   }) async {
     // Snapshot the ledger BEFORE any network await: sign-in and folder
     // lookups take seconds, and a "Delete all data" landing in that window
@@ -228,9 +508,6 @@ class DriveBackupService {
     // the provider; a replace-mode restore applies it back.
     if (settings != null) payload['settings'] = settings;
 
-    final api = await _api();
-    final folderId = await _folderId(api);
-
     final bytes = await compute(
       encodeBackupGz,
       payload,
@@ -239,27 +516,33 @@ class DriveBackupService {
     final now = DateTime.now();
     final name = backupFileName(now);
 
-    // A fresh Media per attempt: its stream is single-subscription, so it
-    // must never be reused across retries (Orbit's update→create fallback
-    // bug).
-    await api.files.create(
-      drive.File()
-        ..name = name
-        ..mimeType = 'application/gzip'
-        ..parents = [folderId],
-      uploadMedia: drive.Media(
-        Stream.fromIterable([bytes]),
-        bytes.length,
-        contentType: 'application/gzip',
-      ),
-    );
+    return _withDrive(interactive: interactive, (api) async {
+      final folderId = await _folderId(api);
+      // A fresh Media per attempt: its stream is single-subscription, so it
+      // must never be reused across retries (the 401 retry included).
+      await api.files.create(
+        drive.File()
+          ..name = name
+          ..mimeType = 'application/gzip'
+          ..parents = [folderId],
+        uploadMedia: drive.Media(
+          Stream.fromIterable([bytes]),
+          bytes.length,
+          contentType: 'application/gzip',
+        ),
+      );
 
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_lastKey, now.toIso8601String());
-    await prefs.remove(_lastErrorKey);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_lastKey, now.toIso8601String());
+      await prefs.remove(_lastErrorKey);
+      await _prune(api, folderId);
+      return name;
+    });
+  }
 
-    // Retention: newest [keepBackups] stay, older ones go. Best-effort — a
-    // prune hiccup must not fail the successful upload.
+  /// Retention: newest [keepBackups] stay, older ones go. Best-effort — a
+  /// prune hiccup must not fail the successful upload.
+  Future<void> _prune(drive.DriveApi api, String folderId) async {
     try {
       // Paged: a folder that ever exceeds one page (e.g. after repeated
       // prune failures) must still be pruned in full, not just its first
@@ -286,7 +569,6 @@ class DriveBackupService {
     } catch (e) {
       debugPrint('Drive prune failed (upload succeeded): $e');
     }
-    return name;
   }
 
   /// Downloads the newest cloud backup, parsed and ready for
@@ -295,8 +577,10 @@ class DriveBackupService {
   /// Falls back through the next-newest files when the newest one is
   /// corrupt (e.g. an upload aborted mid-create) — one bad file must not
   /// make every older good backup unreachable.
-  Future<CloudBackup> downloadLatest() async {
-    final api = await _api();
+  Future<CloudBackup> downloadLatest({bool interactive = false}) =>
+      _withDrive(_downloadLatest, interactive: interactive);
+
+  Future<CloudBackup> _downloadLatest(drive.DriveApi api) async {
     final folderId = await _folderId(api);
     final listed = await api.files.list(
       q:
@@ -356,8 +640,8 @@ class DriveBackupService {
     Map<String, dynamic>? settings,
   }) async {
     try {
-      final account = await currentUser;
-      if (account == null) return; // Drive backup not connected — opt-in.
+      final email = await connectedEmail();
+      if (email == null) return; // Drive backup not connected — opt-in.
       // Never let an empty ledger become the newest backup: a scheduled run
       // racing "Delete all data" (or firing on a freshly wiped device)
       // would push the real backups toward the retention cliff.

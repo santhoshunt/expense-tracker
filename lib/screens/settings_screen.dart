@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 // ScrollCacheExtent is not yet re-exported through material.dart.
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
-import 'package:google_sign_in/google_sign_in.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -174,7 +173,9 @@ class _DriveBackupSection extends StatefulWidget {
 
 class _DriveBackupSectionState extends State<_DriveBackupSection> {
   bool _loading = true;
-  GoogleSignInAccount? _account;
+
+  /// The connected Google account, or null when Drive backup is off.
+  String? _email;
   String _freq = 'daily';
   DateTime? _lastBackup;
   String? _lastError;
@@ -201,19 +202,19 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
 
   Future<void> _load() async {
     final svc = context.read<DriveBackupService>();
-    GoogleSignInAccount? account;
+    String? email;
     try {
-      account = await svc.currentUser;
+      email = await svc.connectedEmail();
     } catch (_) {
       // Platform channel unavailable (tests / unsupported OS) → signed out.
-      account = null;
+      email = null;
     }
     final freq = await svc.getFrequency();
     final last = await svc.lastBackupAt();
     final error = await svc.lastError();
     if (!mounted) return;
     setState(() {
-      _account = account;
+      _email = email;
       _freq = freq;
       _lastBackup = last;
       _lastError = error;
@@ -224,33 +225,39 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
   Future<void> _connect() async {
     final messenger = ScaffoldMessenger.of(context);
     final svc = context.read<DriveBackupService>();
-    GoogleSignInAccount? account;
     try {
-      account = await svc.signIn();
+      await svc.connect();
+    } on DriveAuthException catch (e) {
+      if (mounted) {
+        showAppToastOn(
+          messenger,
+          e.message,
+          tone: AppToastTone.error,
+          duration: const Duration(seconds: 5),
+        );
+      }
+      return;
     } catch (e) {
-      account = null;
-      debugPrint('Drive sign-in failed: $e');
-    }
-    if (!mounted) return;
-    if (account == null) {
-      showAppToastOn(
-        messenger,
-        'Google sign-in was cancelled or failed. Check that the OAuth '
-        'client is set up for this app, then try again.',
-        tone: AppToastTone.error,
-        duration: const Duration(seconds: 5),
-      );
+      debugPrint('Drive connect failed: $e');
+      if (mounted) {
+        showAppToastOn(
+          messenger,
+          "Couldn't connect Google Drive. Try again.",
+          tone: AppToastTone.error,
+        );
+      }
       return;
     }
+    if (!mounted) return;
     // Full reload, not just the account: last-backup / error state is
     // account-scoped and must reflect the newly connected account.
     await _load();
   }
 
   Future<void> _disconnect() async {
-    await context.read<DriveBackupService>().signOut();
-    // signOut cleared the account-scoped prefs; re-read everything so a
-    // stale "backup failed" banner can't sit above "Connect Google account".
+    await context.read<DriveBackupService>().disconnect();
+    // disconnect cleared the account-scoped prefs; re-read everything so a
+    // stale "backup failed" banner can't sit above "Connect Google Drive".
     if (mounted) await _load();
   }
 
@@ -265,6 +272,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
       final name = await svc.uploadNow(
         finance,
         settings: settings.toBackupMap(),
+        interactive: true,
       );
       final last = await svc.lastBackupAt();
       if (!mounted) return;
@@ -328,7 +336,9 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'The last Drive backup failed: $_lastError',
+                        _lastError == kDriveReconnectMessage
+                            ? _lastError!
+                            : 'The last Drive backup failed: $_lastError',
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -336,14 +346,22 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                         ),
                       ),
                     ),
+                    if (_lastError == kDriveReconnectMessage)
+                      TextButton(
+                        onPressed: _connect,
+                        style: TextButton.styleFrom(
+                          foregroundColor: scheme.onErrorContainer,
+                        ),
+                        child: const Text('Reconnect'),
+                      ),
                   ],
                 ),
               ),
             ),
-          if (_account == null)
+          if (_email == null)
             ListTile(
               leading: const Icon(Icons.cloud_off_outlined),
-              title: const Text('Connect Google account'),
+              title: const Text('Connect Google Drive'),
               subtitle: const Text(
                 'Off until connected — nothing is uploaded.',
               ),
@@ -354,7 +372,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
             ListTile(
               leading: Icon(Icons.cloud_done_outlined, color: scheme.primary),
               title: Text(
-                _account!.email,
+                _email!,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -370,8 +388,10 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                 tip: const InfoTip(
                   title: 'Disconnect',
                   message:
-                      'Signs this app out of Google Drive. Backups already in '
-                      'your Drive stay there.',
+                      'Stops backups from this phone. Backups already in your '
+                      'Drive stay there. To remove the app from your Google '
+                      'account entirely, use Google Account, Security, '
+                      'Third-party access.',
                 ),
               ),
             ),
@@ -1069,25 +1089,18 @@ class _DataSectionState extends State<_DataSection> {
           );
         case 'import_drive':
           final driveService = context.read<DriveBackupService>();
-          // Interactive sign-in only when the silent path has no account —
-          // and before the busy dialog, so the account chooser isn't
-          // fighting a barrier.
-          var account = await driveService.currentUser;
-          if (!mounted) return;
-          account ??= await driveService.signIn();
-          if (account == null) {
-            showAppToastOn(
-              messenger,
-              'Google sign-in was cancelled or failed.',
-              tone: AppToastTone.error,
-            );
-            return;
+          // Interactive connect only when not connected already — and
+          // before the busy dialog, so the account picker isn't fighting a
+          // barrier. A cancel lands in the DriveAuthException catch below.
+          if (await driveService.connectedEmail() == null) {
+            await driveService.connect();
           }
+          if (!mounted) return;
           final replaceFromDrive = await _askImportMode();
           if (replaceFromDrive == null || !mounted) return;
           final settingsProvider = context.read<SettingsProvider>();
           final restored = await _withBusy('Restoring cloud backup…', () async {
-            final backup = await driveService.downloadLatest();
+            final backup = await driveService.downloadLatest(interactive: true);
             final added = await finance.importData(
               backup.data,
               replace: replaceFromDrive,
@@ -1112,6 +1125,8 @@ class _DataSectionState extends State<_DataSection> {
             icon: Icons.cloud_download_outlined,
           );
       }
+    } on DriveAuthException catch (e) {
+      showAppToastOn(messenger, e.message, tone: AppToastTone.error);
     } on FormatException catch (e) {
       showAppToastOn(
         messenger,

@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.20.0+29
+version: 1.21.0+30
 
 environment:
   sdk: ^3.12.1
@@ -48,13 +48,13 @@ dependencies:
   # Scheduled notifications (the monthly recap) take a TZDateTime.
   # flutter_local_notifications 21 and later require the 0.11 line.
   timezone: ^0.11.1
-  # Google Drive backup. Pinned to the 6.x google_sign_in API surface
-  # (constructor + signIn/signInSilently + authenticatedClient extension) —
-  # 7.x replaced it with a singleton/authorization-client model and the
-  # Drive service is written against 6.x, mirroring the Orbit app.
-  google_sign_in: ^6.2.0
-  googleapis: ^12.0.0
-  extension_google_sign_in_as_googleapis_auth: ^2.0.0
+  # Google Drive backup. 7.x authorization only (no sign-in, so no Web
+  # client ID): the access token becomes a googleapis_auth client directly.
+  google_sign_in: ^7.2.0
+  # Its authorization call can name the account; the app-facing client can't.
+  google_sign_in_platform_interface: ^3.1.0
+  googleapis: ^17.0.0
+  googleapis_auth: ^2.3.4
   # App lock: biometric / device-credential gate (requires
   # FlutterFragmentActivity — see MainActivity.kt — and USE_BIOMETRIC).
   # From 3.x a cancel or lockout throws LocalAuthException.
