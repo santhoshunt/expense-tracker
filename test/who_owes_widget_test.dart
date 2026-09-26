@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/spend_budget.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -16,7 +17,7 @@ import 'package:expense_tracker/widgets/transaction_tile.dart';
 import 'dashboard_test_utils.dart';
 
 /// Who owes you in the UI: the split rows in the add sheet, the row's
-/// "to get back" line, the Today card and the People page's actions.
+/// "to get back" line, the Overview card and the People page's actions.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -198,7 +199,7 @@ void main() {
     expect(find.text('Settled · Arun, Priya'), findsOneWidget);
   });
 
-  group('Today card and People page', () {
+  group('Overview card and People page', () {
     Future<void> pumpDashboard(WidgetTester tester, FinanceProvider p) async {
       await tester.pumpWidget(
         withProviders(p, const Scaffold(body: DashboardScreen())),
@@ -217,21 +218,27 @@ void main() {
         note: 'coffee',
         date: today,
       );
+      await p.addBudget(
+        name: 'Eating out',
+        limit: 9000,
+        mode: BudgetMode.include,
+        categoryIds: {'food'},
+      );
       await pumpDashboard(tester, p);
       expect(find.text('Owed to you'), findsNothing);
 
       await dinner(p);
       await tester.pumpAndSettle();
-      expect(find.text('Owed to you'), findsOneWidget);
-      expect(find.text(fmtMoney(2000)), findsOneWidget);
+      // Last on the page, after Budgets.
       await tester.scrollUntilVisible(
-        find.text('Recent transactions'),
+        find.text('Owed to you'),
         300,
         scrollable: verticalScrollable(),
       );
+      expect(find.text(fmtMoney(2000)), findsOneWidget);
       expect(
-        tester.getTopLeft(find.text('Owed to you')).dy,
-        lessThan(tester.getTopLeft(find.text('Recent transactions')).dy),
+        tester.getTopLeft(find.text('Budgets')).dy,
+        lessThan(tester.getTopLeft(find.text('Owed to you')).dy),
       );
 
       await tapVisible(tester, find.text('Owed to you'));

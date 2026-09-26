@@ -34,7 +34,6 @@ import '../widgets/monthly_bar_chart.dart';
 import '../widgets/monthly_recap_card.dart';
 import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/spend_comparison_cards.dart';
-import '../widgets/transaction_tile.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
 import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
@@ -44,12 +43,9 @@ import 'app_nav.dart';
 /// route) keeps the month selector, the year toggle and every deep-link
 /// callback in this one State. Each section lives on one view only.
 enum DashboardView {
-  /// Where things stand now, whatever month is picked: balances, what's
-  /// due, the newest rows. The one view without a month selector.
-  today('Today'),
-
-  /// The picked month's own figures: totals, budgets, last month's recap.
-  month('Month'),
+  /// The landing view: the net balance, the picked month's figures (last
+  /// month's recap among them), what's due, budgets, and what friends owe.
+  overview('Overview'),
   trends('Trends'),
   breakdown('Breakdown');
 
@@ -102,11 +98,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _yearMode = false;
 
   /// Not persisted, matching `_month` and `_yearMode`.
-  DashboardView _view = DashboardView.today;
+  DashboardView _view = DashboardView.overview;
 
   late final PageController _pageCtrl = PageController();
 
-  /// The slots of the Month view's recap and the Trends pace card, so a
+  /// The slots of the Overview's recap and the Trends pace card, so a
   /// recap notification tap can scroll the card into view: on a small phone
   /// the recap sits below the fold. On the slot's Builder, outside
   /// AnimatedPresence, so a quick Year toggle can't give the outgoing and
@@ -121,8 +117,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
-  /// Where the recap notification lands: last month's recap on the Month
-  /// view during the recap week, and after it (a late tap) this month so far
+  /// Where the recap notification lands: last month's recap on the Overview
+  /// during the recap week, and after it (a late tap) this month so far
   /// on Trends, the card that took its place. Both are about today's month,
   /// so the selector returns there first.
   void _showMonthCard() {
@@ -133,7 +129,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _month = DateTime(now.year, now.month);
       _yearMode = false;
     });
-    _setView(recapWeek ? DashboardView.month : DashboardView.trends);
+    _setView(recapWeek ? DashboardView.overview : DashboardView.trends);
     final key = recapWeek ? _recapKey : _paceKey;
     // Off-screen pages are disposed, so after a page switch the card
     // exists only once its view has slid in: try after this frame, and
@@ -238,7 +234,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   /// The month cards: last month's recap for the first [kRecapDays] days
-  /// (the Month view), this month's pace after (Trends). Memoized on (revision,
+  /// (the Overview), this month's pace after (Trends). Memoized on (revision,
   /// day, cap) — the recap walks every row's SMS body for merchants, and
   /// the pace is day-aligned, so the day belongs in the key.
   Object? _monthCardRev;
@@ -454,7 +450,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 8),
           ),
           onPressed: () => setState(() => _yearMode = !_yearMode),
-          // Not a bare "Month": that is also the tab above.
           child: Text(_yearMode ? 'Month view' : 'Year'),
         ),
         const InfoTip(
@@ -481,7 +476,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     for (final m in finance.monthsWithData) {
       if (m.isAfter(latestMonth)) latestMonth = m;
     }
-    final recent = finance.transactions.take(5).toList();
     final year = _month.year;
     // In Year view the "month" figures below are the year's: same widgets,
     // wider window.
@@ -507,7 +501,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final period = _yearMode ? 'this year' : 'this month';
     // One children-list builder per view; called lazily from each page's
     // Builder so only mounted pages construct their widgets.
-    List<Widget> todayChildren() => [
+    List<Widget> overviewChildren() => [
       // First-run: the landing tab used to greet a new user with ₹0.00
       // everywhere and no hint of what to do next.
       if (!finance.hasTransactions) ...[
@@ -565,39 +559,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         key: const ValueKey('balance'),
         child: _BalanceCard(finance: finance),
       ),
-      // Card bills coming due + detected recurring payments.
-      _UpcomingCard(finance: finance, hits: _recurring(finance)),
-      // What friends still owe on split bills. All-time, so the Year view
-      // keeps it.
-      AnimatedPresence(
-        key: const ValueKey('presence-owed'),
-        visible: finance.totalOwed > 0,
-        child: finance.totalOwed > 0
-            ? _OwedCard(finance: finance)
-            : const SizedBox.shrink(),
-      ),
-      if (recent.isNotEmpty) ...[
-        const SizedBox(height: 24),
-        _SectionHeading(
-          'Recent transactions',
-          tip: 'Your 5 newest confirmed transactions.',
-          link: const InfoLink(
-            prompt: 'Looking for older ones?',
-            label: 'See all transactions',
-            onTap: goAllTransactions,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: Column(
-            children: [for (final tx in recent) TransactionTile(tx: tx)],
-          ),
-        ),
-      ],
-      const SizedBox(height: 120),
-    ];
-
-    List<Widget> monthChildren() => [
+      // The picked month (or year) below the balance: the selector, its
+      // totals, the monthly budget bar and last month's recap.
+      const SizedBox(height: 16),
       _monthSelector(context, finance, latestMonth),
       const SizedBox(height: 4),
       // Horizontally scrollable so each card is wide enough to show its
@@ -724,6 +688,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           );
         },
       ),
+      // Card bills coming due + detected recurring payments. Not
+      // month-scoped: it is about the days ahead whatever month is picked.
+      _UpcomingCard(finance: finance, hits: _recurring(finance)),
       // Custom spend limits, one compact progress row each — full ring
       // cards would dominate the page with several budgets. Budgets are
       // monthly, so the Year view skips them.
@@ -777,6 +744,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
+      ),
+      // What friends still owe on split bills. All-time, so the Year view
+      // keeps it.
+      AnimatedPresence(
+        key: const ValueKey('presence-owed'),
+        visible: finance.totalOwed > 0,
+        child: finance.totalOwed > 0
+            ? _OwedCard(finance: finance)
+            : const SizedBox.shrink(),
       ),
       const SizedBox(height: 120),
     ];
@@ -1223,9 +1199,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           child: GlassSegmented<DashboardView>(
-            // Labels only: with four tabs on a 360dp phone, an icon beside
-            // each label shrank "Breakdown" to about 10px.
             options: [for (final v in DashboardView.values) (v, v.label)],
+            icons: const [
+              Icons.space_dashboard_outlined,
+              Icons.show_chart,
+              Icons.pie_chart_outline,
+            ],
             selected: _view,
             onChanged: _setView,
             pager: _pageCtrl,
@@ -1241,8 +1220,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             // starts at the top instead of at a remembered offset.
             children: [
               for (final page in [
-                todayChildren,
-                monthChildren,
+                overviewChildren,
                 trendsChildren,
                 breakdownChildren,
               ])

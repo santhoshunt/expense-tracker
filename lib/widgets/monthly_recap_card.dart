@@ -16,7 +16,7 @@ Color _deltaTone(BuildContext context, SpendCompare c) => c.negligible
     ? Theme.of(context).colorScheme.error
     : AppColors.of(context).green;
 
-/// Last month's recap, shown on the Month view for the first [kRecapDays]
+/// Last month's recap, shown on the Overview for the first [kRecapDays]
 /// days: spent and saved, then the top categories, the biggest merchant
 /// and any budget that ended over. No income: the card is about spending.
 ///
