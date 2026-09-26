@@ -42,9 +42,14 @@ import 'app_nav.dart';
 /// Which slice of the dashboard is on screen. The page grew to fifteen
 /// sections in one scroll; splitting it into sub-tabs (rather than a second
 /// route) keeps the month selector, the year toggle and every deep-link
-/// callback in this one State.
+/// callback in this one State. Each section lives on one view only.
 enum DashboardView {
-  overview('Overview'),
+  /// Where things stand now, whatever month is picked: balances, what's
+  /// due, the newest rows. The one view without a month selector.
+  today('Today'),
+
+  /// The picked month's own figures: totals, budgets, last month's recap.
+  month('Month'),
   trends('Trends'),
   breakdown('Breakdown');
 
@@ -83,7 +88,7 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-/// The heatmap sits on two views; one wording for both headings.
+/// The heatmap's heading tip.
 const _heatmapTip =
     "Each day is shaded by its spending compared with this month's biggest "
     'day. Days with no spending stay plain.';
@@ -97,13 +102,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _yearMode = false;
 
   /// Not persisted, matching `_month` and `_yearMode`.
-  DashboardView _view = DashboardView.overview;
+  DashboardView _view = DashboardView.today;
 
   late final PageController _pageCtrl = PageController();
 
-  /// The Overview's month card (recap or pace), so a recap notification
-  /// tap can scroll it into view: on a small phone it sits below the fold.
-  final GlobalKey _monthCardKey = GlobalKey();
+  /// The slots of the Month view's recap and the Trends pace card, so a
+  /// recap notification tap can scroll the card into view: on a small phone
+  /// the recap sits below the fold. On the slot's Builder, outside
+  /// AnimatedPresence, so a quick Year toggle can't give the outgoing and
+  /// incoming copies the same GlobalKey.
+  final GlobalKey _recapKey = GlobalKey();
+  final GlobalKey _paceKey = GlobalKey();
 
   @override
   void dispose() {
@@ -112,17 +121,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.dispose();
   }
 
-  /// Shows the Overview with the month card in view.
-  void _showOverview() {
+  /// Where the recap notification lands: last month's recap on the Month
+  /// view during the recap week, and after it (a late tap) this month so far
+  /// on Trends, the card that took its place. Both are about today's month,
+  /// so the selector returns there first.
+  void _showMonthCard() {
     if (!mounted) return;
-    _setView(DashboardView.overview);
+    final now = recapClock();
+    final recapWeek = showsRecap(now);
+    setState(() {
+      _month = DateTime(now.year, now.month);
+      _yearMode = false;
+    });
+    _setView(recapWeek ? DashboardView.month : DashboardView.trends);
+    final key = recapWeek ? _recapKey : _paceKey;
     // Off-screen pages are disposed, so after a page switch the card
-    // exists only once the Overview has slid in: try after this frame, and
+    // exists only once its view has slid in: try after this frame, and
     // once more when the page animation is done.
     void reveal({required bool retry}) {
-      final card = _monthCardKey.currentContext;
+      final slot = key.currentContext;
       if (!mounted) return;
-      if (card == null) {
+      if (slot == null) {
         if (retry) {
           Future.delayed(
             const Duration(milliseconds: 350),
@@ -131,8 +150,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
         return;
       }
-      Scrollable.ensureVisible(
-        card,
+      // The page's own list only: Scrollable.ensureVisible would also move
+      // the horizontal pager, which then snaps back.
+      final list = Scrollable.maybeOf(slot);
+      final box = slot.findRenderObject();
+      if (list == null || box == null) return;
+      list.position.ensureVisible(
+        box,
         duration: motionDuration(context, const Duration(milliseconds: 300)),
         curve: Curves.easeOutCubic,
         alignment: 0.1,
@@ -213,8 +237,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return _compare!;
   }
 
-  /// The Overview's month card: last month's recap for the first
-  /// [kRecapDays] days, this month's pace after. Memoized on (revision,
+  /// The month cards: last month's recap for the first [kRecapDays] days
+  /// (the Month view), this month's pace after (Trends). Memoized on (revision,
   /// day, cap) — the recap walks every row's SMS body for merchants, and
   /// the pace is day-aligned, so the day belongs in the key.
   Object? _monthCardRev;
@@ -240,6 +264,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     return _monthCard!;
   }
+
+  /// The month cards' spending links: that month's expenses.
+  void Function(DateTime)? get _viewSpending =>
+      widget.onViewTransactions == null
+      ? null
+      : (m) => widget.onViewTransactions!(TxType.expense, m);
 
   /// Long-press on a Top-merchants row: give the payee a readable name.
   Future<void> _renameMerchant(BuildContext context, MerchantSpend m) =>
@@ -271,7 +301,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     final now = DateTime.now();
     _month = DateTime(now.year, now.month);
-    AppNav.instance.attachDashboard(this, showOverview: _showOverview);
+    AppNav.instance.attachDashboard(this, showRecap: _showMonthCard);
   }
 
   /// Steps one month, or one year in Year view (the month is kept so
@@ -347,7 +377,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   /// Chevrons, the tappable month label, the year PDF shortcut and the
-  /// Month/Year switch. Shared by all three views rather than duplicated:
+  /// Month/Year switch. Shared by the month-scoped views rather than duplicated:
   /// `_month` and `_yearMode` live in this one State.
   Widget _monthSelector(
     BuildContext context,
@@ -424,15 +454,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 8),
           ),
           onPressed: () => setState(() => _yearMode = !_yearMode),
-          child: Text(_yearMode ? 'Month' : 'Year'),
+          // Not a bare "Month": that is also the tab above.
+          child: Text(_yearMode ? 'Month view' : 'Year'),
         ),
         const InfoTip(
           title: 'Year view',
           message:
-              'Year view adds up the 12 months of the year. Budgets, '
-              'comparisons, the heatmap, merchants, groups and transfers are '
-              'hidden, and the totals and categories do not open their '
-              'transactions.',
+              'Year view adds up the 12 months of the year. Budgets, the '
+              'monthly recap and pace, comparisons, the heatmap, merchants, '
+              'groups and transfers are hidden, and the totals and '
+              'categories do not open their transactions.',
         ),
       ],
     );
@@ -476,7 +507,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final period = _yearMode ? 'this year' : 'this month';
     // One children-list builder per view; called lazily from each page's
     // Builder so only mounted pages construct their widgets.
-    List<Widget> overviewChildren() => [
+    List<Widget> todayChildren() => [
       // First-run: the landing tab used to greet a new user with ₹0.00
       // everywhere and no hint of what to do next.
       if (!finance.hasTransactions) ...[
@@ -530,9 +561,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         const SizedBox(height: 16),
       ],
-      // The month's own figures lead the Overview. The month card,
-      // Upcoming and the balances below them are about today whatever month
-      // is selected; each names its own period.
+      KeyedSubtree(
+        key: const ValueKey('balance'),
+        child: _BalanceCard(finance: finance),
+      ),
+      // Card bills coming due + detected recurring payments.
+      _UpcomingCard(finance: finance, hits: _recurring(finance)),
+      if (recent.isNotEmpty) ...[
+        const SizedBox(height: 24),
+        _SectionHeading(
+          'Recent transactions',
+          tip: 'Your 5 newest confirmed transactions.',
+          link: const InfoLink(
+            prompt: 'Looking for older ones?',
+            label: 'See all transactions',
+            onTap: goAllTransactions,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Column(
+            children: [for (final tx in recent) TransactionTile(tx: tx)],
+          ),
+        ),
+      ],
+      const SizedBox(height: 120),
+    ];
+
+    List<Widget> monthChildren() => [
       _monthSelector(context, finance, latestMonth),
       const SizedBox(height: 4),
       // Horizontally scrollable so each card is wide enough to show its
@@ -606,8 +662,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
       // Monthly budget progress — only when a cap is set. Uses the selected
       // month's spend so browsing past months shows their usage too.
-      // Keyed: the first-run card above comes and goes, and the list
-      // matches unkeyed children by position.
       Builder(
         key: const ValueKey('presence-monthly-budget'),
         builder: (context) {
@@ -626,50 +680,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
           );
         },
       ),
-      // The month card: last month's recap for the first days of a month,
-      // this month's pace after. Always about today's month, not the one
-      // the selector shows; its title names the month.
+      // Last month's recap, for the first days of a month. About today's
+      // month, so only while the selector shows it: under March's totals it
+      // would read as March's. Its title names the month it sums up.
       Builder(
-        key: const ValueKey('presence-month-card'),
+        key: _recapKey,
         builder: (context) {
           // Selected so a cap edit re-evaluates the budget lines.
           context.select<SettingsProvider, double>((s) => s.monthlyBudget);
-          final card = _monthCardFor(finance, context.read<SettingsProvider>());
-          void Function(DateTime)? spending = widget.onViewTransactions == null
-              ? null
-              : (m) => widget.onViewTransactions!(TxType.expense, m);
-          final recap = card.recap;
-          final pace = card.pace;
+          final recap = _monthCardFor(
+            finance,
+            context.read<SettingsProvider>(),
+          ).recap;
+          final today = recapClock();
+          // Year view drops it with the budgets: its lines are monthly.
+          final showing =
+              recap != null &&
+              !_yearMode &&
+              _month == DateTime(today.year, today.month);
           return AnimatedPresence(
-            // Year view drops it with the budgets: its lines are monthly.
-            visible: (recap != null || pace != null) && !_yearMode,
-            child: Padding(
-              key: _monthCardKey,
-              padding: const EdgeInsets.only(top: 16),
-              child: recap != null
-                  ? MonthlyRecapCard(
-                      key: const ValueKey('recap'),
+            visible: showing,
+            child: !showing
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: MonthlyRecapCard(
                       recap: recap,
                       onViewCategory: widget.onViewCategory,
                       onViewMerchant: widget.onViewMerchant,
                       onViewBudget: widget.onViewBudget,
-                      onViewSpending: spending,
-                    )
-                  : pace != null
-                  ? MonthPaceCard(
-                      key: const ValueKey('pace'),
-                      pace: pace,
-                      onViewBudget: widget.onViewBudget,
-                      onViewSpending: spending,
-                    )
-                  : const SizedBox.shrink(),
-            ),
+                      onViewSpending: _viewSpending,
+                    ),
+                  ),
           );
         },
       ),
-      // Card bills coming due + detected recurring payments. Not
-      // month-scoped, but below the month's own figures: those lead.
-      _UpcomingCard(finance: finance, hits: _recurring(finance)),
       // Custom spend limits, one compact progress row each — full ring
       // cards would dominate the page with several budgets. Budgets are
       // monthly, so the Year view skips them.
@@ -724,73 +769,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       ),
-      // Balances sit below the month's figures: the Overview leads with
-      // this month, and the balance card changes least from day to day.
-      Padding(
-        key: const ValueKey('balance'),
-        padding: const EdgeInsets.only(top: 24),
-        child: _BalanceCard(finance: finance),
-      ),
-      // Overview keeps the highest-signal sections even though Trends and
-      // Breakdown also carry them: it is the landing tab, and a glance
-      // there should not require a tab switch.
-      AnimatedPresence(
-        key: const ValueKey('presence-category-comparison'),
-        visible: !_yearMode,
-        child: CategoryComparisonCard(
-          comparison: _comparison(finance),
-          onViewCategory: widget.onViewCategory == null
-              ? null
-              : (id) => widget.onViewCategory!(id, _month),
-          sort: categorySort,
-          onSortChanged: (s) =>
-              context.read<SettingsProvider>().setCategorySort(s),
-        ),
-      ),
-      AnimatedPresence(
-        key: const ValueKey('presence-heatmap'),
-        visible: monthExpense > 0 && !_yearMode,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const SizedBox(height: 24),
-            const _SectionHeading('Spending heatmap', tip: _heatmapTip),
-            const SizedBox(height: 8),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: SpendingHeatmap(month: _month),
-              ),
-            ),
-          ],
-        ),
-      ),
-      if (recent.isNotEmpty) ...[
-        const SizedBox(height: 24),
-        _SectionHeading(
-          'Recent transactions',
-          tip:
-              'Your 5 newest confirmed transactions, whatever month is '
-              'selected.',
-          link: const InfoLink(
-            prompt: 'Looking for older ones?',
-            label: 'See all transactions',
-            onTap: goAllTransactions,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Card(
-          child: Column(
-            children: [for (final tx in recent) TransactionTile(tx: tx)],
-          ),
-        ),
-      ],
       const SizedBox(height: 120),
     ];
 
     List<Widget> trendsChildren() => [
       _monthSelector(context, finance, latestMonth),
       const SizedBox(height: 4),
+      // This month so far, once the recap week is over. About today's
+      // month, so only while the selector shows it.
+      Builder(
+        key: _paceKey,
+        builder: (context) {
+          context.select<SettingsProvider, double>((s) => s.monthlyBudget);
+          final pace = _monthCardFor(
+            finance,
+            context.read<SettingsProvider>(),
+          ).pace;
+          final today = recapClock();
+          final showing =
+              pace != null &&
+              !_yearMode &&
+              _month == DateTime(today.year, today.month);
+          return AnimatedPresence(
+            visible: showing,
+            child: !showing
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: MonthPaceCard(
+                      pace: pace,
+                      onViewBudget: widget.onViewBudget,
+                      onViewSpending: _viewSpending,
+                    ),
+                  ),
+          );
+        },
+      ),
       // Now vs then. Month concepts, so the Year view steps aside the
       // way budgets and the heatmap already do.
       if (!_yearMode) ...[
@@ -1200,12 +1214,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
           child: GlassSegmented<DashboardView>(
+            // Labels only: with four tabs on a 360dp phone, an icon beside
+            // each label shrank "Breakdown" to about 10px.
             options: [for (final v in DashboardView.values) (v, v.label)],
-            icons: const [
-              Icons.space_dashboard_outlined,
-              Icons.show_chart,
-              Icons.pie_chart_outline,
-            ],
             selected: _view,
             onChanged: _setView,
             pager: _pageCtrl,
@@ -1221,7 +1232,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             // starts at the top instead of at a remembered offset.
             children: [
               for (final page in [
-                overviewChildren,
+                todayChildren,
+                monthChildren,
                 trendsChildren,
                 breakdownChildren,
               ])

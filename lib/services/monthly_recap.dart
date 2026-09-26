@@ -4,16 +4,16 @@ import '../providers/settings_provider.dart';
 import 'merchant_stats.dart';
 import 'spend_comparison.dart';
 
-/// Days at the start of a month that show last month's recap. From the day
-/// after, the Overview shows the running month's pace instead: by the 26th,
-/// last month's totals are old news.
+/// Days at the start of a month that show last month's recap (on the
+/// dashboard's Month view). From the day after, Trends shows the running
+/// month's pace instead: by the 26th, last month's totals are old news.
 const int kRecapDays = 7;
 
-/// Whether the Overview shows last month's recap (true) or this month's
+/// Whether the dashboard shows last month's recap (true) or this month's
 /// pace (false) on [now].
 bool showsRecap(DateTime now) => now.day <= kRecapDays;
 
-/// The clock the Overview's recap and pace cards read. Widget tests swap
+/// The clock the dashboard's recap and pace cards read. Widget tests swap
 /// it to pick a day of the month; nothing else should.
 DateTime Function() recapClock = DateTime.now;
 
@@ -26,8 +26,8 @@ typedef BudgetStanding = ({
   double limit,
 });
 
-/// Last month at a glance, for the Overview's recap card. Every figure comes
-/// from the same provider totals the Overview stat cards read, so the recap
+/// Last month at a glance, for the Month view's recap card. Every figure
+/// comes from the same provider totals the Month view's stat cards read, so the recap
 /// never disagrees with the month it summarises. No income: the card is
 /// about spending and saving.
 class MonthlyRecap {
@@ -115,7 +115,7 @@ MonthlyRecap? buildMonthlyRecap(
 const double kPaceBudgetShare = 0.8;
 const int kPaceBudgetLines = 3;
 
-/// The running month so far, for the Overview after [kRecapDays].
+/// The running month so far, for Trends after [kRecapDays].
 class MonthPace {
   /// Day-aligned: this month through today against last month through the
   /// same day (see buildMonthComparison).

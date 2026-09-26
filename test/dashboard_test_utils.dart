@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// The dashboard is split into Overview / Trends / Breakdown sub-tabs, so a
+/// The dashboard is split into Today / Month / Trends / Breakdown sub-tabs, so a
 /// section assertion has to start on the right one. The tab bar is pinned
 /// above the pager, so its labels are always tappable.
 Future<void> openDashboardView(WidgetTester tester, String view) async {

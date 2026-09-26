@@ -10,6 +10,8 @@ import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/services/sms_parser.dart';
 import 'package:expense_tracker/utils/format.dart';
 
+import 'dashboard_test_utils.dart';
+
 /// Balance-anchor precedence when SMS rows are re-dated (a salary moved to
 /// the 1st of next month), plus the dashboard's next-month arrow reaching
 /// months that only exist because of such rows.
@@ -185,6 +187,7 @@ void main() {
     ) async {
       final p = await loaded();
       await tester.pumpWidget(app(p));
+      await openDashboardView(tester, 'Month');
       expect(nextArrow(tester).onPressed, isNull);
     });
 
@@ -200,6 +203,7 @@ void main() {
         date: nextMonth,
       );
       await tester.pumpWidget(app(p));
+      await openDashboardView(tester, 'Month');
 
       expect(nextArrow(tester).onPressed, isNotNull);
       await tester.tap(find.byTooltip('Next month'));

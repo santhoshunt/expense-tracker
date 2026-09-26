@@ -10,7 +10,9 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/services/launch_actions.dart';
+import 'package:expense_tracker/services/monthly_recap.dart';
 import 'package:expense_tracker/widgets/lock_gate.dart';
+import 'package:expense_tracker/widgets/monthly_recap_card.dart';
 
 /// Shortcut, tile and notification actions: they wait for the app lock,
 /// run once, and land on top of whatever is open.
@@ -40,9 +42,13 @@ void main() {
     }
   }
 
-  Future<void> pumpHome(WidgetTester tester) async {
+  Future<void> pumpHome(
+    WidgetTester tester, {
+    Future<void> Function(FinanceProvider)? seed,
+  }) async {
     final finance = FinanceProvider();
     await finance.load();
+    await seed?.call(finance);
     await tester.pumpWidget(
       MultiProvider(
         providers: [
@@ -121,16 +127,56 @@ void main() {
     expect(find.text('Appearance'), findsOneWidget, reason: 'not popped');
   });
 
-  testWidgets('the recap notification lands on the Dashboard', (tester) async {
-    await pumpHome(tester);
-    await tester.tap(find.text('Transactions').last);
-    await settle(tester);
-    expect(find.text('Overview'), findsNothing);
+  group('the recap notification', () {
+    final now = DateTime.now();
+    tearDown(() => recapClock = DateTime.now);
 
-    LaunchActions.instance.onNotificationPayload(kRecapPayload);
-    await settle(tester);
-    expect(find.text('Overview'), findsOneWidget);
-    expect(LaunchActions.instance.pending.value, isNull);
+    Future<void> seed(FinanceProvider p) async {
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 250,
+        note: 'this month',
+        date: DateTime(now.year, now.month, 1),
+      );
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'transport',
+        amount: 400,
+        note: 'last month',
+        date: DateTime(now.year, now.month - 1, 2),
+      );
+    }
+
+    Future<void> tapNotification(WidgetTester tester) async {
+      await pumpHome(tester, seed: seed);
+      await tester.tap(find.text('Transactions').last);
+      await settle(tester);
+      expect(find.text('Breakdown'), findsNothing);
+
+      LaunchActions.instance.onNotificationPayload(kRecapPayload);
+      await settle(tester);
+      expect(
+        find.text('Breakdown'),
+        findsOneWidget,
+        reason: 'on the Dashboard',
+      );
+      expect(LaunchActions.instance.pending.value, isNull);
+    }
+
+    testWidgets('in the recap week opens the recap on Month', (tester) async {
+      recapClock = () => DateTime(now.year, now.month, 3, 10);
+      await tapNotification(tester);
+      // The recap lives on the Month view only.
+      expect(find.byType(MonthlyRecapCard), findsOneWidget);
+    });
+
+    testWidgets('after it opens this month so far on Trends', (tester) async {
+      recapClock = () => DateTime(now.year, now.month, 20, 10);
+      await tapNotification(tester);
+      expect(find.byType(MonthPaceCard), findsOneWidget);
+      expect(find.text('This month vs last month'), findsOneWidget);
+    });
   });
 
   test('unknown native names and payloads are ignored', () {
