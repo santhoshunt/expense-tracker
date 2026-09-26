@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/app_lock_service.dart';
 import 'package:expense_tracker/widgets/lock_gate.dart';
+import 'package:expense_tracker/widgets/undo_snackbar.dart';
 
 class FakeLock extends AppLockService {
   bool supported = true;
@@ -327,6 +328,76 @@ void main() {
       expect(appLocked.value, isFalse);
       expect(find.textContaining('needs a screen lock'), findsOneWidget);
       expect(settings.appLock, isTrue, reason: 'back once a lock exists');
+    });
+
+    testWidgets('a toast asked for while locked waits for the unlock', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({'app_lock_enabled_v1': true});
+      final settings = SettingsProvider();
+      await settings.load();
+      final lock = FakeLock();
+      final messengerKey = GlobalKey<ScaffoldMessengerState>();
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: settings,
+          child: MaterialApp(
+            scaffoldMessengerKey: messengerKey,
+            builder: (context, child) => LockGate(service: lock, child: child!),
+            home: const Scaffold(body: Text('CONTENT')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Unlock'), findsOneWidget);
+
+      // What the launch auto-import does while the lock screen is up.
+      showAppToastOn(messengerKey.currentState!, 'Auto-import: 2 new');
+      await tester.pumpAndSettle();
+      expect(find.text('Auto-import: 2 new'), findsNothing);
+
+      lock.result = true;
+      await tester.tap(find.text('Unlock'));
+      await tester.pumpAndSettle();
+      expect(find.text('CONTENT'), findsOneWidget);
+      expect(find.text('Auto-import: 2 new'), findsOneWidget);
+    });
+
+    testWidgets('a toast already up at a re-lock is not drawn on the lock '
+        'screen', (tester) async {
+      SharedPreferences.setMockInitialValues({'app_lock_enabled_v1': true});
+      final settings = SettingsProvider();
+      await settings.load();
+      final lock = FakeLock()..result = true;
+      final messengerKey = GlobalKey<ScaffoldMessengerState>();
+      var now = DateTime(2026, 9, 1, 12);
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: settings,
+          child: MaterialApp(
+            scaffoldMessengerKey: messengerKey,
+            builder: (context, child) =>
+                LockGate(service: lock, clock: () => now, child: child!),
+            home: const Scaffold(body: Text('CONTENT')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      showAppToastOn(
+        messengerKey.currentState!,
+        'Saved',
+        duration: const Duration(minutes: 10),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Saved'), findsOneWidget);
+
+      lock.result = false;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      now = now.add(const Duration(minutes: 3));
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(find.text('Unlock'), findsOneWidget);
+      expect(find.text('Saved'), findsNothing);
     });
 
     testWidgets('waits for settings to load before deciding', (tester) async {

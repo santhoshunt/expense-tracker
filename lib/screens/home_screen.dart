@@ -72,6 +72,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     onViewGroup: _viewGroup,
     onViewBudget: _viewBudget,
     onViewMerchant: _viewMerchant,
+    onViewTag: _viewTag,
   );
   late final Widget _accountsTab = AccountsScreen(onViewAccount: _viewAccount);
   TransactionsScreen? _transactionsTab;
@@ -121,6 +122,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   // pre-fills the free-text search with the normalized identity.
   void _viewMerchant(String query, DateTime month) => _openTransactions(
     TxFilterRequest(type: TxType.expense, month: month, query: query),
+  );
+
+  // By tags rows: that tag's spending in the month, like a category row.
+  void _viewTag(String tag, DateTime month) => _openTransactions(
+    TxFilterRequest(type: TxType.expense, month: month, tag: tag),
   );
 
   @override

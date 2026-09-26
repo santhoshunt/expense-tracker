@@ -33,6 +33,7 @@ import '../widgets/category_donut_chart.dart';
 import '../widgets/monthly_bar_chart.dart';
 import '../widgets/monthly_recap_card.dart';
 import '../widgets/rename_merchant_dialog.dart';
+import '../widgets/show_all_list.dart';
 import '../widgets/spend_comparison_cards.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
 import 'add_transaction_sheet.dart';
@@ -71,6 +72,9 @@ class DashboardScreen extends StatefulWidget {
   /// merchant identity, pre-filled into the Transactions search.
   final void Function(String query, DateTime month)? onViewMerchant;
 
+  /// Called when a By tags row is tapped: Transactions filtered to [tag].
+  final void Function(String tag, DateTime month)? onViewTag;
+
   const DashboardScreen({
     super.key,
     this.onViewTransactions,
@@ -78,6 +82,7 @@ class DashboardScreen extends StatefulWidget {
     this.onViewGroup,
     this.onViewBudget,
     this.onViewMerchant,
+    this.onViewTag,
   });
 
   @override
@@ -202,6 +207,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _merchants = topMerchants(
         finance.transactions,
         month: _month,
+        // Every merchant: the card shows five and folds the rest.
+        limit: 1 << 20,
         alias: finance.merchantAlias,
       );
     }
@@ -489,6 +496,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final groupTotal = groupSpend.fold(0.0, (sum, e) => sum + e.$2);
     final transfersBy = finance.transfersByCategoryInMonth(_month);
     final topMerchantsList = _topMerchants(finance);
+    final byTag = _yearMode
+        ? finance.expenseByTagInYear(year)
+        : finance.expenseByTagInMonth(_month);
+    // Keys the capped lists, so a new month or view starts folded.
+    final listKey = _yearMode ? 'y$year' : 'm${monthKey(_month)}';
     final colors = AppColors.of(context);
     final scheme = Theme.of(context).colorScheme;
     final hideIncome = context.select<SettingsProvider, bool>(
@@ -881,8 +893,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
+            child: ShowAllList(
+              key: ValueKey('categories-$listKey'),
+              noun: 'categories',
+              rows: [
                 for (final entry in byCategory)
                   _CategoryRow(
                     icon: entry.key.icon,
@@ -913,6 +927,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
       ],
+      if (byTag.isNotEmpty) ...[
+        const SizedBox(height: 24),
+        _SectionHeading(
+          'By tags',
+          tip:
+              "Each tag's share of the ${_yearMode ? "year's" : "month's"} "
+              'spending. A transaction with two tags counts under both, so '
+              'the shares can add up to more than 100%.',
+          link: const InfoLink(
+            prompt: 'Rename or remove a tag?',
+            label: 'Open Tags',
+            onTap: goCockpitTags,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: ShowAllList(
+              key: ValueKey('tags-$listKey'),
+              noun: 'tags',
+              rows: [
+                for (final t in byTag)
+                  _CategoryRow(
+                    icon: Icons.sell_outlined,
+                    color: scheme.tertiary,
+                    label: t.tag,
+                    amount: t.spent,
+                    fraction: monthExpense == 0 ? 0 : t.spent / monthExpense,
+                    onTap: widget.onViewTag == null || _yearMode
+                        ? null
+                        : () => widget.onViewTag!(t.tag, _month),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
       // Where the money actually went: per-payee totals for the month,
       // re-derived from SMS bodies / manual notes. Display-only — the
       // transactions filter can't express a free-text payee (yet).
@@ -932,6 +984,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (topMerchantsList.isEmpty)
                   Text(
@@ -943,63 +996,73 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       color: scheme.onSurfaceVariant,
                     ),
                   ),
-                for (final m in topMerchantsList)
-                  InkWell(
-                    borderRadius: BorderRadius.circular(AppRadius.control),
-                    onTap: widget.onViewMerchant == null
-                        ? null
-                        // The search matches notes/bodies, so the query is
-                        // the normalized identity, not the cased label.
-                        : () => widget.onViewMerchant!(
-                            m.key.substring(m.key.indexOf('|') + 1),
-                            _month,
-                          ),
-                    onLongPress: () => _renameMerchant(context, m),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.storefront_outlined,
-                            size: 20,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  m.label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                Text(
-                                  m.count == 1
-                                      ? '1 payment'
-                                      : '${m.count} payments',
-                                  style: Theme.of(context).textTheme.bodySmall,
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 120),
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text(
-                                fmtMoney(m.total),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
+                ShowAllList(
+                  key: ValueKey('merchants-$listKey'),
+                  noun: 'merchants',
+                  rows: [
+                    for (final m in topMerchantsList)
+                      InkWell(
+                        borderRadius: BorderRadius.circular(AppRadius.control),
+                        onTap: widget.onViewMerchant == null
+                            ? null
+                            // The search matches notes/bodies, so the query is
+                            // the normalized identity, not the cased label.
+                            : () => widget.onViewMerchant!(
+                                m.key.substring(m.key.indexOf('|') + 1),
+                                _month,
+                              ),
+                        onLongPress: () => _renameMerchant(context, m),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.storefront_outlined,
+                                size: 20,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      m.label,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    Text(
+                                      m.count == 1
+                                          ? '1 payment'
+                                          : '${m.count} payments',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ),
+                              const SizedBox(width: 8),
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 120,
+                                ),
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    fmtMoney(m.total),
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -1105,8 +1168,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         Card(
           child: Padding(
             padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
+            child: ShowAllList(
+              key: ValueKey('groups-$listKey'),
+              noun: 'groups',
+              rows: [
                 for (final (group, amount) in groupSpend)
                   _CategoryRow(
                     icon: group == null
@@ -1177,15 +1242,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   amount: '−${fmtMoney(finance.transferOutInMonth(_month))}',
                 ),
                 const Divider(height: 20),
-                for (final entry in transfersBy)
-                  BreakdownRow(
-                    icon: entry.key.icon,
-                    color: entry.key.color,
-                    label: entry.key.label,
-                    amount:
-                        '${entry.key.type == TxType.income ? '+' : '−'}'
-                        '${fmtMoney(entry.value)}',
-                  ),
+                ShowAllList(
+                  key: ValueKey('transfers-$listKey'),
+                  noun: 'categories',
+                  rows: [
+                    for (final entry in transfersBy)
+                      BreakdownRow(
+                        icon: entry.key.icon,
+                        color: entry.key.color,
+                        label: entry.key.label,
+                        amount:
+                            '${entry.key.type == TxType.income ? '+' : '−'}'
+                            '${fmtMoney(entry.value)}',
+                      ),
+                  ],
+                ),
               ],
             ),
           ),

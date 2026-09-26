@@ -26,7 +26,7 @@ const int kMinUsualMonths = 2;
 const int kMinDaysForProjection = 5;
 
 /// Category rows shown before "Show all".
-const int kTopMoversShown = 6;
+const int kTopMoversShown = 5;
 
 /// A difference under a rupee is rounding, not news. Every icon, chip and
 /// phrase that plays a delta down agrees through this one threshold.

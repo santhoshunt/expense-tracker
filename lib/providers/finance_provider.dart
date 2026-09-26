@@ -181,6 +181,11 @@ class _Derived {
   List<TagUse>? tagUses;
   List<TagSummary>? tagSummaries;
 
+  /// Spend per tag per month, keyed `year*12 + month`, and per year —
+  /// Breakdown's By tags.
+  final Map<int, List<TagSpend>> tagSpendByMonth = {};
+  final Map<int, List<TagSpend>> tagSpendByYear = {};
+
   /// Who owes what: the People page, the Overview card and every split row's
   /// "to get back" line read these.
   List<PersonBalance>? people;
@@ -220,6 +225,9 @@ typedef TagSummary = ({
   DateTime first,
   DateTime last,
 });
+
+/// A tag's spend over a period, as [TagSummary] counts it.
+typedef TagSpend = ({String tag, double spent});
 
 class FinanceProvider extends ChangeNotifier {
   static const _txKey = 'transactions_v1';
@@ -3223,6 +3231,45 @@ class FinanceProvider extends ChangeNotifier {
       byKey.values.toList()..sort((a, b) => b.last.compareTo(a.last)),
     );
   }();
+
+  /// Spend per tag in [month], largest first, by the [tagSummaries] rule. A
+  /// row with two tags counts under both. Tags on rows with no spend
+  /// (transfers, income) are left out.
+  List<TagSpend> expenseByTagInMonth(DateTime month) {
+    final key = month.year * 12 + month.month;
+    return _d.tagSpendByMonth[key] ??= _tagSpend(_byMonth[key] ?? const <Tx>[]);
+  }
+
+  /// [expenseByTagInMonth] across [year].
+  List<TagSpend> expenseByTagInYear(int year) =>
+      _d.tagSpendByYear[year] ??= _tagSpend([
+        for (final m in _monthsOf(year)) ...?_byMonth[m.year * 12 + m.month],
+      ]);
+
+  List<TagSpend> _tagSpend(List<Tx> rows) {
+    final spelling = {for (final u in allTags) tagKey(u.tag): u.tag};
+    final spent = <String, double>{};
+    for (final t in rows) {
+      if (t.type != TxType.expense || isTransferCategory(t.categoryId)) {
+        continue;
+      }
+      final amount = t.spendAmount;
+      if (amount <= 0) continue;
+      for (final tag in t.tags) {
+        final k = tagKey(tag);
+        spent[k] = (spent[k] ?? 0) + amount;
+      }
+    }
+    return List<TagSpend>.unmodifiable(
+      [
+        for (final e in spent.entries)
+          (tag: spelling[e.key] ?? e.key, spent: e.value),
+      ]..sort((a, b) {
+        final bySpend = b.spent.compareTo(a.spent);
+        return bySpend != 0 ? bySpend : tagKey(a.tag).compareTo(tagKey(b.tag));
+      }),
+    );
+  }
 
   /// Rewrites the tags of every row [where] matches through [edit], in one
   /// notification and one write. Returns the rows as they were, for Undo
