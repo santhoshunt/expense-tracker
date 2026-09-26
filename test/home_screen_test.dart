@@ -280,6 +280,54 @@ void main() {
     expect(find.textContaining('Budget ·'), findsNothing);
   });
 
+  testWidgets('By tags sits under By category and deep-links to the tag', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1080, 4000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final p = FinanceProvider();
+    await p.load();
+    final now = DateTime.now();
+    final month = DateTime(now.year, now.month, 1);
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 500,
+      note: 'lunch',
+      date: month,
+      tags: ['Goa trip'],
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'transport',
+      amount: 200,
+      note: 'cab',
+      date: month,
+    );
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Breakdown');
+
+    final byCategory = tester.getTopLeft(find.text('By category')).dy;
+    final byTags = tester.getTopLeft(find.text('By tags')).dy;
+    final merchants = tester.getTopLeft(find.text('Top merchants')).dy;
+    expect(byCategory < byTags && byTags < merchants, isTrue);
+
+    final tagRow = find
+        .ancestor(
+          of: find.text('Goa trip'),
+          matching: find.byWidgetPredicate(
+            (w) => w is InkWell && w.onTap != null,
+          ),
+        )
+        .first;
+    await tester.tap(tagRow);
+    await tester.pumpAndSettle();
+    expect(find.text('lunch'), findsOneWidget);
+    expect(find.text('cab'), findsNothing);
+  });
+
   testWidgets('dashboard category spending row deep-links to that category', (
     tester,
   ) async {

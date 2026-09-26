@@ -32,6 +32,30 @@ void showAppToast(
   duration: duration,
 );
 
+/// While true, toasts wait, and the newest one shows once it turns false.
+/// The lock gate holds them so that nothing (an auto-import count, say)
+/// appears over the lock screen.
+final ValueNotifier<bool> holdToasts = ValueNotifier<bool>(false);
+
+/// The newest toast asked for while [holdToasts] was set. Older ones are
+/// dropped, as a newer toast replaces the current one anyway.
+VoidCallback? _heldToast;
+
+/// Forgets a held toast without showing it: the gate going away is not an
+/// unlock, and its messenger may be tearing down with it.
+void dropHeldToasts() {
+  if (_heldToast != null) holdToasts.removeListener(_releaseHeldToast);
+  _heldToast = null;
+}
+
+void _releaseHeldToast() {
+  if (holdToasts.value) return;
+  holdToasts.removeListener(_releaseHeldToast);
+  final toast = _heldToast;
+  _heldToast = null;
+  toast?.call();
+}
+
 /// [showAppToast] for call sites that captured the messenger before an
 /// await, where the original context may be gone by the time the outcome is
 /// known. Colours resolve inside the snackbar's own context, so no theme is
@@ -45,6 +69,22 @@ void showAppToastOn(
   VoidCallback? onAction,
   Duration duration = const Duration(seconds: 4),
 }) {
+  if (holdToasts.value) {
+    if (_heldToast == null) holdToasts.addListener(_releaseHeldToast);
+    _heldToast = () {
+      if (!messenger.mounted) return;
+      showAppToastOn(
+        messenger,
+        message,
+        tone: tone,
+        icon: icon,
+        actionLabel: actionLabel,
+        onAction: onAction,
+        duration: duration,
+      );
+    };
+    return;
+  }
   messenger
     ..hideCurrentSnackBar()
     ..showSnackBar(

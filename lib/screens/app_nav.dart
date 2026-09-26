@@ -143,6 +143,8 @@ void goCockpitBudgets(BuildContext c) =>
     AppNav.instance.openCockpit(c, kCockpitTabBudgets);
 void goCockpitSubscriptions(BuildContext c) =>
     AppNav.instance.openCockpit(c, kCockpitTabSubscriptions);
+void goCockpitTags(BuildContext c) =>
+    AppNav.instance.openCockpit(c, kCockpitTabTags);
 void goDashboard(BuildContext c) =>
     AppNav.instance.openHomeTab(c, kHomeTabDashboard);
 

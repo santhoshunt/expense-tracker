@@ -64,6 +64,7 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
   set _locked(bool value) {
     _lockedValue = value;
     appLocked.value = value;
+    holdToasts.value = value;
   }
 
   /// False until SettingsProvider has loaded: only then is the app lock
@@ -109,6 +110,8 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
   void dispose() {
     _settings.removeListener(_onSettings);
     WidgetsBinding.instance.removeObserver(this);
+    dropHeldToasts();
+    holdToasts.value = false;
     super.dispose();
   }
 
@@ -199,39 +202,43 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
 
   Widget _lockScreen(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return AmbientBackground(
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.lock_outline, size: 56, color: scheme.primary),
-              const SizedBox(height: 16),
-              Text(
-                'Expense Tracker is locked',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              if (_failureLine case final line?) ...[
-                const SizedBox(height: 8),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 32),
-                  child: Text(
-                    line,
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
+    // Its own messenger: a toast the app shows, or one already on screen at
+    // a re-lock, lands on the app's hidden Scaffold, never on this one.
+    return ScaffoldMessenger(
+      child: AmbientBackground(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.lock_outline, size: 56, color: scheme.primary),
+                const SizedBox(height: 16),
+                Text(
+                  'Expense Tracker is locked',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                if (_failureLine case final line?) ...[
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Text(
+                      line,
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
+                ],
+                const SizedBox(height: 24),
+                FilledButton.icon(
+                  onPressed: _attemptUnlock,
+                  icon: const Icon(Icons.fingerprint),
+                  label: const Text('Unlock'),
                 ),
               ],
-              const SizedBox(height: 24),
-              FilledButton.icon(
-                onPressed: _attemptUnlock,
-                icon: const Icon(Icons.fingerprint),
-                label: const Text('Unlock'),
-              ),
-            ],
+            ),
           ),
         ),
       ),

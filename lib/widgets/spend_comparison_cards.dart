@@ -8,9 +8,9 @@ import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
-import 'animated_fold.dart';
 import 'comparison_bar.dart';
 import 'info_tip.dart';
+import 'show_all_list.dart';
 
 /// The dashboard's three spending comparisons: this month against the last
 /// one, against what a month usually costs, and the same question per
@@ -351,7 +351,6 @@ class CategoryComparisonCard extends StatefulWidget {
 }
 
 class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
-  bool _expanded = false;
   CategorySort _sort = CategorySort.biggestChange;
 
   CategorySort get _effectiveSort => widget.sort ?? _sort;
@@ -425,9 +424,6 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
       );
     }
 
-    final head = rows.take(kTopMoversShown).toList();
-    final rest = rows.skip(kTopMoversShown).toList();
-
     final scheme = Theme.of(context).colorScheme;
     return _Section(
       title: title,
@@ -478,36 +474,13 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
             ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final c in head)
+      child: ShowAllList(
+        key: ValueKey(widget.comparison.month),
+        noun: 'categories',
+        shown: kTopMoversShown,
+        rows: [
+          for (final c in rows)
             _CategoryCompareRow(compare: c, onView: widget.onViewCategory),
-          if (rest.isNotEmpty) ...[
-            AnimatedFold(
-              collapsed: !_expanded,
-              child: Column(
-                children: [
-                  for (final c in rest)
-                    _CategoryCompareRow(
-                      compare: c,
-                      onView: widget.onViewCategory,
-                    ),
-                ],
-              ),
-            ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                onPressed: () => setState(() => _expanded = !_expanded),
-                child: Text(
-                  _expanded
-                      ? 'Show less'
-                      : 'Show all ${rows.length} categories',
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );

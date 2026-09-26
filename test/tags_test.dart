@@ -139,6 +139,36 @@ void main() {
       expect(p.allTags.single.count, 2);
     });
 
+    test('By tags: month spend, both tags counted, transfers out', () async {
+      final (p, _, _) = await seeded();
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'transport',
+        amount: 600,
+        note: 'Cab',
+        date: DateTime(2026, 9, 14),
+        tags: ['Goa trip', 'Work'],
+      );
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 90,
+        note: 'Snack',
+        date: DateTime(2026, 10, 2),
+        tags: ['Work'],
+      );
+      final sep = p.expenseByTagInMonth(DateTime(2026, 9));
+      expect([for (final t in sep) t.tag], ['Goa trip', 'Work']);
+      expect(sep.first.spent, 1000, reason: 'your 400 share + the 600 cab');
+      expect(sep.last.spent, 600);
+      expect(p.expenseByTagInMonth(DateTime(2026, 10)).single.spent, 90);
+      final year = p.expenseByTagInYear(2026);
+      expect(
+        [for (final t in year) (t.tag, t.spent)],
+        [('Goa trip', 1000.0), ('Work', 690.0)],
+      );
+    });
+
     test('bulk add and remove, with Undo', () async {
       final (p, a, b) = await seeded();
       final before = await p.setTagsForMany(
