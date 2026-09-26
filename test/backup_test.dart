@@ -47,6 +47,30 @@ void main() {
     setBuiltinOverrides(const {});
   });
 
+  test('a saved content:// URI shows as a folder and name', () {
+    expect(
+      BackupService.savedLabel(
+        'content://com.android.externalstorage.documents/document/'
+            'primary%3ADownload%2Fbackup.json',
+        'backup.json',
+      ),
+      'Download/backup.json',
+    );
+    expect(
+      BackupService.savedLabel(
+        'content://com.android.providers.downloads.documents/document/'
+            'msf%3A1234',
+        'backup.json',
+      ),
+      'backup.json',
+      reason: 'an opaque id falls back to the file name',
+    );
+    expect(
+      BackupService.savedLabel('/storage/emulated/0/x.csv', 'x.csv'),
+      '/storage/emulated/0/x.csv',
+    );
+  });
+
   test('export → replace-import round-trips all data', () async {
     final source = await seededProvider();
     final json = jsonEncode(source.exportData());

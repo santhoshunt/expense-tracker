@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <!-- Google Drive backup (opt-in): the only network use in the app. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Read bank/UPI alert SMS to auto-import transactions (opt-in at runtime). -->
@@ -11,7 +12,16 @@
          scheduled notification after a reboot. Granted at install. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <!-- No storage permission: exports go through the system save dialog
-         (Storage Access Framework), which needs none on any API level. -->
+         (Storage Access Framework), which needs none on any API level.
+         file_saver merges WRITE_EXTERNAL_STORAGE in for Android 9 and older,
+         and the merger then implies READ_EXTERNAL_STORAGE; both are stripped
+         here. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:node="remove"/>
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        tools:node="remove"/>
     <!-- allowBackup=false: shared_prefs holds the user's complete raw bank
          SMS history — cloud auto-backup / device-to-device transfer would
          ship it off-device, contradicting the in-app "scanned on-device

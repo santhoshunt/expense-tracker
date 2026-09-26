@@ -32,7 +32,7 @@ class BackupService {
       await FileSaver.instance.saveFile(
         name: name,
         bytes: bytes,
-        ext: ext,
+        fileExtension: ext,
         mimeType: mime,
       );
       return '$name.$ext (browser downloads)';
@@ -40,19 +40,35 @@ class BackupService {
     final path = await FileSaver.instance.saveAs(
       name: name,
       bytes: bytes,
-      ext: ext,
+      fileExtension: ext,
       mimeType: mime,
     );
-    return path;
+    return path == null ? null : savedLabel(path, '$name.$ext');
   }
 
+  /// What a toast shows for where [saved] went. From file_saver 0.4 Android
+  /// returns a content:// URI rather than a file path. A shared-storage URI
+  /// ends in "primary:Download/name.json", so that part is kept; any other
+  /// URI falls back to the file name.
+  @visibleForTesting
+  static String savedLabel(String saved, String fallback) {
+    if (!saved.startsWith('content://')) return saved;
+    final uri = Uri.tryParse(saved);
+    final last = uri == null || uri.pathSegments.isEmpty
+        ? ''
+        : uri.pathSegments.last;
+    final colon = last.indexOf(':');
+    final rest = colon < 0 ? '' : last.substring(colon + 1);
+    return rest.contains('/') ? rest : fallback;
+  }
+
+  /// The picked file's bytes, or null if the picker was cancelled.
   static Future<Uint8List?> _pick(List<String> extensions) async {
-    final picked = await FilePicker.platform.pickFiles(
+    final picked = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: extensions,
-      withData: true,
     );
-    return picked?.files.single.bytes;
+    return picked == null ? null : await picked.readAsBytes();
   }
 
   // --- JSON ------------------------------------------------------------------

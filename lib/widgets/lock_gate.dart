@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/app_lock_service.dart';
 import 'glossy.dart';
+import 'undo_snackbar.dart';
 
 /// Whether returning to the foreground should re-lock: enabled, previously
 /// backgrounded, and away longer than [threshold]. Pure — the gate's only
@@ -75,6 +76,10 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
   /// arriving while it is up must not re-arm the lock.
   bool _authInProgress = false;
 
+  /// How the last attempt ended, for the line under the title. Null before
+  /// the first attempt and while one is running.
+  UnlockOutcome? _lastOutcome;
+
   @override
   void initState() {
     super.initState();
@@ -134,13 +139,48 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
   Future<void> _attemptUnlock() async {
     if (_authInProgress) return;
     _authInProgress = true;
+    if (_lastOutcome != null) setState(() => _lastOutcome = null);
     try {
-      final ok = await _service.authenticate();
-      if (ok && mounted) setState(() => _locked = false);
+      final outcome = await _service.unlock();
+      if (!mounted) return;
+      setState(() {
+        _lastOutcome = outcome;
+        // No screen lock means no prompt can ever succeed: every retry
+        // would fail and the app would stay shut. Settings already lets
+        // the lock be switched off unprompted in this state, and removing
+        // a screen lock needs the device PIN, so opening adds no way in.
+        if (outcome == UnlockOutcome.success ||
+            outcome == UnlockOutcome.noScreenLock) {
+          _locked = false;
+        }
+      });
+      if (outcome == UnlockOutcome.noScreenLock) {
+        // The setting stays on: the lock returns once a screen lock does.
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (messenger == null) return;
+          showAppToastOn(
+            messenger,
+            'App lock needs a screen lock on this device. Set one up to use '
+            'it again.',
+            icon: Icons.lock_open,
+          );
+        });
+      }
     } finally {
       _authInProgress = false;
     }
   }
+
+  /// Why the last attempt failed, when there is something to say. A plain
+  /// cancel says nothing: the user chose it.
+  String? get _failureLine => switch (_lastOutcome) {
+    UnlockOutcome.lockedOut =>
+      'Too many fingerprint attempts. Unlock with your PIN.',
+    UnlockOutcome.failed =>
+      "Couldn't check your fingerprint or PIN. Try again.",
+    _ => null,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -172,6 +212,19 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
                 'Expense Tracker is locked',
                 style: Theme.of(context).textTheme.titleMedium,
               ),
+              if (_failureLine case final line?) ...[
+                const SizedBox(height: 8),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Text(
+                    line,
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 24),
               FilledButton.icon(
                 onPressed: _attemptUnlock,
