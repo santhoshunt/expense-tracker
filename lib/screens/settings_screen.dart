@@ -12,6 +12,7 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/app_icon_service.dart';
 import '../services/app_lock_service.dart';
+import '../services/background_import.dart';
 import '../services/backup_service.dart';
 import '../services/drive_backup_service.dart';
 import '../services/sms_import_service.dart';

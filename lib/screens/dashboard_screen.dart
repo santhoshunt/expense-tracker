@@ -12,9 +12,9 @@ import '../services/card_bill.dart';
 import '../services/merchant_stats.dart';
 import '../services/monthly_recap.dart';
 import '../services/recurring_detector.dart';
-import '../services/reminder_schedule.dart';
 import '../services/spend_comparison.dart';
 import '../services/subscriptions.dart';
+import '../services/upcoming_items.dart';
 import '../utils/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
@@ -1411,101 +1411,76 @@ class _UpcomingCard extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final now = DateTime.now();
 
-    final entries =
-        <
-          ({
-            DateTime due,
-            IconData icon,
-            Color color,
-            String label,
-            String sub,
-            double? amount,
-            bool urgent,
-            bool muted,
-            String? hideKey,
-            Reminder? reminder,
-            Account? card,
-          })
-        >[];
-
-    for (final a in finance.openAccounts) {
-      final s = cardBillStatus(a, now);
-      if (s == null) continue;
-      final out = finance.accountOutstanding(a);
-      if (out == null || out <= 0) continue;
-      entries.add((
-        due: s.due,
-        icon: Icons.credit_card,
-        // Traffic-light phases: green = nothing owed right now (not billed /
-        // paid), orange = billed, red = due within the urgent window or
-        // overdue.
-        color: cardBillColor(
-          s,
-          green: AppColors.of(context).green,
-          orange: AppColors.of(context).orange,
-          red: scheme.error,
-        ),
-        label: '${a.name} bill',
-        // Paid and not-yet-billed cycles keep their row (the amount is the
-        // live figure building toward the next/current statement) with the
-        // amount muted — only a billed, unpaid cycle asks for attention.
-        sub: cardBillSubtitle(s),
-        amount: out,
-        urgent: s.urgent,
-        muted: s.phase != CardBillPhase.billed,
-        hideKey: null,
-        reminder: null,
-        card: a,
-      ));
-    }
-
-    for (final h in hits) {
-      if (settings.hiddenUpcoming.contains(h.key)) continue;
-      final c = categoryById(h.categoryId, fallbackType: h.type);
-      final days = h.daysUntil(now);
-      entries.add((
-        due: h.nextDue,
-        icon: c.icon,
-        color: c.color,
-        label: h.label,
-        sub: days < 0
-            ? 'Overdue · expected ${fmtDateCompact(h.nextDue)}'
-            : 'Expected ${fmtDateCompact(h.nextDue)} · ${_inDays(days)}',
-        amount: h.expectedAmount,
-        urgent: days < 0,
-        muted: false,
-        hideKey: h.key,
-        reminder: null,
-        card: null,
-      ));
-    }
-    // Manual reminders: shown from a week before the due day (the schedule
-    // already skips a month marked paid).
-    for (final r in finance.reminders) {
-      final due = reminderNextDue(r, now);
-      final days = reminderDaysUntil(r, now);
-      if (days > 7) continue;
-      final c = categoryById(r.categoryId, fallbackType: TxType.expense);
-      entries.add((
-        due: due,
-        icon: c.icon,
-        color: c.color,
-        label: r.name,
-        sub: days < 0
-            ? 'Overdue · was due ${fmtDateCompact(due)}'
-            : 'Due ${fmtDateCompact(due)} · ${_inDays(days)}',
-        amount: r.expectedAmount,
-        urgent: days <= 0,
-        muted: false,
-        hideKey: null,
-        reminder: r,
-        card: null,
-      ));
-    }
+    final entries = [
+      for (final u in buildUpcomingItems(
+        finance,
+        hits: hits,
+        hidden: settings.hiddenUpcoming,
+        now: now,
+      ))
+        switch (u.kind) {
+          UpcomingKind.cardBill => (
+            due: u.due,
+            icon: Icons.credit_card,
+            // Traffic-light phases: green = nothing owed right now (not
+            // billed / paid), orange = billed, red = due within the urgent
+            // window or overdue.
+            color: cardBillColor(
+              u.cardStatus!,
+              green: AppColors.of(context).green,
+              orange: AppColors.of(context).orange,
+              red: scheme.error,
+            ),
+            label: u.label,
+            // Paid and not-yet-billed cycles keep their row (the amount is
+            // the live figure building toward the next/current statement)
+            // with the amount muted — only a billed, unpaid cycle asks for
+            // attention.
+            sub: cardBillSubtitle(u.cardStatus!),
+            amount: u.amount,
+            urgent: u.urgent,
+            muted: u.muted,
+            hideKey: u.hideKey,
+            reminder: u.reminder,
+            card: u.card,
+          ),
+          UpcomingKind.recurring => (
+            due: u.due,
+            icon: categoryById(u.categoryId!, fallbackType: u.type).icon,
+            color: categoryById(u.categoryId!, fallbackType: u.type).color,
+            label: u.label,
+            sub: u.days < 0
+                ? 'Overdue · expected ${fmtDateCompact(u.due)}'
+                : 'Expected ${fmtDateCompact(u.due)} · ${_inDays(u.days)}',
+            amount: u.amount,
+            urgent: u.urgent,
+            muted: u.muted,
+            hideKey: u.hideKey,
+            reminder: u.reminder,
+            card: u.card,
+          ),
+          // Manual reminders: shown from a week before the due day (the
+          // schedule already skips a month marked paid).
+          UpcomingKind.reminder => (
+            due: u.due,
+            icon: categoryById(u.categoryId!, fallbackType: u.type).icon,
+            color: categoryById(u.categoryId!, fallbackType: u.type).color,
+            label: u.label,
+            sub: u.days < 0
+                ? 'Overdue · was due ${fmtDateCompact(u.due)}'
+                : 'Due ${fmtDateCompact(u.due)} · ${_inDays(u.days)}',
+            amount: u.amount,
+            urgent: u.urgent,
+            muted: u.muted,
+            hideKey: u.hideKey,
+            reminder: u.reminder,
+            card: u.card,
+          ),
+        },
+    ];
     if (entries.isEmpty && finance.reminders.isEmpty) {
       return const SizedBox.shrink();
     }
-    entries.sort((a, b) => a.due.compareTo(b.due));
     final collapsed = settings.isSectionCollapsed('upcoming');
 
     // The gap lives here, not at the call site: an empty card renders

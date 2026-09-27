@@ -172,6 +172,23 @@ class _AppearancePage extends StatelessWidget {
 class _SmsImportPage extends StatelessWidget {
   const _SmsImportPage();
 
+  /// Every SMS listens for new messages, which takes the Receive SMS
+  /// permission; without it the setting stays as it was.
+  Future<void> _choose(BuildContext context, AutoImportFrequency f) async {
+    final settings = context.read<SettingsProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    if (f == AutoImportFrequency.everySms &&
+        !await BackgroundImportScheduler.requestReceiveSms()) {
+      showAppToastOn(
+        messenger,
+        "Android didn't allow reading new SMS, which Every SMS needs.",
+        tone: AppToastTone.error,
+      );
+      return;
+    }
+    await settings.setAutoImport(f);
+  }
+
   @override
   Widget build(BuildContext context) {
     final autoImport = context.select<SettingsProvider, AutoImportFrequency>(
@@ -197,22 +214,29 @@ class _SmsImportPage extends StatelessWidget {
                 'Scans your SMS inbox when you open or return to the '
                 'app, as often as this setting allows. Daily: the first '
                 'open each day. Weekly: 7 days after the last automatic '
-                'scan. The first scan reaches back 30 days. It needs SMS '
-                'permission; without it, the scan is skipped. New rows '
-                'wait in the review queue, and duplicates are skipped.',
+                'scan. Daily and Weekly also check every 6 hours with the '
+                'app closed. Every SMS: each new SMS is imported about a '
+                'minute after it arrives, even with the app closed, and it '
+                'needs the Receive SMS permission too. The first scan '
+                'reaches back 30 days. It needs SMS permission; without '
+                'it, the scan is skipped. New rows wait in the review '
+                'queue, and duplicates are skipped. When more than 5 are '
+                'waiting, a notification says how many.',
           ),
         ),
         const SizedBox(height: 4),
         Text(
           'Scans new bank messages when you open the app. Daily runs '
-          'on the first launch of each day, weekly every 7 days. '
-          'Imports still land in the review queue.',
+          'on the first launch of each day, weekly every 7 days, and '
+          'both also check every 6 hours in the background. Every SMS '
+          'imports each message as it arrives. Imports still land in the '
+          'review queue.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         _RadioSetting<AutoImportFrequency>(
           options: [for (final f in AutoImportFrequency.values) (f, f.label)],
           selected: autoImport,
-          onChanged: (f) => context.read<SettingsProvider>().setAutoImport(f),
+          onChanged: (f) => _choose(context, f),
         ),
         const SizedBox(height: 12),
         const _NotificationCaptureTile(),

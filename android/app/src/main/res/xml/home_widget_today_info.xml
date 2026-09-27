@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Today and Add (4×1). updatePeriodMillis: a 30-minute redraw from the stored
+     snapshot (Android's floor), so "today" and the pace marker move on
+     after midnight without the app running. No configure step. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/home_widget_today_description"
+    android:initialLayout="@layout/home_widget_today"
+    android:minWidth="250dp"
+    android:minHeight="40dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:previewLayout="@layout/home_widget_today"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

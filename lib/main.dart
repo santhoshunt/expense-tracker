@@ -5,9 +5,11 @@ import 'package:provider/provider.dart';
 import 'providers/finance_provider.dart';
 import 'providers/settings_provider.dart';
 import 'screens/home_screen.dart';
+import 'services/background_import.dart';
 import 'services/drive_backup_service.dart';
 import 'services/launch_actions.dart';
 import 'services/notification_service.dart';
+import 'services/sms_import_service.dart';
 import 'utils/app_theme.dart';
 import 'widgets/glow_tilt.dart';
 import 'widgets/keyboard_unfocus.dart';
@@ -24,6 +26,11 @@ Future<void> main() async {
     debugPrint('Unhandled: $error\n$stack');
     return true;
   };
+  // A background import running in a headless engine holds the ledger
+  // until it finishes; loading it here at the same time would let the two
+  // overwrite each other's writes.
+  await BackgroundImportScheduler.awaitIdle();
+  BackgroundImportScheduler.listen();
   // Prepare the local-notifications channel up front; permission is requested
   // later, from Settings, when the user enables budget alerts. Best-effort:
   // a platform failure here must not stop the app from launching at all.
@@ -38,6 +45,44 @@ Future<void> main() async {
     coldNotificationPayload: NotificationService.instance.launchPayload,
   );
   runApp(const ExpenseTrackerApp());
+}
+
+/// The headless engine's entry point (SmsImportWorker.kt): loads the
+/// ledger, runs one background import, refreshes the widgets, reports back.
+/// Never draws anything.
+@pragma('vm:entry-point')
+Future<void> backgroundImportMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  var imported = 0;
+  try {
+    try {
+      await NotificationService.instance.init();
+    } catch (e) {
+      debugPrint('Notification init failed: $e');
+    }
+    final trigger = await BackgroundImportScheduler.takeTrigger();
+    final finance = FinanceProvider();
+    await finance.load();
+    final settings = SettingsProvider();
+    await settings.load();
+    // A ledger that did not load cleanly must not be saved over by an
+    // import nobody is watching; the app shows its warning on the next open.
+    if (finance.loadWarnings.isNotEmpty) {
+      debugPrint('Background import skipped: ${finance.loadWarnings}');
+      await BackgroundImportScheduler.finished(0);
+      return;
+    }
+    imported = await runBackgroundImport(
+      finance,
+      settings,
+      trigger,
+      import: SmsImportService(),
+      syncWidgets: true,
+    );
+  } catch (e) {
+    debugPrint('Background import failed: $e');
+  }
+  await BackgroundImportScheduler.finished(imported);
 }
 
 class ExpenseTrackerApp extends StatelessWidget {

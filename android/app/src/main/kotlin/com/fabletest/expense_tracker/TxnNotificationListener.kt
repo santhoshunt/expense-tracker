@@ -17,8 +17,9 @@ import org.json.JSONObject
  * SMS content-provider import never sees them. Their *notifications* are
  * observable, though, which is the only supported capture path.
  *
- * The buffer lives in SharedPreferences (same process as the activity) and is
- * drained by the Flutter side during imports. Capture is best-effort: only
+ * The buffer lives in SharedPreferences (same process as the activity). The
+ * Flutter side reads it during imports ([peek]) and clears what it saved
+ * ([ack]). Capture is best-effort: only
  * texts containing a currency token are kept, and a persistent seen-set stops
  * MessagingStyle history reposts from re-adding drained messages.
  */
@@ -29,6 +30,10 @@ class TxnNotificationListener : NotificationListenerService() {
         private const val KEY_MESSAGES = "messages"
         private const val KEY_SEEN = "seen_hashes"
         private const val KEY_LAST_CAPTURE = "last_capture_millis"
+
+        /** Numbers each buffered message, so an import can clear exactly the
+         * ones it saved ([ack]) and keep any that arrived meanwhile. */
+        private const val KEY_NEXT_SEQ = "next_seq"
         private const val MAX_BUFFER = 300
         private const val MAX_SEEN = 800
 
@@ -97,11 +102,13 @@ class TxnNotificationListener : NotificationListenerService() {
             while (seen.size > MAX_SEEN) seen.remove(seen.first())
 
             val arr = JSONArray(prefs.getString(KEY_MESSAGES, "[]"))
+            val seq = prefs.getLong(KEY_NEXT_SEQ, 1L)
             arr.put(
                 JSONObject()
                     .put("address", sender)
                     .put("body", body)
                     .put("date", timeMillis)
+                    .put("seq", seq)
             )
             while (arr.length() > MAX_BUFFER) {
                 // The evicted (oldest, never-drained) message must also leave
@@ -115,10 +122,13 @@ class TxnNotificationListener : NotificationListenerService() {
 
             prefs.edit()
                 .putString(KEY_MESSAGES, arr.toString())
+                .putLong(KEY_NEXT_SEQ, seq + 1)
                 .putStringSet(KEY_SEEN, seen)
                 .putLong(KEY_LAST_CAPTURE, System.currentTimeMillis())
                 .putLong(KEY_STORED_TOTAL, prefs.getLong(KEY_STORED_TOTAL, 0L) + 1)
                 .apply()
+            // Every SMS imports captured alerts as they arrive, like SMS.
+            if (BackgroundImport.everySmsOn(context)) BackgroundImport.enqueueNow(context)
         }
 
         @Synchronized
@@ -165,14 +175,19 @@ class TxnNotificationListener : NotificationListenerService() {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getLong(KEY_LAST_CAPTURE, 0L)
 
-        /** Returns all buffered messages and clears the buffer. */
+        /** Every buffered message and the highest sequence number among
+         * them. Nothing is removed: the import calls [ack] once its rows are
+         * saved, so an import killed half-way reads them again next time. */
         @Synchronized
-        fun drain(context: Context): List<Map<String, Any?>> {
+        fun peek(context: Context): Map<String, Any?> {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             val arr = JSONArray(prefs.getString(KEY_MESSAGES, "[]"))
             val out = mutableListOf<Map<String, Any?>>()
+            var maxSeq = 0L
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
+                // Messages buffered before sequence numbers count as 0.
+                maxSeq = maxOf(maxSeq, o.optLong("seq", 0L))
                 out.add(
                     mapOf(
                         "address" to o.getString("address"),
@@ -181,11 +196,24 @@ class TxnNotificationListener : NotificationListenerService() {
                     )
                 )
             }
-            prefs.edit().remove(KEY_MESSAGES).apply()
-            return out
+            return mapOf("messages" to out, "maxSeq" to maxSeq)
+        }
+
+        /** Removes the messages [peek] returned up to [maxSeq]; any captured
+         * since then stay for the next import. */
+        @Synchronized
+        fun ack(context: Context, maxSeq: Long) {
+            if (maxSeq < 0) return
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val arr = JSONArray(prefs.getString(KEY_MESSAGES, "[]"))
+            val keep = JSONArray()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                if (o.optLong("seq", 0L) > maxSeq) keep.put(o)
+            }
+            prefs.edit().putString(KEY_MESSAGES, keep.toString()).apply()
         }
     }
-
     override fun onListenerConnected() {
         super.onListenerConnected()
         putDiagTime(applicationContext, KEY_CONNECTED_AT)

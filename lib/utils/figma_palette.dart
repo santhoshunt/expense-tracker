@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Dark palette (the app's native look) — charcoal structure with a coral
+/// Dark palette (the app's native look) — charcoal structure with an azure
 /// accent, modeled on the Figma restaurant-POS dashboard kit. Everything is
 /// `const` so const widget trees and `kCategories` can reference members
 /// directly. Category colors always use these dark-kit hues in both modes.
@@ -11,8 +11,11 @@ abstract final class FigmaPalette {
   static const surface2 = Color(0xFF2D303E); // input fill, raised layer
   static const border = Color(0xFF3B3F4F); // dividers, outlines
 
-  // Accent (default — user-selectable in Settings)
-  static const primary = Color(0xFFEA7C69); // coral
+  /// The default accent (user-selectable in Settings) since 1.23.
+  static const defaultAccent = Color(0xFF4A90E2); // azure
+
+  // Coral: a category colour, and the default accent before 1.23.
+  static const primary = Color(0xFFEA7C69);
   static const primaryLight = Color(0xFFF2A69C);
 
   // Text

@@ -40,7 +40,7 @@ class PaletteColors {
 enum AppPalette {
   standard(
     'Default',
-    'Charcoal with coral',
+    'Charcoal with azure',
     PaletteColors(
       bg: FigmaPalette.bg,
       surface: FigmaPalette.surface,
@@ -49,7 +49,7 @@ enum AppPalette {
       textPrimary: FigmaPalette.textPrimary,
       textSecondary: FigmaPalette.textSecondary,
       textMuted: FigmaPalette.textMuted,
-      accent: FigmaPalette.primary,
+      accent: FigmaPalette.defaultAccent,
     ),
   ),
   // The Midnight launcher icon's near-black teal with its neon cyan glyph.
@@ -79,7 +79,7 @@ enum AppPalette {
       textPrimary: Color(0xFFFFFFFF),
       textSecondary: Color(0xFFA6A6B0),
       textMuted: Color(0xFF85858F),
-      accent: FigmaPalette.primary,
+      accent: FigmaPalette.defaultAccent,
       outlineCards: true,
     ),
   ),

@@ -277,6 +277,29 @@ MonthComparison buildMonthComparison(
   );
 }
 
+/// Usual spend by each day of [month]: entry d-1 is the median, over the
+/// [usualWindow] months, of what each spent from the 1st through day d.
+/// Entry `now.day - 1` is [buildMonthComparison]'s usual reference while
+/// the month runs; on its last day that compares whole months, which is
+/// entry 30. Always 31 entries (a shorter month holds its total); null when
+/// fewer than [kMinUsualMonths] months can be compared. Feeds the pace
+/// widget, which reads the entry for whatever day it renders on.
+List<double>? usualCumulativeByDay(FinanceProvider finance, DateTime month) {
+  final window = usualWindow(finance, DateTime(month.year, month.month));
+  if (window.length < kMinUsualMonths) return null;
+  final curves = [
+    for (final m in window)
+      () {
+        final byDay = finance.expenseByDayInMonth(m);
+        var total = 0.0;
+        return [for (var d = 1; d <= 31; d++) total += byDay[d] ?? 0];
+      }(),
+  ];
+  return [
+    for (var d = 0; d < 31; d++) median([for (final c in curves) c[d]]),
+  ];
+}
+
 /// "₹3,100 (21%) more", "₹900 less", "the same" — the magnitude without
 /// naming what it is measured against, so both cards share one phrasing.
 String deltaPhrase(SpendCompare c) {

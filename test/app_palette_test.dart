@@ -19,7 +19,7 @@ void main() {
     final s = SettingsProvider();
     await s.load();
     expect(s.palette, AppPalette.standard, reason: 'default');
-    expect(s.accent, FigmaPalette.primary);
+    expect(s.accent, FigmaPalette.defaultAccent);
 
     await s.setPalette(AppPalette.midnight);
     expect(s.accent, AppPalette.midnight.colors.accent);
@@ -82,7 +82,50 @@ void main() {
     final c = AppPalette.standard.colors;
     expect(c.bg, FigmaPalette.bg);
     expect(c.surface, FigmaPalette.surface);
-    expect(c.accent, FigmaPalette.primary);
+    expect(c.accent, FigmaPalette.defaultAccent);
+    expect(AppPalette.amoled.colors.accent, FigmaPalette.defaultAccent);
+  });
+
+  test('the old coral default moves to azure once; other picks stay', () async {
+    final coral = FigmaPalette.primary.toARGB32();
+    SharedPreferences.setMockInitialValues({'accent_color_v1': coral});
+    final s = SettingsProvider();
+    await s.load();
+    expect(s.accent, FigmaPalette.defaultAccent);
+
+    // Coral picked again after the move is kept.
+    await s.setAccent(FigmaPalette.primary);
+    final reloaded = SettingsProvider();
+    await reloaded.load();
+    expect(reloaded.accent, FigmaPalette.primary);
+
+    // A pre-1.23 backup carrying coral lands on azure; any other colour stays.
+    await reloaded.applyBackupMap({'accent': coral});
+    expect(reloaded.accent, FigmaPalette.defaultAccent);
+    await reloaded.applyBackupMap({'accent': FigmaPalette.green.toARGB32()});
+    expect(reloaded.accent, FigmaPalette.green);
+    // Coral picked on 1.23 or later survives its own backup.
+    await reloaded.setAccent(FigmaPalette.primary);
+    final backup = reloaded.toBackupMap();
+    await reloaded.setAccent(FigmaPalette.green);
+    await reloaded.applyBackupMap(backup);
+    expect(reloaded.accent, FigmaPalette.primary);
+
+    SharedPreferences.setMockInitialValues({
+      'accent_color_v1': FigmaPalette.green.toARGB32(),
+    });
+    final other = SettingsProvider();
+    await other.load();
+    expect(other.accent, FigmaPalette.green);
+
+    // On a theme whose own accent was never coral, coral was chosen.
+    SharedPreferences.setMockInitialValues({
+      'accent_color_v1': coral,
+      'palette_v1': 'nord',
+    });
+    final nord = SettingsProvider();
+    await nord.load();
+    expect(nord.accent, FigmaPalette.primary);
   });
 
   test('near-black themes outline their cards', () {

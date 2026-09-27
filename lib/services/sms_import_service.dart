@@ -73,7 +73,7 @@ class SmsImportService {
     final now = DateTime.now();
     final due = switch (frequency) {
       AutoImportFrequency.off => false,
-      AutoImportFrequency.everyOpen => true,
+      AutoImportFrequency.everyOpen || AutoImportFrequency.everySms => true,
       AutoImportFrequency.daily =>
         last.year != now.year || last.month != now.month || last.day != now.day,
       // `last.isAfter(now)`: a clock that ever jumped forward wrote a
@@ -94,16 +94,17 @@ class SmsImportService {
   /// [lastPermission] then tells the caller whether the dialog was suppressed.
   SmsPermission lastPermission = SmsPermission.denied;
 
-  /// Drains the RCS notification buffer and imports whatever is found.
-  /// Safe to call on every launch — [NotificationSource.drain()] is a no-op
+  /// Imports the RCS notification buffer, then clears what was saved.
+  /// Safe to call on every launch — [NotificationSource.peek] is a no-op
   /// when notification access is not granted or the platform is not Android.
   Future<int> drainNotifications(FinanceProvider finance) async {
-    // The platform buffer is cleared by the drain itself and captures are
-    // ephemeral (no backfill). While ledger writes are known to be failing,
+    // Captures are ephemeral (no backfill), so the buffer is cleared only
+    // once the rows are saved. While ledger writes are known to be failing,
     // leave the messages buffered — importing them now would hold them only
     // in memory, and an app kill would lose them permanently.
     if (finance.persistFailed) return 0;
-    final msgs = await notifications.drain();
+    final batch = await notifications.peek();
+    final msgs = batch.messages;
     if (msgs.isEmpty) return 0;
     final ignorePhrases = finance.ignorePhrases;
     final spamSignals = finance.spamSignals;
@@ -119,8 +120,10 @@ class SmsImportService {
       );
       if (txn != null) parsed.add(txn);
     }
-    if (parsed.isEmpty) return 0;
-    final (imported, _) = await finance.addImported(parsed);
+    final (imported, _) = parsed.isEmpty
+        ? (0, 0)
+        : await finance.addImported(parsed);
+    if (!finance.persistFailed) await notifications.ack(batch);
     return imported;
   }
 
@@ -141,7 +144,8 @@ class SmsImportService {
       // Same durability guard as drainNotifications: don't empty the
       // one-shot RCS buffer while ledger writes are failing.
       if (finance.persistFailed) return null;
-      final notifMsgs = await notifications.drain();
+      final batch = await notifications.peek();
+      final notifMsgs = batch.messages;
       if (notifMsgs.isEmpty) return null;
       final ignorePhrases = finance.ignorePhrases;
       final spamSignals = finance.spamSignals;
@@ -158,6 +162,7 @@ class SmsImportService {
         if (txn != null) parsed.add(txn);
       }
       final (imported, spamDropped) = await finance.addImported(parsed);
+      if (!finance.persistFailed) await notifications.ack(batch);
       return SmsImportResult(
         scanned: notifMsgs.length,
         matched: parsed.length,
@@ -222,8 +227,10 @@ class SmsImportService {
     // brand names ("Yes Bank"), not DLT codes. Skipped while ledger writes
     // are failing: SMS stays re-scannable from the inbox, drained RCS does
     // not.
+    var batch = NotificationBatch.empty;
     if (!finance.persistFailed) {
-      for (final msg in await notifications.drain()) {
+      batch = await notifications.peek();
+      for (final msg in batch.messages) {
         scanned++;
         final txn = SmsTxnParser.parse(
           msg.sender,
@@ -238,6 +245,7 @@ class SmsImportService {
     }
 
     final (imported, spamDropped) = await finance.addImported(parsed);
+    if (!finance.persistFailed) await notifications.ack(batch);
     // Advance the marker only when this scan is authoritative up to
     // `newestMillis`:
     //  * complete — the platform read the whole window (not truncated at

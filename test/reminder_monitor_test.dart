@@ -42,6 +42,12 @@ class FakeNotifications implements NotificationService {
 
   @override
   Future<void> cancelRecap() async {}
+
+  @override
+  Future<void> showReview(int count) async {}
+
+  @override
+  Future<void> cancelReview() async {}
 }
 
 void main() {

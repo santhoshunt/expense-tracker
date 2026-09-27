@@ -122,8 +122,9 @@ void main() {
     final dark = buildWidgetTheme(s, Brightness.dark);
     expect(dark['surface'], AppPalette.amoled.colors.surface.toARGB32());
     expect(dark['text'], AppPalette.amoled.colors.textPrimary.toARGB32());
-    // The bar is coloured by budget use, not by the accent.
-    expect(dark.containsKey('accent'), isFalse);
+    // The budget bar is coloured by budget use; the accent is for the
+    // Month pace widget's bar.
+    expect(dark['accent'], FigmaPalette.green.toARGB32());
     expect(dark['safe'], FigmaPalette.green.toARGB32());
     expect(dark['warn'], FigmaPalette.orange.toARGB32());
     expect(dark['over'], FigmaPalette.pink.toARGB32());

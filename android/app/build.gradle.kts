@@ -78,4 +78,6 @@ dependencies {
     // Theme.AppCompat for the launch and normal themes: local_auth's
     // biometric dialog crashes on Android 8 and older without it.
     implementation("androidx.appcompat:appcompat:1.7.1")
+    // Background SMS import: the SMS-arrival and 6-hour runs (SmsImportWorker).
+    implementation("androidx.work:work-runtime:2.10.5")
 }

@@ -21,6 +21,14 @@ const String kMaskedAmount = '₹••••';
 
 String fmtMoney(double v) => _currency.format(v);
 String fmtMoneyCompact(double v) => _currencyCompact.format(v);
+
+/// [fmtMoney] without a trailing ".00": the forced two decimals read as
+/// clutter at home-screen widget size ("₹60,000.00 of ₹60,000.00").
+String fmtMoneyTidy(double v) {
+  final s = fmtMoney(v);
+  return s.endsWith('.00') ? s.substring(0, s.length - 3) : s;
+}
+
 String fmtDate(DateTime d) => _date.format(d);
 String fmtDateTime(DateTime d) => _dateTime.format(d);
 String fmtTime(DateTime d) => _time.format(d);

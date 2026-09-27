@@ -66,21 +66,40 @@ class NotificationSource {
     }
   }
 
-  /// Returns captured messages and clears the platform buffer. Captures are
-  /// ephemeral (no backfill), so callers must feed every drained message
-  /// through the import pipeline immediately.
-  Future<List<SmsMessage>> drain() async {
-    if (!isSupported || !await hasAccess()) return const [];
-    final raw = await _channel.invokeListMethod<dynamic>('notifDrain');
-    return (raw ?? const []).map((e) {
-      final m = Map<String, dynamic>.from(e as Map);
-      return SmsMessage(
-        sender: m['address'] as String? ?? '',
-        body: m['body'] as String? ?? '',
-        date: DateTime.fromMillisecondsSinceEpoch(
-          (m['date'] as num?)?.toInt() ?? 0,
-        ),
-      );
-    }).toList();
+  /// The captured messages, left in the platform buffer until [ack]: an
+  /// import that dies before saving its rows reads them again next time.
+  Future<NotificationBatch> peek() async {
+    if (!isSupported || !await hasAccess()) return NotificationBatch.empty;
+    final raw = await _channel.invokeMapMethod<String, dynamic>('notifPeek');
+    final list = (raw?['messages'] as List?) ?? const [];
+    return NotificationBatch([
+      for (final e in list)
+        () {
+          final m = Map<String, dynamic>.from(e as Map);
+          return SmsMessage(
+            sender: m['address'] as String? ?? '',
+            body: m['body'] as String? ?? '',
+            date: DateTime.fromMillisecondsSinceEpoch(
+              (m['date'] as num?)?.toInt() ?? 0,
+            ),
+          );
+        }(),
+    ], (raw?['maxSeq'] as num?)?.toInt() ?? -1);
   }
+
+  /// Clears the messages [peek] returned (up to [batch]'s last one) once
+  /// their rows are saved. Messages captured since stay buffered.
+  Future<void> ack(NotificationBatch batch) async {
+    if (!isSupported || batch.messages.isEmpty) return;
+    await _channel.invokeMethod<void>('notifAck', {'maxSeq': batch.maxSeq});
+  }
+}
+
+/// What [NotificationSource.peek] found, and where it ends in the buffer.
+class NotificationBatch {
+  final List<SmsMessage> messages;
+  final int maxSeq;
+  const NotificationBatch(this.messages, this.maxSeq);
+
+  static const empty = NotificationBatch([], -1);
 }

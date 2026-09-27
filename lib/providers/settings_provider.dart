@@ -5,14 +5,17 @@ import '../services/budget.dart';
 import '../utils/app_palettes.dart';
 import '../utils/figma_palette.dart';
 
-/// How often SMS auto-import runs. Imports happen on app launch when due —
-/// "daily" means the first launch of each day catches up on everything since
-/// the last scan, so opening the app after EOD covers the whole day.
+/// How often SMS auto-import runs. Every mode but Off imports on launch when
+/// due — "daily" means the first launch of each day catches up on everything
+/// since the last scan. Daily and Weekly also run in the background every 6
+/// hours when due, and Every SMS imports each new SMS with the app closed
+/// (background_import.dart).
 enum AutoImportFrequency {
   off('Off'),
   everyOpen('Launch'),
   daily('Daily'),
-  weekly('Weekly');
+  weekly('Weekly'),
+  everySms('Every SMS');
 
   final String label;
   const AutoImportFrequency(this.label);
@@ -78,8 +81,23 @@ class SettingsProvider extends ChangeNotifier {
   static const _kUpdateDismissed = 'update_dismissed_tag_v1';
   static const _kUpdateInstalling = 'update_installing_tag_v1';
 
+  /// Set once the pre-1.23 coral default accent has been moved to azure.
+  static const _kAccentAzureMigrated = 'accent_azure_migrated_v1';
+
+  /// Backups record this from 1.23, when azure became the default; a
+  /// backup without it may carry the old coral default.
+  static const _kBackupAccentVersion = 2;
+
+  /// Coral on the Default or AMOLED theme, where it was the default, reads
+  /// as "never chosen". On any other theme coral was a deliberate pick.
+  static Color _migrateAccent(Color c, AppPalette palette) =>
+      (palette == AppPalette.standard || palette == AppPalette.amoled) &&
+          c.toARGB32() == FigmaPalette.primary.toARGB32()
+      ? FigmaPalette.defaultAccent
+      : c;
+
   ThemeMode _mode = ThemeMode.dark; // the app's native look
-  Color _accent = FigmaPalette.primary;
+  Color _accent = FigmaPalette.defaultAccent;
   AppPalette _palette = AppPalette.standard;
   AutoImportFrequency _autoImport = AutoImportFrequency.off;
   double _monthlyBudget = 0; // 0 = no cap set
@@ -186,8 +204,8 @@ class SettingsProvider extends ChangeNotifier {
     );
     _accent = tryRead(() {
       final accent = prefs.getInt(_kAccent);
-      return accent != null ? Color(accent) : FigmaPalette.primary;
-    }, FigmaPalette.primary);
+      return accent != null ? Color(accent) : FigmaPalette.defaultAccent;
+    }, FigmaPalette.defaultAccent);
     _autoImport = tryRead(
       () =>
           AutoImportFrequency.values.asNameMap()[prefs.getString(
@@ -246,6 +264,16 @@ class SettingsProvider extends ChangeNotifier {
           AppPalette.standard,
       AppPalette.standard,
     );
+    // Once, after the palette is known: coral stops being the default.
+    if (prefs.getBool(_kAccentAzureMigrated) != true) {
+      _accent = _migrateAccent(_accent, _palette);
+      await _persistPref(_kAccentAzureMigrated, (p) async {
+        if (p.getInt(_kAccent) != null) {
+          await p.setInt(_kAccent, _accent.toARGB32());
+        }
+        await p.setBool(_kAccentAzureMigrated, true);
+      });
+    }
     _updateOnLaunch = tryRead(
       () => prefs.getBool(_kUpdateOnLaunch) ?? true,
       true,
@@ -521,6 +549,7 @@ class SettingsProvider extends ChangeNotifier {
   Map<String, dynamic> toBackupMap() => {
     'themeMode': _mode.name,
     'accent': _accent.toARGB32(),
+    'accentVersion': _kBackupAccentVersion,
     'autoImport': _autoImport.name,
     'monthlyBudget': _monthlyBudget,
     'budgetAlerts': _budgetAlerts,
@@ -582,6 +611,10 @@ class SettingsProvider extends ChangeNotifier {
     _categorySort =
         CategorySort.values.asNameMap()[map['categorySort']] ?? _categorySort;
     _palette = AppPalette.values.asNameMap()[map['palette']] ?? _palette;
+    // A backup from before 1.23 may carry the old coral default.
+    if (accent is int && map['accentVersion'] == null) {
+      _accent = _migrateAccent(_accent, _palette);
+    }
     await _persistPref('backup restore', (p) async {
       await p.remove(budgetAlertMonthKey(DateTime.now()));
       await p.setString(_kThemeMode, _mode.name);

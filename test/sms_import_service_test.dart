@@ -48,11 +48,15 @@ class FakeSmsSource implements SmsSource {
 }
 
 class FakeNotificationSource implements NotificationSource {
+  List<SmsMessage> buffered = [];
+  int maxSeq = -1;
+  final acked = <int>[];
+
   @override
   bool get isSupported => true;
 
   @override
-  Future<bool> hasAccess() async => false;
+  Future<bool> hasAccess() async => buffered.isNotEmpty;
 
   @override
   Future<void> openAccessSettings() async {}
@@ -64,13 +68,17 @@ class FakeNotificationSource implements NotificationSource {
   Future<DateTime?> lastCapture() async => null;
 
   @override
-  Future<List<SmsMessage>> drain() async => const [];
+  Future<NotificationBatch> peek() async => NotificationBatch(buffered, maxSeq);
+
+  @override
+  Future<void> ack(NotificationBatch batch) async => acked.add(batch.maxSeq);
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late FakeSmsSource source;
+  late FakeNotificationSource notifications;
   late SmsImportService service;
 
   SmsMessage msg(DateTime date) => SmsMessage(
@@ -89,10 +97,8 @@ void main() {
     setCustomCategories(const []);
     setBuiltinOverrides(const {});
     source = FakeSmsSource();
-    service = SmsImportService(
-      source: source,
-      notifications: FakeNotificationSource(),
-    );
+    notifications = FakeNotificationSource();
+    service = SmsImportService(source: source, notifications: notifications);
   });
 
   group('watermark', () {
@@ -222,5 +228,60 @@ void main() {
       );
       expect(result, isNull);
     });
+  });
+  group('notification buffer', () {
+    const body =
+        'INR 1,840.00 spent on YES BANK Card xxxx @UPI_NOVA TILES AND N '
+        '06-07-2026 03:41:52 pm. Avl Lmt INR 187,264.38. '
+        'SMS BLKCC 4417 to 9840909000 if not you';
+
+    test(
+      'captured alerts are cleared only once their rows are saved',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        notifications
+          ..buffered = [
+            SmsMessage(
+              sender: 'Yes Bank',
+              body: body,
+              date: DateTime(2026, 7, 6),
+            ),
+          ]
+          ..maxSeq = 7;
+        final p = await finance();
+        expect(await service.drainNotifications(p), 1);
+        expect(p.pendingCount, 1);
+        expect(notifications.acked, [7]);
+      },
+    );
+
+    test('a run imports the buffer too and clears it after', () async {
+      SharedPreferences.setMockInitialValues({});
+      notifications
+        ..buffered = [
+          SmsMessage(
+            sender: 'Yes Bank',
+            body: body,
+            date: DateTime(2026, 7, 6),
+          ),
+        ]
+        ..maxSeq = 3;
+      final result = await service.run(await finance());
+      expect(result!.imported, 1);
+      expect(notifications.acked, [3]);
+    });
+  });
+
+  test('Every SMS is due on every run', () async {
+    SharedPreferences.setMockInitialValues({});
+    final p = await finance();
+    expect(
+      await service.maybeAutoRun(p, AutoImportFrequency.everySms),
+      isNotNull,
+    );
+    expect(
+      await service.maybeAutoRun(p, AutoImportFrequency.everySms),
+      isNotNull,
+    );
   });
 }

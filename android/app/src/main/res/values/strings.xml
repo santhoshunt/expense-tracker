@@ -3,6 +3,13 @@
     <!-- Shown in the launcher's widget picker under each preview. -->
     <string name="budget_widget_description">One budget\'s monthly progress at a glance — name, amounts and bar.</string>
     <string name="budget_widget_detailed_description">One budget\'s monthly progress with percent used, amount left and last update.</string>
+    <string name="home_widget_pace_label">Month pace</string>
+    <string name="home_widget_pace_description">This month\'s spend against your cap and a usual month by today.</string>
+    <string name="home_widget_upcoming_label">Upcoming bills</string>
+    <string name="home_widget_upcoming_description">The next three bills due, nearest first.</string>
+    <string name="home_widget_today_label">Today and Add</string>
+    <string name="home_widget_today_description">What you spent today, with a button to add an expense.</string>
+    <string name="home_widget_empty">Open Expense Tracker to set up this widget.</string>
     <!-- Launcher long-press shortcuts and the Quick Settings tile. -->
     <string name="shortcut_add_expense">Add expense</string>
     <string name="shortcut_import_sms">Import SMS</string>

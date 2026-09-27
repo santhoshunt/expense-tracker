@@ -122,7 +122,7 @@ abstract final class AppRadius {
 final Map<(int, Brightness, AppPalette?), ThemeData> _themeCache = {};
 
 /// Figma-kit theme in a dark and a light variant, tinted by the
-/// user-selected [accent] (coral by default). In dark mode the structural
+/// user-selected [accent] (azure by default). In dark mode the structural
 /// colours come from [palette]; light mode always uses [FigmaPaletteLight].
 /// Screens style themselves via `scheme.*` and [AppColors], so the palettes
 /// live here.

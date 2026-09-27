@@ -60,6 +60,14 @@ class NotificationService {
   /// Fixed, so every reschedule replaces the one pending recap.
   static const recapNotificationId = 97000;
 
+  static const _reviewChannelId = 'import_review';
+  static const _reviewChannelName = 'Transactions to review';
+  static const _reviewChannelDescription =
+      'How many imported transactions are waiting, when more than 5 are';
+
+  /// Fixed, so a later import updates the one note instead of adding more.
+  static const reviewNotificationId = 93000;
+
   bool get _supported =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
@@ -104,6 +112,17 @@ class NotificationService {
               _recapChannelId,
               _recapChannelName,
               description: _recapChannelDescription,
+            ),
+          );
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.createNotificationChannel(
+            const AndroidNotificationChannel(
+              _reviewChannelId,
+              _reviewChannelName,
+              description: _reviewChannelDescription,
             ),
           );
     }
@@ -274,6 +293,34 @@ class NotificationService {
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
       payload: kRecapPayload,
     );
+  }
+
+  /// "N imported transactions are waiting". A count only, no amounts or
+  /// merchants: it can show on the lock screen. Re-posting the same id
+  /// updates the text without sounding again.
+  Future<void> showReview(int count) async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
+    await init();
+    await _plugin.show(
+      id: reviewNotificationId,
+      title: 'Transactions to review',
+      body: '$count imported transactions are waiting for you.',
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _reviewChannelId,
+          _reviewChannelName,
+          channelDescription: _reviewChannelDescription,
+          onlyAlertOnce: true,
+        ),
+      ),
+      payload: kReviewPayload,
+    );
+  }
+
+  Future<void> cancelReview() async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
+    await init();
+    await _plugin.cancel(id: reviewNotificationId);
   }
 
   /// Drops the booked recap note, if any. One already showing stays: the

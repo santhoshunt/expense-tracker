@@ -85,6 +85,8 @@ Map<String, int> buildWidgetTheme(
     'safe': (light ? FigmaPaletteLight.green : FigmaPalette.green).toARGB32(),
     'warn': (light ? FigmaPaletteLight.orange : FigmaPalette.orange).toARGB32(),
     'over': (light ? FigmaPaletteLight.pink : FigmaPalette.pink).toARGB32(),
+    // The pace widget's bar.
+    'accent': settings.accent.toARGB32(),
   };
 }
 
@@ -99,13 +101,7 @@ List<Map<String, dynamic>> buildWidgetSnapshot(
   DateTime now,
 ) {
   final month = DateTime(now.year, now.month);
-
-  // fmtMoney's forced two decimals read as clutter at widget size —
-  // "₹60,000.00 of ₹60,000.00" — so whole-rupee figures drop the ".00".
-  String tidy(double v) {
-    final s = fmtMoney(v);
-    return s.endsWith('.00') ? s.substring(0, s.length - 3) : s;
-  }
+  const tidy = fmtMoneyTidy;
 
   Map<String, dynamic> entry(
     String id,

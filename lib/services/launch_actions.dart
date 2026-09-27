@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 
 /// Something outside the app asked it to open a particular place: a
 /// launcher shortcut, the Quick Settings tile, or a notification tap.
-enum LaunchAction { addExpense, importSms, openRecap }
+enum LaunchAction { addExpense, importSms, openRecap, openReview }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
 /// [pending] until Home can act on it (loaded, unlocked, mounted).
@@ -55,8 +55,8 @@ class LaunchActions {
       debugPrint('takeLaunchAction failed: $e');
     }
     try {
-      final payload = await coldNotificationPayload?.call();
-      if (payload == kRecapPayload) pending.value = LaunchAction.openRecap;
+      final action = _fromPayload(await coldNotificationPayload?.call());
+      if (action != null) pending.value = action;
     } catch (e) {
       debugPrint('Notification launch details failed: $e');
     }
@@ -64,8 +64,15 @@ class LaunchActions {
 
   /// A tapped notification's payload, delivered while the app runs.
   void onNotificationPayload(String? payload) {
-    if (payload == kRecapPayload) pending.value = LaunchAction.openRecap;
+    final action = _fromPayload(payload);
+    if (action != null) pending.value = action;
   }
+
+  static LaunchAction? _fromPayload(String? payload) => switch (payload) {
+    kRecapPayload => LaunchAction.openRecap,
+    kReviewPayload => LaunchAction.openReview,
+    _ => null,
+  };
 
   @visibleForTesting
   void resetForTest() {
@@ -76,3 +83,6 @@ class LaunchActions {
 
 /// Payload on the monthly recap notification.
 const String kRecapPayload = 'recap';
+
+/// Payload on the "transactions to review" notification.
+const String kReviewPayload = 'review';

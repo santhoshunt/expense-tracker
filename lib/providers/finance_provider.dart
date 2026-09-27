@@ -583,6 +583,24 @@ class FinanceProvider extends ChangeNotifier {
     return byDay;
   }
 
+  /// Spend and payment count on one calendar [day], by the same rule as
+  /// [expenseByDayInMonth] (the user's own share of split bills).
+  ({double spent, int count}) spendOnDay(DateTime day) {
+    final rows = _byMonth[day.year * 12 + day.month];
+    var spent = 0.0;
+    var count = 0;
+    for (final t in rows ?? const <Tx>[]) {
+      if (t.date.day != day.day ||
+          t.type != TxType.expense ||
+          isTransferCategory(t.categoryId)) {
+        continue;
+      }
+      spent += t.spendAmount;
+      count++;
+    }
+    return (spent: spent, count: count);
+  }
+
   /// Confirmed money-out rows on one calendar [day] — the heatmap's
   /// day-tap sheet.
   List<Tx> expensesOnDay(DateTime day) => [
@@ -1206,6 +1224,11 @@ class FinanceProvider extends ChangeNotifier {
   int _txWriteSeq = 0;
   int _txWriteDispatched = 0;
 
+  /// The newest dispatched transaction write. A skipped older write waits
+  /// for it, so "persisted" on return means on disk: an import acks its
+  /// notification buffer right after.
+  Future<bool>? _txWriteInFlight;
+
   /// True after a storage write failed — the UI shows a persistent banner,
   /// because the alternative is an optimistic screen whose edits silently
   /// evaporate on the next launch. Cleared by the first successful write
@@ -1303,7 +1326,12 @@ class FinanceProvider extends ChangeNotifier {
       );
       if (seq > _txWriteDispatched) {
         _txWriteDispatched = seq;
-        await prefs.setString(_txKey, blob);
+        final write = prefs.setString(_txKey, blob);
+        _txWriteInFlight = write;
+        await write;
+      } else {
+        // A newer write carries these rows too; return once it has landed.
+        await _txWriteInFlight;
       }
     }
     if (rules) {

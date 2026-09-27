@@ -10,9 +10,11 @@ import 'package:provider/provider.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/background_import.dart';
 import '../services/budget_monitor.dart';
 import '../services/budget_widget_service.dart';
 import '../services/drive_backup_service.dart';
+import '../services/home_widgets_service.dart';
 import '../services/launch_actions.dart';
 import '../services/monthly_recap.dart';
 import '../services/notification_service.dart';
@@ -53,6 +55,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _budgetMonitor = BudgetMonitor();
   final _upcomingMonitor = UpcomingMonitor();
   final _budgetWidgets = BudgetWidgetService();
+  final _homeWidgets = HomeWidgetsService();
   FinanceProvider? _finance;
   SettingsProvider? _settings;
 
@@ -157,6 +160,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     LaunchActions.instance.pending.addListener(_scheduleLaunchAction);
     appLocked.addListener(_scheduleLaunchAction);
     _scheduleLaunchAction();
+    // Background runs that find the app alive import here, in the engine
+    // that owns the ledger (background_import.dart).
+    BackgroundImportScheduler.runImportHandler = _runBackgroundImport;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scheduleRecap();
       _autoImport();
@@ -169,6 +175,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // widget snapshot — the widget config screen then claimed "No budgets
       // yet" against a ledger full of them.
       _syncBudgetWidgets();
+      _applyBackgroundImport();
       // A downloaded update never outlives the launch after it.
       unawaited(UpdateDownloader().cleanup());
       _reportUpdateResult();
@@ -192,6 +199,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _finance!.addListener(_checkBudget);
     _settings = context.read<SettingsProvider>();
     _settings!.addListener(_syncBudgetWidgets);
+    _settings!.addListener(_applyBackgroundImport);
   }
 
   /// "On launch" must include WARM launches: Android keeps the process in
@@ -209,6 +217,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // An action that arrived during the switch back waits for resumed.
     _scheduleLaunchAction();
     _checkForUpdate();
+    // A new day moves Today and the pace marker even with no data change.
+    _syncBudgetWidgets();
     final last = _lastAutoImportAt;
     if (last != null &&
         DateTime.now().difference(last) < const Duration(seconds: 5)) {
@@ -336,6 +346,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => AppNav.instance.showRecap(),
         );
+      case LaunchAction.openReview:
+        setState(() => _showTab(1));
     }
   }
 
@@ -379,6 +391,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _finance?.removeListener(_checkBudget);
     _settings?.removeListener(_syncBudgetWidgets);
+    _settings?.removeListener(_applyBackgroundImport);
+    if (BackgroundImportScheduler.runImportHandler == _runBackgroundImport) {
+      BackgroundImportScheduler.runImportHandler = null;
+    }
     super.dispose();
   }
 
@@ -396,8 +412,60 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // debit completes a recurring pattern) — re-evaluate alongside budgets.
     _checkUpcoming();
     _syncBudgetWidgets();
+    // Reviewing rows clears the "to review" note; the app never posts it.
+    ReviewNotifier.sync(
+      context.read<FinanceProvider>().pendingCount,
+      allowPost: false,
+    );
     // A month's first confirmed row books its recap note.
     _scheduleRecap();
+  }
+
+  /// The mode last handed to the native scheduler, so settings changes
+  /// that leave Auto-import alone don't reach the platform.
+  AutoImportFrequency? _appliedImportMode;
+
+  /// Books the background check and switches the SMS receiver to match
+  /// the Auto-import setting. Also on every open, which heals a booking the
+  /// system dropped.
+  void _applyBackgroundImport() {
+    if (!mounted) return;
+    final mode = context.read<SettingsProvider>().autoImport;
+    if (mode == _appliedImportMode) return;
+    _appliedImportMode = mode;
+    unawaited(BackgroundImportScheduler.apply(mode));
+  }
+
+  /// A background run handed to this engine: the same import as a resume,
+  /// then the toast when the app is in front, or the review note when not.
+  /// Null while another import is running, so the worker retries later.
+  Future<int?> _runBackgroundImport(BackgroundTrigger trigger) async {
+    if (!mounted || _autoImporting) return null;
+    _autoImporting = true;
+    final messenger = ScaffoldMessenger.of(context);
+    final front =
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    try {
+      final imported = await runBackgroundImport(
+        context.read<FinanceProvider>(),
+        context.read<SettingsProvider>(),
+        trigger,
+        import: _smsImport,
+        notify: !front,
+      );
+      if (mounted && front && imported > 0) {
+        showAppToastOn(
+          messenger,
+          'Auto-import: $imported new transaction'
+          '${imported == 1 ? '' : 's'} to review.',
+          tone: AppToastTone.success,
+          icon: Icons.sms_outlined,
+        );
+      }
+      return imported;
+    } finally {
+      _autoImporting = false;
+    }
   }
 
   void _checkUpcoming() {
@@ -410,13 +478,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .catchError((Object e) => debugPrint('Upcoming check failed: $e'));
   }
 
-  /// Pushes fresh figures to the Android home-screen budget widgets. Cheap
-  /// and self-deduplicating (the service skips unchanged snapshots), so it
-  /// simply rides every budget check and settings change.
+  /// Pushes fresh figures to the Android home-screen widgets. Cheap and
+  /// self-deduplicating (the services skip unchanged snapshots), so it
+  /// simply rides every budget check, settings change and resume.
   void _syncBudgetWidgets() {
     if (!mounted) return;
+    final finance = context.read<FinanceProvider>();
+    final settings = context.read<SettingsProvider>();
     _budgetWidgets
-        .sync(context.read<FinanceProvider>(), context.read<SettingsProvider>())
+        .sync(finance, settings)
+        .then((_) => _homeWidgets.sync(finance, settings))
         .catchError((Object e) => debugPrint('Widget sync failed: $e'));
   }
 

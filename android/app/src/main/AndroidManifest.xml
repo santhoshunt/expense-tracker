@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <!-- Read bank/UPI alert SMS to auto-import transactions (opt-in at runtime). -->
     <uses-permission android:name="android.permission.READ_SMS"/>
+    <!-- Auto-import Every SMS: wakes the import when a new SMS arrives.
+         SmsArrivalReceiver is disabled unless that option is chosen. -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <!-- Show budget-threshold alerts (Android 13+ prompts at runtime). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- App lock: fingerprint/face prompt (falls back to device PIN). -->
@@ -208,7 +211,53 @@
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
             </intent-filter>
         </activity>
-        <!-- Captures bank-alert notifications (RCS business messages are not
+        <!-- Month pace, Upcoming bills and Today and Add widgets
+             (HomeWidgets.kt): no configure step, one shared snapshot. -->
+        <receiver
+            android:name=".MonthPaceWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_pace_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_pace_info"/>
+        </receiver>
+        <receiver
+            android:name=".UpcomingWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_upcoming_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_upcoming_info"/>
+        </receiver>
+        <receiver
+            android:name=".TodayAddWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_today_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_today_info"/>
+        </receiver>
+        <!-- Background SMS import (BackgroundImport.kt). Off in the manifest;
+             switched on only while Auto-import is Every SMS. Only the system
+             SMS broadcaster (BROADCAST_SMS) can reach it. -->
+        <receiver
+            android:name=".SmsArrivalReceiver"
+            android:enabled="false"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_RECEIVED"/>
+            </intent-filter>
+        </receiver>        <!-- Captures bank-alert notifications (RCS business messages are not
              readable via the SMS provider). Inert until the user grants
              notification access in system settings. -->
         <service

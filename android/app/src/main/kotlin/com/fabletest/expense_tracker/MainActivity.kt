@@ -8,7 +8,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.provider.Telephony
 import android.service.notification.NotificationListenerService
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -27,15 +26,13 @@ class MainActivity : FlutterFragmentActivity() {
         private const val UPDATE_CHANNEL = "expense_tracker/update"
         private const val PERMISSION_REQUEST = 7301
 
-        /** Rows read per provider query; pages continue until the window is
-         * exhausted so long scan ranges are not silently truncated. */
-        private const val PAGE_SIZE = 2000
-
-        /** Sanity ceiling across all pages. */
-        private const val MAX_MESSAGES = 50_000
+        /** Every SMS: Receive SMS, asked together with Read SMS. */
+        private const val RECEIVE_REQUEST = 7302
     }
 
     private var pendingPermissionResult: MethodChannel.Result? = null
+    private var pendingReceiveResult: MethodChannel.Result? = null
+    private var backgroundChannel: MethodChannel? = null
 
     /** The cold-start action, held until Dart asks for it once. */
     private var pendingLaunchAction: String? = null
@@ -93,10 +90,34 @@ class MainActivity : FlutterFragmentActivity() {
         updateInstaller = UpdateInstaller(this, updateChannel).also { installer ->
             updateChannel.setMethodCallHandler(installer::handle)
         }
+        backgroundChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            BackgroundImport.CHANNEL
+        ).also {
+            it.setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "configure" -> {
+                        BackgroundImport.configure(
+                            applicationContext,
+                            call.argument<String>("mode")
+                        )
+                        result.success(null)
+                    }
+                    "awaitIdle" -> BackgroundImport.awaitIdle(result)
+                    "requestReceiveSms" -> requestReceiveSms(result)
+                    else -> result.notImplemented()
+                }
+            }
+            // The worker hands its runs to this engine while it lives.
+            BackgroundImport.addLive(it)
+        }
+        val smsBridge = SmsBridge(applicationContext)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
+                // Inbox, notification buffer and widgets: shared with the
+                // headless background-import engine.
+                if (smsBridge.handle(call, result)) return@setMethodCallHandler
                 when (call.method) {
-                    "hasPermission" -> result.success(hasSmsPermission())
                     "requestPermission" -> requestSmsPermission(result)
                     "openAppSettings" -> {
                         // Some ROMs lack these settings activities — a bare
@@ -114,19 +135,9 @@ class MainActivity : FlutterFragmentActivity() {
                             result.success(false)
                         }
                     }
-                    "querySms" -> {
-                        if (!hasSmsPermission()) {
-                            result.error("NO_PERMISSION", "READ_SMS not granted", null)
-                        } else {
-                            val since = call.argument<Number>("sinceMillis")?.toLong() ?: 0L
-                            val until = call.argument<Number>("untilMillis")?.toLong()
-                            result.success(queryInbox(since, until))
-                        }
-                    }
                     // Notification capture (RCS alerts): access is a special
                     // system permission granted via its own settings page,
                     // not a runtime dialog.
-                    "notifHasAccess" -> result.success(hasNotificationAccess())
                     "notifOpenSettings" -> {
                         try {
                             startActivity(
@@ -136,21 +147,6 @@ class MainActivity : FlutterFragmentActivity() {
                         } catch (_: Exception) {
                             result.success(false)
                         }
-                    }
-                    "notifDrain" -> result.success(
-                        TxnNotificationListener.drain(applicationContext)
-                    )
-                    "notifLastCapture" -> result.success(
-                        TxnNotificationListener.lastCaptureMillis(applicationContext)
-                    )
-                    "notifDiagnostics" -> result.success(
-                        TxnNotificationListener.diagnostics(applicationContext)
-                    )
-                    // Home-screen budget widgets: the Dart side has written a
-                    // fresh snapshot to prefs — re-render every instance.
-                    "updateBudgetWidgets" -> {
-                        BudgetWidgetProvider.refreshAll(applicationContext)
-                        result.success(null)
                     }
                     // Alternate launcher icons via activity-alias switching.
                     "getAppIcon" -> result.success(currentAppIcon())
@@ -163,6 +159,11 @@ class MainActivity : FlutterFragmentActivity() {
             }
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        backgroundChannel?.let { BackgroundImport.removeLive(it) }
+        backgroundChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
     override fun onDestroy() {
         updateInstaller?.dispose()
         updateInstaller = null
@@ -189,19 +190,10 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
-    private fun hasSmsPermission(): Boolean =
-        checkSelfPermission(Manifest.permission.READ_SMS) ==
-            PackageManager.PERMISSION_GRANTED
+    private fun hasSmsPermission(): Boolean = SmsBridge.hasSmsPermission(this)
 
-    /** Entries are flattened "pkg/cls" component strings — parse and compare
-     * the package exactly. A startsWith check matched any package with this
-     * one as a prefix, reporting "capture on" while the buffer stayed empty. */
-    private fun hasNotificationAccess(): Boolean =
-        Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
-            ?.split(":")
-            ?.any {
-                ComponentName.unflattenFromString(it)?.packageName == packageName
-            } == true
+    private fun hasNotificationAccess(): Boolean = SmsBridge.hasNotificationAccess(this)
+
 
     // --- Alternate launcher icons -------------------------------------------
 
@@ -308,94 +300,29 @@ class MainActivity : FlutterFragmentActivity() {
             }
             pendingPermissionResult?.success(status)
             pendingPermissionResult = null
+        } else if (requestCode == RECEIVE_REQUEST) {
+            pendingReceiveResult?.success(
+                grantResults.isNotEmpty() &&
+                    grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+            )
+            pendingReceiveResult = null
         }
     }
 
-    /** Reads the whole (since, until) window newest-first, paging with a
-     * moving upper-bound date cursor so large windows are not truncated.
-     *
-     * Returns {"messages": [...], "complete": bool}. `complete=false` means
-     * the window was NOT fully read (hit [MAX_MESSAGES], or the provider
-     * threw mid-scan, e.g. READ_SMS revoked) — the Dart side must then keep
-     * its incremental-scan marker where it was, otherwise the unread tail is
-     * skipped forever.
-     *
-     * Pages after the first use an inclusive upper bound with _ID-based
-     * dedup: the old strict `<` silently and permanently dropped any message
-     * sharing the boundary row's exact millisecond. The page loop also
-     * checks capacity BEFORE consuming a row — `moveToNext()` first meant
-     * row PAGE_SIZE+1 was consumed and discarded every page. */
-    private fun queryInbox(sinceMillis: Long, untilMillis: Long?): Map<String, Any?> {
-        val messages = mutableListOf<Map<String, Any?>>()
-        val seenIds = HashSet<Long>()
-        var upperBound = untilMillis ?: Long.MAX_VALUE
-        var inclusiveUpper = false
-        var complete = true
-        try {
-            while (true) {
-                if (messages.size >= MAX_MESSAGES) {
-                    complete = false
-                    break
-                }
-                var pageRows = 0
-                var newRows = 0
-                var oldestInPage = upperBound
-                contentResolver.query(
-                    Telephony.Sms.Inbox.CONTENT_URI,
-                    arrayOf(
-                        Telephony.Sms._ID,
-                        Telephony.Sms.ADDRESS,
-                        Telephony.Sms.BODY,
-                        Telephony.Sms.DATE
-                    ),
-                    "${Telephony.Sms.DATE} > ? AND " +
-                        "${Telephony.Sms.DATE} ${if (inclusiveUpper) "<=" else "<"} ?",
-                    arrayOf(sinceMillis.toString(), upperBound.toString()),
-                    "${Telephony.Sms.DATE} DESC"
-                )?.use { cursor ->
-                    val idIdx = cursor.getColumnIndex(Telephony.Sms._ID)
-                    val addressIdx = cursor.getColumnIndex(Telephony.Sms.ADDRESS)
-                    val bodyIdx = cursor.getColumnIndex(Telephony.Sms.BODY)
-                    val dateIdx = cursor.getColumnIndex(Telephony.Sms.DATE)
-                    if (idIdx < 0 || dateIdx < 0) {
-                        complete = false
-                        return@use
-                    }
-                    while (pageRows < PAGE_SIZE &&
-                        messages.size < MAX_MESSAGES && cursor.moveToNext()
-                    ) {
-                        pageRows++
-                        val date = cursor.getLong(dateIdx)
-                        oldestInPage = date
-                        if (!seenIds.add(cursor.getLong(idIdx))) continue
-                        newRows++
-                        messages.add(
-                            mapOf(
-                                "address" to
-                                    (if (addressIdx >= 0) cursor.getString(addressIdx) else null),
-                                "body" to
-                                    (if (bodyIdx >= 0) cursor.getString(bodyIdx) else null),
-                                "date" to date
-                            )
-                        )
-                    }
-                }
-                // Short page → window exhausted. Zero NEW rows on a full
-                // page can only mean >PAGE_SIZE messages share one
-                // millisecond — bail rather than loop forever.
-                if (pageRows < PAGE_SIZE) break
-                if (newRows == 0) {
-                    complete = false
-                    break
-                }
-                upperBound = oldestInPage
-                inclusiveUpper = true
-            }
-        } catch (_: Exception) {
-            // SecurityException (permission revoked mid-scan) or an OEM
-            // provider quirk: return what was read, flagged incomplete.
-            complete = false
+    /** Every SMS needs Receive SMS on top of Read SMS. Both sit in the SMS
+     * group, so once Read SMS is granted Android usually grants this one
+     * without a dialog. Answers true when both are granted. */
+    private fun requestReceiveSms(result: MethodChannel.Result) {
+        val perms = arrayOf(Manifest.permission.READ_SMS, Manifest.permission.RECEIVE_SMS)
+        if (perms.all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }) {
+            result.success(true)
+            return
         }
-        return mapOf("messages" to messages, "complete" to complete)
+        if (pendingReceiveResult != null) {
+            result.error("IN_PROGRESS", "Permission request already in progress", null)
+            return
+        }
+        pendingReceiveResult = result
+        requestPermissions(perms, RECEIVE_REQUEST)
     }
 }

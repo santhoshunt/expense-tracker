@@ -29,7 +29,7 @@ class BudgetWidgetConfigActivity : Activity() {
     private companion object {
         const val BG = 0xFF1B1927.toInt() // app background
         const val CARD = 0xFF252836.toInt() // card surface
-        const val ACCENT = 0xFFEA7C69.toInt() // coral
+        const val ACCENT = 0xFF4A90E2.toInt() // azure
         const val TEXT_SECONDARY = 0xFFB4C0C8.toInt()
         const val RIPPLE = 0x33FFFFFF
     }
