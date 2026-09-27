@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:flutter/widgets.dart' show StringCharacters;
+import 'package:flutter/widgets.dart' show Color, StringCharacters;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -236,5 +236,96 @@ void main() {
       expect(await p.setTagsForMany({a}, add: {'goa trip'}), isEmpty);
       expect(await p.deleteTag('Nope'), isEmpty);
     });
+  });
+
+  group('colours', () {
+    const green = Color(0xFF50D1AA);
+    const pink = Color(0xFFFF7CA3);
+
+    Future<FinanceProvider> tagged() async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 100,
+        note: 'Lunch',
+        date: DateTime(2026, 9, 12),
+        tags: ['Goa trip', 'Work'],
+      );
+      return p;
+    }
+
+    test('a colour persists and matches any spelling of the tag', () async {
+      final p = await tagged();
+      await p.setTagColor('goa TRIP', green);
+      expect(p.tagColor('Goa trip'), green);
+      final again = FinanceProvider();
+      await again.load();
+      expect(again.tagColor('Goa trip'), green);
+      await again.setTagColor('Goa trip', null);
+      expect(again.tagColor('Goa trip'), isNull);
+    });
+
+    test(
+      'a rename takes the colour along, unless the target has one',
+      () async {
+        final p = await tagged();
+        await p.setTagColor('Goa trip', green);
+        await p.renameTag('Goa trip', 'Holiday');
+        expect(p.tagColor('Holiday'), green);
+        expect(p.tagColor('Goa trip'), isNull);
+
+        await p.setTagColor('Work', pink);
+        await p.renameTag('Holiday', 'Work');
+        expect(
+          p.tagColor('Work'),
+          pink,
+          reason: 'the merge target keeps its own',
+        );
+      },
+    );
+
+    test(
+      'a delete drops the colour, and the Undo snapshot restores both',
+      () async {
+        final p = await tagged();
+        await p.setTagColor('Goa trip', green);
+        final colours = p.tagColorSnapshot;
+        final before = await p.deleteTag('Goa trip');
+        expect(p.tagColor('Goa trip'), isNull);
+        await p.restoreEditedTransactions(before);
+        await p.restoreTagColors(colours);
+        expect(p.tagColor('Goa trip'), green);
+        expect(p.allTags.map((u) => u.tag), contains('Goa trip'));
+      },
+    );
+
+    test('the backup carries colours and restores them', () async {
+      final p = await tagged();
+      await p.setTagColor('Work', pink);
+      final data = p.exportData();
+      expect(data['version'], 16);
+      final fresh = FinanceProvider();
+      await fresh.load();
+      await fresh.importData(data, replace: true);
+      expect(fresh.tagColor('Work'), pink);
+    });
+
+    test(
+      'colours of tags no row carries are dropped at the next load',
+      () async {
+        final p = await tagged();
+        await p.setTagColor('Goa trip', green);
+        await p.setTagsForMany(
+          {p.transactions.single.id},
+          remove: {'Goa trip'},
+        );
+        expect(p.tagColor('Goa trip'), green, reason: 'kept for an Undo');
+        final again = FinanceProvider();
+        await again.load();
+        expect(again.tagColor('Goa trip'), isNull);
+      },
+    );
   });
 }

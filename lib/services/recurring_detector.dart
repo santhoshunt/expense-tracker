@@ -1,3 +1,4 @@
+import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import 'sms_parser.dart';
 
@@ -25,15 +26,23 @@ class RecurringHit {
   /// Date of the newest occurrence.
   final DateTime lastDate;
 
-  /// Median gap between occurrences, in days.
+  /// Median gap between occurrences, in days; for a marked merchant, its
+  /// cycle's length.
   final int intervalDays;
 
-  /// Predicted next occurrence: [lastDate] + [intervalDays].
+  /// Predicted next occurrence: [lastDate] + [intervalDays], or one
+  /// [cycle] after it for a marked merchant.
   final DateTime nextDue;
 
   /// Every occurrence the pattern is built from, one per day, oldest first
   /// — what a price rise is read from.
   final List<({DateTime date, double amount})> history;
+
+  /// The cycle when the user marked this merchant as a subscription (it
+  /// then counts from its first payment); null when it was spotted.
+  final SubscriptionCycle? cycle;
+
+  bool get pinned => cycle != null;
 
   const RecurringHit({
     required this.key,
@@ -45,6 +54,7 @@ class RecurringHit {
     required this.intervalDays,
     required this.nextDue,
     this.history = const [],
+    this.cycle,
   });
 
   /// Calendar days from [now] to [nextDue]; negative = overdue.
@@ -100,8 +110,14 @@ List<RecurringHit> detectRecurring(
   List<Tx> confirmed, {
   required DateTime now,
   MerchantAliasLookup? alias,
+  Map<String, SubscriptionCycle> pinned = const {},
 }) => [
-  for (final h in detectRecurringPatterns(confirmed, now: now, alias: alias))
+  for (final h in detectRecurringPatterns(
+    confirmed,
+    now: now,
+    alias: alias,
+    pinned: pinned,
+  ))
     if (h.daysUntil(now) <= 14 && h.daysUntil(now) >= -7) h,
 ];
 
@@ -112,18 +128,29 @@ List<RecurringHit> detectRecurring(
 /// Qualifies a group when, over the last 12 months and after collapsing
 /// same-day repeats: ≥3 occurrences, every consecutive gap 20–40 days, and
 /// the median gap 25–35 days.
+///
+/// A key in [pinned] (marked as a subscription by the user) qualifies from
+/// one payment in the last 24 months, whatever the gaps, and is due one
+/// cycle after its last payment: a yearly plan paid 11 months ago is still
+/// active, one paid 14 months ago shows as stopped.
 List<RecurringHit> detectRecurringPatterns(
   List<Tx> confirmed, {
   required DateTime now,
   MerchantAliasLookup? alias,
+  Map<String, SubscriptionCycle> pinned = const {},
 }) {
   final horizon = DateTime(now.year - 1, now.month, now.day);
+  final pinnedHorizon = DateTime(now.year - 2, now.month, now.day);
 
   final groups = <String, List<Tx>>{};
+  // Nothing marked: the older rows can only ever be skipped, so skip them
+  // before the (regex-heavy) key.
+  final oldest = pinned.isEmpty ? horizon : pinnedHorizon;
   for (final t in confirmed) {
-    if (t.date.isBefore(horizon) || t.date.isAfter(now)) continue;
+    if (t.date.isAfter(now) || t.date.isBefore(oldest)) continue;
     final key = recurringKeyOf(t);
     if (key == null) continue;
+    if (t.date.isBefore(horizon) && !pinned.containsKey(key)) continue;
     (groups[key] ??= []).add(t);
   }
 
@@ -136,20 +163,28 @@ List<RecurringHit> detectRecurringPatterns(
     for (final t in rows) {
       byDay[DateTime(t.date.year, t.date.month, t.date.day)] = t;
     }
-    if (byDay.length < 3) return;
     final days = byDay.keys.toList()..sort();
-    final gaps = [
-      for (var i = 1; i < days.length; i++)
-        days[i].difference(days[i - 1]).inDays,
-    ];
-    if (gaps.any((g) => g < 20 || g > 40)) return;
-    final interval = _median(gaps.map((g) => g.toDouble()).toList()).round();
-    if (interval < 25 || interval > 35) return;
+    final cycle = pinned[key];
+    final int interval;
+    final DateTime nextDue;
+    if (cycle != null) {
+      interval = cycle.approxDays;
+      nextDue = cycle.nextAfter(days.last);
+    } else {
+      if (byDay.length < 3) return;
+      final gaps = [
+        for (var i = 1; i < days.length; i++)
+          days[i].difference(days[i - 1]).inDays,
+      ];
+      if (gaps.any((g) => g < 20 || g > 40)) return;
+      interval = _median(gaps.map((g) => g.toDouble()).toList()).round();
+      if (interval < 25 || interval > 35) return;
+      nextDue = days.last.add(Duration(days: interval));
+    }
 
     final ordered = [for (final d in days) byDay[d]!];
     final latest = ordered.last;
     final lastDay = days.last;
-    final nextDue = lastDay.add(Duration(days: interval));
 
     final recentAmounts = [
       for (final t in ordered.skip(
@@ -171,6 +206,7 @@ List<RecurringHit> detectRecurringPatterns(
           for (final (i, t) in ordered.indexed)
             (date: days[i], amount: t.amount),
         ],
+        cycle: cycle,
       ),
     );
   });

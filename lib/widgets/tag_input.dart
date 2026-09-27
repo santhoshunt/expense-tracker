@@ -16,12 +16,16 @@ class TagInput extends StatelessWidget {
   final List<String> suggestions;
   final TextEditingController controller;
 
+  /// A tag's colour for its chip, or null for none.
+  final Color? Function(String tag)? colorOf;
+
   const TagInput({
     super.key,
     required this.tags,
     required this.onChanged,
     required this.suggestions,
     required this.controller,
+    this.colorOf,
   });
 
   void _add(Iterable<String> more) =>
@@ -61,6 +65,13 @@ class TagInput extends StatelessWidget {
                   children: [
                     for (final t in tags)
                       InputChip(
+                        avatar: switch (colorOf?.call(t)) {
+                          null => null,
+                          final c => CircleAvatar(
+                            radius: 5,
+                            backgroundColor: c,
+                          ),
+                        },
                         // TalkBack would read the "#" as "number".
                         label: Text('# $t', semanticsLabel: 'Tag $t'),
                         visualDensity: VisualDensity.compact,

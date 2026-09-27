@@ -270,6 +270,32 @@ class SmsTxnParser {
     return upper.replaceAll(RegExp(r'[^A-Z0-9]'), '');
   }
 
+  /// Whether [sender] is a DLT sender id ("VM-HDFCBK"), as inbox SMS carry;
+  /// a messaging app's notification carries a display name instead.
+  static bool isDltSender(String sender) =>
+      _senderShape.hasMatch(sender.trim());
+
+  /// The bank behind [sender], for duplicate checks only: [bankCodeOf], but
+  /// a display name ("State Bank of India", a notification's title) is read
+  /// by its full bank name first, so it meets the same bank's DLT sender.
+  /// Separate from [bankCodeOf], which also keys accounts and must not
+  /// change under existing rows.
+  static String dedupBankOf(String sender) {
+    if (isDltSender(sender)) return bankCodeOf(sender);
+    for (final (re, code) in _dedupOnlyNames) {
+      if (re.hasMatch(sender)) return code;
+    }
+    return _bodyBankCode(sender) ?? bankCodeOf(sender);
+  }
+
+  /// Names [_bodyBankNames] lacks or would read as another bank ("Indian
+  /// Overseas Bank" is not Indian Bank).
+  static final List<(RegExp, String)> _dedupOnlyNames = [
+    (RegExp(r'\bindian\s+overseas\b', caseSensitive: false), 'IOB'),
+    (RegExp(r'\bbank\s+of\s+maharashtra\b', caseSensitive: false), 'MAHABK'),
+    (RegExp(r'\bau\s+small\s+finance\b', caseSensitive: false), 'AUBANK'),
+  ];
+
   /// Bank names as they appear in message text, mapped to the same codes
   /// [bankCodeOf] produces for senders. Order matters: "Union Bank of India"
   /// and "Central Bank of India" must match before the bare "Bank of India".

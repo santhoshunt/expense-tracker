@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:expense_tracker/models/subscription_cycle.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/services/recurring_detector.dart';
 
@@ -296,6 +297,69 @@ void main() {
       expect(hits, hasLength(2));
       expect(hits.first.key, 'expense|netflix');
       expect(hits.last.key, 'expense|rent');
+    });
+  });
+
+  group('marked by hand', () {
+    final now = DateTime(2026, 9, 15, 10);
+
+    test('one payment is enough, and the cycle sets the next date', () {
+      final rows = [
+        manual(amount: 1499, date: DateTime(2026, 3, 10), note: 'Prime'),
+      ];
+      expect(detectRecurringPatterns(rows, now: now), isEmpty);
+      final hit = detectRecurringPatterns(
+        rows,
+        now: now,
+        pinned: {'expense|prime': SubscriptionCycle.yearly},
+      ).single;
+      expect(hit.pinned, isTrue);
+      expect(hit.nextDue, DateTime(2027, 3, 10));
+      expect(hit.intervalDays, 365);
+      expect(hit.expectedAmount, 1499);
+    });
+
+    test('a mark ignores the monthly gap rules', () {
+      // Quarterly: gaps of about 90 days fail the automatic 20-40 day rule.
+      final rows = [
+        manual(amount: 300, date: DateTime(2026, 1, 20), note: 'Water bill'),
+        manual(amount: 300, date: DateTime(2026, 4, 20), note: 'Water bill'),
+        manual(amount: 320, date: DateTime(2026, 7, 20), note: 'Water bill'),
+      ];
+      expect(detectRecurringPatterns(rows, now: now), isEmpty);
+      final hit = detectRecurringPatterns(
+        rows,
+        now: now,
+        pinned: {'expense|water bill': SubscriptionCycle.quarterly},
+      ).single;
+      expect(hit.nextDue, DateTime(2026, 10, 20));
+      expect(hit.history, hasLength(3));
+    });
+
+    test('a month-end payment lands on the last day of a short month', () {
+      expect(
+        SubscriptionCycle.monthly.nextAfter(DateTime(2026, 1, 31)),
+        DateTime(2026, 2, 28),
+      );
+      expect(
+        SubscriptionCycle.yearly.nextAfter(DateTime(2024, 2, 29)),
+        DateTime(2025, 2, 28),
+      );
+    });
+
+    test('marks leave unmarked merchants exactly as detected', () {
+      final netflix = [
+        for (final m in [6, 7, 8])
+          sms(amount: 649, date: DateTime(2026, m, 12)),
+      ];
+      final plain = detectRecurringPatterns(netflix, now: now);
+      final withPins = detectRecurringPatterns(
+        netflix,
+        now: now,
+        pinned: {'expense|prime': SubscriptionCycle.yearly},
+      );
+      expect(withPins.single.nextDue, plain.single.nextDue);
+      expect(withPins.single.pinned, isFalse);
     });
   });
 }

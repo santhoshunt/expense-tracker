@@ -128,7 +128,9 @@ class TxnNotificationListener : NotificationListenerService() {
                 .putLong(KEY_STORED_TOTAL, prefs.getLong(KEY_STORED_TOTAL, 0L) + 1)
                 .apply()
             // Every SMS imports captured alerts as they arrive, like SMS.
-            if (BackgroundImport.everySmsOn(context)) BackgroundImport.enqueueNow(context)
+            if (BackgroundImport.everySmsOn(context)) {
+                BackgroundImport.enqueueNow(context, BackgroundImport.TRIGGER_NOTIF)
+            }
         }
 
         @Synchronized

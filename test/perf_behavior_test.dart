@@ -57,7 +57,7 @@ void main() {
       expect(p.transactionCount, 2);
     });
 
-    test('ref-less fuzzy: type + amount + sender within 3 minutes', () async {
+    test('ref-less fuzzy: type + amount + bank within 3 minutes', () async {
       final p = FinanceProvider();
       await p.load();
       await p.addImported([
@@ -111,6 +111,153 @@ void main() {
         ),
       ]);
       expect(added, 0);
+    });
+
+    test('an SMS and its notification copy match on the bank, not the '
+        'sender text', () async {
+      final p = FinanceProvider();
+      await p.load();
+      // The inbox copy, then the notification copy a minute later.
+      await p.addImported([
+        parsed(
+          type: TxType.expense,
+          amount: 640,
+          date: t0,
+          sender: 'VM-HDFCBK',
+        ),
+      ]);
+      var (added, _) = await p.addImported([
+        parsed(
+          type: TxType.expense,
+          amount: 640,
+          date: t0.add(const Duration(minutes: 1)),
+          sender: 'HDFC Bank',
+        ),
+      ]);
+      expect(added, 0, reason: 'across two imports');
+
+      // Both copies in one import, as a single run hands them over.
+      (added, _) = await p.addImported([
+        parsed(
+          type: TxType.expense,
+          amount: 910,
+          date: t0,
+          sender: 'AD-HDFCBK-S',
+        ),
+        parsed(
+          type: TxType.expense,
+          amount: 910,
+          date: t0.add(const Duration(seconds: 40)),
+          sender: 'HDFC Bank',
+        ),
+      ]);
+      expect(added, 1, reason: 'within one batch');
+
+      // Another bank at the same moment is a different payment.
+      (added, _) = await p.addImported([
+        parsed(
+          type: TxType.expense,
+          amount: 640,
+          date: t0,
+          sender: 'VM-ICICIB',
+        ),
+      ]);
+      expect(added, 1);
+    });
+
+    test(
+      'a copy with a ref is blocked by its ref-less twin stored first',
+      () async {
+        final p = FinanceProvider();
+        await p.load();
+        await p.addImported([
+          parsed(
+            type: TxType.expense,
+            amount: 250,
+            date: t0,
+            sender: 'HDFC Bank',
+          ),
+        ]);
+        final (added, _) = await p.addImported([
+          parsed(
+            type: TxType.expense,
+            amount: 250,
+            date: t0.add(const Duration(minutes: 1)),
+            sender: 'VM-HDFCBK',
+            ref: 'UPI123',
+          ),
+        ]);
+        expect(added, 0);
+        // Two different payments that both carry refs never block each other.
+        final (more, _) = await p.addImported([
+          parsed(type: TxType.expense, amount: 99, date: t0, ref: 'A1'),
+          parsed(type: TxType.expense, amount: 99, date: t0, ref: 'A2'),
+        ]);
+        expect(more, 2);
+      },
+    );
+
+    test('an inbox alert without a ref never swallows a later payment with '
+        'one', () async {
+      final p = FinanceProvider();
+      await p.load();
+      // A card swipe: the SMS itself carries no ref.
+      await p.addImported([
+        parsed(type: TxType.expense, amount: 99, date: t0, sender: 'VM-HDFCBK'),
+      ]);
+      final (added, _) = await p.addImported([
+        parsed(
+          type: TxType.expense,
+          amount: 99,
+          date: t0.add(const Duration(minutes: 2)),
+          sender: 'VM-HDFCBK',
+          ref: 'UPI777',
+        ),
+      ]);
+      expect(added, 1);
+    });
+
+    test('a notification twin pairs with one copy only', () async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addImported([
+        parsed(type: TxType.expense, amount: 77, date: t0, sender: 'HDFC Bank'),
+      ]);
+      final (added, _) = await p.addImported([
+        parsed(
+          type: TxType.expense,
+          amount: 77,
+          date: t0,
+          ref: 'B1',
+          sender: 'VM-HDFCBK',
+        ),
+        parsed(
+          type: TxType.expense,
+          amount: 77,
+          date: t0,
+          ref: 'B2',
+          sender: 'VM-HDFCBK',
+        ),
+      ]);
+      expect(added, 1, reason: 'B1 is the twin, B2 a second payment');
+    });
+
+    test('a full bank name meets its DLT sender', () async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addImported([
+        parsed(type: TxType.expense, amount: 55, date: t0, sender: 'VM-SBIINB'),
+      ]);
+      final (added, _) = await p.addImported([
+        parsed(
+          type: TxType.expense,
+          amount: 55,
+          date: t0.add(const Duration(minutes: 1)),
+          sender: 'State Bank of India',
+        ),
+      ]);
+      expect(added, 0);
+      expect(SmsTxnParser.dedupBankOf('Indian Overseas Bank'), isNot('INDBNK'));
     });
 
     test('rows added earlier in the same batch block later ones', () async {

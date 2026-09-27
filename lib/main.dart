@@ -54,6 +54,7 @@ Future<void> main() async {
 Future<void> backgroundImportMain() async {
   WidgetsFlutterBinding.ensureInitialized();
   var imported = 0;
+  var ok = false;
   try {
     try {
       await NotificationService.instance.init();
@@ -69,20 +70,22 @@ Future<void> backgroundImportMain() async {
     // import nobody is watching; the app shows its warning on the next open.
     if (finance.loadWarnings.isNotEmpty) {
       debugPrint('Background import skipped: ${finance.loadWarnings}');
-      await BackgroundImportScheduler.finished(0);
+      await BackgroundImportScheduler.finished(0, ok: false);
       return;
     }
-    imported = await runBackgroundImport(
+    final result = await runBackgroundImport(
       finance,
       settings,
       trigger,
       import: SmsImportService(),
       syncWidgets: true,
     );
+    imported = result.imported;
+    ok = result.ok;
   } catch (e) {
     debugPrint('Background import failed: $e');
   }
-  await BackgroundImportScheduler.finished(imported);
+  await BackgroundImportScheduler.finished(imported, ok: ok);
 }
 
 class ExpenseTrackerApp extends StatelessWidget {

@@ -34,7 +34,8 @@ class BackgroundImportScheduler {
 
   /// Runs an import in the app's own engine when the worker finds it alive.
   /// Home sets it while mounted; null answers "busy" and the worker retries.
-  static Future<int?> Function(BackgroundTrigger trigger)? runImportHandler;
+  static Future<BackgroundImportResult?> Function(BackgroundTrigger trigger)?
+  runImportHandler;
 
   static bool _listening = false;
 
@@ -46,12 +47,18 @@ class BackgroundImportScheduler {
       if (call.method != 'runImport') return null;
       final handler = runImportHandler;
       if (handler == null) return 'busy';
-      return await handler(triggerOf(call.arguments)) ?? 'busy';
+      final result = await handler(triggerOf(call.arguments));
+      if (result == null) return 'busy';
+      return result.ok ? result.imported : 'failed';
     });
   }
 
+  /// 'sms' and 'notif' (an alert captured from a notification) both run
+  /// as an SMS arrival.
   static BackgroundTrigger triggerOf(Object? name) =>
-      name == 'sms' ? BackgroundTrigger.sms : BackgroundTrigger.periodic;
+      name == 'sms' || name == 'notif'
+      ? BackgroundTrigger.sms
+      : BackgroundTrigger.periodic;
 
   /// Books or cancels the periodic check and switches the SMS receiver on
   /// or off to match [mode]. Safe to repeat; runs on start and on change.
@@ -99,10 +106,15 @@ class BackgroundImportScheduler {
     }
   }
 
-  /// The headless engine reports back, so the worker can finish.
-  static Future<void> finished(int imported) async {
+  /// The headless engine reports back, so the worker can finish. [ok] false
+  /// (the ledger did not load, or the import threw) keeps the alerts queued
+  /// behind this run from counting as read.
+  static Future<void> finished(int imported, {required bool ok}) async {
     try {
-      await channel.invokeMethod<void>('finished', {'imported': imported});
+      await channel.invokeMethod<void>('finished', {
+        'imported': imported,
+        'ok': ok,
+      });
     } catch (e) {
       debugPrint('Background import finish failed: $e');
     }
@@ -113,8 +125,9 @@ class BackgroundImportScheduler {
 /// review queue, as the Auto-import setting allows for [trigger]. Rows stay
 /// pending. [syncWidgets] refreshes the home-screen widgets (the headless
 /// engine has no Home screen listening for changes); [notify] posts or
-/// clears the review notification. Never throws; returns rows imported.
-Future<int> runBackgroundImport(
+/// clears the review notification. Never throws: [BackgroundImportResult.ok]
+/// is false when the import failed part-way.
+Future<BackgroundImportResult> runBackgroundImport(
   FinanceProvider finance,
   SettingsProvider settings,
   BackgroundTrigger trigger, {
@@ -123,6 +136,7 @@ Future<int> runBackgroundImport(
   bool notify = true,
 }) async {
   var imported = 0;
+  var ok = true;
   final mode = settings.autoImport;
   final runs = switch (trigger) {
     BackgroundTrigger.sms => mode == AutoImportFrequency.everySms,
@@ -134,6 +148,7 @@ Future<int> runBackgroundImport(
       imported += await import.drainNotifications(finance);
       imported += (await import.maybeAutoRun(finance, mode))?.imported ?? 0;
     } catch (e) {
+      ok = false;
       debugPrint('Background import failed: $e');
     }
   }
@@ -149,8 +164,11 @@ Future<int> runBackgroundImport(
     // Only new rows post it: a swiped-away note stays away until then.
     await ReviewNotifier.sync(finance.pendingCount, allowPost: imported > 0);
   }
-  return imported;
+  return (imported: imported, ok: ok);
 }
+
+/// What one background import did.
+typedef BackgroundImportResult = ({int imported, bool ok});
 
 /// Keeps the "transactions to review" notification in step with the queue:
 /// shown above [kReviewNotifyThreshold] when [allowPost], cleared at or

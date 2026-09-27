@@ -206,6 +206,67 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('the recap and pace fit a 320 wide phone at double text size', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    for (final (day, view) in [(3, 'Overview'), (20, 'Trends')]) {
+      recapClock = () => DateTime(now.year, now.month, day, 10);
+      final p = FinanceProvider();
+      await p.load();
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'transport',
+        amount: 125000.75,
+        note: 'Relocation and packers',
+        date: DateTime(now.year, now.month, 1),
+      );
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'transport',
+        amount: 348000.25,
+        note: 'Relocation and packers',
+        date: DateTime(lastMonth.year, lastMonth.month, 2),
+      );
+      final s = SettingsProvider();
+      await s.load();
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: p),
+            ChangeNotifierProvider.value(value: s),
+          ],
+          child: MaterialApp(
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: const TextScaler.linear(2)),
+              child: child!,
+            ),
+            home: const Scaffold(body: DashboardScreen()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      if (view != 'Overview') await openDashboardView(tester, view);
+      final card = view == 'Overview'
+          ? find.byType(MonthlyRecapCard)
+          : find.byType(MonthPaceCard);
+      // Built lazily at this text size, so scroll to it rather than look.
+      await tester.scrollUntilVisible(
+        card,
+        200,
+        scrollable: verticalScrollable(),
+      );
+      await tester.pumpAndSettle();
+      expect(card, findsOneWidget, reason: view);
+      // A RenderFlex overflow would have failed the test by now.
+      expect(tester.takeException(), isNull, reason: view);
+    }
+  });
+
   testWidgets('a top category opens its transactions for that month', (
     tester,
   ) async {

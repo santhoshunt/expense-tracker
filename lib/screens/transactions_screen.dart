@@ -8,10 +8,12 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../models/account.dart';
 import '../models/spend_budget.dart';
+import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
+import '../services/recurring_detector.dart';
 import '../services/transfer_pairing.dart';
 import '../widgets/animated_fold.dart';
 import '../utils/app_theme.dart';
@@ -872,6 +874,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   onAccount: _bulkAccount,
                   onDateTime: _bulkDateTime,
                   onTags: _bulkTags,
+                  onSubscription: _bulkSubscription,
                   // Pairing is a two-row concept — the button only exists at
                   // exactly two selected.
                   onPair: _selected.length == 2 ? _bulkPair : null,
@@ -1326,6 +1329,70 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       icon: Icons.sell_outlined,
       onUndo: () => finance.restoreEditedTransactions(before),
     );
+  }
+
+  /// Marks the merchants of the selected expenses as subscriptions, with
+  /// one cycle for all. Rows without a merchant (transfers, anonymous
+  /// alerts) are skipped and counted. Undo puts back the previous marks and
+  /// the hide list.
+  Future<void> _bulkSubscription() async {
+    if (_selected.isEmpty) return;
+    final finance = context.read<FinanceProvider>();
+    final settings = context.read<SettingsProvider>();
+    final labels = <String, String>{};
+    var skipped = 0;
+    for (final t in _selectedSnapshot(finance)) {
+      final key = t.type == TxType.expense ? recurringKeyOf(t) : null;
+      if (key == null) {
+        skipped++;
+        continue;
+      }
+      labels.putIfAbsent(
+        key,
+        () => merchantDisplayLabel(t, alias: finance.merchantAlias),
+      );
+    }
+    if (labels.isEmpty) {
+      showAppToast(
+        context,
+        'None of these has a merchant to mark as a subscription.',
+      );
+      return;
+    }
+    final cycle = await showModalBottomSheet<SubscriptionCycle>(
+      context: context,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (ctx) => _BulkSubscriptionSheet(
+        labels: labels.values.toList(),
+        skipped: skipped,
+      ),
+    );
+    if (cycle == null || !mounted) return;
+    final pinsBefore = finance.subscriptionPinsBefore(labels.keys);
+    final hiddenBefore = settings.hiddenUpcoming;
+    await finance.setSubscriptionPins({for (final k in labels.keys) k: cycle});
+    for (final k in labels.keys) {
+      await settings.unhideUpcoming(k);
+    }
+    if (!mounted) return;
+    final n = labels.length;
+    showAppToast(
+      context,
+      'Marked $n merchant${n == 1 ? '' : 's'} as '
+      '${cycle.label.toLowerCase()} subscriptions.',
+      tone: AppToastTone.change,
+      icon: Icons.autorenew,
+      duration: const Duration(seconds: 5),
+      actionLabel: 'Undo',
+      onAction: () async {
+        await finance.setSubscriptionPins(pinsBefore);
+        for (final k in labels.keys) {
+          if (hiddenBefore.contains(k)) await settings.hideUpcoming(k);
+        }
+      },
+    );
+    setState(_selected.clear);
   }
 
   /// Exports exactly what the list is showing — same rows, same order.
@@ -1909,6 +1976,63 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 }
 
+/// The bulk Subscription sheet: which merchants the selection marks, and
+/// the cycle for all of them. Pops the chosen cycle.
+class _BulkSubscriptionSheet extends StatelessWidget {
+  final List<String> labels;
+  final int skipped;
+
+  const _BulkSubscriptionSheet({required this.labels, required this.skipped});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final n = labels.length;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Mark $n merchant${n == 1 ? '' : 's'} as '
+              'subscription${n == 1 ? '' : 's'}',
+              style: text.titleMedium,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              [
+                labels.join(', '),
+                if (skipped > 0)
+                  '$skipped row${skipped == 1 ? '' : 's'} skipped '
+                      '(income, transfers, or no merchant).',
+                'Every payment to ${n == 1 ? 'it' : 'them'} counts.',
+              ].join(' · '),
+              style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                for (final (i, c) in SubscriptionCycle.values.indexed) ...[
+                  if (i > 0) const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.tonal(
+                      onPressed: () => Navigator.pop(context, c),
+                      child: Text(c.label),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// The bulk Tag sheet: tags to add to every selected row, and the tags the
 /// rows already carry, each removable from all of them.
 class _BulkTagSheet extends StatefulWidget {
@@ -2010,6 +2134,7 @@ class _SelectionBar extends StatelessWidget {
   final VoidCallback onAccount;
   final VoidCallback onDateTime;
   final VoidCallback onTags;
+  final VoidCallback onSubscription;
 
   /// Null hides the button (shown only with exactly two rows selected).
   final VoidCallback? onPair;
@@ -2023,6 +2148,7 @@ class _SelectionBar extends StatelessWidget {
     required this.onAccount,
     required this.onDateTime,
     required this.onTags,
+    required this.onSubscription,
     required this.onPair,
     required this.onDelete,
     required this.onClose,
@@ -2079,6 +2205,12 @@ class _SelectionBar extends StatelessWidget {
                         visualDensity: VisualDensity.compact,
                         icon: const Icon(Icons.sell_outlined, size: 20),
                         onPressed: onTags,
+                      ),
+                      IconButton(
+                        tooltip: 'Mark as subscription',
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.autorenew, size: 20),
+                        onPressed: onSubscription,
                       ),
                       IconButton(
                         tooltip: 'Assign account',

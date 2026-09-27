@@ -32,28 +32,34 @@ void showAppToast(
   duration: duration,
 );
 
-/// While true, toasts wait, and the newest one shows once it turns false.
-/// The lock gate holds them so that nothing (an auto-import count, say)
-/// appears over the lock screen.
+/// While true, toasts wait, and show in order once it turns false. The lock
+/// gate holds them so that nothing (an auto-import count, say) appears over
+/// the lock screen.
 final ValueNotifier<bool> holdToasts = ValueNotifier<bool>(false);
 
-/// The newest toast asked for while [holdToasts] was set. Older ones are
-/// dropped, as a newer toast replaces the current one anyway.
-VoidCallback? _heldToast;
+/// How many held toasts survive a long lock; the oldest go first.
+const int kMaxHeldToasts = 3;
 
-/// Forgets a held toast without showing it: the gate going away is not an
+/// Toasts asked for while [holdToasts] was set, oldest first. `queue` is
+/// true for all but the first on release, so they follow one another
+/// instead of each replacing the last.
+final List<({String message, void Function(bool queue) show})> _heldToasts = [];
+
+/// Forgets held toasts without showing them: the gate going away is not an
 /// unlock, and its messenger may be tearing down with it.
 void dropHeldToasts() {
-  if (_heldToast != null) holdToasts.removeListener(_releaseHeldToast);
-  _heldToast = null;
+  if (_heldToasts.isNotEmpty) holdToasts.removeListener(_releaseHeldToast);
+  _heldToasts.clear();
 }
 
 void _releaseHeldToast() {
   if (holdToasts.value) return;
   holdToasts.removeListener(_releaseHeldToast);
-  final toast = _heldToast;
-  _heldToast = null;
-  toast?.call();
+  final toasts = [..._heldToasts];
+  _heldToasts.clear();
+  for (final (i, t) in toasts.indexed) {
+    t.show(i > 0);
+  }
 }
 
 /// [showAppToast] for call sites that captured the messenger before an
@@ -70,64 +76,91 @@ void showAppToastOn(
   Duration duration = const Duration(seconds: 4),
 }) {
   if (holdToasts.value) {
-    if (_heldToast == null) holdToasts.addListener(_releaseHeldToast);
-    _heldToast = () {
-      if (!messenger.mounted) return;
-      showAppToastOn(
-        messenger,
-        message,
-        tone: tone,
-        icon: icon,
-        actionLabel: actionLabel,
-        onAction: onAction,
-        duration: duration,
-      );
-    };
+    if (_heldToasts.isEmpty) holdToasts.addListener(_releaseHeldToast);
+    // The same message twice (two resumes while locked) shows once.
+    _heldToasts.removeWhere((t) => t.message == message);
+    _heldToasts.add((
+      message: message,
+      show: (queue) {
+        if (!messenger.mounted) return;
+        _showToast(
+          messenger,
+          message,
+          tone: tone,
+          icon: icon,
+          actionLabel: actionLabel,
+          onAction: onAction,
+          duration: duration,
+          queue: queue,
+        );
+      },
+    ));
+    while (_heldToasts.length > kMaxHeldToasts) {
+      _heldToasts.removeAt(0);
+    }
     return;
   }
-  messenger
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        duration: duration,
-        content: Builder(
-          builder: (context) {
-            final scheme = Theme.of(context).colorScheme;
-            final (fallback, color) = switch (tone) {
-              AppToastTone.success => (
-                Icons.check,
-                AppColors.of(context).green,
-              ),
-              AppToastTone.change => (Icons.edit_outlined, scheme.primary),
-              AppToastTone.removal => (Icons.delete_outline, scheme.error),
-              AppToastTone.error => (Icons.error_outline, scheme.error),
-              AppToastTone.info => (
-                Icons.info_outline,
-                scheme.onSurfaceVariant,
-              ),
-            };
-            return Row(
-              children: [
-                Container(
-                  width: 28,
-                  height: 28,
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(icon ?? fallback, size: 16, color: color),
+  _showToast(
+    messenger,
+    message,
+    tone: tone,
+    icon: icon,
+    actionLabel: actionLabel,
+    onAction: onAction,
+    duration: duration,
+  );
+}
+
+/// [queue] lines the toast up behind the current one instead of replacing
+/// it; only held toasts replayed after an unlock use it.
+void _showToast(
+  ScaffoldMessengerState messenger,
+  String message, {
+  required AppToastTone tone,
+  required IconData? icon,
+  required String? actionLabel,
+  required VoidCallback? onAction,
+  required Duration duration,
+  bool queue = false,
+}) {
+  // clearSnackBars, not hideCurrentSnackBar: held toasts replayed after an
+  // unlock may still be queued, and a newer toast must not wait behind them.
+  if (!queue) messenger.clearSnackBars();
+  messenger.showSnackBar(
+    SnackBar(
+      duration: duration,
+      content: Builder(
+        builder: (context) {
+          final scheme = Theme.of(context).colorScheme;
+          final (fallback, color) = switch (tone) {
+            AppToastTone.success => (Icons.check, AppColors.of(context).green),
+            AppToastTone.change => (Icons.edit_outlined, scheme.primary),
+            AppToastTone.removal => (Icons.delete_outline, scheme.error),
+            AppToastTone.error => (Icons.error_outline, scheme.error),
+            AppToastTone.info => (Icons.info_outline, scheme.onSurfaceVariant),
+          };
+          return Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
                 ),
-                const SizedBox(width: 12),
-                Expanded(child: Text(message)),
-              ],
-            );
-          },
-        ),
-        action: actionLabel == null || onAction == null
-            ? null
-            : SnackBarAction(label: actionLabel, onPressed: onAction),
+                child: Icon(icon ?? fallback, size: 16, color: color),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(message)),
+            ],
+          );
+        },
       ),
-    );
+      action: actionLabel == null || onAction == null
+          ? null
+          : SnackBarAction(label: actionLabel, onPressed: onAction),
+    ),
+  );
 }
 
 /// The app's delete model: destructive taps act immediately and offer a

@@ -113,6 +113,7 @@ class UpcomingMonitor {
         finance.transactions,
         now: now,
         alias: finance.merchantAlias,
+        pinned: finance.subscriptionPins,
       );
       for (final h in hits) {
         if (settings.hiddenUpcoming.contains(h.key)) continue;

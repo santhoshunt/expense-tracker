@@ -178,4 +178,78 @@ void main() {
     await tester.pumpAndSettle();
     expect(row(p, 'beachshack').tags, ['Goa trip']);
   });
+
+  testWidgets('the edit button renames, merges and colours a tag, with Undo', (
+    tester,
+  ) async {
+    final p = await seeded();
+    await p.setTagsForMany({row(p, 'coffeerun').id}, add: {'Work'});
+    await tester.pumpWidget(
+      withProviders(p, const ClassifiersScreen(initialTab: kCockpitTabTags)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.descendant(
+        of: find.widgetWithText(ListTile, 'Goa trip'),
+        matching: find.byTooltip('Edit tag'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Edit tag'), findsOneWidget);
+    final name = find.widgetWithText(TextField, 'Name');
+    await tester.enterText(name, 'work');
+    await tester.pump();
+    expect(find.text('Merges with the existing tag "Work"'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Merge'), findsOneWidget);
+
+    await tester.enterText(name, 'Holiday');
+    await tester.pump();
+    final mint = find.byTooltip('Mint');
+    await tester.ensureVisible(mint);
+    await tester.pumpAndSettle();
+    await tester.tap(mint);
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+    await tester.pumpAndSettle();
+    expect(row(p, 'beachshack').tags, ['Holiday']);
+    expect(p.tagColor('Holiday'), isNotNull);
+    expect(find.text('Renamed "Goa trip" to "Holiday"'), findsOneWidget);
+
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(row(p, 'beachshack').tags, ['Goa trip']);
+    expect(p.tagColor('Goa trip'), isNull);
+    expect(p.tagColor('Holiday'), isNull);
+  });
+
+  testWidgets('a coloured tag shows its colour on the chip in the edit sheet', (
+    tester,
+  ) async {
+    final p = await seeded();
+    await p.setTagColor('Goa trip', const Color(0xFF50D1AA));
+    await tester.pumpWidget(
+      withProviders(
+        p,
+        Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showAddTransactionSheet(
+                context,
+                existing: row(p, 'beachshack'),
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    final chip = find.widgetWithText(InputChip, '# Goa trip');
+    await tester.ensureVisible(chip);
+    await tester.pumpAndSettle();
+    final avatar = tester.widget<InputChip>(chip).avatar! as CircleAvatar;
+    expect(avatar.backgroundColor, const Color(0xFF50D1AA));
+  });
 }

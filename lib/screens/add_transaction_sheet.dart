@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/recurring_detector.dart';
+import '../services/subscriptions.dart';
 import '../utils/format.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/tag_input.dart';
@@ -107,6 +110,29 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   late List<String> _tags;
   final _tagCtrl = TextEditingController();
 
+  /// The Subscription switch, once touched: [_subOn] and [_subCycle] then
+  /// hold the user's choice, applied on save. Untouched, the switch shows
+  /// what the merchant counts as already.
+  bool _subTouched = false;
+  bool _subOn = false;
+  SubscriptionCycle _subCycle = SubscriptionCycle.monthly;
+
+  /// The merchant the switch was touched for: editing the note to another
+  /// merchant drops the choice rather than carrying it over.
+  String? _subTouchedKey;
+
+  /// The user's Subscription choice when it differs from what the merchant
+  /// counts as already, as the key and the choice; null otherwise. Off then
+  /// on again, or a cycle picked back, is no change.
+  ({String key, bool on, SubscriptionCycle cycle})? _subscriptionChange() {
+    if (!_subTouched) return null;
+    final key = _subscriptionKey();
+    if (key == null || key != _subTouchedKey) return null;
+    final now = _subscriptionNow(key);
+    if (now.on == _subOn && (!_subOn || now.cycle == _subCycle)) return null;
+    return (key: key, on: _subOn, cycle: _subCycle);
+  }
+
   bool get isEditing => widget.existing != null;
 
   /// Re-entrancy latch: a save on a large ledger runs a multi-MB encode on
@@ -134,6 +160,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       for (final p in _people) '${p.name.text}:${p.amount.text}',
     if (_categoryId == kRepaidToMeCategoryId) _fromCtrl.text,
     pendingTagsOf(_tags, _tagCtrl).join('|'),
+    if (_subscriptionChange() case final s?) 'sub:${s.on}:${s.cycle.name}',
     _accountId ?? '',
     _date.toIso8601String(),
   ].join('|');
@@ -199,6 +226,116 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     }
     _tagCtrl.dispose();
     super.dispose();
+  }
+
+  /// The entry as it would be saved, for its merchant (the recurring key
+  /// and label the Subscription switch works on).
+  Tx _draft() =>
+      (widget.existing ??
+              Tx(
+                id: '_draft',
+                type: _type,
+                categoryId: _categoryId,
+                amount: 0,
+                note: '',
+                date: _date,
+              ))
+          .copyWith(
+            type: _type,
+            categoryId: _categoryId,
+            note: _noteCtrl.text.trim(),
+          );
+
+  /// The key a Subscription mark would use, or null when the switch has
+  /// nothing to mark (not an expense, a transfer, or no merchant).
+  String? _subscriptionKey() =>
+      _kind == _EntryKind.expense ? recurringKeyOf(_draft()) : null;
+
+  Set<String> _hiddenUpcoming() {
+    try {
+      return context.read<SettingsProvider>().hiddenUpcoming;
+    } on ProviderNotFoundException {
+      return const {};
+    }
+  }
+
+  /// Whether [key] counts as a subscription now, and its cycle.
+  ({bool on, SubscriptionCycle cycle}) _subscriptionNow(String key) {
+    final finance = context.read<FinanceProvider>();
+    final pinned = finance.subscriptionPins[key];
+    if (pinned != null) return (on: true, cycle: pinned);
+    final summary = cachedSubscriptions(finance, _hiddenUpcoming());
+    final listed = [
+      ...summary.active,
+      ...summary.stopped,
+    ].any((i) => i.hit.key == key);
+    return (on: listed, cycle: SubscriptionCycle.monthly);
+  }
+
+  /// Applies a Subscription [change]: a mark with its cycle, or off, which
+  /// also hides a merchant the app would still spot on its own.
+  Future<void> _applySubscription(
+    FinanceProvider finance,
+    SettingsProvider? settings,
+    ({String key, bool on, SubscriptionCycle cycle}) change,
+  ) async {
+    final key = change.key;
+    if (change.on) {
+      await finance.setSubscriptionPins({key: change.cycle});
+      await settings?.unhideUpcoming(key);
+      return;
+    }
+    await finance.setSubscriptionPins({key: null});
+    final spotted = detectRecurringPatterns(
+      finance.transactions,
+      now: DateTime.now(),
+    ).any((h) => h.key == key);
+    if (spotted) await settings?.hideUpcoming(key);
+  }
+
+  List<Widget> _subscriptionField(BuildContext context) {
+    final key = _subscriptionKey();
+    if (key == null) return const [];
+    final touched = _subTouched && key == _subTouchedKey;
+    final now = touched ? null : _subscriptionNow(key);
+    final on = now?.on ?? _subOn;
+    final cycle = now?.cycle ?? _subCycle;
+    final label = merchantDisplayLabel(
+      _draft(),
+      alias: context.read<FinanceProvider>().merchantAlias,
+    );
+    return [
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Subscription'),
+        subtitle: Text('Every payment to $label counts'),
+        value: on,
+        onChanged: (v) => setState(() {
+          _subTouched = true;
+          _subTouchedKey = key;
+          _subOn = v;
+          _subCycle = cycle;
+        }),
+      ),
+      if (on) ...[
+        const SizedBox(height: 4),
+        SegmentedButton<SubscriptionCycle>(
+          showSelectedIcon: false,
+          segments: [
+            for (final c in SubscriptionCycle.values)
+              ButtonSegment(value: c, label: Text(c.label)),
+          ],
+          selected: {cycle},
+          onSelectionChanged: (s) => setState(() {
+            _subTouched = true;
+            _subTouchedKey = key;
+            _subOn = true;
+            _subCycle = s.first;
+          }),
+        ),
+      ],
+      const SizedBox(height: 16),
+    ];
   }
 
   List<TxCategory> _categoriesFor(_EntryKind kind) => _ordered(switch (kind) {
@@ -341,6 +478,14 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         : '';
     final finance = context.read<FinanceProvider>();
     final navigator = Navigator.of(context);
+    SettingsProvider? settings;
+    try {
+      settings = context.read<SettingsProvider>();
+    } on ProviderNotFoundException {
+      settings = null;
+    }
+    // Read before the save: the key follows the note as typed.
+    final subChange = _subscriptionChange();
     // Text typed in the tag field but not yet added is saved too.
     final tags = pendingTagsOf(_tags, _tagCtrl);
     setState(() => _busy = true);
@@ -382,6 +527,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         );
         if (_accountId != null) await finance.assignAccount(id, _accountId!);
         newId = id;
+      }
+      if (subChange != null) {
+        await _applySubscription(finance, settings, subChange);
       }
     } catch (_) {
       if (mounted) setState(() => _busy = false);
@@ -853,6 +1001,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   decoration: const InputDecoration(
                     labelText: 'Note (optional)',
                   ),
+                  // A manual entry's merchant is its note: the Subscription
+                  // switch below follows it.
+                  onChanged: (_) => setState(() {}),
                 ),
                 const SizedBox(height: 16),
                 TagInput(
@@ -863,8 +1014,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                       u.tag,
                   ],
                   onChanged: (t) => setState(() => _tags = t),
+                  colorOf: context.read<FinanceProvider>().tagColor,
                 ),
                 const SizedBox(height: 16),
+                ..._subscriptionField(context),
                 // The raw alert an SMS row was imported from — read-only so the
                 // review flow can still see the full message, while the Note
                 // field above stays purely the user's own text.

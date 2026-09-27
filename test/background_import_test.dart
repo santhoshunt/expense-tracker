@@ -54,13 +54,15 @@ void main() {
     final settings = SettingsProvider();
     await settings.load();
     await settings.setAutoImport(mode);
-    return runBackgroundImport(
+    final result = await runBackgroundImport(
       finance,
       settings,
       trigger,
       import: import,
       notify: false,
     );
+    expect(result.ok, isTrue);
+    return result.imported;
   }
 
   for (final (mode, trigger, runs) in [
@@ -95,6 +97,8 @@ void main() {
       BackgroundImportScheduler.triggerOf(null),
       BackgroundTrigger.periodic,
     );
+    // A notification capture runs as an SMS arrival.
+    expect(BackgroundImportScheduler.triggerOf('notif'), BackgroundTrigger.sms);
   });
 
   test('tapping the review note opens the review list', () {

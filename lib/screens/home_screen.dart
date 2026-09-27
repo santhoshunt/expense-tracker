@@ -439,20 +439,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// A background run handed to this engine: the same import as a resume,
   /// then the toast when the app is in front, or the review note when not.
   /// Null while another import is running, so the worker retries later.
-  Future<int?> _runBackgroundImport(BackgroundTrigger trigger) async {
+  Future<BackgroundImportResult?> _runBackgroundImport(
+    BackgroundTrigger trigger,
+  ) async {
     if (!mounted || _autoImporting) return null;
     _autoImporting = true;
     final messenger = ScaffoldMessenger.of(context);
     final front =
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
     try {
-      final imported = await runBackgroundImport(
+      final result = await runBackgroundImport(
         context.read<FinanceProvider>(),
         context.read<SettingsProvider>(),
         trigger,
         import: _smsImport,
         notify: !front,
       );
+      final imported = result.imported;
       if (mounted && front && imported > 0) {
         showAppToastOn(
           messenger,
@@ -462,7 +465,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           icon: Icons.sms_outlined,
         );
       }
-      return imported;
+      return result;
     } finally {
       _autoImporting = false;
     }

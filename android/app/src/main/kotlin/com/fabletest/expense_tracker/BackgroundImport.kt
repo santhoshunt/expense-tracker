@@ -32,6 +32,15 @@ import java.util.concurrent.TimeUnit
 object BackgroundImport {
     const val CHANNEL = "expense_tracker/background"
     const val KEY_TRIGGER = "trigger"
+    const val KEY_ENQUEUED_AT = "enqueued_at"
+
+    /** Triggers: a new SMS, and an alert captured from a notification. */
+    const val TRIGGER_SMS = "sms"
+    const val TRIGGER_NOTIF = "notif"
+
+    /** Start time of the last SMS or notification run that finished. */
+    private const val PREFS = "background_import"
+    private const val KEY_LAST_OK_START = "last_ok_start"
     private const val PERIODIC_WORK = "sms_import_periodic"
     private const val NOW_WORK = "sms_import_now"
 
@@ -94,18 +103,54 @@ object BackgroundImport {
             ComponentName(context, SmsArrivalReceiver::class.java)
         ) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
 
-    /** A new SMS: import it once the SMS app has stored it. Appended, so
-     * a message arriving during a run gets a run of its own. */
-    fun enqueueNow(context: Context) {
+    /** A new SMS ([TRIGGER_SMS], run once the SMS app has stored it) or a
+     * captured notification ([TRIGGER_NOTIF], already buffered, so no delay
+     * of its own; queued behind a pending SMS run, it then usually finds
+     * itself covered). Appended, so an alert arriving during a run gets a
+     * run of its own; [isCovered] then skips the runs an earlier one did. */
+    fun enqueueNow(context: Context, trigger: String) {
+        val request = OneTimeWorkRequest.Builder(SmsImportWorker::class.java)
+            .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
+            .setInputData(
+                Data.Builder()
+                    .putString(KEY_TRIGGER, trigger)
+                    .putLong(KEY_ENQUEUED_AT, System.currentTimeMillis())
+                    .build()
+            )
+        if (trigger == TRIGGER_SMS) request.setInitialDelay(SMS_DELAY_SECONDS, TimeUnit.SECONDS)
         WorkManager.getInstance(context).enqueueUniqueWork(
             NOW_WORK,
             ExistingWorkPolicy.APPEND_OR_REPLACE,
-            OneTimeWorkRequest.Builder(SmsImportWorker::class.java)
-                .setInitialDelay(SMS_DELAY_SECONDS, TimeUnit.SECONDS)
-                .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
-                .setInputData(trigger("sms"))
-                .build()
+            request.build()
         )
+    }
+
+    /** True when a run that started after this alert was readable has
+     * already finished: an SMS 30 s after it arrived (the inbox write), a
+     * notification capture as soon as it was buffered. One bank alert
+     * usually arrives both ways a second apart; this makes it one run. */
+    fun isCovered(context: Context, trigger: String?, enqueuedAt: Long): Boolean {
+        if (enqueuedAt <= 0) return false
+        val readableAt = when (trigger) {
+            TRIGGER_SMS -> enqueuedAt + SMS_DELAY_SECONDS * 1000
+            TRIGGER_NOTIF -> enqueuedAt
+            else -> return false
+        }
+        val lastOk = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getLong(KEY_LAST_OK_START, 0L)
+        // A value from the future (the clock ran ahead, then was corrected)
+        // would otherwise skip every alert until real time caught up.
+        return lastOk >= readableAt && lastOk <= System.currentTimeMillis()
+    }
+
+    /** Records a finished SMS or notification run that began at [startedAt]. */
+    fun recordSuccess(context: Context, trigger: String?, startedAt: Long) {
+        if (trigger != TRIGGER_SMS && trigger != TRIGGER_NOTIF) return
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val stored = prefs.getLong(KEY_LAST_OK_START, 0L)
+        if (startedAt > stored || stored > System.currentTimeMillis()) {
+            prefs.edit().putLong(KEY_LAST_OK_START, startedAt).apply()
+        }
     }
 
     private fun trigger(name: String) = Data.Builder().putString(KEY_TRIGGER, name).build()

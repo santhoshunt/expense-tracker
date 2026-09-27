@@ -3,21 +3,23 @@ import 'package:provider/provider.dart';
 
 import '../models/reminder.dart';
 import '../models/spend_budget.dart';
+import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/notification_service.dart';
+import '../services/recurring_detector.dart';
 import '../services/subscriptions.dart';
 import '../utils/contrast.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../widgets/budget_dialog.dart';
-import '../widgets/dispose_scope.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/fold_section.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
+import '../widgets/tag_editor_dialog.dart';
 import '../widgets/glossy.dart';
 import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
@@ -103,8 +105,8 @@ class RemindersTab extends StatelessWidget {
 
 /// Every tag with its all-time spend, row count and date span. Tags are
 /// added from a transaction's sheet or the bulk Tag action, so there is no
-/// add button here; long-press renames (merging into an existing tag) or
-/// deletes.
+/// add button here; the edit button (or a long-press) opens the tag editor:
+/// rename, merge into an existing tag, colour, delete.
 class TagsTab extends StatelessWidget {
   const TagsTab({super.key});
 
@@ -124,9 +126,9 @@ class TagsTab extends StatelessWidget {
                 'Labels that cut across categories, like a trip or '
                 '"Reimbursable". A row can carry up to 5. Spent counts money '
                 'out as the dashboard does: your share of a split bill, and '
-                'no transfers. Tap a tag for its transactions; long-press to '
-                'rename or delete it. Renaming to an existing tag merges the '
-                'two.',
+                'no transfers. Tap a tag for its transactions, or the pencil '
+                'to rename it, give it a colour or delete it. Renaming to an '
+                'existing tag merges the two.',
           ),
         ),
         const SizedBox(height: 4),
@@ -153,8 +155,19 @@ class TagsTab extends StatelessWidget {
                 for (final s in summaries)
                   ListTile(
                     dense: true,
-                    leading: const Icon(Icons.sell_outlined, size: 20),
+                    leading: Icon(
+                      Icons.sell,
+                      size: 20,
+                      color:
+                          finance.tagColor(s.tag) ??
+                          Theme.of(context).colorScheme.tertiary,
+                    ),
                     title: Text(s.tag),
+                    trailing: IconButton(
+                      tooltip: 'Edit tag',
+                      icon: const Icon(Icons.edit_outlined, size: 20),
+                      onPressed: () => showTagEditor(context, s.tag),
+                    ),
                     subtitle: Text(
                       '${fmtMoney(s.spent)} spent · ${s.count} '
                       '${s.count == 1 ? 'row' : 'rows'} · '
@@ -165,7 +178,7 @@ class TagsTab extends StatelessWidget {
                       context,
                       TxFilterRequest(tag: s.tag),
                     ),
-                    onLongPress: () => _actions(context, s.tag),
+                    onLongPress: () => showTagEditor(context, s.tag),
                   ),
               ],
             ),
@@ -174,119 +187,12 @@ class TagsTab extends StatelessWidget {
       ],
     );
   }
-
-  Future<void> _actions(BuildContext context, String tag) async {
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      useSafeArea: true,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Rename'),
-              subtitle: const Text('To an existing tag to merge the two'),
-              onTap: () => Navigator.pop(ctx, 'rename'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('Delete'),
-              subtitle: const Text('Takes it off every transaction'),
-              onTap: () => Navigator.pop(ctx, 'delete'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (!context.mounted || choice == null) return;
-    final finance = context.read<FinanceProvider>();
-    if (choice == 'delete') {
-      final before = await finance.deleteTag(tag);
-      if (!context.mounted || before.isEmpty) return;
-      showUndoSnackBar(
-        context,
-        'Deleted tag "$tag" from ${before.length} '
-        '${before.length == 1 ? 'transaction' : 'transactions'}',
-        () => finance.restoreEditedTransactions(before),
-        icon: Icons.delete_outline,
-        tone: AppToastTone.removal,
-      );
-      return;
-    }
-    final to = await _renameDialog(context, tag, [
-      for (final u in finance.allTags) u.tag,
-    ]);
-    if (to == null || !context.mounted) return;
-    final before = await finance.renameTag(tag, to);
-    if (!context.mounted || before.isEmpty) return;
-    showUndoSnackBar(
-      context,
-      'Renamed "$tag" to "$to"',
-      () => finance.restoreEditedTransactions(before),
-      icon: Icons.edit_outlined,
-    );
-  }
-
-  /// The new name, or null when cancelled or unchanged. Says so when the
-  /// name belongs to another tag, since saving merges the two.
-  static Future<String?> _renameDialog(
-    BuildContext context,
-    String tag,
-    List<String> existing,
-  ) async {
-    final ctrl = TextEditingController(text: tag);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => DisposeScope(
-        disposables: [ctrl],
-        child: StatefulBuilder(
-          builder: (ctx, setState) {
-            final name = normalizeTags([ctrl.text]).firstOrNull;
-            final merges = name == null || tagKey(name) == tagKey(tag)
-                ? null
-                : existing.where((e) => tagKey(e) == tagKey(name)).firstOrNull;
-            return AlertDialog(
-              title: const Text('Rename tag'),
-              content: TextField(
-                controller: ctrl,
-                autofocus: true,
-                maxLength: kMaxTagLength,
-                textCapitalization: TextCapitalization.sentences,
-                decoration: InputDecoration(
-                  labelText: 'Name',
-                  helperText: merges == null
-                      ? null
-                      : 'Merges with the existing tag "$merges"',
-                  helperMaxLines: 2,
-                ),
-                onChanged: (_) => setState(() {}),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton(
-                  onPressed: name == null || name == tag
-                      ? null
-                      : () => Navigator.pop(ctx, name),
-                  child: Text(merges == null ? 'Rename' : 'Merge'),
-                ),
-              ],
-            );
-          },
-        ),
-      ),
-    );
-    return result;
-  }
 }
 
-/// Regular monthly payments the app spotted: what each costs a month and a
-/// year, price rises, and the ones that stopped. Nothing is added by hand,
-/// so the tab has no add button; hiding shares the Upcoming card's list.
+/// Regular payments: the monthly ones the app spotted, plus the merchants
+/// the user marked (from a transaction's sheet or the selection bar), with
+/// what each costs a month and a year, price rises, and the ones that
+/// stopped. Hiding shares the Upcoming card's list.
 class SubscriptionsTab extends StatefulWidget {
   const SubscriptionsTab({super.key});
 
@@ -325,8 +231,10 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
           tip: const InfoTip(
             title: 'Subscriptions',
             message:
-                'Payments the app spotted repeating: 3 or more to the same '
-                'merchant about a month apart, from SMS or your notes. A '
+                'Payments the app spotted repeating (3 or more to the same '
+                'merchant about a month apart, from SMS or your notes), and '
+                'merchants you marked as a subscription in a transaction or '
+                'from the selection bar, monthly, quarterly or yearly. A '
                 'yearly cost is the usual amount over a year. "Up" means the '
                 'last payment was more than the one before. A payment more '
                 'than a week past its date moves to Stopped. Hiding one here '
@@ -336,7 +244,8 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
         const SizedBox(height: 4),
         Text(
           count == 0
-              ? 'Regular payments show here once the app spots them.'
+              ? 'Regular payments show here once the app spots them or you '
+                    'mark one.'
               : '$count regular ${count == 1 ? 'payment' : 'payments'} · '
                     '${fmtMoney(summary.monthlyTotal)} a month · '
                     '${fmtMoney(summary.yearlyTotal)} a year',
@@ -405,6 +314,9 @@ class _SubscriptionTile extends StatelessWidget {
         ? 'next ${fmtDateCompact(hit.nextDue)}'
         : 'last paid ${fmtDateCompact(hit.lastDate)}';
     final rise = item.priceRise;
+    final cycle = context.select<FinanceProvider, SubscriptionCycle?>(
+      (f) => f.subscriptionPinOf(hit.key),
+    );
 
     return ListTile(
       dense: true,
@@ -424,8 +336,10 @@ class _SubscriptionTile extends StatelessWidget {
       ),
       title: Text(hit.label),
       subtitle: Text(
-        '${fmtMoney(hit.expectedAmount)} monthly · '
-        '${fmtMoney(item.yearly)} a year · $when',
+        '${fmtMoney(hit.expectedAmount)} '
+        '${(cycle ?? SubscriptionCycle.monthly).label.toLowerCase()} · '
+        '${fmtMoney(item.yearly)} a year · $when'
+        '${cycle == null ? '' : ' · marked by you'}',
         style: text.bodySmall,
       ),
       trailing: kind == _SubKind.hidden
@@ -456,9 +370,15 @@ class _SubscriptionTile extends StatelessWidget {
     );
   }
 
-  /// Long-press: rename the payee, turn it into a reminder, or hide it.
+  /// Long-press: rename the payee, turn it into a reminder, or hide it; a
+  /// merchant the user marked can also change its cycle or be unmarked.
   Future<void> _actions(BuildContext context) async {
     final hit = item.hit;
+    final marked = hit.pinned;
+    // Reminders repeat monthly only; a quarterly or yearly plan's would
+    // notify every month.
+    final canRemind =
+        (hit.cycle ?? SubscriptionCycle.monthly) == SubscriptionCycle.monthly;
     final choice = await showModalBottomSheet<String>(
       context: context,
       useSafeArea: true,
@@ -472,12 +392,27 @@ class _SubscriptionTile extends StatelessWidget {
               title: const Text('Rename'),
               onTap: () => Navigator.pop(ctx, 'rename'),
             ),
-            ListTile(
-              leading: const Icon(Icons.add_alert_outlined),
-              title: const Text('Make a reminder'),
-              subtitle: const Text('For bills that may stop showing in SMS'),
-              onTap: () => Navigator.pop(ctx, 'reminder'),
-            ),
+            if (canRemind)
+              ListTile(
+                leading: const Icon(Icons.add_alert_outlined),
+                title: const Text('Make a reminder'),
+                subtitle: const Text('For bills that may stop showing in SMS'),
+                onTap: () => Navigator.pop(ctx, 'reminder'),
+              ),
+            if (marked) ...[
+              ListTile(
+                leading: const Icon(Icons.autorenew),
+                title: const Text('Change cycle'),
+                subtitle: const Text('Monthly, quarterly or yearly'),
+                onTap: () => Navigator.pop(ctx, 'cycle'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.remove_circle_outline),
+                title: const Text('Not a subscription'),
+                subtitle: const Text('Removes your mark'),
+                onTap: () => Navigator.pop(ctx, 'unmark'),
+              ),
+            ],
             if (kind != _SubKind.hidden)
               ListTile(
                 leading: const Icon(Icons.visibility_off_outlined),
@@ -517,6 +452,57 @@ class _SubscriptionTile extends StatelessWidget {
           tone: AppToastTone.removal,
         );
         await settings.hideUpcoming(hit.key);
+      case 'cycle':
+        final finance = context.read<FinanceProvider>();
+        final current = finance.subscriptionPinOf(hit.key);
+        final next = await showModalBottomSheet<SubscriptionCycle>(
+          context: context,
+          useSafeArea: true,
+          showDragHandle: true,
+          builder: (ctx) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final c in SubscriptionCycle.values)
+                  ListTile(
+                    title: Text(c.label),
+                    trailing: c == current ? const Icon(Icons.check) : null,
+                    onTap: () => Navigator.pop(ctx, c),
+                  ),
+              ],
+            ),
+          ),
+        );
+        if (next == null || next == current) return;
+        await finance.setSubscriptionPins({hit.key: next});
+      case 'unmark':
+        final finance = context.read<FinanceProvider>();
+        final settings = context.read<SettingsProvider>();
+        final messenger = ScaffoldMessenger.of(context);
+        final before = finance.subscriptionPinsBefore([hit.key]);
+        final wasHidden = settings.hiddenUpcoming.contains(hit.key);
+        // A merchant the app would still spot on its own is hidden too,
+        // or it would stay on the list as a detected subscription.
+        final spotted = detectRecurringPatterns(
+          finance.transactions,
+          now: DateTime.now(),
+        ).any((h) => h.key == hit.key);
+        // Both writes first, then the toast: an Undo tapped mid-write would
+        // otherwise be overtaken by the hide that followed it.
+        await finance.setSubscriptionPins({hit.key: null});
+        if (spotted) await settings.hideUpcoming(hit.key);
+        showAppToastOn(
+          messenger,
+          '"${hit.label}" is no longer a subscription',
+          tone: AppToastTone.removal,
+          icon: Icons.remove_circle_outline,
+          actionLabel: 'Undo',
+          duration: const Duration(seconds: 5),
+          onAction: () async {
+            await finance.setSubscriptionPins(before);
+            if (!wasHidden) await settings.unhideUpcoming(hit.key);
+          },
+        );
     }
   }
 }

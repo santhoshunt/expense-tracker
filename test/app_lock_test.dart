@@ -363,6 +363,53 @@ void main() {
       expect(find.text('Auto-import: 2 new'), findsOneWidget);
     });
 
+    testWidgets('toasts held while locked show in order, the newest three', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({'app_lock_enabled_v1': true});
+      final settings = SettingsProvider();
+      await settings.load();
+      final lock = FakeLock();
+      final messengerKey = GlobalKey<ScaffoldMessengerState>();
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: settings,
+          child: MaterialApp(
+            scaffoldMessengerKey: messengerKey,
+            builder: (context, child) => LockGate(service: lock, child: child!),
+            home: const Scaffold(body: Text('CONTENT')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      for (final m in ['one', 'two', 'three', 'four', 'three']) {
+        showAppToastOn(
+          messengerKey.currentState!,
+          m,
+          duration: const Duration(seconds: 1),
+        );
+      }
+      lock.result = true;
+      await tester.tap(find.text('Unlock'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      // 'one' was the oldest of four; the repeat of 'three' shows once, last.
+      expect(find.text('one'), findsNothing);
+      expect(find.text('two'), findsOneWidget);
+      // Each shows for a second, plus its slide in and out.
+      Future<void> next(String text) async {
+        for (var i = 0; i < 40 && find.text(text).evaluate().isEmpty; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        expect(find.text(text), findsOneWidget, reason: text);
+      }
+
+      await next('four');
+      expect(find.text('two'), findsNothing);
+      await next('three');
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('a toast already up at a re-lock is not drawn on the lock '
         'screen', (tester) async {
       SharedPreferences.setMockInitialValues({'app_lock_enabled_v1': true});

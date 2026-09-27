@@ -1,3 +1,4 @@
+import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import 'recurring_detector.dart';
@@ -63,15 +64,25 @@ SubscriptionSummary buildSubscriptions(
   required DateTime now,
   MerchantAliasLookup? alias,
   Set<String> hidden = const {},
+  Map<String, SubscriptionCycle> pinned = const {},
 }) {
   final active = <SubscriptionItem>[];
   final stopped = <SubscriptionItem>[];
   final hiddenItems = <SubscriptionItem>[];
-  for (final h in detectRecurringPatterns(confirmed, now: now, alias: alias)) {
+  for (final h in detectRecurringPatterns(
+    confirmed,
+    now: now,
+    alias: alias,
+    pinned: pinned,
+  )) {
     if (h.type != TxType.expense) continue;
+    final cycle = h.cycle;
     final item = SubscriptionItem(
       hit: h,
-      yearly: h.expectedAmount * 365 / h.intervalDays,
+      // A marked plan charges exactly its cycle: 12, 4 or 1 payment a year.
+      yearly: cycle != null
+          ? h.expectedAmount * 12 / cycle.months
+          : h.expectedAmount * 365 / h.intervalDays,
       priceRise: _priceRise(h),
     );
     if (hidden.contains(h.key)) {
@@ -111,11 +122,14 @@ SubscriptionSummary cachedSubscriptions(
       c.day == day) {
     return c.summary;
   }
+  // Marks live on the provider, so finance.revision already changes with
+  // them and needs no key of its own here.
   final summary = buildSubscriptions(
     finance.transactions,
     now: now,
     alias: finance.merchantAlias,
     hidden: hidden,
+    pinned: finance.subscriptionPins,
   );
   _cache = (
     rev: finance.revision,

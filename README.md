@@ -1,69 +1,92 @@
 # Expense Tracker
 
-A cross-platform (Web, Android, iOS) Flutter app to track expenses, income, and savings goals.
+A personal finance app for Android, built with Flutter. It reads the alerts Indian banks and UPI apps send by SMS, turns them into transactions, and keeps everything on the phone.
 
-## Features
+The repo still has `web/` and `ios/` folders from the Flutter template, and the code guards the Android-only parts, but only the Android build is built, tested and released.
 
-- **Dashboard** — available balance, a month selector with income/spend stat cards, a category donut chart, category progress bars, and an income-vs-expense bar chart for the last 6 months.
-- **Transactions** — add, edit (tap), and delete income and expense entries. Grouped by month with per-month income/expense totals; sortable (date/amount, both directions) within each section; search by note/sender; filter by All / Income / Expenses, categories, and amount range; quick-jump controls for top / bottom / any month.
-- **Cockpit** — the management hub (tune icon in the app bar): classification rules ("if the SMS contains *text* → category X", case-insensitive; a rule targeting **Spam** drops matching messages from import entirely), import checks, the ledger as a recategorisation tool, categories & groups, budgets, and reminders.
-- **Spam handling** — heuristically suspicious imports (promos, mandates, links) land in a separate "Suspected spam" queue that is excluded from *Confirm all*: each entry must be confirmed or discarded individually.
-- **Savings goals** — create goals with target amounts, add or withdraw money, and track progress. Money in goals is deducted from the available balance.
-- **SMS auto-import (Android only)** — opt-in scan of bank/UPI alert SMS with a selectable range (since last scan / 7 / 30 / 90 / 365 days / custom calendar range). A rule-based parser extracts amount, direction (word-boundary verb matching), merchant, date, and bank reference; OTPs, promos, e-mandates, collect requests, and failed transactions are filtered out. Matches land in a review queue (excluded from totals); duplicates are skipped by bank reference id. Imported entries carry the SMS sender id and the full original message in the note.
-- **Sender field** — every transaction has an optional "sender" (who the money moved to/from); SMS imports fill it automatically with the bank/UPI sender id.
-- **Backup & restore** — export as JSON (full backup, re-importable with merge/replace), CSV (transactions, re-importable), or a PDF statement (Unicode ₹ via bundled Noto Sans, summary cards, category share table, month-grouped transaction tables with subtotals). On Android a save-location dialog is shown; web triggers a browser download. "Delete all data" (with confirmation) lives in the same ⋮ menu.
-- **Persistence** — all data is stored locally on-device via `shared_preferences` (localStorage on web). No account or network needed.
-- **Light & dark theme** — follows system setting.
+## What it does
 
-## Project structure
+- **Dashboard.** Three tabs:
+  - Overview: balance, the month's income, spend and savings, budgets, upcoming bills, and who owes you. For the first week of a month it also shows a recap of the month before.
+  - Trends: the month's pace, and this month against last month and a usual month, overall and by category.
+  - Breakdown: spend by category, tag, merchant and group, transfers, subscriptions, and a spending heatmap.
+- **Transactions.** Search, and filter by type, category, tag and amount. Imported rows wait in a review queue and stay out of the totals until confirmed. Suspected spam has its own queue. Long-press starts a selection for bulk category, tags, account, date, subscription, transfer pairing or delete, each with Undo.
+- **SMS import.** The app reads bank alerts from the inbox, and also captures them from messaging-app notifications. That second route is the only way to see RCS business chats. Auto-import runs Off, on each Launch, Daily, Weekly or on Every SMS. Daily and Weekly also check every 6 hours in the background, and Every SMS imports each alert about 30 seconds after it arrives. Duplicates are matched by the bank's reference number, or by bank, amount and a 3-minute window when an alert has none.
+- **Cockpit.** One screen for classification rules ("if the SMS contains X, use category Y"; a rule pointing at Spam drops the message), import checks, categories and groups, budgets, reminders, tags and subscriptions.
+- **Subscriptions.** The app spots monthly payments on its own: three or more to one merchant about a month apart. You can also mark any merchant as a monthly, quarterly or yearly subscription from its transaction or the selection bar, and it counts from the first payment.
+- **Tags.** Up to five per transaction, for totals across categories such as a trip. Each tag can be renamed, merged into another, given a colour, or deleted.
+- **Splits and people.** Mark a bill as split, name who owes what, and record or settle repayments on the People page.
+- **Accounts and cards.** Accounts are created from the account numbers in alerts, or added by hand. Credit cards get a billing cycle, a due date and a paid state.
+- **Home screen.** Widgets: Budget (compact and detailed), Month pace, Upcoming bills, and Today and Add. There is a Quick Settings tile and launcher shortcuts for adding an expense or importing SMS.
+- **Notifications.** Budget thresholds, bills and reminders coming due, the monthly recap, and a count of rows waiting for review once more than 5 pile up. The recap and review notifications carry no amounts.
+- **Backup.** Export as JSON (a full backup), CSV or a PDF statement, and import JSON or CSV. Google Drive can keep a daily, weekly or monthly backup.
+- **Everything else.** App lock (fingerprint, face or device PIN), light and dark themes with several dark palettes, an accent colour, alternate launcher icons, and in-app updates from this repo's GitHub releases.
+
+## Privacy
+
+- All data lives in the app's own storage on the phone (`shared_preferences`).
+- `android:allowBackup` is off, so Android's cloud backup and device-to-device transfer never copy it.
+- Exports and Drive backups leave out the raw SMS text.
+- Drive access uses the `drive.file` scope, which lets the app see only the files it created.
+- The app makes network calls only to Google Drive, when you turn it on, and to the GitHub releases API for the update check.
+
+## Permissions
+
+| Permission | Why |
+|---|---|
+| `READ_SMS` | Reads bank alerts from the inbox. Asked for when you first import. |
+| `RECEIVE_SMS` | Wakes the import when an SMS arrives. Asked for only when you pick Every SMS. |
+| Notification access | Captures bank alerts from messaging-app notifications. You grant it in system settings. |
+| `POST_NOTIFICATIONS` | Budget, bill, recap and review notifications. |
+| `USE_BIOMETRIC` | App lock. |
+| `RECEIVE_BOOT_COMPLETED` | Books the recap notification and background checks again after a reboot. |
+| `REQUEST_INSTALL_PACKAGES`, `UPDATE_PACKAGES_WITHOUT_USER_ACTION` | In-app updates. The installer accepts only this app's package, signed with its own key, at a newer version. |
+| `INTERNET` | Google Drive and the update check. |
+
+WorkManager, which runs the background import, adds `WAKE_LOCK`, `ACCESS_NETWORK_STATE` and `FOREGROUND_SERVICE` on its own.
+
+Android 13 and later hard-restrict `READ_SMS` for apps installed outside the Play Store: the permission dialog often never appears. The app detects this and walks you through the fix: app settings, then the ⋮ menu, then "Allow restricted settings", then Permissions, SMS, Allow.
+
+## Project layout
 
 ```
 lib/
-  main.dart                      App entry, theming, provider wiring
-  models/transaction.dart        Tx, TxCategory, SavingsGoal models + categories
-  providers/finance_provider.dart State + persistence + aggregations
-  screens/                       Home (nav shell), dashboard, transactions, savings, add/edit sheet
-  services/sms_parser.dart       Pure-Dart bank/UPI SMS parser (filters + field extraction)
-  services/sms_source.dart       Platform channel to the Android SMS inbox
-  services/sms_import_service.dart  Import run: permission → query → parse → dedupe
-  widgets/                       Transaction tile, custom-painted monthly bar chart
-  utils/format.dart              Currency/date formatters
-test/                            Provider, SMS parser corpus, and import/dedup tests
+  main.dart            App start, providers, and the background-import entry point
+  models/              Transactions, categories, accounts, rules, budgets, reminders, subscription cycles
+  providers/           FinanceProvider (the ledger and its persistence), SettingsProvider
+  screens/             Home shell, dashboard, transactions, accounts, people, Cockpit, settings, add/edit sheet
+  services/            SMS parser and import, background import, Drive backup, updates, widgets, notifications
+  widgets/             Shared UI: charts, tiles, dialogs, the lock gate
+  utils/               Formatting, dates, palettes, theme
+android/app/src/main/kotlin/com/fabletest/expense_tracker/
+  MainActivity.kt      Platform channels, permissions, launcher icons
+  SmsBridge.kt         SMS inbox, notification buffer and widget refresh, shared with the background engine
+  TxnNotificationListener.kt  Captures bank alerts from notifications
+  BackgroundImport.kt, SmsImportWorker.kt, SmsArrivalReceiver.kt  Background import
+  BudgetWidgetProvider.kt, HomeWidgets.kt  Home-screen widgets
+  UpdateInstaller.kt   Verifies and installs downloaded updates
+test/                  Unit and widget tests
 ```
 
-The Android side of SMS reading is a ~100-line `MethodChannel` in
-`android/app/src/main/kotlin/.../MainActivity.kt` (runtime `READ_SMS` permission +
-inbox query) — no third-party SMS plugin. Note: Google Play restricts `READ_SMS`;
-this feature is intended for personal/sideloaded builds.
+## Build and release
 
-**Sideloaded installs and the SMS permission**: Android 10+ marks `READ_SMS` as
-hard-restricted — for apps installed outside the Play Store the permission dialog
-is often suppressed and the request is auto-denied. The app detects this and shows
-a walkthrough: open app settings → ⋮ menu → "Allow restricted settings"
-(Android 13+) → Permissions → SMS → Allow, then retry the import.
-
-## Run & build
+Needs Flutter 3.44 (Dart 3.12) and JDK 17 or later.
 
 ```sh
 flutter pub get
-
-# Run (pick a device)
-flutter run -d chrome            # web
-flutter run -d <android-device>  # android
-flutter run -d <ios-device>      # ios (requires macOS)
-
-# Release builds
-flutter build web --release      # output: build/web
-flutter build apk --release      # output: build/app/outputs/flutter-apk/app-release.apk
-flutter build appbundle          # for Play Store
-flutter build ipa                # iOS — must be run on macOS with Xcode
+flutter run -d <android-device>
+flutter build apk --release
 ```
 
-To serve the web build locally: `cd build/web` then any static server, e.g.
-`python -m http.server 8080`.
+A release build signs with the key named in `android/key.properties`. Without that file it falls back to the debug key, and a debug-signed APK cannot update an installed release.
+
+To publish, push a tag such as `v1.24.0`. The Release workflow runs the tests, builds the APK, checks it carries the release key's certificate, and attaches `app-release.apk` to a GitHub release. Installed copies then find it through the in-app update check.
 
 ## Tests
 
 ```sh
+flutter analyze
 flutter test
 ```
+
+CI runs both on every push to `main`.

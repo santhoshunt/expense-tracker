@@ -15,6 +15,6 @@ import android.provider.Telephony
 class SmsArrivalReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
-        BackgroundImport.enqueueNow(context.applicationContext)
+        BackgroundImport.enqueueNow(context.applicationContext, BackgroundImport.TRIGGER_SMS)
     }
 }

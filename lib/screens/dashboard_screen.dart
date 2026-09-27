@@ -36,6 +36,7 @@ import '../widgets/monthly_recap_card.dart';
 import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/show_all_list.dart';
 import '../widgets/spend_comparison_cards.dart';
+import '../widgets/tag_editor_dialog.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
 import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
@@ -189,6 +190,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         finance.transactions,
         now: DateTime.now(),
         alias: finance.merchantAlias,
+        pinned: finance.subscriptionPins,
       );
     }
     return _recurringHits;
@@ -937,9 +939,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           tip:
               "Each tag's share of the ${_yearMode ? "year's" : "month's"} "
               'spending. A transaction with two tags counts under both, so '
-              'the shares can add up to more than 100%.',
+              'the shares can add up to more than 100%. Long-press a tag to '
+              'rename it, give it a colour or delete it.',
           link: const InfoLink(
-            prompt: 'Rename or remove a tag?',
+            prompt: 'Every tag, with all-time totals?',
             label: 'Open Tags',
             onTap: goCockpitTags,
           ),
@@ -955,13 +958,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 for (final t in byTag)
                   _CategoryRow(
                     icon: Icons.sell_outlined,
-                    color: scheme.tertiary,
+                    color: finance.tagColor(t.tag) ?? scheme.tertiary,
                     label: t.tag,
                     amount: t.spent,
                     fraction: monthExpense == 0 ? 0 : t.spent / monthExpense,
                     onTap: widget.onViewTag == null || _yearMode
                         ? null
                         : () => widget.onViewTag!(t.tag, _month),
+                    onLongPress: () => showTagEditor(context, t.tag),
                   ),
               ],
             ),

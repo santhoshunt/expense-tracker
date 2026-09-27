@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:expense_tracker/models/subscription_cycle.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/services/recurring_detector.dart';
 import 'package:expense_tracker/services/subscriptions.dart';
@@ -115,5 +116,37 @@ void main() {
     expect(detectRecurringPatterns(all, now: now), hasLength(2));
     final hit = detectRecurring(netflix, now: now).single;
     expect([for (final h in hit.history) h.amount], [499, 499, 649]);
+  });
+
+  test('a yearly plan marked by hand costs its amount a year', () {
+    final s = buildSubscriptions(
+      [tx('Prime', 1499, DateTime(2026, 3, 10))],
+      now: now,
+      pinned: {'expense|prime': SubscriptionCycle.yearly},
+    );
+    final item = s.active.single;
+    expect(item.hit.pinned, isTrue);
+    expect(item.yearly, 1499);
+    expect(s.yearlyTotal, 1499);
+  });
+
+  test('a marked monthly plan costs exactly twelve payments a year', () {
+    final s = buildSubscriptions(
+      [tx('Hotstar', 199, DateTime(2026, 9, 1))],
+      now: now,
+      pinned: {'expense|hotstar': SubscriptionCycle.monthly},
+    );
+    expect(s.active.single.yearly, 2388);
+    expect(s.active.single.monthly, 199);
+  });
+
+  test('a yearly plan last paid over a year ago shows as stopped', () {
+    final s = buildSubscriptions(
+      [tx('Prime', 1499, DateTime(2025, 6, 1))],
+      now: now,
+      pinned: {'expense|prime': SubscriptionCycle.yearly},
+    );
+    expect(s.active, isEmpty);
+    expect(s.stopped.single.hit.label, 'Prime');
   });
 }

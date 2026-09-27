@@ -11,6 +11,7 @@ import '../models/default_rules.dart';
 import '../models/import_rule.dart';
 import '../models/reminder.dart';
 import '../models/spend_budget.dart';
+import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../services/budget.dart';
 import '../services/recurring_detector.dart';
@@ -248,6 +249,8 @@ class FinanceProvider extends ChangeNotifier {
   static const _groupsSeededKey = 'category_groups_seeded_v1';
   static const _budgetsKey = 'spend_budgets_v1';
   static const _merchantAliasesKey = 'merchant_aliases_v1';
+  static const _tagColorsKey = 'tag_colors_v1';
+  static const _subscriptionPinsKey = 'subscription_pins_v1';
   static const _remindersKey = 'reminders_v1';
 
   final List<Tx> _transactions = [];
@@ -264,6 +267,13 @@ class FinanceProvider extends ChangeNotifier {
 
   /// merchant identity ([merchantIdentityOf]) → user-chosen display name.
   final Map<String, String> _merchantAliases = {};
+
+  /// Tag colours by [tagKey], as ARGB. Tags themselves stay plain strings
+  /// on the rows; a tag with no entry uses the theme's default.
+  final Map<String, int> _tagColors = {};
+
+  /// Merchants the user marked as subscriptions, by [recurringKeyOf] key.
+  final Map<String, SubscriptionCycle> _subscriptionPins = {};
   final List<Reminder> _reminders = [];
   bool _loaded = false;
 
@@ -939,6 +949,22 @@ class FinanceProvider extends ChangeNotifier {
           ..addAll(_decodeAliases(jsonDecode(aliasesRaw)));
       }, _merchantAliases.clear);
     }
+    final tagColorsRaw = prefs.getString(_tagColorsKey);
+    if (tagColorsRaw != null) {
+      await _guardedLoad('tag colours', () async {
+        _tagColors
+          ..clear()
+          ..addAll(_decodeTagColors(jsonDecode(tagColorsRaw)));
+      }, _tagColors.clear);
+    }
+    final pinsRaw = prefs.getString(_subscriptionPinsKey);
+    if (pinsRaw != null) {
+      await _guardedLoad('subscription marks', () async {
+        _subscriptionPins
+          ..clear()
+          ..addAll(_decodePins(jsonDecode(pinsRaw)));
+      }, _subscriptionPins.clear);
+    }
     final remindersRaw = prefs.getString(_remindersKey);
     if (remindersRaw != null) {
       await _guardedLoad('reminders', () async {
@@ -1186,6 +1212,33 @@ class FinanceProvider extends ChangeNotifier {
         !_loadWarnings.contains('categories') &&
         !_loadWarnings.contains('category styles');
     if (registryIntact && _sanitizeAllSplits()) await _persist(tx: true);
+    // Colours of tags no row carries any more: the Undo that could bring
+    // such a tag back does not outlive the app session.
+    if (_tagColors.isNotEmpty && !_loadWarnings.contains('transactions')) {
+      final live = {
+        for (final t in _transactions)
+          for (final tag in t.tags) tagKey(tag),
+      };
+      final before = _tagColors.length;
+      _tagColors.removeWhere((k, _) => !live.contains(k));
+      if (_tagColors.length != before) await _persist(marks: true);
+    }
+    // A mark whose merchant has no payment left inside detection's 24-month
+    // reach never shows as a subscription, so it could not be removed.
+    if (_subscriptionPins.isNotEmpty &&
+        !_loadWarnings.contains('transactions')) {
+      final now = DateTime.now();
+      final reach = DateTime(now.year - 2, now.month, now.day);
+      final seen = <String>{};
+      for (final t in _transactions) {
+        if (t.pending || t.date.isBefore(reach)) continue;
+        final key = recurringKeyOf(t);
+        if (key != null && _subscriptionPins.containsKey(key)) seen.add(key);
+      }
+      final before = _subscriptionPins.length;
+      _subscriptionPins.removeWhere((k, _) => !seen.contains(k));
+      if (_subscriptionPins.length != before) await _persist(marks: true);
+    }
     _loaded = true;
     notifyListeners();
   }
@@ -1248,6 +1301,7 @@ class FinanceProvider extends ChangeNotifier {
     budgets: true,
     aliases: true,
     reminders: true,
+    marks: true,
   );
 
   /// Writes only the collections the caller says it changed.
@@ -1274,6 +1328,7 @@ class FinanceProvider extends ChangeNotifier {
     bool budgets = false,
     bool aliases = false,
     bool reminders = false,
+    bool marks = false,
   }) async {
     try {
       await _persistOrThrow(
@@ -1287,6 +1342,7 @@ class FinanceProvider extends ChangeNotifier {
         budgets: budgets,
         aliases: aliases,
         reminders: reminders,
+        marks: marks,
       );
       if (_persistFailed) {
         _persistFailed = false;
@@ -1311,6 +1367,7 @@ class FinanceProvider extends ChangeNotifier {
     bool budgets = false,
     bool aliases = false,
     bool reminders = false,
+    bool marks = false,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     if (tx) {
@@ -1388,6 +1445,40 @@ class FinanceProvider extends ChangeNotifier {
         jsonEncode(_reminders.map((r) => r.toJson()).toList()),
       );
     }
+    // One flag, two keys: a collection that failed to load stays as stored
+    // (it loaded empty), so a change to the other cannot overwrite it.
+    if (marks && !_loadWarnings.contains('tag colours')) {
+      await prefs.setString(_tagColorsKey, jsonEncode(_tagColors));
+    }
+    if (marks && !_loadWarnings.contains('subscription marks')) {
+      await prefs.setString(
+        _subscriptionPinsKey,
+        jsonEncode({
+          for (final e in _subscriptionPins.entries) e.key: e.value.name,
+        }),
+      );
+    }
+  }
+
+  /// Tolerant decode for tag colours: non-int values are dropped.
+  static Map<String, int> _decodeTagColors(Object? raw) {
+    if (raw is! Map) return const {};
+    return {
+      for (final e in raw.entries)
+        if (e.key is String && (e.key as String).isNotEmpty && e.value is int)
+          e.key as String: e.value as int,
+    };
+  }
+
+  /// Tolerant decode for subscription marks: unknown cycles are dropped.
+  static Map<String, SubscriptionCycle> _decodePins(Object? raw) {
+    if (raw is! Map) return const {};
+    final cycles = SubscriptionCycle.values.asNameMap();
+    return {
+      for (final e in raw.entries)
+        if (e.key is String && cycles[e.value] != null)
+          e.key as String: cycles[e.value]!,
+    };
   }
 
   /// Tolerant decode for the alias map: non-string entries and blank names
@@ -3351,26 +3442,116 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Renames tag [from] to [to] on every row. When [to] already exists the
   /// two merge: its rows take [to]'s spelling too, and normalizeTags drops
-  /// the duplicate on rows that had both.
-  Future<List<Tx>> renameTag(String from, String to) {
+  /// the duplicate on rows that had both. The colour follows the rename,
+  /// unless [to] already has one of its own.
+  Future<List<Tx>> renameTag(String from, String to) async {
     final keys = {tagKey(from), tagKey(to)};
-    return _editTags(
+    final fromKey = tagKey(from);
+    final toKey = tagKey(to);
+    var colourMoved = false;
+    if (fromKey != toKey) {
+      final colour = _tagColors.remove(fromKey);
+      if (colour != null) {
+        _tagColors.putIfAbsent(toKey, () => colour);
+        colourMoved = true;
+      }
+    }
+    final before = await _editTags(
       (t) => t.tags.any((tag) => keys.contains(tagKey(tag))),
       (tags) => [for (final tag in tags) keys.contains(tagKey(tag)) ? to : tag],
     );
+    if (colourMoved) {
+      if (before.isEmpty) notifyListeners();
+      await _persist(marks: true);
+    }
+    return before;
   }
 
-  /// Removes tag [tag] from every row that carries it.
-  Future<List<Tx>> deleteTag(String tag) {
+  /// Removes tag [tag] from every row that carries it, and its colour.
+  Future<List<Tx>> deleteTag(String tag) async {
     final k = tagKey(tag);
-    return _editTags(
+    final hadColour = _tagColors.remove(k) != null;
+    final before = await _editTags(
       (t) => t.tags.any((x) => tagKey(x) == k),
       (tags) => [
         for (final x in tags)
           if (tagKey(x) != k) x,
       ],
     );
+    if (hadColour) {
+      if (before.isEmpty) notifyListeners();
+      await _persist(marks: true);
+    }
+    return before;
   }
+
+  /// [tag]'s colour, or null for the theme default.
+  Color? tagColor(String tag) {
+    final v = _tagColors[tagKey(tag)];
+    return v == null ? null : Color(v);
+  }
+
+  /// Every tag colour, for an Undo to put back with [restoreTagColors].
+  Map<String, int> get tagColorSnapshot => Map.of(_tagColors);
+
+  /// Sets or, with null, clears [tag]'s colour.
+  Future<void> setTagColor(String tag, Color? color) async {
+    final k = tagKey(tag);
+    final value = color?.toARGB32();
+    if (_tagColors[k] == value) return;
+    if (value == null) {
+      _tagColors.remove(k);
+    } else {
+      _tagColors[k] = value;
+    }
+    notifyListeners();
+    await _persist(marks: true);
+  }
+
+  Future<void> restoreTagColors(Map<String, int> snapshot) async {
+    if (mapEquals(snapshot, _tagColors)) return;
+    _tagColors
+      ..clear()
+      ..addAll(snapshot);
+    notifyListeners();
+    await _persist(marks: true);
+  }
+
+  // --- Subscriptions marked by hand -----------------------------------------
+
+  /// Merchants marked as subscriptions: [recurringKeyOf] key to its cycle.
+  /// Detection counts them from their first payment (recurring_detector).
+  Map<String, SubscriptionCycle> get subscriptionPins =>
+      Map.unmodifiable(_subscriptionPins);
+
+  /// [key]'s mark, without copying the whole map.
+  SubscriptionCycle? subscriptionPinOf(String key) => _subscriptionPins[key];
+
+  /// Marks (a cycle) or unmarks (null) each key in [changes].
+  Future<void> setSubscriptionPins(
+    Map<String, SubscriptionCycle?> changes,
+  ) async {
+    var changed = false;
+    for (final e in changes.entries) {
+      final cycle = e.value;
+      if (_subscriptionPins[e.key] == cycle) continue;
+      if (cycle == null) {
+        _subscriptionPins.remove(e.key);
+      } else {
+        _subscriptionPins[e.key] = cycle;
+      }
+      changed = true;
+    }
+    if (!changed) return;
+    notifyListeners();
+    await _persist(marks: true);
+  }
+
+  /// What [setSubscriptionPins] would overwrite for [keys], to hand back to
+  /// it for an Undo that leaves every other key alone.
+  Map<String, SubscriptionCycle?> subscriptionPinsBefore(
+    Iterable<String> keys,
+  ) => {for (final k in keys) k: _subscriptionPins[k]};
 
   // --- Who owes you ---------------------------------------------------------
 
@@ -3663,19 +3844,58 @@ class FinanceProvider extends ChangeNotifier {
     // not duplicates. A transaction without a ref is never a ref-match, so
     // it won't block a genuinely new message from the same bank.
     //
-    // The fuzzy bucket (same type + amount + sender, dates compared within
+    // The fuzzy bucket (same type + amount + bank, dates compared within
     // the bucket) treats a matching alert within 3 minutes as the same bank
-    // message sent twice; sender prevents cross-bank collisions (two banks
-    // sending ₹500 alerts within 3 minutes). Every existing row goes in the
-    // bucket — carrying a ref does not exempt a row from fuzzy-blocking a
-    // ref-less incoming copy of itself.
+    // message sent twice; the bank prevents cross-bank collisions (two banks
+    // sending ₹500 alerts within 3 minutes), and two different account keys
+    // mean two different payments. The bank, not the raw sender: one alert
+    // reaches the app from the inbox as "VM-HDFCBK" and from the messaging
+    // app's notification as "HDFC Bank", and both must meet. Every existing
+    // row goes in the bucket — carrying a ref does not exempt a row from
+    // fuzzy-blocking a ref-less incoming copy of itself.
+    //
+    // An incoming copy WITH a new ref is checked only against ref-less rows
+    // that came from a notification (a display-name sender): that is the one
+    // copy that can lose its ref, to a truncated notification text. An
+    // inbox alert with no ref (a card swipe, an ATM withdrawal) is a real
+    // payment and must not swallow the next one. Each such match pairs one
+    // to one, so a second payment with another ref still imports.
     final refKeys = <String>{};
-    final fuzzyDates = <String, List<DateTime>>{};
+    final fuzzyDates = <String, List<({DateTime date, String? acct})>>{};
+    final fuzzyDatesNoRef = <String, List<({DateTime date, String? acct})>>{};
+    final bankOf = <String, String>{};
     String fuzzyKeyOf(TxType type, double amount, String sender) =>
-        '${type.name}|$amount|$sender';
+        '${type.name}|$amount|'
+        '${bankOf[sender] ??= SmsTxnParser.dedupBankOf(sender)}';
+    int nearIndex(
+      List<({DateTime date, String? acct})>? rows,
+      DateTime at,
+      String? acct,
+    ) =>
+        rows?.indexWhere(
+          (r) =>
+              r.date.difference(at).abs() <= const Duration(minutes: 3) &&
+              (acct == null || r.acct == null || r.acct == acct),
+        ) ??
+        -1;
+    void remember(
+      TxType type,
+      double amount,
+      String sender,
+      String? ref,
+      DateTime date,
+      String? acct,
+    ) {
+      final key = fuzzyKeyOf(type, amount, sender);
+      (fuzzyDates[key] ??= []).add((date: date, acct: acct));
+      if (ref == null && !SmsTxnParser.isDltSender(sender)) {
+        (fuzzyDatesNoRef[key] ??= []).add((date: date, acct: acct));
+      }
+    }
+
     for (final t in _transactions) {
       if (t.externalRef != null) refKeys.add('${t.type.name}|${t.externalRef}');
-      (fuzzyDates[fuzzyKeyOf(t.type, t.amount, t.sender)] ??= []).add(t.date);
+      remember(t.type, t.amount, t.sender, t.externalRef, t.date, t.acctKey);
     }
     for (final p in parsed) {
       final ruleText = p.rawBody.isNotEmpty ? p.rawBody : p.merchant;
@@ -3685,16 +3905,23 @@ class FinanceProvider extends ChangeNotifier {
         continue;
       }
 
+      final key = fuzzyKeyOf(p.type, p.amount, p.sender);
       final bool isDuplicate;
       if (p.ref != null) {
-        isDuplicate = refKeys.contains('${p.type.name}|${p.ref}');
+        if (refKeys.contains('${p.type.name}|${p.ref}')) {
+          isDuplicate = true;
+        } else {
+          final twins = fuzzyDatesNoRef[key];
+          final i = nearIndex(twins, p.date, p.acctKey);
+          isDuplicate = i != -1;
+          // Paired: that ref-less copy is spent, and the ref now known.
+          if (isDuplicate) {
+            twins!.removeAt(i);
+            refKeys.add('${p.type.name}|${p.ref}');
+          }
+        }
       } else {
-        final dates = fuzzyDates[fuzzyKeyOf(p.type, p.amount, p.sender)];
-        isDuplicate =
-            dates != null &&
-            dates.any(
-              (d) => d.difference(p.date).abs() <= const Duration(minutes: 3),
-            );
+        isDuplicate = nearIndex(fuzzyDates[key], p.date, p.acctKey) != -1;
       }
       if (isDuplicate) continue;
 
@@ -3742,7 +3969,7 @@ class FinanceProvider extends ChangeNotifier {
       // The new row must block later duplicates in this same batch, exactly
       // as it would have when the old code rescanned _transactions each time.
       if (p.ref != null) refKeys.add('${p.type.name}|${p.ref}');
-      (fuzzyDates[fuzzyKeyOf(p.type, p.amount, p.sender)] ??= []).add(p.date);
+      remember(p.type, p.amount, p.sender, p.ref, p.date, p.acctKey);
       added++;
     }
     if (added > 0) {
@@ -3962,6 +4189,8 @@ class FinanceProvider extends ChangeNotifier {
       _budgets.clear();
       _merchantAliases.clear();
       _reminders.clear();
+      _tagColors.clear();
+      _subscriptionPins.clear();
       setCustomCategories(const []);
       setBuiltinOverrides(const {});
       // Reseed immediately (flags stay set) so the app keeps working
@@ -3982,6 +4211,7 @@ class FinanceProvider extends ChangeNotifier {
       budgets: includeConfig,
       aliases: includeConfig,
       reminders: includeConfig,
+      marks: includeConfig,
     );
   }
 
@@ -4002,7 +4232,9 @@ class FinanceProvider extends ChangeNotifier {
     // v13: `reminders` collection; transactions may carry `pairId`.
     // v14: transactions may carry `tags` (a list of strings).
     // v15: transactions may carry `people` (split shares) and `repaidBy`.
-    'version': 15,
+    // v16: `tagColors` (tag key → ARGB) and `subscriptionPins` (recurring
+    // key → cycle name).
+    'version': 16,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
@@ -4029,6 +4261,10 @@ class FinanceProvider extends ChangeNotifier {
     'importRules': _importRules.map((r) => r.toJson()).toList(),
     'merchantAliases': Map<String, String>.from(_merchantAliases),
     'reminders': _reminders.map((r) => r.toJson()).toList(),
+    'tagColors': Map<String, int>.from(_tagColors),
+    'subscriptionPins': {
+      for (final e in _subscriptionPins.entries) e.key: e.value.name,
+    },
   };
 
   /// Card/bank kind for every SMS-derived account key in the ledger.
@@ -4141,6 +4377,13 @@ class FinanceProvider extends ChangeNotifier {
     final importedAliases = rawAliases is Map
         ? _decodeAliases(rawAliases)
         : null;
+    // v16 additions, same absent-means-keep rule.
+    final rawTagColors = data['tagColors'];
+    final importedTagColors = rawTagColors is Map
+        ? _decodeTagColors(rawTagColors)
+        : null;
+    final rawPins = data['subscriptionPins'];
+    final importedPins = rawPins is Map ? _decodePins(rawPins) : null;
     // v13 addition, same absent-means-keep rule.
     final rawReminders = data['reminders'];
     final importedReminders = rawReminders is List
@@ -4263,6 +4506,16 @@ class FinanceProvider extends ChangeNotifier {
           ..clear()
           ..addAll(importedReminders);
       }
+      if (importedTagColors != null) {
+        _tagColors
+          ..clear()
+          ..addAll(importedTagColors);
+      }
+      if (importedPins != null) {
+        _subscriptionPins
+          ..clear()
+          ..addAll(importedPins);
+      }
       if (importedRules != null) {
         _rules
           ..clear()
@@ -4294,6 +4547,7 @@ class FinanceProvider extends ChangeNotifier {
         reminders: importedReminders != null || remindersSanitized,
         rules: importedRules != null,
         importRules: importedImportRules != null,
+        marks: importedTagColors != null || importedPins != null,
       );
       return txs.length;
     }
@@ -4345,6 +4599,17 @@ class FinanceProvider extends ChangeNotifier {
       if (importedAliases != null)
         for (final e in importedAliases.entries)
           if (!_merchantAliases.containsKey(e.key)) e.key: e.value,
+    };
+    // Tag colours and subscription marks merge per key, existing wins.
+    final newTagColors = <String, int>{
+      if (importedTagColors != null)
+        for (final e in importedTagColors.entries)
+          if (!_tagColors.containsKey(e.key)) e.key: e.value,
+    };
+    final newPins = <String, SubscriptionCycle>{
+      if (importedPins != null)
+        for (final e in importedPins.entries)
+          if (!_subscriptionPins.containsKey(e.key)) e.key: e.value,
     };
     final reminderIds = _reminders.map((r) => r.id).toSet();
     final newReminders = [
@@ -4399,6 +4664,8 @@ class FinanceProvider extends ChangeNotifier {
     if (newGroups.isNotEmpty || assignmentsChanged) sanitizeAssignments();
     _budgets.addAll(newBudgets);
     _merchantAliases.addAll(newAliases);
+    _tagColors.addAll(newTagColors);
+    _subscriptionPins.addAll(newPins);
     _reminders.addAll(newReminders);
     if (newRules.isNotEmpty) {
       final firstBuiltin = _rules.indexWhere((r) => r.isBuiltIn);
@@ -4416,6 +4683,8 @@ class FinanceProvider extends ChangeNotifier {
         groupsChanged ||
         newBudgets.isNotEmpty ||
         newAliases.isNotEmpty ||
+        newTagColors.isNotEmpty ||
+        newPins.isNotEmpty ||
         newReminders.isNotEmpty ||
         newRules.isNotEmpty ||
         newImportRules.isNotEmpty) {
@@ -4440,6 +4709,7 @@ class FinanceProvider extends ChangeNotifier {
         reminders: newReminders.isNotEmpty,
         rules: newRules.isNotEmpty,
         importRules: newImportRules.isNotEmpty,
+        marks: newTagColors.isNotEmpty || newPins.isNotEmpty,
       );
     }
     return newTxs.length;

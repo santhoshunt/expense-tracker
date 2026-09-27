@@ -290,40 +290,61 @@ class _PaceBar extends StatelessWidget {
     return Semantics(
       label: '$label ${fmtMoney(amount)}',
       excludeSemantics: true,
-      child: Row(
-        children: [
-          // At least the width of "Sep", growing with the font scale rather
-          // than wrapping the month name.
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 36),
-            child: Text(
-              label,
-              softWrap: false,
-              style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-          ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(5),
-              child: LinearProgressIndicator(
-                value: share,
-                minHeight: 10,
-                color: color,
-                backgroundColor: scheme.surfaceContainerHighest,
+      // Caps on the label and amount so the bar keeps a share of the row: at
+      // a large font size on a narrow phone the two texts alone overflowed
+      // it. Below the caps nothing changes; above them the text scales down.
+      child: LayoutBuilder(
+        builder: (context, box) => Row(
+          children: [
+            // At least the width of "Sep", growing with the font scale rather
+            // than wrapping the month name.
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: 36.0.clamp(0.0, box.maxWidth * 0.25),
+                maxWidth: box.maxWidth * 0.25,
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerStart,
+                child: Text(
+                  label,
+                  softWrap: false,
+                  style: text.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          ConstrainedBox(
-            constraints: const BoxConstraints(minWidth: 72),
-            child: Text(
-              fmtMoney(amount),
-              textAlign: TextAlign.end,
-              style: text.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+            const SizedBox(width: 4),
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(5),
+                child: LinearProgressIndicator(
+                  value: share,
+                  minHeight: 10,
+                  color: color,
+                  backgroundColor: scheme.surfaceContainerHighest,
+                ),
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 8),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: 72.0.clamp(0.0, box.maxWidth * 0.4),
+                maxWidth: box.maxWidth * 0.4,
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerEnd,
+                child: Text(
+                  fmtMoney(amount),
+                  textAlign: TextAlign.end,
+                  style: text.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -451,18 +472,25 @@ class _Line extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final body = Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '$label: ',
-            style: text.bodySmall?.copyWith(
-              color: scheme.onSurface,
-              fontWeight: FontWeight.w600,
+      // The label wraps within half the row instead of pushing the value
+      // off the card at a large font size on a narrow phone.
+      child: LayoutBuilder(
+        builder: (context, box) => Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: box.maxWidth * 0.5),
+              child: Text(
+                '$label: ',
+                style: text.bodySmall?.copyWith(
+                  color: scheme.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
-          ),
-          Expanded(child: child),
-        ],
+            Expanded(child: child),
+          ],
+        ),
       ),
     );
     if (onTap == null) return body;

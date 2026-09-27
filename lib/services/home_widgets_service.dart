@@ -49,6 +49,7 @@ class HomeWidgetsService {
         finance.transactions,
         now: now,
         alias: finance.merchantAlias,
+        pinned: finance.subscriptionPins,
       );
     }
     return _hits;
