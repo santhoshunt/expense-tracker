@@ -176,11 +176,8 @@ void main() {
 
       MonthlyBarChart chart() =>
           tester.widget<MonthlyBarChart>(find.byType(MonthlyBarChart));
-      await tester.scrollUntilVisible(
-        find.byType(MonthlyBarChart),
-        300,
-        scrollable: verticalScrollable(),
-      );
+      // The chart's section starts folded.
+      await openDashboardSection(tester, 'sixMonths');
       expect(chart().shownMonths.last, DateTime(now.year, now.month));
 
       await tester.scrollUntilVisible(

@@ -314,6 +314,8 @@ void main() {
     final merchants = tester.getTopLeft(find.text('Top merchants')).dy;
     expect(byCategory < byTags && byTags < merchants, isTrue);
 
+    // By tags starts folded.
+    await openDashboardSection(tester, 'byTags');
     final tagRow = find
         .ancestor(
           of: find.text('Goa trip'),
@@ -408,13 +410,8 @@ void main() {
     await tester.pumpAndSettle();
     await openDashboardView(tester, 'Breakdown');
 
-    final scrollable = verticalScrollable();
-    await tester.scrollUntilVisible(
-      find.text('Top merchants'),
-      200,
-      scrollable: scrollable,
-    );
-    await tester.pumpAndSettle();
+    // Top merchants starts folded.
+    await openDashboardSection(tester, 'merchants');
 
     // The merchants row shows the title-cased label, unique on screen.
     final row = find
@@ -943,6 +940,7 @@ void main() {
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
     await openDashboardView(tester, 'Breakdown');
+    await openDashboardSection(tester, 'merchants');
 
     final row = find
         .ancestor(
@@ -993,6 +991,7 @@ void main() {
 
     // Scroll until the hint itself is on screen (the header alone can be
     // visible while the card below it is still off-stage).
+    await openDashboardSection(tester, 'merchants');
     final list = verticalScrollable();
     final hint = find.textContaining('No identifiable merchants in');
     await tester.scrollUntilVisible(hint, 300, scrollable: list);

@@ -37,7 +37,7 @@ void main() {
     child: const MaterialApp(home: ClassifiersScreen()),
   );
 
-  testWidgets('Cockpit hub lists the three groups with live counts, and each '
+  testWidgets('Cockpit hub lists the four groups with live counts, and each '
       'opens its page', (tester) async {
     final p = FinanceProvider();
     await p.load();
@@ -89,13 +89,23 @@ void main() {
         '1 budget · 1 reminder · 0 subscriptions · 1 over',
         'Budgets',
       ),
+      (
+        'Dashboard',
+        'Order and show the dashboard sections',
+        'All sections shown',
+        'Overview',
+      ),
     ];
     for (final (title, gist, count, _) in hub) {
+      // The fourth card can sit below a short screen's fold.
+      await tester.scrollUntilVisible(find.text(count), 200);
       expect(find.text(title), findsOneWidget);
       expect(find.text(gist), findsOneWidget);
       expect(find.text(count), findsOneWidget, reason: '$title count');
     }
     for (final (title, _, _, marker) in hub) {
+      await tester.ensureVisible(find.text(title));
+      await pumpThrough(tester);
       await tester.tap(find.text(title));
       await pumpThrough(tester);
       expect(

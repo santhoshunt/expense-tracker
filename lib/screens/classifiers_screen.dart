@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../models/import_rule.dart';
 import '../models/transaction.dart';
+import '../models/dashboard_layout.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/sms_parser.dart';
@@ -25,6 +26,7 @@ import '../widgets/budget_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
+import 'dashboard_layout_tab.dart';
 import 'category_management.dart';
 import 'cockpit_tabs.dart';
 
@@ -38,8 +40,11 @@ const int kCockpitTabBudgets = 4;
 const int kCockpitTabReminders = 5;
 const int kCockpitTabSubscriptions = 6;
 const int kCockpitTabTags = 7;
+const int kCockpitTabDashOverview = 8;
+const int kCockpitTabDashTrends = 9;
+const int kCockpitTabDashBreakdown = 10;
 
-/// The Cockpit's three groups, each one page holding the tabs in [tabs]
+/// The Cockpit's groups, each one page holding the tabs in [tabs]
 /// (kCockpitTab* ids, in tab order). Six tabs on one bar were too many to
 /// scan, so the hub splits them by what they steer, as Settings does.
 enum CockpitGroup {
@@ -56,7 +61,13 @@ enum CockpitGroup {
     kCockpitTabBudgets,
     kCockpitTabReminders,
     kCockpitTabSubscriptions,
-  ]);
+  ]),
+  dashboard(
+    'Dashboard',
+    'Order and show the dashboard sections',
+    Icons.dashboard_customize_outlined,
+    [kCockpitTabDashOverview, kCockpitTabDashTrends, kCockpitTabDashBreakdown],
+  );
 
   const CockpitGroup(this.title, this.gist, this.icon, this.tabs);
 
@@ -82,6 +93,9 @@ const Map<int, String> _kCockpitTabLabels = {
   kCockpitTabReminders: 'Reminders',
   kCockpitTabSubscriptions: 'Subscriptions',
   kCockpitTabTags: 'Tags',
+  kCockpitTabDashOverview: 'Overview',
+  kCockpitTabDashTrends: 'Trends',
+  kCockpitTabDashBreakdown: 'Breakdown',
 };
 
 /// The Cockpit: everything that steers the app — rules, import checks, the
@@ -164,6 +178,9 @@ class _CockpitHub extends StatelessWidget {
       finance,
       context.read<SettingsProvider>().hiddenUpcoming,
     ).active.length;
+    final hiddenSections = context.select<SettingsProvider, int>(
+      (s) => s.hiddenSectionCount,
+    );
     final counts = {
       CockpitGroup.classify: [
         _count(ownRules, 'rule', 'rules'),
@@ -184,6 +201,9 @@ class _CockpitHub extends StatelessWidget {
         _count(finance.reminders.length, 'reminder', 'reminders'),
         _count(subscriptions, 'subscription', 'subscriptions'),
         if (over > 0) '$over over',
+      ],
+      CockpitGroup.dashboard: [
+        hiddenSections > 0 ? '$hiddenSections hidden' : 'All sections shown',
       ],
     };
     final textTheme = Theme.of(context).textTheme;
@@ -310,6 +330,15 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
     kCockpitTabBudgets => const BudgetsTab(),
     kCockpitTabSubscriptions => const SubscriptionsTab(),
     kCockpitTabTags => const TagsTab(),
+    kCockpitTabDashOverview => const DashboardLayoutTab(
+      page: DashboardPage.overview,
+    ),
+    kCockpitTabDashTrends => const DashboardLayoutTab(
+      page: DashboardPage.trends,
+    ),
+    kCockpitTabDashBreakdown => const DashboardLayoutTab(
+      page: DashboardPage.breakdown,
+    ),
     _ => const RemindersTab(),
   };
 

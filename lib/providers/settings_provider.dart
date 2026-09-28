@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/dashboard_layout.dart';
 import '../services/budget.dart';
 import '../utils/app_palettes.dart';
 import '../utils/figma_palette.dart';
@@ -65,6 +68,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kUpcomingReminders = 'upcoming_reminders_v1';
   static const _kUpcomingHidden = 'upcoming_hidden_v1';
   static const _kCollapsedSections = 'collapsed_sections_v1';
+  static const _kDashboardLayout = 'dashboard_layout_v1';
 
   /// Pre-1.1.1 key: a single bool for the dashboard Upcoming card, folded
   /// into [_kCollapsedSections] on load.
@@ -108,6 +112,11 @@ class SettingsProvider extends ChangeNotifier {
   bool _upcomingReminders = true;
   Set<String> _upcomingHidden = {};
   Set<String> _collapsedSections = {};
+
+  /// Per page, when changed from the defaults; open state per section,
+  /// when toggled.
+  final Map<DashboardPage, DashboardPageLayout> _layouts = {};
+  final Map<DashboardSection, bool> _sectionOpen = {};
   Set<String> _dismissedPairs = {};
   bool _appLock = false;
   bool _hideIncome = false;
@@ -231,6 +240,10 @@ class SettingsProvider extends ChangeNotifier {
       () => (prefs.getStringList(_kCollapsedSections) ?? const []).toSet(),
       <String>{},
     );
+    tryRead(() {
+      final raw = prefs.getString(_kDashboardLayout);
+      _readDashboardLayout(raw == null ? null : jsonDecode(raw));
+    }, null);
     // One-shot legacy fold-in; best-effort like every other write here.
     if (prefs.getBool(_kLegacyUpcomingCollapsed) == true) {
       _collapsedSections.add('upcoming');
@@ -476,6 +489,111 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  // --- Dashboard layout -----------------------------------------------------
+
+  /// [page]'s section order and hidden sections (Cockpit, Dashboard).
+  DashboardPageLayout dashboardLayout(DashboardPage page) =>
+      _layouts[page] ?? DashboardPageLayout.defaults(page);
+
+  /// Changes whenever any page's layout or fold state does: the dashboard
+  /// selects it to rebuild.
+  String get dashboardLayoutKey => jsonEncode(_dashboardLayoutJson());
+
+  /// Whether [s] is unfolded: the last toggle, else its default.
+  bool sectionOpen(DashboardSection s) => _sectionOpen[s] ?? s.openByDefault;
+
+  /// Sections hidden across the dashboard's pages, for the Cockpit card.
+  int get hiddenSectionCount => [
+    for (final page in DashboardPage.values) ...dashboardLayout(page).hidden,
+  ].length;
+
+  Future<void> setDashboardOrder(
+    DashboardPage page,
+    List<DashboardSection> order,
+  ) async {
+    final was = dashboardLayout(page);
+    // Through the tolerant reader: a partial or foreign list is repaired.
+    _layouts[page] = DashboardPageLayout.fromJson(page, {
+      'order': [for (final s in order) s.name],
+      'hidden': [for (final s in was.hidden) s.name],
+    });
+    notifyListeners();
+    await _saveDashboardLayout();
+  }
+
+  Future<void> setSectionHidden(DashboardSection s, bool hidden) async {
+    final was = dashboardLayout(s.page);
+    final set = {...was.hidden};
+    if (!(hidden ? set.add(s) : set.remove(s))) return;
+    _layouts[s.page] = DashboardPageLayout(
+      page: s.page,
+      order: was.order,
+      hidden: set,
+    );
+    notifyListeners();
+    await _saveDashboardLayout();
+  }
+
+  Future<void> setSectionOpen(DashboardSection s, bool open) async {
+    if (sectionOpen(s) == open) return;
+    _sectionOpen[s] = open;
+    notifyListeners();
+    await _saveDashboardLayout();
+  }
+
+  /// [page]'s order, hidden sections and folds back to the defaults; the
+  /// other pages keep theirs.
+  Future<void> resetDashboardLayout(DashboardPage page) async {
+    _layouts.remove(page);
+    _sectionOpen.removeWhere((s, _) => s.page == page);
+    notifyListeners();
+    await _saveDashboardLayout();
+  }
+
+  Map<String, dynamic> _dashboardLayoutJson() => {
+    'pages': {for (final e in _layouts.entries) e.key.name: e.value.toJson()},
+    'open': {for (final e in _sectionOpen.entries) e.key.name: e.value},
+  };
+
+  /// Replaces the layout with [json]'s, or with the defaults when it is not
+  /// a map. Parsed into new maps first, so a surprise mid-way leaves the
+  /// current layout as it was.
+  void _readDashboardLayout(Object? json) {
+    final layouts = <DashboardPage, DashboardPageLayout>{};
+    final open = <DashboardSection, bool>{};
+    if (json is Map) {
+      final pages = json['pages'];
+      if (pages is Map) {
+        for (final page in DashboardPage.values) {
+          if (pages[page.name] != null) {
+            layouts[page] = DashboardPageLayout.fromJson(
+              page,
+              pages[page.name],
+            );
+          }
+        }
+      }
+      final stored = json['open'];
+      if (stored is Map) {
+        for (final e in stored.entries) {
+          final s = DashboardSection.byName(e.key);
+          if (s != null && e.value is bool) open[s] = e.value as bool;
+        }
+      }
+    }
+    _layouts
+      ..clear()
+      ..addAll(layouts);
+    _sectionOpen
+      ..clear()
+      ..addAll(open);
+  }
+
+  Future<void> _saveDashboardLayout() => _persistPref(
+    _kDashboardLayout,
+    (p) => p.setString(_kDashboardLayout, jsonEncode(_dashboardLayoutJson())),
+  );
+
   /// Un-hides everything hidden via [hideUpcoming].
   Future<void> resetHiddenUpcoming() async {
     if (_upcomingHidden.isEmpty) return;
@@ -563,6 +681,7 @@ class SettingsProvider extends ChangeNotifier {
     'categoryOrder': _categoryOrder.name,
     'categorySort': _categorySort.name,
     'palette': _palette.name,
+    'dashboardLayout': _dashboardLayoutJson(),
     // appLock is intentionally absent — see setAppLock.
   };
 
@@ -611,6 +730,9 @@ class SettingsProvider extends ChangeNotifier {
     _categorySort =
         CategorySort.values.asNameMap()[map['categorySort']] ?? _categorySort;
     _palette = AppPalette.values.asNameMap()[map['palette']] ?? _palette;
+    if (map['dashboardLayout'] is Map) {
+      _readDashboardLayout(map['dashboardLayout']);
+    }
     // A backup from before 1.23 may carry the old coral default.
     if (accent is int && map['accentVersion'] == null) {
       _accent = _migrateAccent(_accent, _palette);
@@ -632,6 +754,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setString(_kCategoryOrder, _categoryOrder.name);
       await p.setString(_kCategorySort, _categorySort.name);
       await p.setString(_kPalette, _palette.name);
+      await p.setString(_kDashboardLayout, jsonEncode(_dashboardLayoutJson()));
     });
     notifyListeners();
   }

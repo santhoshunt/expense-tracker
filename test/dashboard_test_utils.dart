@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:expense_tracker/widgets/dashboard_fold.dart';
+
 /// The dashboard is split into Overview / Trends / Breakdown sub-tabs, so a
 /// section assertion has to start on the right one. The tab bar is pinned
 /// above the pager, so its labels are always tappable.
@@ -22,3 +24,18 @@ Finder verticalScrollable() => find
           axisDirectionToAxis(w.axisDirection) == Axis.vertical,
     )
     .first;
+
+/// Trends and Breakdown fold most sections by default: scrolls to
+/// [section]'s fold (a DashboardSection name, e.g. 'merchants') and opens it
+/// when folded, so the test can reach its cards.
+Future<void> openDashboardSection(WidgetTester tester, String section) async {
+  final fold = find.byKey(ValueKey('fold-$section'));
+  await tester.scrollUntilVisible(fold, 300, scrollable: verticalScrollable());
+  await tester.pumpAndSettle();
+  if (!tester.widget<DashboardFold>(fold).open) {
+    await tester.tap(
+      find.descendant(of: fold, matching: find.byType(InkWell)).first,
+    );
+    await tester.pumpAndSettle();
+  }
+}

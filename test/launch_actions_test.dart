@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/dashboard_layout.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -180,8 +181,16 @@ void main() {
 
     testWidgets('after it opens this month so far on Trends', (tester) async {
       recapClock = () => DateTime(now.year, now.month, 20, 10);
+      // Folded by the user: the note opens it.
+      SharedPreferences.setMockInitialValues({
+        'dashboard_layout_v1': '{"pages":{},"open":{"pace":false}}',
+      });
       await tapNotification(tester);
-      expect(find.byType(MonthPaceCard), findsOneWidget);
+      final settings = tester
+          .element(find.byType(HomeScreen))
+          .read<SettingsProvider>();
+      expect(settings.sectionOpen(DashboardSection.pace), isTrue);
+      expect(find.byType(MonthPaceCard).hitTestable(), findsOneWidget);
       expect(find.text('This month vs last month'), findsOneWidget);
     });
   });

@@ -157,12 +157,11 @@ void main() {
     await tester.pumpAndSettle();
     await openDashboardView(tester, 'Breakdown');
 
-    final line = find.text('Subscriptions');
-    await tester.scrollUntilVisible(
-      line,
-      300,
-      scrollable: verticalScrollable(),
-    );
+    // Folded at first: open it, then tap its card.
+    await openDashboardSection(tester, 'subscriptions');
+    final line = find.textContaining('regular payment');
+    await tester.ensureVisible(line);
+    await tester.pumpAndSettle();
     await tester.tap(line);
     await tester.pumpAndSettle();
     expect(find.text('Plan'), findsOneWidget);

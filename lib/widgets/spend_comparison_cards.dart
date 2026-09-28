@@ -9,6 +9,7 @@ import '../utils/contrast.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
 import 'comparison_bar.dart';
+import 'dashboard_fold.dart';
 import 'info_tip.dart';
 import 'show_all_list.dart';
 
@@ -672,26 +673,29 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Inside a dashboard fold its heading already shows [title]: keep only
+    // the tip and the controls, on one row, and no top gap.
+    final inFold = DashboardFoldScope.of(context);
+    final infoTip = tip == null
+        ? null
+        : InfoTip(title: title, message: tip!, example: example, link: link);
     final text = Text(title, style: Theme.of(context).textTheme.titleMedium);
-    final Widget heading = tip == null
+    final Widget heading = inFold
+        ? Align(alignment: Alignment.centerLeft, child: infoTip)
+        : infoTip == null
         ? text
         : Align(
             alignment: Alignment.centerLeft,
-            child: InfoLabel(
-              label: text,
-              tip: InfoTip(
-                title: title,
-                message: tip!,
-                example: example,
-                link: link,
-              ),
-            ),
+            child: InfoLabel(label: text, tip: infoTip),
           );
+    final showHeading = !inFold || infoTip != null || trailing != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SizedBox(height: 24),
-        if (trailing == null)
+        if (!inFold) const SizedBox(height: 24),
+        if (!showHeading)
+          const SizedBox.shrink()
+        else if (trailing == null)
           heading
         else
           Row(

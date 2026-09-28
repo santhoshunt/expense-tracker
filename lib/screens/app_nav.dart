@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/account.dart';
+import '../models/dashboard_layout.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import 'classifiers_screen.dart';
 import 'people_screen.dart';
@@ -145,6 +146,14 @@ void goCockpitSubscriptions(BuildContext c) =>
     AppNav.instance.openCockpit(c, kCockpitTabSubscriptions);
 void goCockpitTags(BuildContext c) =>
     AppNav.instance.openCockpit(c, kCockpitTabTags);
+
+/// Cockpit, Dashboard: the tab that orders and hides [page]'s sections.
+void goCockpitDashboard(BuildContext c, DashboardPage page) =>
+    AppNav.instance.openCockpit(c, switch (page) {
+      DashboardPage.overview => kCockpitTabDashOverview,
+      DashboardPage.trends => kCockpitTabDashTrends,
+      DashboardPage.breakdown => kCockpitTabDashBreakdown,
+    });
 void goDashboard(BuildContext c) =>
     AppNav.instance.openHomeTab(c, kHomeTabDashboard);
 

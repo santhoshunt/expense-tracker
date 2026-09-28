@@ -13,6 +13,7 @@ import 'package:expense_tracker/services/monthly_recap.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
+import 'package:expense_tracker/widgets/dashboard_fold.dart';
 import 'package:expense_tracker/widgets/spend_comparison_cards.dart';
 
 import 'dashboard_test_utils.dart';
@@ -85,16 +86,20 @@ void main() {
 
       await openDashboardView(tester, 'Trends');
       expect(find.text('This month vs last month'), findsOneWidget);
-      expect(find.text('This month vs usual'), findsOneWidget);
+      // This month vs usual starts folded.
+      expect(
+        tester
+            .widget<DashboardFold>(find.byKey(const ValueKey('fold-usual')))
+            .open,
+        isFalse,
+      );
       expect(find.text('Spent'), findsNothing);
       expect(find.byType(CategoryDonutChart), findsNothing);
-      // The one home of the categories comparison.
-      await tester.scrollUntilVisible(
-        find.text('Categories vs usual'),
-        300,
-        scrollable: verticalScrollable(),
-      );
-      expect(find.text('Categories vs usual'), findsOneWidget);
+      // The one home of the categories comparison, folded at first.
+      await openDashboardSection(tester, 'categoryComparison');
+      await tester.ensureVisible(find.byType(CategoryComparisonCard));
+      await tester.pumpAndSettle();
+      expect(find.byType(CategoryComparisonCard).hitTestable(), findsOneWidget);
 
       await openDashboardView(tester, 'Breakdown');
       expect(find.byType(CategoryDonutChart), findsOneWidget);
