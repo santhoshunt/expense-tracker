@@ -26,6 +26,7 @@ import '../widgets/budget_dialog.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/undo_snackbar.dart';
+import '../widgets/import_health_banner.dart';
 import '../widgets/update_banner.dart';
 import '../widgets/spending_heatmap.dart';
 import '../widgets/glossy.dart';
@@ -95,7 +96,9 @@ class DashboardScreen extends StatefulWidget {
 /// The heatmap's heading tip.
 const _heatmapTip =
     "Each day is shaded by its spending compared with this month's biggest "
-    'day. Days with no spending stay plain.';
+    'day, and shows what it spent. Days with no spending stay plain. A dot '
+    'marks a day a bill is still due this month; tap a day for its payments '
+    'and bills.';
 
 class _DashboardScreenState extends State<DashboardScreen> {
   late DateTime _month;
@@ -197,6 +200,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ];
     }
     return _recurringHits;
+  }
+
+  /// This month's unpaid bills from today on, for the heatmap's dots;
+  /// none under other months, whose bills show as the spend they became.
+  List<DueBill> _heatmapBills(FinanceProvider finance) {
+    final now = DateTime.now();
+    if (_month != DateTime(now.year, now.month)) return const [];
+    return billsDue(
+      finance,
+      patterns: _patterns(finance, now),
+      hidden: context.read<SettingsProvider>().hiddenUpcoming,
+      from: now,
+      to: DateTime(now.year, now.month + 1, 0),
+      now: now,
+    );
   }
 
   /// Every live pattern, not only the next fortnight's: safe to spend sets
@@ -546,6 +564,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     List<Widget> overviewChildren() => [
       // A newer release, offered by the launch check; empty otherwise.
       const UpdateBanner(),
+      // A bank whose alerts stopped importing; empty otherwise.
+      const ImportHealthBanner(),
       // First-run: the landing tab used to greet a new user with ₹0.00
       // everywhere and no hint of what to do next.
       if (!finance.hasTransactions) ...[
@@ -1245,17 +1265,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ],
       // Spending hotspots: which DATES were hot this month, and which
       // weekdays are usually hot across history.
-      if (monthExpense > 0 && !_yearMode) ...[
-        const SizedBox(height: 24),
-        const _SectionHeading('Spending heatmap', tip: _heatmapTip),
-        const SizedBox(height: 8),
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: SpendingHeatmap(month: _month),
-          ),
+      // Also before the month's first spend, once bills are due: the dots
+      // are most useful then.
+      if (!_yearMode)
+        Builder(
+          builder: (context) {
+            // Hiding a bill elsewhere must take its dot away here too.
+            context.select<SettingsProvider, String>(
+              (s) => hiddenListKey(s.hiddenUpcoming),
+            );
+            final bills = _heatmapBills(finance);
+            if (monthExpense <= 0 && bills.isEmpty) {
+              return const SizedBox.shrink();
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 24),
+                const _SectionHeading('Spending heatmap', tip: _heatmapTip),
+                const SizedBox(height: 8),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: SpendingHeatmap(month: _month, bills: bills),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
-      ],
       // Transfers: own-account moves for the month. Not income or expense —
       // shown separately so the flows are still visible.
       if (transfersBy.isNotEmpty && !_yearMode) ...[

@@ -68,41 +68,42 @@ class SafeToSpend {
   }
 }
 
-/// Null without a cap ([cap] <= 0).
-///
-/// Bills are what is still due from a week ago (the overdue grace, into last
-/// month too) to the month's end: each reminder occurrence not yet paid, and each detected
-/// payment in [patterns] ([detectRecurringPatterns], not the Upcoming list,
-/// which only looks one or two weeks ahead) that is not hidden and not
-/// already a reminder. Card bills are left out (the card's spending is in
-/// this month's spend already) and so are transfers (the cap does not
-/// cover them).
-SafeToSpend? computeSafeToSpend(
+/// One unpaid bill: a reminder occurrence or a detected payment's next date.
+class DueBill {
+  final DateTime due;
+  final String label;
+  final double amount;
+  const DueBill({required this.due, required this.label, required this.amount});
+}
+
+/// Unpaid bills due from [from] through [to] (calendar dates), soonest
+/// first: each reminder occurrence not yet paid, and each detected payment
+/// in [patterns] ([detectRecurringPatterns]) that is not hidden, not paid
+/// by an alert still waiting for review, and not already a reminder. Card
+/// bills are left out (the card's spending is counted as it happens) and
+/// so are transfers (the budget cap does not cover them).
+List<DueBill> billsDue(
   FinanceProvider finance, {
-  required double cap,
   required List<RecurringHit> patterns,
   required Set<String> hidden,
+  required DateTime from,
+  required DateTime to,
   required DateTime now,
 }) {
-  if (cap <= 0) return null;
-  final today = DateTime(now.year, now.month, now.day);
-  final month = DateTime(now.year, now.month);
-  final last = daysInMonth(now.year, now.month);
-  final monthEnd = DateTime(now.year, now.month, last);
-  // Bills overdue up to a week count too, last month's included: their
-  // payment lands in this month's spend.
-  final from = today.subtract(const Duration(days: 7));
-
-  var bills = 0.0;
+  final start = DateTime(from.year, from.month, from.day);
+  final end = DateTime(to.year, to.month, to.day);
+  final out = <DueBill>[];
   for (final r in finance.reminders) {
     final amount = r.expectedAmount;
     if (amount == null || isTransferCategory(r.categoryId)) continue;
-    for (final due in reminderDueDatesBetween(r, from, monthEnd)) {
-      if (!reminderOccurrenceDone(r, due)) bills += amount;
+    for (final due in reminderDueDatesBetween(r, start, end)) {
+      if (!reminderOccurrenceDone(r, due)) {
+        out.add(DueBill(due: due, label: r.name, amount: amount));
+      }
     }
   }
-  // Alerts waiting for review already count as spend below; a detected
-  // payment one of them made is not due any more.
+  // An alert waiting for review already counts as spend; the detected
+  // payment it made is not due any more.
   final pendingKeys = <String, DateTime>{};
   for (final t in finance.pendingTransactions) {
     if (t.suspectedSpam) continue;
@@ -115,10 +116,10 @@ SafeToSpend? computeSafeToSpend(
     if (h.type != TxType.expense || hidden.contains(h.key)) continue;
     if (isTransferCategory(h.categoryId)) continue;
     final due = DateTime(h.nextDue.year, h.nextDue.month, h.nextDue.day);
-    if (due.isBefore(from) || due.isAfter(monthEnd)) continue;
+    if (due.isBefore(start) || due.isAfter(end)) continue;
     final paidPending = pendingKeys[h.key];
     if (paidPending != null && paidPending.isAfter(h.lastDate)) continue;
-    // Counted once, as its reminder, when that reminder is counted above.
+    // Listed once, as its reminder, when that reminder is listed above.
     if (finance.reminders.any(
       (r) =>
           r.expectedAmount != null &&
@@ -127,8 +128,35 @@ SafeToSpend? computeSafeToSpend(
     )) {
       continue;
     }
-    bills += h.expectedAmount;
+    out.add(DueBill(due: due, label: h.label, amount: h.expectedAmount));
   }
+  out.sort((a, b) => a.due.compareTo(b.due));
+  return out;
+}
+
+/// Null without a cap ([cap] <= 0).
+///
+/// Bills are [billsDue] from a week ago (the overdue grace, into last month
+/// too: their payment lands in this month's spend) to the month's end.
+SafeToSpend? computeSafeToSpend(
+  FinanceProvider finance, {
+  required double cap,
+  required List<RecurringHit> patterns,
+  required Set<String> hidden,
+  required DateTime now,
+}) {
+  if (cap <= 0) return null;
+  final today = DateTime(now.year, now.month, now.day);
+  final month = DateTime(now.year, now.month);
+  final last = daysInMonth(now.year, now.month);
+  final bills = billsDue(
+    finance,
+    patterns: patterns,
+    hidden: hidden,
+    from: today.subtract(const Duration(days: 7)),
+    to: DateTime(now.year, now.month, last),
+    now: now,
+  ).fold(0.0, (s, b) => s + b.amount);
   bool spend(Tx t) =>
       t.type == TxType.expense &&
       !t.suspectedSpam &&

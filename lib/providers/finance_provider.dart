@@ -14,6 +14,7 @@ import '../models/spend_budget.dart';
 import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../services/budget.dart';
+import '../services/import_health.dart' show kImportHealthKey;
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
 import '../services/sms_parser.dart';
@@ -4364,6 +4365,8 @@ class FinanceProvider extends ChangeNotifier {
             .toList()) {
       await prefs.remove(key);
     }
+    // The unreadable alerts kept for the import warning hold bank SMS text.
+    await prefs.remove(kImportHealthKey);
     if (includeConfig) {
       _rules.clear();
       _importRules.clear();

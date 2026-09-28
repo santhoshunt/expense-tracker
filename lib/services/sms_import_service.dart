@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart' show DateTimeRange;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart' show AutoImportFrequency;
+import 'import_health.dart';
 import 'notification_source.dart';
 import 'sms_parser.dart';
 import 'sms_source.dart';
@@ -28,7 +30,7 @@ class SmsImportResult {
 /// Orchestrates one import run: permission → query window →
 /// parse → hand off to the provider (rules, dedupe, pending state).
 class SmsImportService {
-  static const _lastScanKey = 'sms_last_scan_millis';
+  static const _lastScanKey = kSmsLastScanKey;
   static const _autoRunKey = 'sms_auto_import_last_run_millis';
   static const _backfillDays = 30;
 
@@ -94,6 +96,38 @@ class SmsImportService {
   /// [lastPermission] then tells the caller whether the dialog was suppressed.
   SmsPermission lastPermission = SmsPermission.denied;
 
+  /// Keeps [body] for the Overview's import warning when it looked like a
+  /// bank alert but the parser could not read it.
+  static void _noteMiss(
+    List<ImportMiss> misses,
+    String sender,
+    String body,
+    DateTime date,
+    bool relaxedSender,
+    List<String> ignorePhrases,
+    List<String> spamSignals,
+  ) {
+    if (SmsTxnParser.looksUnreadable(
+      sender,
+      body,
+      relaxedSender: relaxedSender,
+      ignorePhrases: ignorePhrases,
+      spamSignals: spamSignals,
+    )) {
+      misses.add((sender: sender, body: body, date: date));
+    }
+  }
+
+  /// Best effort: a failed write costs a warning, never the import.
+  static Future<void> _recordMisses(List<ImportMiss> misses) async {
+    if (misses.isEmpty) return;
+    try {
+      await ImportHealth.recordUnreadable(misses);
+    } catch (e) {
+      debugPrint('Import health write failed: $e');
+    }
+  }
+
   /// Imports the RCS notification buffer, then clears what was saved.
   /// Safe to call on every launch — [NotificationSource.peek] is a no-op
   /// when notification access is not granted or the platform is not Android.
@@ -109,6 +143,7 @@ class SmsImportService {
     final ignorePhrases = finance.ignorePhrases;
     final spamSignals = finance.spamSignals;
     final parsed = <ParsedTxn>[];
+    final misses = <ImportMiss>[];
     for (final msg in msgs) {
       final txn = SmsTxnParser.parse(
         msg.sender,
@@ -118,11 +153,24 @@ class SmsImportService {
         ignorePhrases: ignorePhrases,
         spamSignals: spamSignals,
       );
-      if (txn != null) parsed.add(txn);
+      if (txn != null) {
+        parsed.add(txn);
+      } else {
+        _noteMiss(
+          misses,
+          msg.sender,
+          msg.body,
+          msg.date,
+          true,
+          ignorePhrases,
+          spamSignals,
+        );
+      }
     }
     final (imported, _) = parsed.isEmpty
         ? (0, 0)
         : await finance.addImported(parsed);
+    await _recordMisses(misses);
     if (!finance.persistFailed) await notifications.ack(batch);
     return imported;
   }
@@ -150,6 +198,7 @@ class SmsImportService {
       final ignorePhrases = finance.ignorePhrases;
       final spamSignals = finance.spamSignals;
       final parsed = <ParsedTxn>[];
+      final misses = <ImportMiss>[];
       for (final msg in notifMsgs) {
         final txn = SmsTxnParser.parse(
           msg.sender,
@@ -159,9 +208,22 @@ class SmsImportService {
           ignorePhrases: ignorePhrases,
           spamSignals: spamSignals,
         );
-        if (txn != null) parsed.add(txn);
+        if (txn != null) {
+          parsed.add(txn);
+        } else {
+          _noteMiss(
+            misses,
+            msg.sender,
+            msg.body,
+            msg.date,
+            true,
+            ignorePhrases,
+            spamSignals,
+          );
+        }
       }
       final (imported, spamDropped) = await finance.addImported(parsed);
+      await _recordMisses(misses);
       if (!finance.persistFailed) await notifications.ack(batch);
       return SmsImportResult(
         scanned: notifMsgs.length,
@@ -202,6 +264,7 @@ class SmsImportService {
     final messages = queryResult.messages;
 
     final parsed = <ParsedTxn>[];
+    final misses = <ImportMiss>[];
     var scanned = 0;
     var newestMillis = sinceMillis;
     final ignorePhrases = finance.ignorePhrases;
@@ -218,7 +281,19 @@ class SmsImportService {
         ignorePhrases: ignorePhrases,
         spamSignals: spamSignals,
       );
-      if (txn != null) parsed.add(txn);
+      if (txn != null) {
+        parsed.add(txn);
+      } else {
+        _noteMiss(
+          misses,
+          msg.sender,
+          msg.body,
+          msg.date,
+          false,
+          ignorePhrases,
+          spamSignals,
+        );
+      }
     }
 
     // Notification-captured alerts (RCS business chats the SMS provider can't
@@ -240,11 +315,24 @@ class SmsImportService {
           ignorePhrases: ignorePhrases,
           spamSignals: spamSignals,
         );
-        if (txn != null) parsed.add(txn);
+        if (txn != null) {
+          parsed.add(txn);
+        } else {
+          _noteMiss(
+            misses,
+            msg.sender,
+            msg.body,
+            msg.date,
+            true,
+            ignorePhrases,
+            spamSignals,
+          );
+        }
       }
     }
 
     final (imported, spamDropped) = await finance.addImported(parsed);
+    await _recordMisses(misses);
     if (!finance.persistFailed) await notifications.ack(batch);
     // Advance the marker only when this scan is authoritative up to
     // `newestMillis`:
@@ -267,6 +355,8 @@ class SmsImportService {
         !finance.persistFailed &&
         newestMillis > (existing ?? 0)) {
       await prefs.setInt(_lastScanKey, newestMillis);
+      // Silence is measured up to this marker.
+      ImportHealth.changed();
     }
 
     return SmsImportResult(

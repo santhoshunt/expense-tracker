@@ -501,6 +501,46 @@ class SmsTxnParser {
     );
   }
 
+  /// True when [body] from [sender] passes the sender and transactional
+  /// checks [parse] applies first, but yields no positive amount or no
+  /// direction: a bank alert this parser cannot read, often because the
+  /// bank changed its format. OTPs, promotions and ignore phrases fail the
+  /// earlier checks, and promotions ([looksLikeSpam]) are left out too, so
+  /// they never count. Mirrors [parse]'s order.
+  static bool looksUnreadable(
+    String sender,
+    String body, {
+    bool relaxedSender = false,
+    List<String> ignorePhrases = kDefaultIgnorePhrases,
+    List<String> spamSignals = kDefaultSpamSignals,
+  }) {
+    final senderOk =
+        senderLooksFinancial(sender) ||
+        (relaxedSender && senderLooksBankBrand(sender));
+    if (!senderOk) return false;
+    // A promotion quoting a limit ("available limit of Rs.1,50,000")
+    // has no amount the parser takes, but it is no alert either.
+    // Link signals are left out: real alerts carry "Not you? https://..."
+    // footers, and one of those changing format must still be noticed.
+    if (looksLikeSpam(
+      body,
+      spamSignals: [
+        for (final s in spamSignals)
+          if (!s.toLowerCase().contains('http')) s,
+      ],
+    )) {
+      return false;
+    }
+    if (!bodyLooksTransactional(body, ignorePhrases: ignorePhrases)) {
+      return false;
+    }
+    final amountMatch = _pickAmountMatch(body);
+    if (amountMatch == null) return true;
+    final amount = double.tryParse(amountMatch.group(1)!.replaceAll(',', ''));
+    if (amount == null || amount <= 0) return true;
+    return _direction(body, amountMatch.start) == null;
+  }
+
   /// Step-by-step diagnosis of how [parse] treats one message — backs the
   /// "Test a message" tool in the Cockpit → Import tab. Mirrors the real
   /// pipeline (dedup against existing transactions is not simulated).

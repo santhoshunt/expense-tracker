@@ -3,18 +3,29 @@ import 'package:provider/provider.dart';
 
 import '../providers/finance_provider.dart';
 import '../screens/add_transaction_sheet.dart';
+import '../services/safe_to_spend.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
 
 /// Calendar heatmap of money-out for one month (which DATES were hot) plus
 /// the recurring weekday pattern underneath (which DAYS are usually hot).
 /// Day cells tint toward the error colour with spend; tapping a day lists
-/// its transactions. Hour-of-day is deliberately not shown: midnight is the
+/// its transactions. Cells show the day's spend, and a dot marks days a
+/// bill falls due ([bills]); tapping one lists its payments and its bills.
+/// Hour-of-day is deliberately not shown: midnight is the
 /// app's "time unknown" sentinel and would fake a spike.
 class SpendingHeatmap extends StatelessWidget {
   final DateTime month;
 
-  const SpendingHeatmap({super.key, required this.month});
+  /// Unpaid bills to mark, from [billsDue]; the dashboard passes today to
+  /// the month's end for the current month and nothing for others.
+  final List<DueBill> bills;
+
+  const SpendingHeatmap({
+    super.key,
+    required this.month,
+    this.bills = const [],
+  });
 
   static const _weekdayLabels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
   static const _weekdayNames = [
@@ -39,9 +50,23 @@ class SpendingHeatmap extends StatelessWidget {
     final weeks = ((leading + daysInMonth) / 7).ceil();
     final weekdayAvg = finance.avgExpenseByWeekday();
     final maxAvg = weekdayAvg.fold(0.0, (m, v) => v > m ? v : m);
+    final billsByDay = <int, List<DueBill>>{};
+    for (final b in bills) {
+      if (b.due.year != month.year || b.due.month != month.month) continue;
+      (billsByDay[b.due.day] ??= []).add(b);
+    }
 
     Widget dayCell(int day) {
       final spend = byDay[day] ?? 0;
+      final dayBills = billsByDay[day] ?? const <DueBill>[];
+      final VoidCallback? open = spend == 0 && dayBills.isEmpty
+          ? null
+          : () => _showDaySheet(
+              context,
+              DateTime(month.year, month.month, day),
+              spend,
+              dayBills,
+            );
       final intensity = maxDay == 0 ? 0.0 : (spend / maxDay).clamp(0.0, 1.0);
       // Zero-spend days stay neutral; hot days deepen toward the error
       // tint. Once the fill is strong enough that the default text colour
@@ -58,7 +83,11 @@ class SpendingHeatmap extends StatelessWidget {
       final textColor = spend == 0
           ? scheme.onSurfaceVariant
           : intensity >= 0.35
-          ? onSwatch(fill)
+          // Opaque black, not onSwatch's black87: the 10sp amount sits on
+          // mid-hot fills where 87% black measured 4.2:1, under AA.
+          ? (onSwatch(fill).computeLuminance() < 0.5
+                ? Colors.black
+                : onSwatch(fill))
           : scheme.onSurface;
       return Expanded(
         child: AspectRatio(
@@ -68,31 +97,61 @@ class SpendingHeatmap extends StatelessWidget {
             child: Semantics(
               label:
                   '$day ${fmtMonth(month)}'
-                  '${spend == 0 ? '' : ', spent ${fmtMoney(spend)}'}',
-              button: spend > 0,
+                  '${spend == 0 ? '' : ', spent ${fmtMoney(spend)}'}'
+                  '${dayBills.isEmpty ? '' : ', ${dayBills.length} '
+                            '${dayBills.length == 1 ? 'bill' : 'bills'} due'}',
+              button: open != null,
+              // The InkWell's own semantics are excluded with the label's
+              // children, so the tap is exposed here for screen readers.
+              onTap: open,
               excludeSemantics: true,
               child: InkWell(
                 borderRadius: BorderRadius.circular(8),
-                onTap: spend == 0
-                    ? null
-                    : () => _showDaySheet(
-                        context,
-                        DateTime(month.year, month.month, day),
-                        spend,
-                      ),
+                onTap: open,
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     color: fill,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Center(
-                    child: Text(
-                      '$day',
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: textColor,
-                        fontWeight: spend == 0
-                            ? FontWeight.w400
-                            : FontWeight.w600,
+                  // Shrunk, never wrapped: a square about 40dp wide holds
+                  // the date, the amount and the bill dot at large fonts.
+                  child: Padding(
+                    padding: const EdgeInsets.all(2),
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '$day',
+                            style: Theme.of(context).textTheme.labelSmall
+                                ?.copyWith(
+                                  color: textColor,
+                                  fontWeight: spend == 0
+                                      ? FontWeight.w400
+                                      : FontWeight.w600,
+                                ),
+                          ),
+                          if (spend > 0)
+                            Text(
+                              fmtMoneyCompact(spend),
+                              maxLines: 1,
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(color: textColor, fontSize: 10),
+                            ),
+                          if (dayBills.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 1),
+                              child: Container(
+                                width: 5,
+                                height: 5,
+                                decoration: BoxDecoration(
+                                  color: textColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ),
@@ -135,60 +194,69 @@ class SpendingHeatmap extends StatelessWidget {
                 },
             ],
           ),
-        const SizedBox(height: 16),
-        Text('By weekday', style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 2),
-        Text(
-          'Average per weekday, all history.',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: 8),
-        for (var wd = 0; wd < 7; wd++)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 3),
-            child: Row(
-              children: [
-                // Both label boxes scale with the text: an unbreakable
-                // "Wed" in a fixed 36px box wraps mid-word ("We"/"d") at
-                // large system font sizes.
-                SizedBox(
-                  width: MediaQuery.textScalerOf(context).scale(36),
-                  child: Text(
-                    _weekdayNames[wd],
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: maxAvg == 0 ? 0 : weekdayAvg[wd] / maxAvg,
-                      minHeight: 8,
-                      color: scheme.error,
-                      backgroundColor: scheme.error.withValues(alpha: 0.15),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: MediaQuery.textScalerOf(context).scale(64),
-                  child: Text(
-                    fmtMoneyCompact(weekdayAvg[wd]),
-                    textAlign: TextAlign.right,
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                ),
-              ],
-            ),
+        // No history yet (only bills due): seven empty bars say nothing.
+        if (maxAvg > 0) ...[
+          const SizedBox(height: 16),
+          Text('By weekday', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 2),
+          Text(
+            'Average per weekday, all history.',
+            style: Theme.of(context).textTheme.bodySmall,
           ),
+          const SizedBox(height: 8),
+          for (var wd = 0; wd < 7; wd++)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                children: [
+                  // Both label boxes scale with the text: an unbreakable
+                  // "Wed" in a fixed 36px box wraps mid-word ("We"/"d") at
+                  // large system font sizes.
+                  SizedBox(
+                    width: MediaQuery.textScalerOf(context).scale(36),
+                    child: Text(
+                      _weekdayNames[wd],
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: maxAvg == 0 ? 0 : weekdayAvg[wd] / maxAvg,
+                        minHeight: 8,
+                        color: scheme.error,
+                        backgroundColor: scheme.error.withValues(alpha: 0.15),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: MediaQuery.textScalerOf(context).scale(64),
+                    child: Text(
+                      fmtMoneyCompact(weekdayAvg[wd]),
+                      textAlign: TextAlign.right,
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
       ],
     );
   }
 
-  /// One day's money-out rows; row tap opens the normal edit sheet.
-  void _showDaySheet(BuildContext context, DateTime day, double total) {
+  /// One day's money-out rows, then the bills due that day; a row tap
+  /// opens the normal edit sheet.
+  void _showDaySheet(
+    BuildContext context,
+    DateTime day,
+    double total,
+    List<DueBill> dayBills,
+  ) {
     final finance = context.read<FinanceProvider>();
     showModalBottomSheet<void>(
       context: context,
@@ -206,7 +274,9 @@ class SpendingHeatmap extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
                 child: Text(
-                  '${fmtDate(day)} · ${fmtMoney(total)} spent',
+                  total > 0
+                      ? '${fmtDate(day)} · ${fmtMoney(total)} spent'
+                      : fmtDate(day),
                   style: Theme.of(ctx).textTheme.titleSmall,
                 ),
               ),
@@ -242,6 +312,26 @@ class SpendingHeatmap extends StatelessWidget {
                     showAddTransactionSheet(context, existing: t);
                   },
                 ),
+              if (dayBills.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+                  child: Text('Due', style: Theme.of(ctx).textTheme.titleSmall),
+                ),
+                for (final b in dayBills)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.event_outlined, size: 20),
+                    title: Text(
+                      b.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: Text(
+                      fmtMoney(b.amount),
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+              ],
             ],
           ),
         );

@@ -236,6 +236,42 @@ void main() {
     expect(s.leftToday, closeTo((40000 - 22500 - 5000) / 12 - 2000, 1e-9));
   });
 
+  test('billsDue from today lists what is ahead, today included', () async {
+    final p = await ledger(
+      reminders: [rent, phone, bill('Past', 800, 12), bill('Milk', 60, 19)],
+    );
+    // Due today: `from` is 14:00, the due dates midnight. Both kinds must
+    // still count.
+    final gym = RecurringHit(
+      key: 'expense|gym',
+      label: 'Gym',
+      categoryId: 'food',
+      type: TxType.expense,
+      expectedAmount: 1500,
+      lastDate: DateTime(2026, 8, 19),
+      intervalDays: 31,
+      nextDue: DateTime(2026, 9, 19),
+    );
+    final due = billsDue(
+      p,
+      patterns: [gym],
+      hidden: const {},
+      from: now,
+      to: DateTime(2026, 9, 30),
+      now: now,
+    );
+    expect(
+      {for (final b in due) (b.label, b.due.day, b.amount)},
+      {
+        ('Gym', 19, 1500.0),
+        ('Milk', 19, 60.0),
+        ('Phone', 25, 1000.0),
+        ('Rent', 30, 5000.0),
+      },
+    );
+    // Soonest first.
+    expect(due.map((b) => b.due.day).toList(), [19, 19, 25, 30]);
+  });
   test('no cap, no figure', () async {
     expect(
       computeSafeToSpend(
