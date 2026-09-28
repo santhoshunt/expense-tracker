@@ -24,6 +24,7 @@ import '../services/upcoming_monitor.dart';
 import '../services/update_downloader.dart';
 import '../services/update_installer.dart';
 import '../services/update_service.dart';
+import '../utils/format.dart';
 import '../utils/haptics.dart';
 import '../widgets/glossy.dart';
 import '../widgets/lock_gate.dart';
@@ -167,6 +168,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       _scheduleRecap();
       _autoImport();
       _ensureNotificationPermission();
+      // Add it for me reminders record what came due while it was shut.
+      _postDueReminders();
       // Due reminders must run even on a quiet open — the budget listener
       // below only fires on data CHANGES, and a bill comes due without any.
       _checkUpcoming();
@@ -219,6 +222,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _checkForUpdate();
     // A new day moves Today and the pace marker even with no data change.
     _syncBudgetWidgets();
+    // A process kept alive past a due day records it on the way back.
+    _postDueReminders();
     final last = _lastAutoImportAt;
     if (last != null &&
         DateTime.now().difference(last) < const Duration(seconds: 5)) {
@@ -454,7 +459,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         trigger,
         import: _smsImport,
         notify: !front,
+        postReminders: false,
       );
+      // Reminder entries in this engine get their toast and Remove.
+      unawaited(_postDueReminders());
       final imported = result.imported;
       if (mounted && front && imported > 0) {
         showAppToastOn(
@@ -469,6 +477,43 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     } finally {
       _autoImporting = false;
     }
+  }
+
+  /// Records the expenses Add it for me reminders owe up to today, with a
+  /// toast whose Remove deletes them (the occurrences stay done, so they
+  /// are not added again). Background imports do the same silently.
+  Future<void> _postDueReminders() async {
+    if (!mounted) return;
+    final finance = context.read<FinanceProvider>();
+    // A ledger that failed to load must not be written to.
+    if (finance.loadWarnings.isNotEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    final List<String> ids;
+    try {
+      ids = await finance.postDueReminders(DateTime.now());
+    } catch (e) {
+      debugPrint('Reminder entries failed: $e');
+      return;
+    }
+    if (ids.isEmpty) return;
+    final wanted = ids.toSet();
+    final rows = [
+      for (final t in finance.transactions)
+        if (wanted.contains(t.id)) t,
+    ];
+    final message = rows.length == 1
+        ? 'Added ${rows.first.note} ${fmtMoney(rows.first.amount)} from its '
+              'reminder'
+        : 'Added ${ids.length} entries from reminders';
+    showAppToastOn(
+      messenger,
+      message,
+      tone: AppToastTone.success,
+      icon: Icons.event_repeat,
+      actionLabel: 'Remove',
+      onAction: () => finance.deleteTransactions(ids),
+      duration: const Duration(seconds: 6),
+    );
   }
 
   void _checkUpcoming() {

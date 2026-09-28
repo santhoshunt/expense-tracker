@@ -392,16 +392,19 @@ ThemeData _buildAppTheme({
       ),
     ),
     dividerTheme: DividerThemeData(color: border),
-    // Snackbars float as bordered pills above the nav bar. The explicit
-    // background keeps dark mode dark — the default inverseSurface flips the
-    // app's look. They clear with a sideways swipe (the Android-notification
-    // gesture people expect); the default only accepted a swipe down.
+    // Toasts are bordered pills just above the nav bar. The bar is FIXED
+    // (and drawn invisible by showAppToast, which paints the pill from
+    // these colours and shape) so the Scaffold lifts the Add button above
+    // it while it shows, the way WhatsApp does; a floating one sat over the
+    // button instead. The explicit background keeps dark mode dark — the
+    // default inverseSurface flips the app's look. They clear with a
+    // sideways swipe (the Android-notification gesture people expect); the
+    // default only accepted a swipe down.
     snackBarTheme: SnackBarThemeData(
-      behavior: SnackBarBehavior.floating,
+      behavior: SnackBarBehavior.fixed,
       backgroundColor: surface2,
       contentTextStyle: TextStyle(fontSize: 14, color: textPrimary),
       actionTextColor: accent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.button),
         side: BorderSide(color: border),

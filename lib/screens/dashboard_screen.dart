@@ -13,6 +13,7 @@ import '../services/merchant_stats.dart';
 import '../services/monthly_recap.dart';
 import '../services/recurring_detector.dart';
 import '../services/spend_comparison.dart';
+import '../services/safe_to_spend.dart';
 import '../services/subscriptions.dart';
 import '../services/upcoming_items.dart';
 import '../utils/app_theme.dart';
@@ -180,20 +181,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   /// Recurring detection scans the whole ledger — memoized on the provider's
   /// revision token so it reruns only when data actually changes.
-  Object? _recurringRev;
+  /// The Upcoming card's window of [_patterns] (what detectRecurring
+  /// keeps), filtered from the same scan.
+  Object? _recurringFrom;
   List<RecurringHit> _recurringHits = const [];
 
   List<RecurringHit> _recurring(FinanceProvider finance) {
-    if (!identical(_recurringRev, finance.revision)) {
-      _recurringRev = finance.revision;
-      _recurringHits = detectRecurring(
+    final now = DateTime.now();
+    final patterns = _patterns(finance, now);
+    if (!identical(_recurringFrom, patterns)) {
+      _recurringFrom = patterns;
+      _recurringHits = [
+        for (final h in patterns)
+          if (h.daysUntil(now) <= 14 && h.daysUntil(now) >= -7) h,
+      ];
+    }
+    return _recurringHits;
+  }
+
+  /// Every live pattern, not only the next fortnight's: safe to spend sets
+  /// aside the whole month's bills. Scans the ledger once per data change
+  /// or day.
+  Object? _patternsRev;
+  int? _patternsDay;
+  List<RecurringHit> _patternHits = const [];
+
+  List<RecurringHit> _patterns(FinanceProvider finance, DateTime now) {
+    // The whole date, not the day of the month: an untouched ledger a
+    // month later is still a new day.
+    final day = now.year * 10000 + now.month * 100 + now.day;
+    if (!identical(_patternsRev, finance.revision) || _patternsDay != day) {
+      _patternsRev = finance.revision;
+      _patternsDay = day;
+      _patternHits = detectRecurringPatterns(
         finance.transactions,
-        now: DateTime.now(),
+        now: now,
         alias: finance.merchantAlias,
         pinned: finance.subscriptionPins,
       );
     }
-    return _recurringHits;
+    return _patternHits;
   }
 
   /// Per-merchant totals scan every row's SMS body — memoized on
@@ -658,6 +685,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
           final budget = context.select<SettingsProvider, double>(
             (s) => s.monthlyBudget,
           );
+          // Hiding an Upcoming row changes the bills safe to spend sets
+          // aside.
+          context.select<SettingsProvider, String>(
+            (s) => hiddenListKey(s.hiddenUpcoming),
+          );
+          final now = DateTime.now();
+          // About today, so only under this month's figures.
+          final safe = budget <= 0 || _month != DateTime(now.year, now.month)
+              ? null
+              : computeSafeToSpend(
+                  finance,
+                  cap: budget,
+                  patterns: _patterns(finance, now),
+                  hidden: context.read<SettingsProvider>().hiddenUpcoming,
+                  now: now,
+                );
           return AnimatedPresence(
             visible: budget > 0 && !_yearMode,
             child: Padding(
@@ -665,6 +708,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: _BudgetCard(
                 spent: finance.budgetSpentInMonth(_month),
                 cap: budget,
+                safe: safe,
               ),
             ),
           );
@@ -1693,22 +1737,56 @@ class _UpcomingCard extends StatelessWidget {
               title: Text(r.name, style: Theme.of(ctx).textTheme.titleMedium),
               subtitle: Text('Due ${fmtDate(due)}'),
             ),
-            ListTile(
-              leading: const Icon(Icons.check_circle_outline),
-              title: const Text('Mark paid this month'),
-              onTap: () {
-                Navigator.pop(ctx);
-                final before = r;
-                finance.markReminderPaid(r.id, due);
-                showUndoSnackBar(
-                  context,
-                  '${r.name} marked paid',
-                  () => finance.updateReminder(before),
-                  icon: Icons.task_alt,
-                  tone: AppToastTone.success,
-                );
-              },
-            ),
+            if (r.autoAdd)
+              // It records its own expense: paying early means recording it
+              // now, since marking it paid alone would leave it out.
+              ListTile(
+                leading: const Icon(Icons.add_task),
+                title: const Text('Add it now'),
+                subtitle: const Text(
+                  'Paid early: records it today, not on the due day',
+                ),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  final messenger = ScaffoldMessenger.of(context);
+                  final before = r;
+                  final txId = await finance.addReminderPaymentNow(
+                    r.id,
+                    due,
+                    DateTime.now(),
+                  );
+                  if (txId == null) return;
+                  showAppToastOn(
+                    messenger,
+                    'Added ${r.name}',
+                    tone: AppToastTone.success,
+                    icon: Icons.add_task,
+                    actionLabel: 'Undo',
+                    onAction: () async {
+                      await finance.deleteTransactions([txId]);
+                      await finance.updateReminder(before);
+                    },
+                    duration: const Duration(seconds: 5),
+                  );
+                },
+              )
+            else
+              ListTile(
+                leading: const Icon(Icons.check_circle_outline),
+                title: const Text('Mark paid'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  final before = r;
+                  finance.markReminderPaid(r.id, due);
+                  showUndoSnackBar(
+                    context,
+                    '${r.name} marked paid',
+                    () => finance.updateReminder(before),
+                    icon: Icons.task_alt,
+                    tone: AppToastTone.success,
+                  );
+                },
+              ),
             ListTile(
               leading: const Icon(Icons.edit_outlined),
               title: const Text('Edit'),
@@ -2107,7 +2185,10 @@ class _BalanceCard extends StatelessWidget {
 class _BudgetCard extends StatelessWidget {
   final double spent;
   final double cap;
-  const _BudgetCard({required this.spent, required this.cap});
+
+  /// This month's safe to spend today; null under any other month.
+  final SafeToSpend? safe;
+  const _BudgetCard({required this.spent, required this.cap, this.safe});
 
   @override
   Widget build(BuildContext context) {
@@ -2166,11 +2247,28 @@ class _BudgetCard extends StatelessWidget {
                                 'Cockpit, Plan, Budgets. Green below 80%, orange '
                                 'from 80%, red above 95%. The ring stays full '
                                 'past 100% while the percentage keeps '
-                                'counting.',
+                                'counting. Safe to spend today sets aside the '
+                                'bills still due this month (not card bills or '
+                                'transfers) and spreads the rest over the days '
+                                'left.',
                             // Rounded the way the ring's centre label is.
-                            example: () =>
-                                '${fmtMoney(spent)} of ${fmtMoney(cap)} = '
-                                '${(pct * 100).round()}%',
+                            example: () {
+                              final line =
+                                  '${fmtMoney(spent)} of ${fmtMoney(cap)} = '
+                                  '${(pct * 100).round()}%';
+                              final s = safe;
+                              if (s == null || over || s.overCap) return line;
+                              final left =
+                                  cap - s.spentBeforeToday - s.billsDue;
+                              return '$line\n\nSafe to spend today: '
+                                  '${fmtMoney(cap)} − '
+                                  '${fmtMoney(s.spentBeforeToday)} spent − '
+                                  '${fmtMoney(s.billsDue)} bills due = '
+                                  '${fmtMoney(left)} over ${s.daysLeft} '
+                                  '${s.daysLeft == 1 ? 'day' : 'days'} = '
+                                  '${fmtMoney(s.dailyAllowance)} a day'
+                                  '${s.spentToday > 0 ? ', less ${fmtMoney(s.spentToday)} spent today' : ''}.';
+                            },
                             link: const InfoLink(
                               prompt: 'Want a different cap?',
                               label: 'Change the monthly cap',
@@ -2195,6 +2293,24 @@ class _BudgetCard extends StatelessWidget {
                         : '${fmtMoneyCompact(remaining)} left',
                     style: TextStyle(color: color, fontWeight: FontWeight.w700),
                   ),
+                  // Over the cap, the line above says it all; bills due
+                  // that eat the rest read as nothing left today.
+                  if (safe != null && !over) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      safe!.overCap
+                          // Confirmed spend is under the cap, but not with
+                          // the alerts still waiting for review.
+                          ? 'Over budget with rows to review'
+                          : safe!.leftToday >= 1
+                          ? '${fmtMoneyCompact(safe!.leftToday)} safe to '
+                                'spend today'
+                          : 'Nothing left to spend today',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                  ],
                 ],
               ),
             ),

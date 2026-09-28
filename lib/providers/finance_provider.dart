@@ -15,6 +15,7 @@ import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../services/budget.dart';
 import '../services/recurring_detector.dart';
+import '../services/reminder_schedule.dart';
 import '../services/sms_parser.dart';
 import '../services/transfer_pairing.dart';
 import '../utils/dates.dart';
@@ -1542,8 +1543,10 @@ class FinanceProvider extends ChangeNotifier {
         ),
       ),
     );
+    // A cash payment typed in for a reminder pays it too.
+    final paid = _markRemindersPaidBy([_transactions.last]);
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: paid);
     return id;
   }
 
@@ -2324,8 +2327,13 @@ class FinanceProvider extends ChangeNotifier {
     required int dayOfMonth,
     double? expectedAmount,
     required String categoryId,
+    SubscriptionCycle cycle = SubscriptionCycle.monthly,
+    int? anchorMonth,
+    bool autoAdd = false,
+    String? accountId,
   }) async {
-    final id = 'rem_${DateTime.now().microsecondsSinceEpoch}_${_idSeq++}';
+    final now = DateTime.now();
+    final id = 'rem_${now.microsecondsSinceEpoch}_${_idSeq++}';
     _reminders.add(
       Reminder(
         id: id,
@@ -2338,6 +2346,11 @@ class FinanceProvider extends ChangeNotifier {
             ? expectedAmount
             : null,
         categoryId: categoryId,
+        cycle: cycle,
+        anchorMonth: (anchorMonth ?? now.month).clamp(1, 12),
+        autoAdd: autoAdd,
+        accountId: accountId,
+        autoSince: autoAdd ? _dayKey(now) : null,
       ),
     );
     _sanitizeReminders();
@@ -2349,7 +2362,11 @@ class FinanceProvider extends ChangeNotifier {
   Future<void> updateReminder(Reminder updated) async {
     final i = _reminders.indexWhere((r) => r.id == updated.id);
     if (i == -1) return;
-    _reminders[i] = updated;
+    // Switching Add it for me on starts it from today: earlier months are
+    // never back-filled, even when it was on once before.
+    _reminders[i] = !_reminders[i].autoAdd && updated.autoAdd
+        ? updated.copyWith(autoSince: _dayKey(DateTime.now()))
+        : updated;
     _sanitizeReminders();
     notifyListeners();
     await _persist(reminders: true);
@@ -2386,6 +2403,46 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(reminders: true);
   }
 
+  /// An Add it for me occurrence paid early: records its expense dated
+  /// [paidOn] and marks the occurrence due on [due] done, so the due day
+  /// adds nothing. (Marking it paid alone would leave the expense out.)
+  /// Returns the new row's id, or null when the reminder is gone or has no
+  /// amount.
+  Future<String?> addReminderPaymentNow(
+    String id,
+    DateTime due,
+    DateTime paidOn,
+  ) async {
+    final i = _reminders.indexWhere((r) => r.id == id);
+    if (i == -1) return null;
+    final r = _reminders[i];
+    final amount = r.expectedAmount;
+    if (amount == null) return null;
+    final txId = _newId();
+    _transactions.add(
+      Tx(
+        id: txId,
+        type: TxType.expense,
+        categoryId: r.categoryId,
+        amount: amount,
+        note: r.name,
+        date: paidOn,
+      ),
+    );
+    final ai = r.accountId == null
+        ? -1
+        : _accounts.indexWhere((a) => a.id == r.accountId);
+    final accounts = ai != -1 && _assignInPlace(_transactions.length - 1, ai);
+    final key = monthKey(due);
+    final was = r.lastPaidMonth;
+    if (was == null || key.compareTo(was) > 0) {
+      _reminders[i] = r.copyWith(lastPaidMonth: key);
+    }
+    notifyListeners();
+    await _persist(tx: true, accounts: accounts, reminders: true);
+    return txId;
+  }
+
   /// Undo half of [markReminderPaid].
   Future<void> clearReminderPaid(String id) async {
     final i = _reminders.indexWhere((r) => r.id == id);
@@ -2401,10 +2458,130 @@ class FinanceProvider extends ChangeNotifier {
   bool _sanitizeReminders() {
     var changed = false;
     for (var i = 0; i < _reminders.length; i++) {
-      final r = _reminders[i];
+      var r = _reminders[i];
       final known = allCategories.any((c) => c.id == r.categoryId);
-      if (known && categoryById(r.categoryId).type == TxType.expense) continue;
-      _reminders[i] = r.copyWith(categoryId: 'other_expense');
+      if (!known || categoryById(r.categoryId).type != TxType.expense) {
+        r = r.copyWith(categoryId: 'other_expense');
+      }
+      // A deleted account: the added expenses then go on no account. Not
+      // while the accounts failed to load: they only look deleted.
+      final account = r.accountId;
+      if (account != null &&
+          !_loadWarnings.contains('accounts') &&
+          !_accounts.any((a) => a.id == account)) {
+        r = r.copyWith(clearAccountId: true);
+      }
+      if (!identical(r, _reminders[i])) {
+        _reminders[i] = r;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /// `yyyy-MM-dd` of [d]'s calendar date, for [Reminder.autoSince].
+  static String _dayKey(DateTime d) =>
+      '${monthKey(d)}-${d.day.toString().padLeft(2, '0')}';
+
+  /// Adds the expense for every due occurrence of each Add it for me
+  /// reminder up to today that is not recorded yet, and marks each one paid.
+  /// Runs on launch, on resume and in background imports; a second call the
+  /// same day adds nothing. Returns the ids of the rows it added.
+  Future<List<String>> postDueReminders(DateTime now) async {
+    final today = DateTime(now.year, now.month, now.day);
+    final added = <String>[];
+    var accountsTouched = false;
+    for (var i = 0; i < _reminders.length; i++) {
+      var r = _reminders[i];
+      final amount = r.expectedAmount;
+      if (!r.autoAdd || amount == null) continue;
+      final since = DateTime.tryParse(r.autoSince ?? '');
+      if (since == null) continue;
+      var from = DateTime(since.year, since.month, since.day);
+      // Everything up to the end of the month last recorded is done. By
+      // month, not by that month's occurrence: after a change of cycle or
+      // due month the recorded month may not be on the schedule any more,
+      // and walking back from autoSince would add old periods again.
+      final paid = DateTime.tryParse('${r.lastPaidMonth ?? ''}-01');
+      if (paid != null) {
+        final after = DateTime(paid.year, paid.month + 1);
+        if (after.isAfter(from)) from = after;
+      }
+      for (final due in reminderDueDatesBetween(r, from, today)) {
+        final id = _newId();
+        _transactions.add(
+          Tx(
+            id: id,
+            type: TxType.expense,
+            categoryId: r.categoryId,
+            amount: amount,
+            note: r.name,
+            date: due,
+          ),
+        );
+        final ai = r.accountId == null
+            ? -1
+            : _accounts.indexWhere((a) => a.id == r.accountId);
+        if (ai != -1 && _assignInPlace(_transactions.length - 1, ai)) {
+          accountsTouched = true;
+        }
+        added.add(id);
+        r = r.copyWith(lastPaidMonth: monthKey(due));
+      }
+      _reminders[i] = r;
+    }
+    if (added.isEmpty) return added;
+    notifyListeners();
+    await _persist(tx: true, accounts: accountsTouched, reminders: true);
+    return added;
+  }
+
+  /// Marks a plain reminder paid when one of [rows] is its payment: money
+  /// out of the same amount (to the rupee) dated from 3 days before to 7
+  /// days after a due date not yet marked. Each row pays at most one
+  /// reminder, the one due nearest to it. A row typed in by hand must also
+  /// share the reminder's category: a ₹499 grocery bill is not the ₹499
+  /// broadband. Add it for me reminders never match: they add their own
+  /// row, and a match would count a cash bill twice. Returns whether any
+  /// reminder changed; the caller persists.
+  bool _markRemindersPaidBy(Iterable<Tx> rows) {
+    var changed = false;
+    for (final t in rows) {
+      if (t.type != TxType.expense || t.suspectedSpam) continue;
+      final day = DateTime(t.date.year, t.date.month, t.date.day);
+      var best = -1;
+      var bestGap = 0;
+      DateTime? bestDue;
+      for (var i = 0; i < _reminders.length; i++) {
+        final r = _reminders[i];
+        final expected = r.expectedAmount;
+        if (r.autoAdd || expected == null) continue;
+        if ((t.amount - expected).abs() >= 1) continue;
+        if (t.source == TxSource.manual && t.categoryId != r.categoryId) {
+          continue;
+        }
+        // Every occurrence the row can pay: due 7 days before it to 3
+        // after (a day-31 bill paid on the 2nd included). Only forward of
+        // the mark, so a backfill of old alerts never reopens this month.
+        final was = r.lastPaidMonth;
+        for (final due in reminderDueDatesBetween(
+          r,
+          day.subtract(const Duration(days: 7)),
+          day.add(const Duration(days: 3)),
+        )) {
+          if (was != null && monthKey(due).compareTo(was) <= 0) continue;
+          final gap = day.difference(due).inDays.abs();
+          if (best == -1 || gap < bestGap) {
+            best = i;
+            bestGap = gap;
+            bestDue = due;
+          }
+        }
+      }
+      if (best == -1) continue;
+      _reminders[best] = _reminders[best].copyWith(
+        lastPaidMonth: monthKey(bestDue!),
+      );
       changed = true;
     }
     return changed;
@@ -3185,8 +3362,10 @@ class FinanceProvider extends ChangeNotifier {
   Future<void> deleteAccount(String id) async {
     _accounts.removeWhere((a) => a.id == id);
     _rebuildKeyIndex();
+    // Reminders paying from it now add their expenses on no account.
+    final reminders = _sanitizeReminders();
     notifyListeners();
-    await _persist(accounts: true);
+    await _persist(accounts: true, reminders: reminders);
   }
 
   /// Assigns a transaction to [accountId], moving ONLY that transaction.
@@ -3832,6 +4011,8 @@ class FinanceProvider extends ChangeNotifier {
   /// treated as the same bank alert sent twice. Fuzzy matching is only used to *skip* an import —
   /// never to touch existing user data.
   Future<(int, int)> addImported(List<ParsedTxn> parsed) async {
+    // Rows are only appended below, so everything from here on is new.
+    final firstNew = _transactions.length;
     var added = 0;
     var spamDropped = 0;
     // Duplicate lookups, built once per batch — a linear scan of the ledger
@@ -3973,8 +4154,10 @@ class FinanceProvider extends ChangeNotifier {
       added++;
     }
     if (added > 0) {
+      // A bank alert for a reminder's amount near its due day pays it.
+      final paid = _markRemindersPaidBy(_transactions.sublist(firstNew));
       notifyListeners();
-      await _persist(tx: true, accounts: true);
+      await _persist(tx: true, accounts: true, reminders: paid);
     }
     return (added, spamDropped);
   }
@@ -4234,7 +4417,9 @@ class FinanceProvider extends ChangeNotifier {
     // v15: transactions may carry `people` (split shares) and `repaidBy`.
     // v16: `tagColors` (tag key → ARGB) and `subscriptionPins` (recurring
     // key → cycle name).
-    'version': 16,
+    // v17: reminders may carry `cycle`, `anchorMonth`, `autoAdd`,
+    // `accountId` and `autoSince`.
+    'version': 17,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
@@ -4567,9 +4752,13 @@ class FinanceProvider extends ChangeNotifier {
     // changed" gate below must see it — appended-list emptiness alone would
     // skip the key-index rebuild and the persist.
     var accountKeysFolded = false;
+    // Imported account id -> the device account it folded into, so an
+    // imported reminder paying from it keeps paying from the same account.
+    final foldedInto = <String, String>{};
     for (final a in accounts) {
       if (acctIds.contains(a.id)) continue;
       final ownerIdx = _accounts.indexWhere((e) => e.keys.any(a.keys.contains));
+      if (ownerIdx != -1) foldedInto[a.id] = _accounts[ownerIdx].id;
       if (ownerIdx == -1) {
         newAccounts.add(a);
       } else if (!_accounts[ownerIdx].keys.containsAll(a.keys)) {
@@ -4613,8 +4802,26 @@ class FinanceProvider extends ChangeNotifier {
     };
     final reminderIds = _reminders.map((r) => r.id).toSet();
     final newReminders = [
-      ...?importedReminders?.where((r) => !reminderIds.contains(r.id)),
+      for (final r in importedReminders ?? const <Reminder>[])
+        if (!reminderIds.contains(r.id))
+          foldedInto.containsKey(r.accountId)
+              ? r.copyWith(accountId: foldedInto[r.accountId])
+              : r,
     ];
+    // A reminder on both sides keeps the device's copy, but the later paid
+    // month: the backup may carry Add it for me rows this device never
+    // added, and the older mark would add those months again.
+    var remindersAdvanced = false;
+    for (final r in importedReminders ?? const <Reminder>[]) {
+      final paid = r.lastPaidMonth;
+      if (paid == null) continue;
+      final i = _reminders.indexWhere((x) => x.id == r.id);
+      if (i == -1) continue;
+      final was = _reminders[i].lastPaidMonth;
+      if (was != null && paid.compareTo(was) <= 0) continue;
+      _reminders[i] = _reminders[i].copyWith(lastPaidMonth: paid);
+      remindersAdvanced = true;
+    }
     // Rules merge by id, existing wins. Order is match priority: imported
     // user rules slot in at the END of the device's user segment (device
     // rules keep top priority) while imported built-in-id rules append at
@@ -4686,6 +4893,7 @@ class FinanceProvider extends ChangeNotifier {
         newTagColors.isNotEmpty ||
         newPins.isNotEmpty ||
         newReminders.isNotEmpty ||
+        remindersAdvanced ||
         newRules.isNotEmpty ||
         newImportRules.isNotEmpty) {
       // Merged categories are registered above, so the invariant check sees
@@ -4706,7 +4914,7 @@ class FinanceProvider extends ChangeNotifier {
         groups: groupsChanged,
         budgets: newBudgets.isNotEmpty,
         aliases: newAliases.isNotEmpty,
-        reminders: newReminders.isNotEmpty,
+        reminders: newReminders.isNotEmpty || remindersAdvanced,
         rules: newRules.isNotEmpty,
         importRules: newImportRules.isNotEmpty,
         marks: newTagColors.isNotEmpty || newPins.isNotEmpty,

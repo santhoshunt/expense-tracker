@@ -9,9 +9,9 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/notification_service.dart';
 import '../services/recurring_detector.dart';
+import '../services/reminder_schedule.dart';
 import '../services/subscriptions.dart';
 import '../utils/contrast.dart';
-import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../widgets/budget_dialog.dart';
 import '../widgets/empty_state.dart';
@@ -375,10 +375,6 @@ class _SubscriptionTile extends StatelessWidget {
   Future<void> _actions(BuildContext context) async {
     final hit = item.hit;
     final marked = hit.pinned;
-    // Reminders repeat monthly only; a quarterly or yearly plan's would
-    // notify every month.
-    final canRemind =
-        (hit.cycle ?? SubscriptionCycle.monthly) == SubscriptionCycle.monthly;
     final choice = await showModalBottomSheet<String>(
       context: context,
       useSafeArea: true,
@@ -392,13 +388,12 @@ class _SubscriptionTile extends StatelessWidget {
               title: const Text('Rename'),
               onTap: () => Navigator.pop(ctx, 'rename'),
             ),
-            if (canRemind)
-              ListTile(
-                leading: const Icon(Icons.add_alert_outlined),
-                title: const Text('Make a reminder'),
-                subtitle: const Text('For bills that may stop showing in SMS'),
-                onTap: () => Navigator.pop(ctx, 'reminder'),
-              ),
+            ListTile(
+              leading: const Icon(Icons.add_alert_outlined),
+              title: const Text('Make a reminder'),
+              subtitle: const Text('For bills that may stop showing in SMS'),
+              onTap: () => Navigator.pop(ctx, 'reminder'),
+            ),
             if (marked) ...[
               ListTile(
                 leading: const Icon(Icons.autorenew),
@@ -439,6 +434,9 @@ class _SubscriptionTile extends StatelessWidget {
           dayOfMonth: hit.nextDue.day,
           amount: hit.expectedAmount,
           categoryId: hit.categoryId,
+          // Reminders repeat like the plan, in the month it is next due.
+          cycle: hit.cycle ?? SubscriptionCycle.monthly,
+          anchorMonth: hit.nextDue.month,
         );
       case 'hide':
         final settings = context.read<SettingsProvider>();
@@ -963,12 +961,13 @@ class _RemindersSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
-    final thisMonth = monthKey(DateTime.now());
+    final now = DateTime.now();
 
     String subtitle(Reminder r) => [
-      'Day ${r.dayOfMonth}',
+      reminderCycleLabel(r),
       if (r.expectedAmount != null) fmtMoneyCompact(r.expectedAmount!),
-      if (r.lastPaidMonth == thisMonth) 'paid this month',
+      if (r.autoAdd) 'adds itself',
+      if (reminderPaidThisPeriod(r, now)) 'paid',
     ].join(' · ');
 
     return FrostedPanel(

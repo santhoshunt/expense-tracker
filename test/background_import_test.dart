@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -116,5 +117,41 @@ void main() {
     await again.load();
     expect(again.autoImport, AutoImportFrequency.everySms);
     expect(again.toBackupMap()['autoImport'], 'everySms');
+  });
+
+  test("the app's own engine leaves reminder entries to itself", () async {
+    final finance = FinanceProvider();
+    await finance.load();
+    await finance.restoreReminder(
+      Reminder(
+        id: 'rem',
+        name: 'Rent',
+        dayOfMonth: 1,
+        categoryId: 'other_expense',
+        expectedAmount: 100,
+        autoAdd: true,
+        autoSince: '2020-01-01',
+        lastPaidMonth: '2020-01',
+      ),
+    );
+    final settings = SettingsProvider();
+    await settings.load();
+    await runBackgroundImport(
+      finance,
+      settings,
+      BackgroundTrigger.periodic,
+      import: CountingImport(),
+      notify: false,
+      postReminders: false,
+    );
+    expect(finance.transactions, isEmpty);
+    await runBackgroundImport(
+      finance,
+      settings,
+      BackgroundTrigger.periodic,
+      import: CountingImport(),
+      notify: false,
+    );
+    expect(finance.transactions, isNotEmpty);
   });
 }

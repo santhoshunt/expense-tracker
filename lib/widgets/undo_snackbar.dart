@@ -9,9 +9,10 @@ import '../utils/haptics.dart';
 /// (the destructive rose), [success] confirmations and saves (green).
 enum AppToastTone { success, change, removal, error, info }
 
-/// The app's toast: a floating pill (shape and colours come from the theme's
-/// snackBarTheme) led by a tinted status icon, so the outcome reads at a
-/// glance before the words do.
+/// The app's toast: a pill just above the nav bar (shape and colours come
+/// from the theme's snackBarTheme) led by a tinted status icon, so the
+/// outcome reads at a glance before the words do. The Add button moves up
+/// while it shows.
 ///
 /// A newer toast replaces the current one rather than stacking.
 void showAppToast(
@@ -126,12 +127,32 @@ void _showToast(
   // clearSnackBars, not hideCurrentSnackBar: held toasts replayed after an
   // unlock may still be queued, and a newer toast must not wait behind them.
   if (!queue) messenger.clearSnackBars();
+  final hasAction = actionLabel != null && onAction != null;
+  // The action can be tapped again during the exit animation.
+  var fired = false;
   messenger.showSnackBar(
     SnackBar(
       duration: duration,
+      // With no SnackBarAction, Flutter no longer keeps an actionable toast
+      // up for screen-reader users; they need the time to reach Undo.
+      persist:
+          hasAction &&
+          MediaQuery.maybeAccessibleNavigationOf(messenger.context) == true,
+      // The pill's shadow spills past the bar.
+      clipBehavior: Clip.none,
+      // A fixed bar makes the Scaffold lift the Add button above the toast
+      // while it shows. The bar itself is invisible; the pill inside is the
+      // toast, drawn from the theme's snackBarTheme colours and shape.
+      behavior: SnackBarBehavior.fixed,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      padding: EdgeInsets.zero,
+      shape: const RoundedRectangleBorder(),
       content: Builder(
         builder: (context) {
-          final scheme = Theme.of(context).colorScheme;
+          final theme = Theme.of(context);
+          final scheme = theme.colorScheme;
+          final bar = theme.snackBarTheme;
           final (fallback, color) = switch (tone) {
             AppToastTone.success => (Icons.check, AppColors.of(context).green),
             AppToastTone.change => (Icons.edit_outlined, scheme.primary),
@@ -139,26 +160,60 @@ void _showToast(
             AppToastTone.error => (Icons.error_outline, scheme.error),
             AppToastTone.info => (Icons.info_outline, scheme.onSurfaceVariant),
           };
-          return Row(
-            children: [
-              Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.15),
-                  shape: BoxShape.circle,
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: Material(
+              color: bar.backgroundColor ?? scheme.surfaceContainerHigh,
+              shape:
+                  bar.shape ??
+                  RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadius.button),
+                  ),
+              elevation: bar.elevation ?? 6,
+              clipBehavior: Clip.antiAlias,
+              child: Padding(
+                padding: EdgeInsetsDirectional.fromSTEB(
+                  16,
+                  hasAction ? 4 : 12,
+                  hasAction ? 4 : 16,
+                  hasAction ? 4 : 12,
                 ),
-                child: Icon(icon ?? fallback, size: 16, color: color),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(icon ?? fallback, size: 16, color: color),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text(message)),
+                    if (actionLabel != null && onAction != null)
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          foregroundColor:
+                              bar.actionTextColor ?? scheme.primary,
+                        ),
+                        onPressed: () {
+                          if (fired) return;
+                          fired = true;
+                          messenger.hideCurrentSnackBar(
+                            reason: SnackBarClosedReason.action,
+                          );
+                          onAction();
+                        },
+                        child: Text(actionLabel),
+                      ),
+                  ],
+                ),
               ),
-              const SizedBox(width: 12),
-              Expanded(child: Text(message)),
-            ],
+            ),
           );
         },
       ),
-      action: actionLabel == null || onAction == null
-          ? null
-          : SnackBarAction(label: actionLabel, onPressed: onAction),
     ),
   );
 }

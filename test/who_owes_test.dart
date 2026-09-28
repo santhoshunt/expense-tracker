@@ -607,12 +607,12 @@ void main() {
       expect(rows[back]!.repaidBy, 'Arun');
     });
 
-    test('JSON backup is v16 and restores people and payer', () async {
+    test('JSON backup is v17 and restores people and payer', () async {
       final p = await loaded();
       final bill = await dinner(p);
       await repaid(p, 'Priya', 500);
       final data = p.exportData();
-      expect(data['version'], 16);
+      expect(data['version'], 17);
 
       final fresh = await loaded();
       await fresh.importData(

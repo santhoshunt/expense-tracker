@@ -85,17 +85,24 @@ object HomeWidgets {
     }
 
     fun render(context: Context, manager: AppWidgetManager, id: Int) {
-        val provider = manager.getAppWidgetInfo(id)?.provider?.className ?: return
-        val data = readJson(context, DATA_KEY)
-        val theme = Theme(readJson(context, THEME_KEY))
-        val views = when (provider) {
-            MonthPaceWidgetProvider::class.java.name ->
-                pace(context, manager, id, data, theme)
-            UpcomingWidgetProvider::class.java.name -> upcoming(context, data, theme)
-            TodayAddWidgetProvider::class.java.name -> todayAdd(context, id, data, theme)
-            else -> return
+        // The system calls this from the widget broadcast, where an escaping
+        // exception kills the whole app process: a widget that cannot draw
+        // keeps its last picture instead.
+        try {
+            val provider = manager.getAppWidgetInfo(id)?.provider?.className ?: return
+            val data = readJson(context, DATA_KEY)
+            val theme = Theme(readJson(context, THEME_KEY))
+            val views = when (provider) {
+                MonthPaceWidgetProvider::class.java.name ->
+                    pace(context, manager, id, data, theme)
+                UpcomingWidgetProvider::class.java.name -> upcoming(context, data, theme)
+                TodayAddWidgetProvider::class.java.name -> todayAdd(context, id, data, theme)
+                else -> return
+            }
+            manager.updateAppWidget(id, views)
+        } catch (_: Exception) {
+            // Drawn again on the next data change or 30-minute redraw.
         }
-        manager.updateAppWidget(id, views)
     }
 
     private fun openApp(context: Context, id: Int): PendingIntent =
@@ -300,6 +307,34 @@ object HomeWidgets {
                 else -> "${t.optString("spentLabel")} · $count payment${if (count == 1) "" else "s"}"
             }
         )
+
+        // Safe to spend: today's figure, or the one worked out for a later
+        // day of the same month. Hidden without a budget and past the
+        // month's end, until the app writes a new snapshot.
+        val safe = data?.optJSONObject("safe")
+        val safeLabel = safe?.let { s ->
+            if (!s.has("day")) return@let null
+            val offset = today() - s.optLong("day")
+            when {
+                offset == 0L -> s.optString("label")
+                offset > 0L -> {
+                    val next = s.optJSONArray("next")
+                    if (next != null && offset <= next.length()) {
+                        next.optString((offset - 1).toInt())
+                    } else {
+                        null
+                    }
+                }
+                else -> null
+            }?.ifEmpty { null }
+        }
+        views.setViewVisibility(
+            R.id.hw_safe_row,
+            if (safeLabel == null) View.GONE else View.VISIBLE
+        )
+        views.setTextColor(R.id.hw_safe_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_safe_amount, theme.text)
+        views.setTextViewText(R.id.hw_safe_amount, safeLabel ?: "")
 
         // Dark or white label on the accent, whichever reads better.
         views.setInt(R.id.hw_add_bg, "setColorFilter", theme.accent)

@@ -134,6 +134,7 @@ Future<BackgroundImportResult> runBackgroundImport(
   required SmsImportService import,
   bool syncWidgets = false,
   bool notify = true,
+  bool postReminders = true,
 }) async {
   var imported = 0;
   var ok = true;
@@ -150,6 +151,18 @@ Future<BackgroundImportResult> runBackgroundImport(
     } catch (e) {
       ok = false;
       debugPrint('Background import failed: $e');
+    }
+  }
+  // Add it for me reminders due while the app was shut, before the widgets
+  // read the totals. Not over a ledger that failed to load. The app's own
+  // engine passes [postReminders] false and adds them itself, with the toast
+  // that offers Remove.
+  if (postReminders && finance.loadWarnings.isEmpty) {
+    try {
+      await finance.postDueReminders(DateTime.now());
+    } catch (e) {
+      // The import itself still ran; the next open retries these.
+      debugPrint('Background reminder entries failed: $e');
     }
   }
   if (syncWidgets) {

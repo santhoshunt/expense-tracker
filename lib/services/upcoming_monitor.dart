@@ -8,6 +8,7 @@ import 'card_bill.dart';
 import 'notification_service.dart';
 import 'recurring_detector.dart';
 import 'reminder_schedule.dart';
+import 'upcoming_items.dart';
 
 /// Fires "card bill due" and "recurring payment expected" notifications.
 ///
@@ -117,6 +118,10 @@ class UpcomingMonitor {
       );
       for (final h in hits) {
         if (settings.hiddenUpcoming.contains(h.key)) continue;
+        // Its reminder notifies (or, adding itself, needs no reminding).
+        if (finance.reminders.any((r) => reminderCoversHit(r, h, now))) {
+          continue;
+        }
         final days = h.daysUntil(now);
         if (days > recurringWindowDays) continue;
         checks.add((
@@ -132,6 +137,8 @@ class UpcomingMonitor {
       }
 
       for (final r in finance.reminders) {
+        // Add it for me records the expense itself: nothing to remind.
+        if (r.autoAdd) continue;
         final due = reminderNextDue(r, now);
         final days = reminderDaysUntil(r, now);
         if (days > reminderWindowDays) continue;

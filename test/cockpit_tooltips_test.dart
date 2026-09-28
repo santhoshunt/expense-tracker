@@ -279,7 +279,7 @@ void main() {
     await expectTip(tester, 'Reminders', 'Reminders notify only when');
     await tester.tap(find.text('New reminder'));
     await pumpThrough(tester);
-    await expectTip(tester, 'Due day of month', 'Days 29 to 31 fall');
+    await expectTip(tester, 'Due day', 'Days 29 to 31 fall');
     await expectTip(tester, 'Category', 'Sets the icon and colour');
     expect(
       find.textContaining('notifies from 2 days before, when you open the app'),

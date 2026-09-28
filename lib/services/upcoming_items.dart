@@ -91,6 +91,8 @@ List<UpcomingItem> buildUpcomingItems(
   }
   for (final h in hits) {
     if (hidden.contains(h.key)) continue;
+    // A reminder for the same payment is its row already.
+    if (finance.reminders.any((r) => reminderCoversHit(r, h, now))) continue;
     final days = h.daysUntil(now);
     items.add(
       UpcomingItem(
@@ -127,4 +129,28 @@ List<UpcomingItem> buildUpcomingItems(
   }
   items.sort((a, b) => a.due.compareTo(b.due));
   return items;
+}
+
+/// Whether reminder [r] already stands for the payment [h] was detected
+/// from, so the two show as one row (and count once in safe to spend):
+/// - an Add it for me reminder whose name reads as the hit's payee: it
+///   notes its own rows with its name, which the detector then groups;
+/// - any reminder in the hit's category expecting the same amount (to the
+///   rupee) due within 3 days of the hit's next date.
+bool reminderCoversHit(Reminder r, RecurringHit h, DateTime now) {
+  if (h.type != TxType.expense) return false;
+  if (r.autoAdd) {
+    final name = r.name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
+        .trim();
+    if (name.isNotEmpty && h.key == 'expense|$name') return true;
+  }
+  final expected = r.expectedAmount;
+  if (expected == null || (expected - h.expectedAmount).abs() >= 1) {
+    return false;
+  }
+  if (r.categoryId != h.categoryId) return false;
+  final hitDue = DateTime(h.nextDue.year, h.nextDue.month, h.nextDue.day);
+  return reminderNextDue(r, now).difference(hitDue).inDays.abs() <= 3;
 }

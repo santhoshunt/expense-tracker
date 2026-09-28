@@ -80,9 +80,11 @@ SubscriptionSummary buildSubscriptions(
     final item = SubscriptionItem(
       hit: h,
       // A marked plan charges exactly its cycle: 12, 4 or 1 payment a year.
-      yearly: cycle != null
-          ? h.expectedAmount * 12 / cycle.months
-          : h.expectedAmount * 365 / h.intervalDays,
+      // Detection only finds monthly patterns (a 25 to 35-day median gap)
+      // and the row reads "monthly", so a detected plan is 12 payments,
+      // not 365 days over its average gap.
+      yearly:
+          h.expectedAmount * 12 / (cycle ?? SubscriptionCycle.monthly).months,
       priceRise: _priceRise(h),
     );
     if (hidden.contains(h.key)) {

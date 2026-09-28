@@ -89,4 +89,52 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byIcon(Icons.info_outline), findsOneWidget);
   });
+
+  testWidgets('a toast lifts the Add button instead of covering it', (
+    tester,
+  ) async {
+    late BuildContext ctx;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: theme,
+        home: Scaffold(
+          body: Builder(
+            builder: (c) {
+              ctx = c;
+              return const SizedBox.expand();
+            },
+          ),
+          floatingActionButton: FloatingActionButton(
+            onPressed: () {},
+            child: const Icon(Icons.add),
+          ),
+          bottomNavigationBar: const SizedBox(height: 80),
+        ),
+      ),
+    );
+    final fab = find.byType(FloatingActionButton);
+    final before = tester.getRect(fab);
+    showUndoSnackBar(ctx, 'Deleted Food', () {}, icon: Icons.delete_outline);
+    await tester.pumpAndSettle();
+    final during = tester.getRect(fab);
+    final toast = tester.getRect(find.text('Deleted Food'));
+    expect(during.bottom, lessThan(before.bottom));
+    // Above the toast, not over it.
+    expect(during.bottom, lessThanOrEqualTo(toast.top));
+    // Back down once it goes.
+    ScaffoldMessenger.of(ctx).hideCurrentSnackBar();
+    await tester.pumpAndSettle();
+    expect(tester.getRect(fab), before);
+  });
+
+  testWidgets('the action closes the toast', (tester) async {
+    final ctx = await host(tester);
+    var taps = 0;
+    showUndoSnackBar(ctx, 'Deleted Food', () => taps++, icon: Icons.delete);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Undo'));
+    await tester.pumpAndSettle();
+    expect(taps, 1);
+    expect(find.text('Deleted Food'), findsNothing);
+  });
 }

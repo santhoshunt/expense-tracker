@@ -22,6 +22,7 @@ import '../utils/contrast.dart';
 import '../utils/haptics.dart';
 import '../utils/search_text.dart';
 import '../widgets/category_chip_label.dart';
+import '../widgets/cycle_label.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
@@ -2020,7 +2021,7 @@ class _BulkSubscriptionSheet extends StatelessWidget {
                   Expanded(
                     child: FilledButton.tonal(
                       onPressed: () => Navigator.pop(context, c),
-                      child: Text(c.label),
+                      child: cycleLabel(c.label),
                     ),
                   ),
                 ],

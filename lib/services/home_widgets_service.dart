@@ -11,6 +11,7 @@ import '../providers/settings_provider.dart';
 import '../utils/format.dart';
 import 'budget_widget_service.dart';
 import 'recurring_detector.dart';
+import 'safe_to_spend.dart';
 import 'spend_comparison.dart';
 import 'upcoming_items.dart';
 
@@ -39,18 +40,25 @@ class HomeWidgetsService {
   Object? _hitsRev;
   int? _hitsDay;
   List<RecurringHit> _hits = const [];
+  List<RecurringHit> _patterns = const [];
 
   List<RecurringHit> _recurring(FinanceProvider finance, DateTime now) {
     final day = epochDay(now);
     if (!identical(_hitsRev, finance.revision) || _hitsDay != day) {
       _hitsRev = finance.revision;
       _hitsDay = day;
-      _hits = detectRecurring(
+      // The whole month's, for safe to spend's bills; Upcoming's window of
+      // them is what detectRecurring would keep.
+      _patterns = detectRecurringPatterns(
         finance.transactions,
         now: now,
         alias: finance.merchantAlias,
         pinned: finance.subscriptionPins,
       );
+      _hits = [
+        for (final h in _patterns)
+          if (h.daysUntil(now) <= 14 && h.daysUntil(now) >= -7) h,
+      ];
     }
     return _hits;
   }
@@ -59,7 +67,13 @@ class HomeWidgetsService {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     final now = DateTime.now();
     final json = jsonEncode(
-      buildHomeWidgetSnapshot(finance, settings, now, _recurring(finance, now)),
+      buildHomeWidgetSnapshot(
+        finance,
+        settings,
+        now,
+        _recurring(finance, now),
+        patterns: _patterns,
+      ),
     );
     final theme = jsonEncode(
       buildWidgetTheme(
@@ -88,19 +102,35 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
   FinanceProvider finance,
   SettingsProvider settings,
   DateTime now,
-  List<RecurringHit> hits,
-) {
+  List<RecurringHit> hits, {
+  List<RecurringHit>? patterns,
+}) {
   final month = DateTime(now.year, now.month);
   final spent = finance.expenseInMonth(month);
   final cap = settings.monthlyBudget;
   final today = finance.spendOnDay(now);
+  final allUpcoming = buildUpcomingItems(
+    finance,
+    hits: hits,
+    hidden: settings.hiddenUpcoming,
+    now: now,
+  );
+  final safe = computeSafeToSpend(
+    finance,
+    cap: cap,
+    patterns:
+        patterns ??
+        detectRecurringPatterns(
+          finance.transactions,
+          now: now,
+          alias: finance.merchantAlias,
+          pinned: finance.subscriptionPins,
+        ),
+    hidden: settings.hiddenUpcoming,
+    now: now,
+  );
   final upcoming = [
-    for (final u in buildUpcomingItems(
-      finance,
-      hits: hits,
-      hidden: settings.hiddenUpcoming,
-      now: now,
-    ))
+    for (final u in allUpcoming)
       // Bills only: no salary or interest, and no card cycle that owes
       // nothing yet.
       if (u.type == TxType.expense && !u.muted && u.days >= -7) u,
@@ -132,5 +162,22 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       'spentLabel': fmtMoneyTidy(today.spent),
       'count': today.count,
     },
+    // Today's figure plus one per later day of this month (what each would
+    // allow if nothing more is spent), so the widget moves on after
+    // midnight without the app; past the month's end it hides the row.
+    if (safe != null)
+      'safe': {
+        'day': epochDay(now),
+        'label': _safeLabel(safe, safe.leftToday),
+        'next': [
+          for (var d = safe.today + 1; d < safe.today + safe.daysLeft; d++)
+            _safeLabel(safe, safe.allowanceOn(d) ?? 0),
+        ],
+      },
   };
+}
+
+String _safeLabel(SafeToSpend safe, double amount) {
+  if (safe.overCap) return 'Over budget';
+  return amount < 1 ? fmtMoneyTidy(0) : fmtMoneyTidy(amount);
 }

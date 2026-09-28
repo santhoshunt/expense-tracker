@@ -8,6 +8,7 @@ import '../providers/settings_provider.dart';
 import '../services/recurring_detector.dart';
 import '../services/subscriptions.dart';
 import '../utils/format.dart';
+import '../widgets/cycle_label.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/undo_snackbar.dart';
@@ -323,7 +324,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           showSelectedIcon: false,
           segments: [
             for (final c in SubscriptionCycle.values)
-              ButtonSegment(value: c, label: Text(c.label)),
+              ButtonSegment(value: c, label: cycleLabel(c.label)),
           ],
           selected: {cycle},
           onSelectionChanged: (s) => setState(() {

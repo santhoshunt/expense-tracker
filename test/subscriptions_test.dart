@@ -56,14 +56,16 @@ void main() {
     expect(s.hidden, isEmpty);
   });
 
-  test('yearly and monthly cost from the usual amount and interval', () {
+  test('a detected plan costs 12 payments a year, whatever its gap', () {
     final s = buildSubscriptions(netflix, now: now);
     final item = s.active.single;
-    // Median of the last three (499, 499, 649) over a 31-day interval.
+    // Median of the last three (499, 499, 649) over a 31-day interval. The
+    // row reads monthly, so a year is 12 payments: 365 / 31 made a 499
+    // plan cost 489.92 a month, contradicting its own amount.
     expect(item.hit.expectedAmount, 499);
     expect(item.hit.intervalDays, 31);
-    expect(item.yearly, closeTo(499 * 365 / 31, 1e-9));
-    expect(item.monthly, closeTo(item.yearly / 12, 1e-9));
+    expect(item.yearly, 499 * 12);
+    expect(item.monthly, 499);
     expect(s.monthlyTotal, closeTo(item.monthly, 1e-9));
     expect(s.yearlyTotal, closeTo(item.yearly, 1e-9));
   });
