@@ -20,6 +20,13 @@ void main() {
   });
 
   Future<SettingsProvider> pump(WidgetTester tester, int tab) async {
+    // Tall enough for a whole page's rows, each with its 48dp Open/Folded
+    // target, so the drags below never start off screen. On a phone the
+    // page is longer than the screen and the list auto-scrolls during a
+    // drag: it is the page's only scrollable.
+    tester.view.physicalSize = const Size(800, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     final p = FinanceProvider();
     await p.load();
     final s = SettingsProvider();
@@ -43,7 +50,30 @@ void main() {
     expect(find.text('Trends'), findsOneWidget);
     expect(find.text('Breakdown'), findsOneWidget);
     expect(find.text('Top merchants'), findsOneWidget);
-    expect(find.text('Starts folded'), findsWidgets);
+    expect(find.text('Folded'), findsWidgets);
+  });
+
+  testWidgets('Open / Folded sets how a section starts', (tester) async {
+    final s = await pump(tester, kCockpitTabDashBreakdown);
+    expect(s.sectionOpen(DashboardSection.merchants), isFalse);
+    await tester.tap(find.bySemanticsLabel('Top merchants, starts folded'));
+    await tester.pumpAndSettle();
+    expect(s.sectionOpen(DashboardSection.merchants), isTrue);
+    // Stored, the same state a tap on the dashboard heading sets.
+    final again = SettingsProvider();
+    await again.load();
+    expect(again.sectionOpen(DashboardSection.merchants), isTrue);
+    expect(find.bySemanticsLabel('Top merchants, starts open'), findsOneWidget);
+    // A hidden section says so instead.
+    await tester.tap(find.bySemanticsLabel('Show Top merchants'));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.widgetWithText(ListTile, 'Top merchants'),
+        matching: find.text('Hidden'),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('a switch hides a section', (tester) async {

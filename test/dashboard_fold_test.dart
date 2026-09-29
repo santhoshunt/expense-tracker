@@ -159,6 +159,85 @@ void main() {
     expect(find.text('Categories vs usual'), findsOneWidget);
   });
 
+  testWidgets('every Trends and Breakdown heading carries its tip', (
+    tester,
+  ) async {
+    await pump(tester);
+    final seen = <String, DashboardFold>{};
+    for (final view in ['Trends', 'Breakdown']) {
+      await openDashboardView(tester, view);
+      for (var i = 0; i < 12; i++) {
+        for (final f in tester.widgetList<DashboardFold>(
+          find.byType(DashboardFold),
+        )) {
+          seen[(f.key! as ValueKey<String>).value] = f;
+        }
+        await tester.drag(verticalScrollable(), const Offset(0, -300));
+        await tester.pumpAndSettle();
+      }
+    }
+    expect(
+      seen.keys,
+      containsAll([
+        for (final s in [
+          'pace',
+          'previousMonth',
+          'usual',
+          'categoryComparison',
+          'sixMonths',
+          'donut',
+          'byCategory',
+          'byTags',
+          'merchants',
+          'heatmap',
+        ])
+          'fold-$s',
+      ]),
+    );
+    for (final e in seen.entries) {
+      expect(e.value.tip, isNotNull, reason: e.key);
+    }
+  });
+
+  testWidgets('an open Trends card leaves its tip to the heading', (
+    tester,
+  ) async {
+    await pump(tester);
+    await openDashboardView(tester, 'Trends');
+    // Open by default, with its own card title and no second tip.
+    expect(fold(tester, 'pace').open, isTrue);
+    expect(find.bySemanticsLabel('About This month so far'), findsOneWidget);
+    await openDashboardSection(tester, 'categoryComparison');
+    expect(find.bySemanticsLabel('About Categories vs usual'), findsOneWidget);
+  });
+
+  testWidgets('Last 6 months folds to the finished months\' average', (
+    tester,
+  ) async {
+    await pump(tester);
+    await openDashboardView(tester, 'Trends');
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('fold-sixMonths')),
+      300,
+      scrollable: verticalScrollable(),
+    );
+    // 400 last month. The month before starts on the 15th, so it is not
+    // fully on record, and this month is still running.
+    expect(fold(tester, 'sixMonths').summary, '₹400 a month on average');
+    // A month back: last month is still a finished month. An average
+    // anchored on the shown month would drop it and have nothing left.
+    await tester.drag(verticalScrollable(), const Offset(0, 4000));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('fold-sixMonths')),
+      300,
+      scrollable: verticalScrollable(),
+    );
+    expect(fold(tester, 'sixMonths').summary, '₹400 a month on average');
+  });
+
   testWidgets('the Overview never folds', (tester) async {
     await pump(tester);
     expect(find.byType(DashboardFold), findsNothing);

@@ -6,7 +6,16 @@ import '../services/spend_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
+import 'dashboard_fold.dart';
 import 'info_tip.dart';
+
+/// "This month so far"'s tip; the Trends fold heading shows it too.
+const String kPaceTipMessage =
+    'Spending from the 1st to today, against the same days '
+    'of last month, so a half-finished month is not '
+    'measured against a whole one. Budgets show here once '
+    'they reach 80% of their limit. For the first $kRecapDays days, '
+    'last month\'s recap shows on the Overview instead.';
 
 /// Colour for a spending change: red for more, green for less, blue for
 /// about the same. Same rule as the comparison cards.
@@ -204,15 +213,12 @@ class MonthPaceCard extends StatelessWidget {
                 Flexible(
                   child: Text('$monthName so far', style: text.titleMedium),
                 ),
-                const InfoTip(
-                  title: 'This month so far',
-                  message:
-                      'Spending from the 1st to today, against the same days '
-                      'of last month, so a half-finished month is not '
-                      'measured against a whole one. Budgets show here once '
-                      'they reach 80% of their limit. Last month\'s recap '
-                      'shows here instead for the first $kRecapDays days.',
-                ),
+                // A fold heading above carries the tip already.
+                if (!DashboardFoldScope.of(context))
+                  const InfoTip(
+                    title: 'This month so far',
+                    message: kPaceTipMessage,
+                  ),
               ],
             ),
             Text(

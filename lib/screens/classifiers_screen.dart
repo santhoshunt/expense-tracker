@@ -226,6 +226,10 @@ class _CockpitHub extends StatelessWidget {
                 radius: BorderRadius.circular(20),
                 child: ListTile(
                   isThreeLine: true,
+                  // Three-line tiles pin the icons to the top; the cards
+                  // differ in height, so they sat at a different spot on
+                  // each one.
+                  titleAlignment: ListTileTitleAlignment.center,
                   leading: Icon(g.icon),
                   title: Text(g.title),
                   subtitle: Column(

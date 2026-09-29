@@ -57,7 +57,9 @@ void main() {
     await p.addImported([txn(ref: 'REF1')]);
     final (added, _) = await p.addImported([
       txn(ref: 'REF1'),
-      txn(ref: 'REF2'),
+      // Another payment's alert quotes its own ref, so its text differs:
+      // the same text, sender and time is the stored message again.
+      txn(ref: 'REF2', rawBody: 'Rs.100 debited at SWIGGY Ref REF2'),
     ]);
     expect(added, 1);
     expect(p.pendingTransactions.length, 2);

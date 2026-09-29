@@ -181,7 +181,8 @@ void main() {
 
     testWidgets('after it opens this month so far on Trends', (tester) async {
       recapClock = () => DateTime(now.year, now.month, 20, 10);
-      // Folded by the user: the note opens it.
+      // Folded by the user: the note opens it for this visit, and the
+      // user's choice of how it starts stays.
       SharedPreferences.setMockInitialValues({
         'dashboard_layout_v1': '{"pages":{},"open":{"pace":false}}',
       });
@@ -189,8 +190,14 @@ void main() {
       final settings = tester
           .element(find.byType(HomeScreen))
           .read<SettingsProvider>();
-      expect(settings.sectionOpen(DashboardSection.pace), isTrue);
+      expect(settings.sectionOpen(DashboardSection.pace), isFalse);
       expect(find.byType(MonthPaceCard).hitTestable(), findsOneWidget);
+      // Choosing Folded afterwards (Cockpit) folds it again.
+      await settings.setSectionOpen(DashboardSection.pace, true);
+      await settle(tester);
+      await settings.setSectionOpen(DashboardSection.pace, false);
+      await settle(tester);
+      expect(find.byType(MonthPaceCard).hitTestable(), findsNothing);
       expect(find.text('This month vs last month'), findsOneWidget);
     });
   });

@@ -177,8 +177,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           title: s.title ?? id.label,
           summary: s.summary,
           tip: s.tip,
-          open: settings.sectionOpen(id),
-          onChanged: (v) => settings.setSectionOpen(id, v),
+          open: _openedForVisit.contains(id) || settings.sectionOpen(id),
+          onChanged: (v) {
+            // A tap is the user's choice again, and sticks.
+            if (_openedForVisit.remove(id)) setState(() {});
+            settings.setSectionOpen(id, v);
+          },
           children: s.body(),
         ),
       );
@@ -189,6 +193,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   late DateTime _month;
+
+  /// Sections a recap notification opened for this visit, without changing
+  /// how they start next time. The visit ends on leaving Trends or on any
+  /// stored fold change ([_openedAtLayout] is the layout it began under).
+  final Set<DashboardSection> _openedForVisit = {};
+  String? _openedAtLayout;
 
   /// Year view: the stat cards, category breakdown and bar chart cover
   /// `_month.year`; the month-only sections (budgets, merchants, heatmap,
@@ -230,9 +240,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _setView(recapWeek ? DashboardView.overview : DashboardView.trends);
     // Trends folds: the pace card is only there to see once opened, and
     // only fully laid out once the fold has finished opening.
+    // Opened for this visit only: how the section starts is the user's
+    // choice (Cockpit, or a tap on its heading), not the notification's.
     final settings = context.read<SettingsProvider>();
-    final opening = !recapWeek && !settings.sectionOpen(DashboardSection.pace);
-    if (opening) settings.setSectionOpen(DashboardSection.pace, true);
+    final opening =
+        !recapWeek &&
+        !settings.sectionOpen(DashboardSection.pace) &&
+        !_openedForVisit.contains(DashboardSection.pace);
+    if (opening) {
+      setState(() {
+        _openedForVisit.add(DashboardSection.pace);
+        _openedAtLayout = settings.dashboardLayoutKey;
+      });
+    }
     final key = recapWeek ? _recapKey : _paceKey;
     // Off-screen pages are disposed, so after a page switch the card
     // exists only once its view has slid in: try after this frame, and
@@ -622,7 +642,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final finance = context.watch<FinanceProvider>();
     // A section moved, hidden or folded, and a bill hidden (subscriptions,
     // the heatmap's dots), rebuild the pages.
-    context.select<SettingsProvider, String>((s) => s.dashboardLayoutKey);
+    final layoutKey = context.select<SettingsProvider, String>(
+      (s) => s.dashboardLayoutKey,
+    );
+    // A stored fold change (a heading tap, Cockpit, Reset) is the user's
+    // word again: the notification's one-visit opening ends.
+    if (_openedForVisit.isNotEmpty && layoutKey != _openedAtLayout) {
+      _openedForVisit.clear();
+    }
     // The pace card on Trends reads the cap. The page lists build lazily
     // inside each page's Builder, so selects belong here, not in them.
     context.select<SettingsProvider, double>((s) => s.monthlyBudget);
@@ -1024,6 +1051,41 @@ class _DashboardScreenState extends State<DashboardScreen> {
           break;
         }
       }
+      final thisMonth = DateTime(today.year, today.month);
+      final sixMonthsTitle = _yearMode
+          ? 'Months of $year'
+          : _month == thisMonth
+          ? 'Last 6 months'
+          : '6 months to ${fmtMonth(_month)}';
+      // The chart's months that have ended and are fully on record: a
+      // running month, one before the records, one they start part-way
+      // through or one with nothing recorded (an import gap) would drag it
+      // down. The usual month skips those too.
+      final oldest = finance.transactions.isEmpty
+          ? null
+          : finance.transactions.last.date;
+      final firstMonth = oldest == null
+          ? null
+          : DateTime(oldest.year, oldest.month + (oldest.day == 1 ? 0 : 1));
+      final recorded = finance.monthsWithData.toSet();
+      final finished = [
+        for (final m
+            in _yearMode
+                ? [for (var m = 1; m <= 12; m++) DateTime(year, m)]
+                : [
+                    for (var i = 5; i >= 0; i--)
+                      DateTime(_month.year, _month.month - i),
+                  ])
+          if (m.isBefore(thisMonth) &&
+              firstMonth != null &&
+              !m.isBefore(firstMonth) &&
+              recorded.contains(m))
+            m,
+      ];
+      final sixMonthAverage = finished.isEmpty
+          ? null
+          : finished.fold<double>(0, (s, m) => s + finance.expenseInMonth(m)) /
+                finished.length;
       final sections = <DashboardSection, _DashSection>{
         // This month so far, once the recap week is over. About today's
         // month, so only while the selector shows it.
@@ -1037,7 +1099,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           summary: pace == null
               ? null
               : '${fmtMoneyCompact(pace.comparison.vsPrevious.actual)} so far',
-          tip: null,
+          tip: const InfoTip(
+            title: 'This month so far',
+            message: kPaceTipMessage,
+          ),
           body: () => [
             KeyedSubtree(
               key: _paceKey,
@@ -1055,14 +1120,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
           visible: comparison != null,
           title: null,
           summary: against(comparison?.vsPrevious, 'last month'),
-          tip: null,
+          tip: comparison == null ? null : previousMonthTip(comparison),
           body: () => [PreviousMonthCard(comparison: comparison!)],
         ),
         DashboardSection.usual: (
           visible: comparison != null,
           title: null,
           summary: against(comparison?.vsUsual, 'a usual month'),
-          tip: null,
+          tip: comparison == null ? null : usualTip(comparison),
           body: () => [UsualSpendCard(comparison: comparison!)],
         ),
         DashboardSection.categoryComparison: (
@@ -1071,7 +1136,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           summary: mover == null
               ? null
               : '${mover.category.label} up most on usual',
-          tip: null,
+          tip: comparison == null
+              ? null
+              : categoryComparisonTip(comparison, categorySort),
           body: () => [
             CategoryComparisonCard(
               comparison: comparison!,
@@ -1086,13 +1153,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         DashboardSection.sixMonths: (
           visible: true,
-          title: _yearMode
-              ? 'Months of $year'
-              : _month == DateTime(DateTime.now().year, DateTime.now().month)
-              ? 'Last 6 months'
-              : '6 months to ${fmtMonth(_month)}',
-          summary: hideIncome ? 'Spend by month' : 'Income and spend by month',
-          tip: null,
+          title: sixMonthsTitle,
+          summary: sixMonthAverage == null
+              ? (hideIncome ? 'Spend by month' : 'Income and spend by month')
+              : '${fmtMoneyCompact(sixMonthAverage)} a month on average',
+          tip: InfoTip(
+            title: sixMonthsTitle,
+            message:
+                '${hideIncome ? "Each bar is one month's spending." : "Each pair of bars is one month's income and spending."} '
+                'Tap a bar for its figures. The average counts finished '
+                'months that are fully on record.',
+          ),
           body: () => [
             Card(
               child: Padding(
@@ -1160,7 +1231,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ? null
               : '${fmtMoneyCompact(monthExpense)} across ${byCategory.length} '
                     '${byCategory.length == 1 ? 'category' : 'categories'}',
-          tip: null,
+          tip: InfoTip(
+            title: DashboardSection.donut.label,
+            message:
+                "Each slice is a category's share of the "
+                "${_yearMode ? "year's spending. Tap a slice for its amount and share." : "month's spending. Tap a slice for its amount and share, or a name below for its transactions."}",
+          ),
           body: () => [
             Card(
               child: Padding(
@@ -1412,7 +1488,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           summary:
               '${subs.active.length} active, '
               '${fmtMoneyCompact(subs.monthlyTotal)} a month',
-          tip: null,
+          tip: const InfoTip(
+            title: 'Subscriptions',
+            message:
+                'Monthly payments found in the last year, plus any you '
+                'marked as monthly, quarterly or yearly. Only active ones '
+                'count: a payment more than $kSubscriptionGraceDays days late '
+                'counts as stopped. The monthly figure spreads quarterly and '
+                'yearly ones across the year.',
+          ),
           body: () {
             final n = subs.active.length;
             return [
@@ -1637,8 +1721,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         Expanded(
           child: PageView(
             controller: _pageCtrl,
-            onPageChanged: (i) =>
-                setState(() => _view = DashboardView.values[i]),
+            onPageChanged: (i) => setState(() {
+              _view = DashboardView.values[i];
+              if (_view != DashboardView.trends) _openedForVisit.clear();
+            }),
             // No PageStorageKey anywhere: off-screen pages dispose (no
             // keepAlive, zero cache extent), so every view change still
             // starts at the top instead of at a remembered offset.

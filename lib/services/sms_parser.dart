@@ -96,6 +96,9 @@ class SmsTxnParser {
     'FREECH',
     'BHIMPAY',
     'SLICEIT',
+    'AMEX', // American Express, "AMEXIN"
+    'AIRBNK', // Airtel Payments Bank
+    'SIBSMS', // South Indian Bank, not Indian Bank
     'ONECRD',
   };
 
@@ -104,14 +107,29 @@ class SmsTxnParser {
     caseSensitive: false,
   );
 
+  // Group 1: a currency-prefixed figure, including UCO's "Rs..50" (50 paise)
+  // and Union's "Rs:354.00". Group 2: SBI's unprefixed "debited by 150.0",
+  // which needs decimals so a date ("credited by 05-07-2026") never reads as
+  // an amount. Read through [_amountText].
+  // The paise form must end there: "INR.5000.00" is not ₹0.50.
   static final RegExp _amountRe = RegExp(
-    r'(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d{1,2})?)',
+    r'(?:rs[.:]?|inr[.:]?|₹)\s*(\.\d{1,2}(?!\.?\d)|\d[\d,]*(?:\.\d{1,2})?)'
+    r'|(?<=\b(?:debited|credited)\s+by\s+)(\d[\d,]*\.\d{1,2})\b',
     caseSensitive: false,
   );
 
+  static String _amountText(RegExpMatch m) => m.group(1) ?? m.group(2)!;
+
   // Trailing bare `upi` alternative covers Indian Bank's "UPI:418257360914".
+  // The digit lookahead keeps words out: "UPI Mandate" used to store the
+  // ref "Mandate". RRN, UTR and IMPS carry the bank reference on NEFT/IMPS
+  // alerts ("IMPS/412345678901", "Ref ID: …", "reference number …"). A
+  // UPI ID ("UPI ID shop123@ybl") is the payee, never the ref: one taken as
+  // a ref would drop every later payment to it as a duplicate.
   static final RegExp _refRe = RegExp(
-    r'(?:upi\s*ref(?:erence)?(?:\s*no)?|ref(?:erence)?(?:\s*no)?|txn\s*id|transaction\s*id|upi)\s*[.:# ]\s*([A-Za-z0-9]{6,25})',
+    r'(?:upi\s*ref(?:erence)?|ref(?:erence)?|rrn|utr|txn\s*id|transaction\s*id|imps|upi)'
+    r'(?:\s*(?:no|id|num(?:ber)?)\.?)?\s*[.:#/ ]\s*(?=[A-Za-z]*\d)(?![\w.\-]*@)'
+    r'([A-Za-z0-9]{6,25})',
     caseSensitive: false,
   );
 
@@ -134,11 +152,42 @@ class SmsTxnParser {
   //   * HDFC writes "ENDING WITH 1234".
   // A digit prefix is only accepted when mask characters follow it, so a bare
   // long account number can never be sliced mid-way.
+  //
+  // Widened after checking published alerts from many banks:
+  //   * ICICI writes "Acc XX246"; BOI "A/cXX5468" and SBI "A/cX0398" put the
+  //     mask straight after the keyword; Bank of Baroda writes "BOBCARD".
+  //   * Masks can end in more digits than the last four (PNB
+  //     "XXXXXXXX00341234", Axis "XX589034", IndusInd "201***123456") or mix
+  //     mask characters (Federal "XX**3456"): the last 3-4 digits are taken.
   static final RegExp _acctKeyRe = RegExp(
-    r'\b(?:(credit\s+card|debit\s+card|card)|a\/?c|acct|account)\b'
+    r'\b(?:(credit\s+card|debit\s+card|(?:bob)?card)|a\/?c|acct|acc|account)(?:\b|(?=x))'
     r'(?:\s+(?:account|acct|a\/?c|no\.?|number))?'
     r'(?:\s*(?:no\.?|number|ending(?:\s+(?:in|with))?))?'
-    r'[\s:.#-]*(?:\d{1,6}\s*(?:x+|\*+)|x+|\*+|ending)?\s*(\d{3,4})\b',
+    r'[\s:.#-]*(?:(?:\d{1,6}\s*)?[x*]+\s*\d*?|ending\s*)?(\d{3,4})\b(?![x*])',
+    caseSensitive: false,
+  );
+
+  /// The other party's account in an inward credit ("Sender A/c XXXX9108"):
+  /// never the user's.
+  static final RegExp _otherPartyRe = RegExp(
+    r'\b(?:sender|remitter|beneficiary)\s*$',
+    caseSensitive: false,
+  );
+
+  /// Masks with no account keyword: Kotak's "Sent Rs.51.00 from XXXXXX9722",
+  /// "credited in XXXX1234". "from XXXX…" only counts beside a debit (in a
+  /// credit it is the remitter), "credited to XXXX…" only when nothing was
+  /// debited (beside a debit it is the transfer's beneficiary).
+  static final RegExp _bareMaskInRe = RegExp(
+    r'\bin\s+[x*]{3,}(\d{3,4})\b',
+    caseSensitive: false,
+  );
+  static final RegExp _bareMaskFromRe = RegExp(
+    r'\bfrom\s+[x*]{3,}(\d{3,4})\b',
+    caseSensitive: false,
+  );
+  static final RegExp _bareMaskToRe = RegExp(
+    r'\bcredited\s+to\s+[x*]{3,}(\d{3,4})\b',
     caseSensitive: false,
   );
 
@@ -147,22 +196,72 @@ class SmsTxnParser {
   // the amount. The optional `is`/`of` matters: HDFC's card-payment
   // confirmation is the one that states the *post-payment* limit, and without
   // it the figure was dropped.
+  //
+  // Also PNB's "Aval Bal", ICICI's "Avb Bal", Canara's "Total Avail. Bal",
+  // Indian Bank's "Avl Bal- Rs.", BOB's "Available credit limit is". A
+  // trailing "CR"/"DR" belongs to the figure, so it is never read as a
+  // credit or debit verb.
   static final RegExp _balanceAfterRe = RegExp(
-    r'(?:avl|available|avbl|a\/v)\.?\s*(?:bal(?:ance)?|lmt|limit|lim)\.?'
-    r'\s*(?:is|of)?\s*[:.]?\s*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)',
+    r'(?:avl|avail|available(?:\s+credit)?|avbl|avb|aval|avlbl|a\/v)\.?\s*(?:bal(?:ance)?|lmt|limit|lim)\.?'
+    r'\s*(?:is|of)?\s*[:.\-]?\s*(?:rs[.:]?|inr[.:]?|₹)?\s*([\d,]+(?:\.\d{1,2})?)'
+    r'(?:\s*(?:cr|dr)\b\.?)?',
     caseSensitive: false,
   );
 
+  // Only when no "Avl" figure exists: the unprefixed "Bal INR", "Bal:Rs",
+  // "Total Bal", "New Bal", "Current Bal" (Canara, AU, Federal, IDFC, BOB,
+  // IndusInd). A "bal" after a word naming some other figure (a minimum,
+  // an outstanding loan, reward points) is not the account's balance.
+  static final RegExp _bareBalanceRe = RegExp(
+    r'(?<![a-z])(?<!(?:minimum|min|average|avg|sufficient|maintain|monthly'
+    r'|outstanding|o\/s|loan|principal|points?|rewards?|due|emi)\.?\s+)'
+    r'bal(?:ance)?\.?\s*(?:is|of)?\s*[:.\-]?\s*(?:rs[.:]?|inr[.:]?|₹)?\s*'
+    r'([\d,]+(?:\.\d{1,2})?)(?:\s*(?:cr|dr)\b\.?)?',
+    caseSensitive: false,
+  );
+
+  /// Spans of every stated balance or limit figure, prefixed or bare.
+  static List<(int, int)> _balanceSpans(String body) => [
+    for (final m in _balanceAfterRe.allMatches(body)) (m.start, m.end),
+    for (final m in _bareBalanceRe.allMatches(body)) (m.start, m.end),
+  ];
+
   // Verbs are matched on word boundaries: a bare `credit` would also match
-  // "Credit Card" and turn card promos into six-figure incomes.
+  // "Credit Card" and turn card promos into six-figure incomes. The
+  // boundaries are letters only, so Federal's "Rs.1100credited" still reads.
   static final RegExp _expenseVerbRe = RegExp(
     // "used" covers Yes Bank / many debit-card alerts: "has been used for Rs X"
     // "charged" covers card-swipe confirmations: "Rs X charged to your card"
-    r'\b(debited|spent|sent|paid|withdrawn|purchase|deducted|charged|used)\b',
+    // "Dr." (Canara, AU, BOB) only before an amount or from/to, never
+    // "Dr. Sharma"; "Txn Rs.X" is HDFC's card UPI alert; "w/d" SBI's ATM.
+    r'(?<![a-z])(debited|spent|sent|paid|withdrawn|purchase|deducted|charged|used'
+    r'|w\/d|transferred(?=\s+from\b)|txn(?=\s+(?:rs|inr|₹))|done(?=\s+at\b)'
+    r'|dr\.?(?=\s*(?:inr|rs|₹|from\b|to\b)))(?![a-z])',
     caseSensitive: false,
   );
   static final RegExp _incomeVerbRe = RegExp(
-    r'\b(credited|received|deposited|refunded|refund)\b',
+    // "Cr." only before an amount or "to <account>", never "Rs 1 Cr to
+    // spend" or a balance's trailing "CR."; "Transaction Reversed!" is
+    // HDFC's card refund.
+    // "will be reversed if unauthorised" is a promise, not money back.
+    r'(?<![a-z])(credited|received|deposited|refunded|refund|(?<!be\s)reversed'
+    r'|cr\.?(?=\s*(?:inr|rs|₹|to\s+(?:your\s+)?(?:a\/?c|acct|account)\b)))'
+    r'(?![a-z])',
+    caseSensitive: false,
+  );
+
+  /// Federal's "`<payee>` has received Rs X from your A/c": the payee's
+  /// receipt, so the user's expense.
+  static final RegExp _payeeReceivedRe = RegExp(
+    r'\bhas\s+received\b.{0,40}?\bfrom\s+your\s+(?:a\/?c|account)',
+    caseSensitive: false,
+  );
+
+  /// Kotak's "Cashback of Rs.50 has been sent to your … A/c": money in.
+  /// The account noun matters: "details sent to your registered email" is
+  /// a debit's footer.
+  static final RegExp _sentToYouRe = RegExp(
+    r'\bsent\s+to\s+your\s+(?:\w+\s+){0,3}?(?:a\/?c|account|card|wallet)\b',
     caseSensitive: false,
   );
 
@@ -174,7 +273,7 @@ class SmsTxnParser {
   /// only picks the category; direction still comes from the verbs. Card
   /// *spends* ("spent on ... credit card") don't match it.
   static final RegExp _cardBillPaymentRe = RegExp(
-    r'received\s+(?:on|towards|for)\s+your\s+.{0,40}\bcard\b'
+    r'received\s+(?:on|towards|for)\s+your\s+.{0,40}\b(?:bob)?card\b'
     r'|payment\s+.{0,60}?\breceived\b.{0,60}?\bcredit\s+card'
     r'|towards\s+(?:your\s+)?.{0,30}\bcredit\s+card\s+(?:bill|payment|xx)'
     r'|thank\s+you\s+for\s+your\s+payment'
@@ -241,7 +340,10 @@ class SmsTxnParser {
     // brand missing here silently mints a *separate* squash-coded account
     // ("Indian Bank" → INDIANBANK:7316) alongside the DLT-coded one
     // (INDBNK:7316), splitting one real account across two tiles.
-    // INDUSIND must stay above INDIAN: first contains-match wins.
+    // INDUSIND must stay above INDIAN: first contains-match wins. So must
+    // SOUTH INDIAN and OVERSEAS: "South Indian Bank" and "Indian Overseas
+    // Bank" are other banks than Indian Bank. UNION and CENTRAL stay above
+    // BANK OF INDIA, which their full names contain.
     const brandMap = {
       'YES': 'YESBNK',
       'HDFC': 'HDFC',
@@ -249,14 +351,20 @@ class SmsTxnParser {
       'AXIS': 'AXIS',
       'KOTAK': 'KOTAK',
       'SBI': 'SBI',
+      'STATE BANK': 'SBI',
       'IDFC': 'IDFC',
       'INDUSIND': 'INDUS',
+      'SOUTH INDIAN': 'SIBSMS',
+      'OVERSEAS': 'IOB',
       'INDIAN': 'INDBNK',
       'IDBI': 'IDBI',
       'FEDERAL': 'FEDBNK',
       'CANARA': 'CANBNK',
       'UNION': 'UNION',
       'CENTRAL': 'CENTBK',
+      'BANK OF INDIA': 'BOI',
+      'PUNJAB NATIONAL': 'PNB',
+      'AU SMALL': 'AUBANK',
       'BARODA': 'BOB',
       'RBL': 'RBL',
       'CITI': 'CITI',
@@ -306,7 +414,10 @@ class SmsTxnParser {
     (RegExp(r'\baxis\b', caseSensitive: false), 'AXIS'),
     (RegExp(r'\bkotak\b', caseSensitive: false), 'KOTAK'),
     (RegExp(r'\byes\s+bank\b', caseSensitive: false), 'YESBNK'),
-    (RegExp(r'\bindian\s+bank\b', caseSensitive: false), 'INDBNK'),
+    // "South Indian Bank" is its own bank; the lookbehind keeps it from
+    // reading as Indian Bank.
+    (RegExp(r'\bsouth\s+indian\s+bank\b', caseSensitive: false), 'SIBSMS'),
+    (RegExp(r'(?<!south\s)\bindian\s+bank\b', caseSensitive: false), 'INDBNK'),
     (RegExp(r'\bindusind\b', caseSensitive: false), 'INDUS'),
     (RegExp(r'\bidfc\b', caseSensitive: false), 'IDFC'),
     (RegExp(r'\bidbi\b', caseSensitive: false), 'IDBI'),
@@ -349,8 +460,12 @@ class SmsTxnParser {
       // ("ICICI Bank Account…", "YES BANK Card…") — a short window is
       // deliberate, anything wider would catch unrelated mentions.
       final windowStart = m.start < 24 ? 0 : m.start - 24;
-      final named = _bodyBankCode(body.substring(windowStart, m.start));
+      final before = body.substring(windowStart, m.start);
+      final named = _bodyBankCode(before);
       if (named != null && named != senderCode) continue;
+      // Canara's "credited to XXXX6785 … Sender A/c XXXX9108": the
+      // remitter's account, not the user's.
+      if (_otherPartyRe.hasMatch(before)) continue;
       // "Debit Card" spends from a BANK account — treating any card keyword
       // as credit-card-ness minted a credit-card account, which hid the
       // account's real cash from netWorth and flagged a bogus
@@ -359,25 +474,195 @@ class SmsTxnParser {
       final isCard = keyword != null && !keyword.contains('debit');
       return ('$senderCode:${m.group(2)!}', isCard);
     }
+    final debited = _expenseVerbRe.hasMatch(body);
+    final bare =
+        _bareMaskInRe.firstMatch(body) ??
+        (debited
+            ? _bareMaskFromRe.firstMatch(body)
+            : _bareMaskToRe.firstMatch(body));
+    if (bare != null) return ('$senderCode:${bare.group(1)!}', false);
     return (null, false);
   }
 
   /// The pre-foreign-check keying: first fragment + sender's bank code,
   /// unconditionally. Kept ONLY so the one-time re-key migration can tell a
   /// machine-derived key (equal to this) from a hand-assigned one (anything
-  /// else) — do not use for new imports.
+  /// else) — do not use for new imports. Reads the v1.27 patterns, the last
+  /// ones that migration ran against.
   static (String?, bool) legacyAccountKeyOf(String sender, String body) {
-    final m = _acctKeyRe.firstMatch(body);
+    final m = _acctKeyReV127.firstMatch(body);
     if (m == null) return (null, false);
-    return ('${bankCodeOf(sender)}:${m.group(2)!}', m.group(1) != null);
+    return ('${_bankCodeOfV127(sender)}:${m.group(2)!}', m.group(1) != null);
   }
 
-  /// Extracts the `Avl Bal` / `Avl Lmt` figure, or null when absent.
+  /// [accountKeyOf] exactly as v1.27 derived it, from frozen copies of every
+  /// pattern and table it read. Kept ONLY for the v5 re-key migration: a
+  /// stored key equal to this was machine-derived and may be re-derived; any
+  /// other key was assigned by hand. Never change these copies.
+  static (String?, bool) accountKeyOfV127(String sender, String body) {
+    final senderCode = _bankCodeOfV127(sender);
+    for (final m in _acctKeyReV127.allMatches(body)) {
+      final windowStart = m.start < 24 ? 0 : m.start - 24;
+      final named = _bodyBankCodeV127(body.substring(windowStart, m.start));
+      if (named != null && named != senderCode) continue;
+      final keyword = m.group(1)?.toLowerCase();
+      final isCard = keyword != null && !keyword.contains('debit');
+      return ('$senderCode:${m.group(2)!}', isCard);
+    }
+    return (null, false);
+  }
+
+  static final RegExp _acctKeyReV127 = RegExp(
+    r'\b(?:(credit\s+card|debit\s+card|card)|a\/?c|acct|account)\b'
+    r'(?:\s+(?:account|acct|a\/?c|no\.?|number))?'
+    r'(?:\s*(?:no\.?|number|ending(?:\s+(?:in|with))?))?'
+    r'[\s:.#-]*(?:\d{1,6}\s*(?:x+|\*+)|x+|\*+|ending)?\s*(\d{3,4})\b',
+    caseSensitive: false,
+  );
+
+  static const Set<String> _bankCodesV127 = {
+    'HDFC',
+    'ICICI',
+    'SBI',
+    'SBIUPI',
+    'SBIINB',
+    'AXIS',
+    'AXISBK',
+    'KOTAK',
+    'IDFC',
+    'IDFCFB',
+    'YESBNK',
+    'INDUS',
+    'INDBNK',
+    'IDBI',
+    'CENTBK',
+    'MAHABK',
+    'PNB',
+    'BOB',
+    'BOI',
+    'CANBNK',
+    'UNION',
+    'UCO',
+    'IOB',
+    'FEDBNK',
+    'RBL',
+    'AUBANK',
+    'DBS',
+    'HSBC',
+    'CITI',
+    'SCB',
+    'PAYTM',
+    'PHONPE',
+    'GPAY',
+    'AMAZONP',
+    'MOBIKW',
+    'FREECH',
+    'BHIMPAY',
+    'SLICEIT',
+    'ONECRD',
+  };
+
+  static String _bankCodeOfV127(String sender) {
+    final s = sender.trim();
+    final m = _senderShape.firstMatch(s);
+    if (m != null) {
+      final code = m.group(1)!.toUpperCase();
+      for (final b in _bankCodesV127) {
+        if (code.contains(b) || b.contains(code)) return b;
+      }
+    }
+    final upper = s.toUpperCase();
+    for (final b in _bankCodesV127) {
+      if (upper.contains(b)) return b;
+    }
+    const brandMap = {
+      'YES': 'YESBNK',
+      'HDFC': 'HDFC',
+      'ICICI': 'ICICI',
+      'AXIS': 'AXIS',
+      'KOTAK': 'KOTAK',
+      'SBI': 'SBI',
+      'IDFC': 'IDFC',
+      'INDUSIND': 'INDUS',
+      'INDIAN': 'INDBNK',
+      'IDBI': 'IDBI',
+      'FEDERAL': 'FEDBNK',
+      'CANARA': 'CANBNK',
+      'UNION': 'UNION',
+      'CENTRAL': 'CENTBK',
+      'BARODA': 'BOB',
+      'RBL': 'RBL',
+      'CITI': 'CITI',
+      'HSBC': 'HSBC',
+      'PAYTM': 'PAYTM',
+      'PHONEPE': 'PHONPE',
+    };
+    for (final e in brandMap.entries) {
+      if (upper.contains(e.key)) return e.value;
+    }
+    return upper.replaceAll(RegExp(r'[^A-Z0-9]'), '');
+  }
+
+  static final List<(RegExp, String)> _bodyBankNamesV127 = [
+    (RegExp(r'\bicici\b', caseSensitive: false), 'ICICI'),
+    (RegExp(r'\bhdfc\b', caseSensitive: false), 'HDFC'),
+    (RegExp(r'\bsbi\b|\bstate\s+bank\b', caseSensitive: false), 'SBI'),
+    (RegExp(r'\baxis\b', caseSensitive: false), 'AXIS'),
+    (RegExp(r'\bkotak\b', caseSensitive: false), 'KOTAK'),
+    (RegExp(r'\byes\s+bank\b', caseSensitive: false), 'YESBNK'),
+    (RegExp(r'\bindian\s+bank\b', caseSensitive: false), 'INDBNK'),
+    (RegExp(r'\bindusind\b', caseSensitive: false), 'INDUS'),
+    (RegExp(r'\bidfc\b', caseSensitive: false), 'IDFC'),
+    (RegExp(r'\bidbi\b', caseSensitive: false), 'IDBI'),
+    (RegExp(r'\bpnb\b|\bpunjab\s+national\b', caseSensitive: false), 'PNB'),
+    (RegExp(r'\bcanara\b', caseSensitive: false), 'CANBNK'),
+    (RegExp(r'\bfederal\b', caseSensitive: false), 'FEDBNK'),
+    (RegExp(r'\brbl\b', caseSensitive: false), 'RBL'),
+    (RegExp(r'\bciti\b', caseSensitive: false), 'CITI'),
+    (RegExp(r'\bhsbc\b', caseSensitive: false), 'HSBC'),
+    (RegExp(r'\bunion\s+bank\b', caseSensitive: false), 'UNION'),
+    (
+      RegExp(r'\bcentral\s+bank\s+of\s+india\b', caseSensitive: false),
+      'CENTBK',
+    ),
+    (RegExp(r'\bbank\s+of\s+baroda\b', caseSensitive: false), 'BOB'),
+    (RegExp(r'\bbank\s+of\s+india\b', caseSensitive: false), 'BOI'),
+  ];
+
+  static String? _bodyBankCodeV127(String text) {
+    for (final (re, code) in _bodyBankNamesV127) {
+      if (re.hasMatch(text)) return code;
+    }
+    return null;
+  }
+
+  /// The bank reference (UPI ref, RRN, UTR, IMPS number), or null.
+  static String? refOf(String body) => _refRe.firstMatch(body)?.group(1);
+
+  /// Extracts the `Avl Bal` / `Avl Lmt` figure, else a bare `Bal` one, or
+  /// null when absent. "Outstanding Bal Rs.12,000. Avl Lmt Rs.88,000" is
+  /// 88,000: the prefixed figure wins wherever it sits.
   static double? balanceAfterOf(String body) {
-    final m = _balanceAfterRe.firstMatch(body);
+    final m =
+        _balanceAfterRe.firstMatch(body) ?? _bareBalanceRe.firstMatch(body);
     if (m == null) return null;
     return double.tryParse(m.group(1)!.replaceAll(',', ''));
   }
+
+  /// [balanceAfterOf] as v1.27 read it. Kept ONLY for the v5 migration, to
+  /// tell a figure v1.27 already had (and a user edit then cleared) from
+  /// one only the widened patterns find.
+  static double? balanceAfterOfV127(String body) {
+    final m = _balanceAfterReV127.firstMatch(body);
+    if (m == null) return null;
+    return double.tryParse(m.group(1)!.replaceAll(',', ''));
+  }
+
+  static final RegExp _balanceAfterReV127 = RegExp(
+    r'(?:avl|available|avbl|a\/v)\.?\s*(?:bal(?:ance)?|lmt|limit|lim)\.?'
+    r'\s*(?:is|of)?\s*[:.]?\s*(?:rs\.?|inr|₹)?\s*([\d,]+(?:\.\d{1,2})?)',
+    caseSensitive: false,
+  );
 
   /// Stage 2 filter: does the body look like a completed transaction alert?
   /// [ignorePhrases] defaults to the built-ins; the import service passes the
@@ -410,9 +695,7 @@ class SmsTxnParser {
   /// Null when the only prefixed numbers ARE balance figures: refusing the
   /// import beats minting a known-wrong row.
   static RegExpMatch? _pickAmountMatch(String body) {
-    final balanceSpans = [
-      for (final m in _balanceAfterRe.allMatches(body)) (m.start, m.end),
-    ];
+    final balanceSpans = _balanceSpans(body);
     for (final m in _amountRe.allMatches(body)) {
       final insideBalance = balanceSpans.any(
         (s) => m.start >= s.$1 && m.end <= s.$2,
@@ -446,7 +729,9 @@ class SmsTxnParser {
 
     final amountMatch = _pickAmountMatch(body);
     if (amountMatch == null) return null;
-    final amount = double.tryParse(amountMatch.group(1)!.replaceAll(',', ''));
+    final amount = double.tryParse(
+      _amountText(amountMatch).replaceAll(',', ''),
+    );
     if (amount == null || amount <= 0) return null;
 
     var type = _direction(body, amountMatch.start);
@@ -462,14 +747,17 @@ class SmsTxnParser {
     // has been reversed and credited back"), so the nearest-verb heuristic
     // picks the debit — but the alert is about money RETURNING. Importing
     // it as a second expense would double the loss.
+    // A money-back verb besides "reversed" itself: "debited … will be
+    // reversed if unauthorised" is still a debit.
     if (type == TxType.expense &&
         _reversalRe.hasMatch(body) &&
-        _incomeVerbRe.hasMatch(body)) {
+        _creditBackRe.hasMatch(body)) {
       type = TxType.income;
     }
+    type = _flipForParty(type, body);
 
     final merchant = _merchant(body);
-    final ref = _refRe.firstMatch(body)?.group(1);
+    final ref = refOf(body);
     final date = resolveDateTime(body, smsDate);
     // Categorisation is rule-driven (built-in keyword mappings are seeded as
     // editable ClassifierRules), except credit-card bill payments, which the
@@ -536,7 +824,9 @@ class SmsTxnParser {
     }
     final amountMatch = _pickAmountMatch(body);
     if (amountMatch == null) return true;
-    final amount = double.tryParse(amountMatch.group(1)!.replaceAll(',', ''));
+    final amount = double.tryParse(
+      _amountText(amountMatch).replaceAll(',', ''),
+    );
     if (amount == null || amount <= 0) return true;
     return _direction(body, amountMatch.start) == null;
   }
@@ -574,7 +864,9 @@ class SmsTxnParser {
                 'figure, not a transaction amount.'
           : 'Not imported — no amount (Rs / INR / ₹) found.';
     }
-    final amount = double.tryParse(amountMatch.group(1)!.replaceAll(',', ''));
+    final amount = double.tryParse(
+      _amountText(amountMatch).replaceAll(',', ''),
+    );
     if (amount == null || amount <= 0) {
       return 'Not imported — the amount could not be read.';
     }
@@ -624,11 +916,17 @@ class SmsTxnParser {
       if (result.spamSuspect)
         'Flagged as suspected spam (matches "$spamHit") — individual review',
       if (type == TxType.income && result.type == TxType.expense)
-        'Note: "credited to" names another bank — treated as an outward '
-            'transfer (money leaving your account).',
+        _payeeReceivedRe.hasMatch(body)
+            ? 'Note: "has received … from your A/c" is the payee\'s side — '
+                  'imported as money leaving your account.'
+            : 'Note: "credited to" names another bank or the beneficiary — '
+                  'treated as an outward transfer (money leaving your '
+                  'account).',
       if (type == TxType.expense && result.type == TxType.income)
-        'Note: reversal alert — imported as money returned, not a second '
-            'expense.',
+        _sentToYouRe.hasMatch(body) && !_reversalRe.hasMatch(body)
+            ? 'Note: "sent to your" account — imported as money coming in.'
+            : 'Note: reversal alert — imported as money returned, not a '
+                  'second expense.',
       if (!strictOk)
         'Note: sender only matches as a brand name — imported via '
             'notification capture, not inbox SMS scans.',
@@ -639,11 +937,23 @@ class SmsTxnParser {
   /// Income or expense — from the account holder's perspective. When a message
   /// contains both kinds of verb (UPI "debited from X and credited to Y"),
   /// the verb closest to the amount wins.
+  ///
+  /// A balance's own "CR"/"DR" is no verb, and "Txn" only means a spend
+  /// when no other verb says which way the money went ("Txn Rs.500
+  /// credited to … Card as refund", "… will be reversed if unauthorised").
   static TxType? _direction(String body, int amountIndex) {
     int? bestDist;
     TxType? best;
+    final balances = _balanceSpans(body);
+    final otherVerb =
+        _incomeVerbRe.hasMatch(body) ||
+        _expenseVerbRe
+            .allMatches(body)
+            .any((m) => m.group(1)!.toLowerCase() != 'txn');
     void scan(RegExp verbRe, TxType t) {
       for (final m in verbRe.allMatches(body)) {
+        if (balances.any((s) => m.start >= s.$1 && m.end <= s.$2)) continue;
+        if (otherVerb && m.group(1)!.toLowerCase() == 'txn') continue;
         final d = (m.start - amountIndex).abs();
         if (bestDist == null || d < bestDist!) {
           bestDist = d;
@@ -657,6 +967,26 @@ class SmsTxnParser {
     return best;
   }
 
+  /// Alerts whose verb describes the other party: Federal's "`<payee>` has
+  /// received Rs X from your A/c" is money out, Kotak's "Cashback … has been
+  /// sent to your A/c. Credited on …" money in.
+  static TxType _flipForParty(TxType type, String body) {
+    if (type == TxType.income && _payeeReceivedRe.hasMatch(body)) {
+      return TxType.expense;
+    }
+    // Only when "sent" is the one debit word: "INR 10,000 debited … Amount
+    // sent to your Credit Card XX5678 will be credited" is money out.
+    if (type == TxType.expense &&
+        _sentToYouRe.hasMatch(body) &&
+        _incomeVerbRe.hasMatch(body) &&
+        _expenseVerbRe
+            .allMatches(body)
+            .every((m) => m.group(1)!.toLowerCase() == 'sent')) {
+      return TxType.income;
+    }
+    return type;
+  }
+
   static final RegExp _creditedToRe = RegExp(
     r'\bcredited\s+to\b',
     caseSensitive: false,
@@ -667,11 +997,23 @@ class SmsTxnParser {
     caseSensitive: false,
   );
 
+  static final RegExp _creditBackRe = RegExp(
+    r'\b(credited|received|deposited|refunded|refund)\b',
+    caseSensitive: false,
+  );
+
+  static final RegExp _beneficiaryCreditRe = RegExp(
+    r'\bcredited\s+to\s+the\s+beneficiary',
+    caseSensitive: false,
+  );
+
   /// True when a credit verb in the body describes the OTHER side of an
   /// outward transfer: "credited to `<some other bank's>` account". The
   /// receiving bank's name must follow "credited to" directly; "credited to
-  /// your …" is the user's own inward credit and never flips.
+  /// your …" is the user's own inward credit and never flips. ICICI's NEFT
+  /// confirmation "… has been credited to the beneficiary account" flips too.
   static bool _creditIsOutward(String sender, String body) {
+    if (_beneficiaryCreditRe.hasMatch(body)) return true;
     final senderCode = bankCodeOf(sender);
     for (final m in _creditedToRe.allMatches(body)) {
       final windowEnd = m.end + 32 > body.length ? body.length : m.end + 32;

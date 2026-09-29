@@ -241,10 +241,12 @@ class FinanceProvider extends ChangeNotifier {
   static const _accountsMigratedV2Key = 'accounts_migrated_v2';
   static const _accountsMigratedV3Key = 'accounts_migrated_v3';
   static const _accountsMigratedV4Key = 'accounts_migrated_v4';
+  static const _accountsMigratedV5Key = 'accounts_migrated_v5';
   static const _smsBodyMigratedKey = 'sms_body_migrated_v1';
   static const _importRulesKey = 'import_rules_v1';
   static const _importRulesSeededKey = 'import_rules_seeded_v1';
   static const _importRulesPrunedKey = 'import_rules_pruned_v1';
+  static const _importRulesSeededV2Key = 'import_rules_seeded_v2';
   static const _customCategoriesKey = 'custom_categories_v1';
   static const _builtinOverridesKey = 'builtin_category_overrides_v1';
   static const _groupsKey = 'category_groups_v1';
@@ -1021,6 +1023,22 @@ class FinanceProvider extends ChangeNotifier {
         if (_importRules.length != before) await _persist(importRules: true);
         await prefs.setBool(_importRulesPrunedKey, true);
       }
+      // One-time top-up with the ignore phrases added in 1.28. Only those:
+      // re-running the full seed would bring back built-ins the user deleted.
+      if (!(prefs.getBool(_importRulesSeededV2Key) ?? false)) {
+        final existingIds = _importRules.map((r) => r.id).toSet();
+        var added = false;
+        for (final pattern in kIgnorePhrasesAddedV128) {
+          final id = _builtinImportRuleId(pattern, ImportRuleKind.ignore);
+          if (existingIds.contains(id)) continue;
+          _importRules.add(
+            ImportRule(id: id, pattern: pattern, kind: ImportRuleKind.ignore),
+          );
+          added = true;
+        }
+        if (added) await _persist(importRules: true);
+        await prefs.setBool(_importRulesSeededV2Key, true);
+      }
       // One-time seeding of the starter parent groups. The flag — not the data —
       // gates reseeding, so deleting or renaming Needs/Wants sticks.
       if (!(prefs.getBool(_groupsSeededKey) ?? false)) {
@@ -1164,7 +1182,9 @@ class FinanceProvider extends ChangeNotifier {
           if (key == null || !key.startsWith('manual:')) continue;
           final ownerId = _keyIndex[key];
           if (ownerId == null) continue;
-          final (derivedKey, _) = SmsTxnParser.accountKeyOf(
+          // The keys accounts held then are v1.27's (v5 below adds the new
+          // ones), so compare against v1.27's derivation.
+          final (derivedKey, _) = SmsTxnParser.accountKeyOfV127(
             t.sender,
             t.smsText,
           );
@@ -1175,6 +1195,105 @@ class FinanceProvider extends ChangeNotifier {
         }
         migrationFlags.add(_accountsMigratedV4Key);
         if (changed) migrationTxDirty = true;
+      }
+      // One-time re-derivation after 1.28 widened the SMS patterns ("Acc
+      // XX246", long mask tails, BOBCARD, bare masks, RRN/UTR refs) and
+      // stopped reading "Indian Overseas Bank" and "South Indian Bank"
+      // senders as Indian Bank:
+      //  * an unkeyed row gets the key it now derives, and its stated
+      //    balance when v1.27 could not read one (a figure v1.27 had and
+      //    the row lacks was cleared by an edit, on purpose);
+      //  * a key equal to what 1.27 derived was machine-made and follows the
+      //    new derivation. A key 1.27 never derived was set by hand and
+      //    stays. The old key's account takes the new key, keeping its name,
+      //    manual balance and limit, only when that is unambiguous: every
+      //    row leaves the old key, and most of them for this one new key.
+      //    Otherwise the old key named two real accounts, or is still in
+      //    use, and the new key gets an account of its own;
+      //  * the stored ref follows the new pattern, so another copy of the
+      //    same alert still pairs with it.
+      // A keyed row's balance is left alone: it was cleared on purpose when
+      // the row moved to another account or day.
+      if (!(prefs.getBool(_accountsMigratedV5Key) ?? false)) {
+        var txChanged = false;
+        var accountsChanged = false;
+        final moves = <int, (String, String, bool)>{}; // row → old, new, card
+        final stillUsed = <String>{};
+        final newKeyCounts = <String, Map<String, int>>{};
+        final unkeyed = <(String, bool)>[];
+        for (var i = 0; i < _transactions.length; i++) {
+          final original = _transactions[i];
+          final current = original.acctKey;
+          if (original.source != TxSource.sms || original.smsText.isEmpty) {
+            if (current != null) stillUsed.add(current);
+            continue;
+          }
+          var t = original;
+          final body = t.smsText;
+          final (key, isCard) = SmsTxnParser.accountKeyOf(t.sender, body);
+          final keyV127 = SmsTxnParser.accountKeyOfV127(t.sender, body).$1;
+          if (current == null) {
+            // Only where 1.27 found nothing: an unkeyed row 1.27 could key
+            // was taken off its account by hand.
+            if (key != null && keyV127 == null) {
+              final hadFigure = SmsTxnParser.balanceAfterOfV127(body) != null;
+              t = t.copyWith(
+                acctKey: key,
+                balanceAfter: t.balanceAfter != null || hadFigure
+                    ? null
+                    : SmsTxnParser.balanceAfterOf(body),
+              );
+              // Its account is made after the joins below: made now, it
+              // would take the key an old account is about to adopt.
+              unkeyed.add((key, isCard));
+              stillUsed.add(key);
+            }
+          } else if (key != current && keyV127 == current) {
+            if (key == null) {
+              // A chimera 1.27 minted from another bank's fragment.
+              t = t.copyWith(clearAcctKey: true);
+            } else {
+              moves[i] = (current, key, isCard);
+              final counts = newKeyCounts[current] ??= {};
+              counts[key] = (counts[key] ?? 0) + 1;
+            }
+          } else {
+            stillUsed.add(current);
+          }
+          final ref = SmsTxnParser.refOf(body);
+          if (ref != null && ref != t.externalRef) {
+            t = t.copyWith(externalRef: ref);
+          }
+          if (!identical(t, original)) {
+            _transactions[i] = t;
+            txChanged = true;
+          }
+        }
+        // Accounts first, so the order of rows can't decide who joins what.
+        for (final e in newKeyCounts.entries) {
+          if (stillUsed.contains(e.key)) continue;
+          final ranked = e.value.entries.toList()
+            ..sort((a, b) => b.value.compareTo(a.value));
+          // A tie means two real accounts shared the old key: neither wins.
+          if (ranked.length > 1 && ranked[0].value == ranked[1].value) {
+            continue;
+          }
+          if (_joinMachineKey(e.key, ranked.first.key)) accountsChanged = true;
+        }
+        for (final (key, isCard) in unkeyed) {
+          _ensureAccount(key, isCard: isCard);
+          accountsChanged = true;
+        }
+        for (final e in moves.entries) {
+          final (_, newKey, isCard) = e.value;
+          _ensureAccount(newKey, isCard: isCard);
+          _transactions[e.key] = _transactions[e.key].copyWith(acctKey: newKey);
+          accountsChanged = true;
+          txChanged = true;
+        }
+        migrationFlags.add(_accountsMigratedV5Key);
+        if (txChanged) migrationTxDirty = true;
+        if (accountsChanged) migrationAccountsDirty = true;
       }
       // One-time move: the raw SMS body historically lived in `note`; it now has
       // its own field so `note` can hold user text. Runs after v1–v4, which were
@@ -2749,6 +2868,31 @@ class FinanceProvider extends ChangeNotifier {
     _keyIndex[key] = acc.id;
   }
 
+  /// Re-derivation of a machine-made key ([oldKey] → [newKey]): the account
+  /// that owned [oldKey] takes [newKey] too, and loses a default name that
+  /// spelled the old key. False, changing nothing, when some account owns
+  /// [newKey] already or none owns [oldKey].
+  bool _joinMachineKey(String oldKey, String newKey) {
+    if (_keyIndex.containsKey(newKey)) return false;
+    final ai = _accounts.indexWhere((a) => a.id == _keyIndex[oldKey]);
+    if (ai == -1) return false;
+    String nameOf(String key) {
+      final parts = key.split(':');
+      return Account.defaultName(
+        parts.first,
+        parts.length > 1 ? parts.last : '',
+      );
+    }
+
+    final owner = _accounts[ai];
+    _accounts[ai] = owner.copyWith(
+      keys: {...owner.keys, newKey},
+      name: owner.name == nameOf(oldKey) ? nameOf(newKey) : null,
+    );
+    _keyIndex[newKey] = owner.id;
+    return true;
+  }
+
   /// Card/bank hints from a v9 backup's `acctKinds` map, set by [importData]
   /// for the duration of its `_ensureAccountsForTransactions` call. Backups
   /// carry no SMS bodies, so this is the only card-ness evidence a restored
@@ -4075,6 +4219,17 @@ class FinanceProvider extends ChangeNotifier {
       }
     }
 
+    // The very same message again (a rescan): same sender, text and time.
+    // It must drop even when a newer parser reads another ref or direction
+    // from it than the stored row has. Rows already on record only, so two
+    // identical ref-less swipes in one batch both import.
+    String sameMessage(String sender, DateTime date, String body) =>
+        '$sender|${date.millisecondsSinceEpoch}|$body';
+    final seenMessages = <String>{
+      for (final t in _transactions)
+        if (t.source == TxSource.sms && t.smsText.isNotEmpty)
+          sameMessage(t.sender, t.date, t.smsText),
+    };
     for (final t in _transactions) {
       if (t.externalRef != null) refKeys.add('${t.type.name}|${t.externalRef}');
       remember(t.type, t.amount, t.sender, t.externalRef, t.date, t.acctKey);
@@ -4084,6 +4239,10 @@ class FinanceProvider extends ChangeNotifier {
       final rule = _matchRule(ruleText, p.type);
       if (rule != null && rule.isSpamRule) {
         spamDropped++;
+        continue;
+      }
+      if (p.rawBody.isNotEmpty &&
+          seenMessages.contains(sameMessage(p.sender, p.date, p.rawBody))) {
         continue;
       }
 

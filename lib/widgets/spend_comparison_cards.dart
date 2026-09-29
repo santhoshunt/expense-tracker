@@ -32,6 +32,99 @@ Color _toneFor(BuildContext context, double delta) {
       : AppColors.of(context).green;
 }
 
+const _previousTitle = 'This month vs last month';
+const _previousTip =
+    'While the month is running, compares spending up to the same day '
+    "of last month. The projection scales this month's spending by how "
+    'last month grew from this day to its end, and appears from day '
+    '$kMinDaysForProjection. When last month is not fully on record, it '
+    "uses this month's daily pace instead, once $kMinDaysOfData days are "
+    'on record.';
+
+const _usualTitle = 'This month vs usual';
+const _usualTip =
+    '"Usual" is the middle value of up to 6 complete months before '
+    'this one, so one unusual month does not move it the way an average '
+    'would. While the month is running, both sides count only up to '
+    "today's date. It needs at least 2 complete months.";
+
+const _categoryTitle = 'Categories vs usual';
+const _categoryTip =
+    '"Usual" is the middle value of up to $kUsualWindowMonths complete '
+    'months before this one, so one unusual month does not move it. A '
+    'month with nothing in a category counts as zero. While the month is '
+    "running, both sides count only up to today's date. Red means more "
+    'than usual, green less.';
+
+/// The cards' tips, for a dashboard fold heading: inside a fold the cards
+/// leave theirs out, so each section carries its tip on the heading,
+/// folded or open.
+InfoTip previousMonthTip(MonthComparison comparison) => InfoTip(
+  title: _previousTitle,
+  message: _previousTip,
+  example: () => projectionExample(comparison),
+);
+
+InfoTip usualTip(MonthComparison comparison) => InfoTip(
+  title: _usualTitle,
+  message: _usualTip,
+  example: () => _usualExample(comparison),
+);
+
+InfoTip categoryComparisonTip(MonthComparison comparison, CategorySort sort) =>
+    InfoTip(
+      title: _categoryTitle,
+      message: _categoryTip,
+      example: () => _categoryExample(
+        comparison.usualMonths < kMinUsualMonths
+            ? const []
+            : sortCategoryCompares(comparison.categories, sort),
+      ),
+      link: _rulesLink,
+    );
+
+String? _usualExample(MonthComparison comparison) {
+  final c = comparison.vsUsual;
+  if (c.state == CompareState.notEnoughHistory || c.reference <= 0) {
+    return null;
+  }
+  final d = c.actual - c.reference;
+  return 'This month ${fmtMoney(c.actual)} vs usual '
+      '${fmtMoney(c.reference)} = ${d < 0 ? '−' : '+'}${fmtMoney(d.abs())}';
+}
+
+String? _categoryExample(List<CategoryCompare> rows) {
+  if (rows.isEmpty) return null;
+  final top = rows.first;
+  if (top.usual <= 0) return null;
+  final d = top.delta;
+  return '${top.category.label}: ${fmtMoney(top.actual)} this month vs '
+      '${fmtMoney(top.usual)} usual = '
+      '${d < 0 ? '−' : '+'}${fmtMoney(d.abs())}';
+}
+
+/// [rows] in [sort]'s order; [CategorySort.biggestChange] is the order the
+/// comparison already has.
+List<CategoryCompare> sortCategoryCompares(
+  List<CategoryCompare> rows,
+  CategorySort sort,
+) {
+  switch (sort) {
+    case CategorySort.biggestChange:
+      return rows;
+    case CategorySort.mostUnusual:
+      return [...rows]..sort((a, b) {
+        final ap = a.deltaPct, bp = b.deltaPct;
+        // No usual to divide by means infinitely unusual: pinned first.
+        if ((ap == null) != (bp == null)) return ap == null ? -1 : 1;
+        if (ap == null || bp == null) return b.actual.compareTo(a.actual);
+        return bp.abs().compareTo(ap.abs());
+      });
+    case CategorySort.highestSpend:
+      return [...rows]..sort((a, b) => b.actual.compareTo(a.actual));
+  }
+}
+
 class PreviousMonthCard extends StatelessWidget {
   final MonthComparison comparison;
 
@@ -41,13 +134,7 @@ class PreviousMonthCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = comparison.vsPrevious;
     final name = _monthName.format(comparison.previousMonth);
-    final tip =
-        'While the month is running, compares spending up to the same day '
-        "of last month. The projection scales this month's spending by how "
-        'last month grew from this day to its end, and appears from day '
-        '$kMinDaysForProjection. When last month is not fully on record, it '
-        "uses this month's daily pace instead, once $kMinDaysOfData days are "
-        'on record.';
+    const tip = _previousTip;
 
     // Records that start part-way through last month (or later) leave no
     // fair "same day" figure; say so rather than compare a few days.
@@ -137,19 +224,8 @@ class UsualSpendCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = comparison.vsUsual;
     final months = comparison.usualMonths;
-    const tip =
-        '"Usual" is the middle value of up to 6 complete months before '
-        'this one, so one unusual month does not move it the way an average '
-        'would. While the month is running, both sides count only up to '
-        "today's date. It needs at least 2 complete months.";
-    String? example() {
-      if (c.state == CompareState.notEnoughHistory || c.reference <= 0) {
-        return null;
-      }
-      final d = c.actual - c.reference;
-      return 'This month ${fmtMoney(c.actual)} vs usual '
-          '${fmtMoney(c.reference)} = ${d < 0 ? '−' : '+'}${fmtMoney(d.abs())}';
-    }
+    const tip = _usualTip;
+    String? example() => _usualExample(comparison);
 
     if (c.state == CompareState.notEnoughHistory) {
       return _Section(
@@ -361,46 +437,19 @@ class _CategoryComparisonCardState extends State<CategoryComparisonCard> {
     if (widget.sort == null) setState(() => _sort = s);
   }
 
-  List<CategoryCompare> _sorted(List<CategoryCompare> rows) {
-    switch (_effectiveSort) {
-      case CategorySort.biggestChange:
-        return rows;
-      case CategorySort.mostUnusual:
-        return [...rows]..sort((a, b) {
-          final ap = a.deltaPct, bp = b.deltaPct;
-          // No usual to divide by means infinitely unusual: pinned first.
-          if ((ap == null) != (bp == null)) return ap == null ? -1 : 1;
-          if (ap == null || bp == null) return b.actual.compareTo(a.actual);
-          return bp.abs().compareTo(ap.abs());
-        });
-      case CategorySort.highestSpend:
-        return [...rows]..sort((a, b) => b.actual.compareTo(a.actual));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final rows = _sorted(widget.comparison.categories);
+    final rows = sortCategoryCompares(
+      widget.comparison.categories,
+      _effectiveSort,
+    );
     final muted = Theme.of(context).textTheme.bodySmall?.copyWith(
       color: Theme.of(context).colorScheme.onSurfaceVariant,
     );
 
-    const title = 'Categories vs usual';
-    const tip =
-        '"Usual" is the middle value of up to $kUsualWindowMonths complete '
-        'months before this one, so one unusual month does not move it. A '
-        'month with nothing in a category counts as zero. While the month is '
-        "running, both sides count only up to today's date. Red means more "
-        'than usual, green less.';
-    String? example() {
-      if (rows.isEmpty) return null;
-      final top = rows.first;
-      if (top.usual <= 0) return null;
-      final d = top.delta;
-      return '${top.category.label}: ${fmtMoney(top.actual)} this month vs '
-          '${fmtMoney(top.usual)} usual = '
-          '${d < 0 ? '−' : '+'}${fmtMoney(d.abs())}';
-    }
+    const title = _categoryTitle;
+    const tip = _categoryTip;
+    String? example() => _categoryExample(rows);
 
     // Same gate as "This month vs usual": with too little history every
     // row would read "New this month", which says nothing.
@@ -673,29 +722,46 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Inside a dashboard fold its heading already shows [title]: keep only
-    // the tip and the controls, on one row, and no top gap.
-    final inFold = DashboardFoldScope.of(context);
+    final small = Theme.of(context).textTheme.bodySmall;
+    // Inside a dashboard fold its heading already shows [title] and the tip
+    // (the dashboard passes the same one): keep the subtitle and the
+    // controls, on one row, and no top gap.
+    if (DashboardFoldScope.of(context)) {
+      final line = subtitle == null ? null : Text(subtitle!, style: small);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (trailing != null)
+            Row(
+              children: [
+                Expanded(child: line ?? const SizedBox.shrink()),
+                trailing!,
+              ],
+            )
+          else
+            ?line,
+          if (trailing != null || line != null) const SizedBox(height: 8),
+          Card(
+            child: Padding(padding: const EdgeInsets.all(16), child: child),
+          ),
+        ],
+      );
+    }
     final infoTip = tip == null
         ? null
         : InfoTip(title: title, message: tip!, example: example, link: link);
     final text = Text(title, style: Theme.of(context).textTheme.titleMedium);
-    final Widget heading = inFold
-        ? Align(alignment: Alignment.centerLeft, child: infoTip)
-        : infoTip == null
+    final Widget heading = infoTip == null
         ? text
         : Align(
             alignment: Alignment.centerLeft,
             child: InfoLabel(label: text, tip: infoTip),
           );
-    final showHeading = !inFold || infoTip != null || trailing != null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (!inFold) const SizedBox(height: 24),
-        if (!showHeading)
-          const SizedBox.shrink()
-        else if (trailing == null)
+        const SizedBox(height: 24),
+        if (trailing == null)
           heading
         else
           Row(
@@ -706,7 +772,7 @@ class _Section extends StatelessWidget {
           ),
         if (subtitle != null) ...[
           const SizedBox(height: 2),
-          Text(subtitle!, style: Theme.of(context).textTheme.bodySmall),
+          Text(subtitle!, style: small),
         ],
         const SizedBox(height: 8),
         Card(

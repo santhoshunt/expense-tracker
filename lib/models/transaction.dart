@@ -554,6 +554,8 @@ class Tx {
     String? note,
     DateTime? date,
     String? sender,
+    // Only the SMS re-derivation migration sets it; edits never touch it.
+    String? externalRef,
     bool? pending,
     bool? userCategorized,
     String? acctKey,
@@ -583,7 +585,7 @@ class Tx {
     date: date ?? this.date,
     source: source,
     sender: sender ?? this.sender,
-    externalRef: externalRef,
+    externalRef: externalRef ?? this.externalRef,
     pending: pending ?? this.pending,
     suspectedSpam: suspectedSpam,
     userCategorized: userCategorized ?? this.userCategorized,

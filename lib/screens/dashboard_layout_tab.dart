@@ -81,8 +81,12 @@ class DashboardLayoutTab extends StatelessWidget {
       header: Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: Text(
-          'Drag to reorder. Hidden sections leave the dashboard until you '
-          'show them again.',
+          folds
+              ? 'Drag to reorder. Tap Open or Folded to choose how a section '
+                    'starts. Hidden sections leave the dashboard until you '
+                    'show them again.'
+              : 'Drag to reorder. Hidden sections leave the dashboard until '
+                    'you show them again.',
           style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
         ),
       ),
@@ -125,9 +129,22 @@ class DashboardLayoutTab extends StatelessWidget {
                 ),
               ),
               title: Text(s.label),
-              subtitle: folds
-                  ? Text(s.openByDefault ? 'Starts open' : 'Starts folded')
-                  : null,
+              subtitle: !folds
+                  ? null
+                  : shown
+                  ? Align(
+                      alignment: Alignment.centerLeft,
+                      child: _StartsOpen(section: s),
+                    )
+                  // As tall as the Open/Folded target, so switching Show
+                  // does not move the rows below under the finger.
+                  : const SizedBox(
+                      height: 48,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('Hidden'),
+                      ),
+                    ),
               trailing: Semantics(
                 label: 'Show ${s.label}',
                 child: Switch(
@@ -139,6 +156,73 @@ class DashboardLayoutTab extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Whether a section starts open or folded on the dashboard, as a small
+/// outlined button under its name. The same stored state as tapping the
+/// section's heading there, so the two always agree.
+class _StartsOpen extends StatelessWidget {
+  final DashboardSection section;
+  const _StartsOpen({required this.section});
+
+  @override
+  Widget build(BuildContext context) {
+    final open = context.select<SettingsProvider, bool>(
+      (s) => s.sectionOpen(section),
+    );
+    final settings = context.read<SettingsProvider>();
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    void toggle() => settings.setSectionOpen(section, !open);
+    return Semantics(
+      container: true,
+      button: true,
+      label: '${section.label}, starts ${open ? 'open' : 'folded'}',
+      excludeSemantics: true,
+      onTap: toggle,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: toggle,
+        // A 48dp tall target around the 32dp outlined box.
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            widthFactor: 1,
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 32),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: scheme.outlineVariant),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    open ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      open ? 'Open' : 'Folded',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: text.labelMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

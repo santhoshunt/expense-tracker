@@ -83,6 +83,20 @@ const List<String> kDefaultIgnorePhrases = [
   'e-statement',
   // 'statement' intentionally omitted: too broad — Yes Bank and many others
   // include "For statement enquiry call …" in the footer of genuine alerts.
+  ...kIgnorePhrasesAddedV128,
+];
+
+/// Added in 1.28: bill and card-due reminders ("… is due on 15-Jan. Ignore
+/// if paid"), ASBA blocks, NACH mandates "received today for processing"
+/// and gift vouchers. Seeded once more for existing users, who got the list
+/// above before these existed. Left out because a completed debit's footer
+/// can say them: 'min due' (card payments), 'will be auto-debited' ("next
+/// EMI will be auto-debited on …"), a bare 'for processing'.
+const List<String> kIgnorePhrasesAddedV128 = [
+  'ignore if paid',
+  'is blocked',
+  'received today for processing',
+  'e-voucher',
 ];
 
 /// Signals that a parsed transaction is likely promotional or informational
