@@ -111,6 +111,11 @@ void main() {
   testWidgets('a new entry shows the switch once its note names a merchant, '
       'and off then on again changes nothing', (tester) async {
     final (p, s) = await seeded();
+    // Phone-shaped: on the default 800x600 surface the sheet's Add button
+    // sits below the bottom edge and the tap missed silently.
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(
       app(
         p,
@@ -149,6 +154,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(add);
     await tester.pumpAndSettle();
+    // The row saved, so an empty pin set means the toggle really was off.
+    expect(p.transactions.where((t) => t.note == 'Spotify'), hasLength(1));
     expect(p.subscriptionPins, isEmpty);
   });
 
@@ -189,7 +196,9 @@ void main() {
     await tester.tap(find.textContaining('Water bill'));
     await tester.tap(find.textContaining('To savings'));
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.byTooltip('Mark as subscription'));
+    await tester.tap(find.byTooltip('More actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('bulk-more-subscription')));
     await tester.pumpAndSettle();
     expect(find.text('Mark 2 merchants as subscriptions'), findsOneWidget);
     expect(find.textContaining('1 row skipped'), findsOneWidget);

@@ -590,7 +590,8 @@ void main() {
     await tester.tap(find.byTooltip('Delete'));
     await tester.pumpAndSettle();
     expect(find.text('Delete 2 transactions?'), findsOneWidget);
-    await tester.tap(find.text('Delete'));
+    // The bar's own Delete label is on screen too.
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
     await tester.pumpAndSettle();
 
     expect(p.transactions, isEmpty);

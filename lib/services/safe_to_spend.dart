@@ -164,11 +164,10 @@ SafeToSpend? computeSafeToSpend(
   var pendingMonth = 0.0;
   var pendingToday = 0.0;
   for (final t in finance.pendingTransactions) {
-    if (!spend(t) || t.date.year != now.year || t.date.month != now.month) {
-      continue;
-    }
+    final d = t.effectiveDate;
+    if (!spend(t) || d.year != now.year || d.month != now.month) continue;
     pendingMonth += t.spendAmount;
-    if (t.date.day == now.day) pendingToday += t.spendAmount;
+    if (d.day == now.day) pendingToday += t.spendAmount;
   }
   final todaySpent = finance.spendOnDay(now).spent + pendingToday;
   final monthSpent = finance.expenseInMonth(month) + pendingMonth;

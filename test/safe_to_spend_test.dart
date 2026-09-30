@@ -236,6 +236,31 @@ void main() {
     expect(s.leftToday, closeTo((40000 - 22500 - 5000) / 12 - 2000, 1e-9));
   });
 
+  test('a row counted into this month is this month\'s spend', () async {
+    final p = await ledger();
+    // Paid on 30 August, counted in September: the cap sees it.
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 1200,
+      note: '',
+      date: DateTime(2026, 8, 30, 10),
+      countIn: DateTime(2026, 9, 1),
+    );
+    // Paid today, counted in October: out of September's cap.
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 300,
+      note: '',
+      date: DateTime(2026, 9, 19, 9),
+      countIn: DateTime(2026, 10, 1),
+    );
+    final s = safe(p);
+    expect(s.spentBeforeToday, 22500 + 1200);
+    expect(s.spentToday, 0);
+  });
+
   test('billsDue from today lists what is ahead, today included', () async {
     final p = await ledger(
       reminders: [rent, phone, bill('Past', 800, 12), bill('Milk', 60, 19)],

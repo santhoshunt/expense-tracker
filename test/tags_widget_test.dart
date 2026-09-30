@@ -138,7 +138,10 @@ void main() {
 
     await tester.longPress(find.textContaining('coffeerun'));
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.byTooltip('Tags'));
+    // Tags sits in the bar's More menu.
+    await tester.tap(find.byTooltip('More actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('bulk-more-tags')));
     await tester.pumpAndSettle();
     await tester.enterText(find.widgetWithText(TextField, 'Tags'), 'Work,');
     await tester.pump();

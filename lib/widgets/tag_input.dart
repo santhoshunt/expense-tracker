@@ -97,7 +97,7 @@ class TagInput extends StatelessWidget {
                     ? 'Up to $kMaxTagsPerTx tags'
                     : 'For totals across categories, like a trip',
                 counterText: '',
-                prefixIcon: const Icon(Icons.sell_outlined),
+                prefixIcon: const Icon(Icons.label_outline),
               ),
               onChanged: (v) {
                 if (v.contains(',')) _submit(v);

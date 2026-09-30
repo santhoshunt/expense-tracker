@@ -66,6 +66,23 @@ void main() {
     expect(result.single.total, 200);
   });
 
+  test('a row counts in the month it is counted in', () {
+    final moved = Tx(
+      id: 't${seq++}',
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 700,
+      note: '',
+      smsBody: 'Rs.700 debited from a/c XX1234 to SWIGGY on 30-06-26.',
+      date: DateTime(2026, 6, 30),
+      source: TxSource.sms,
+      sender: 'VM-HDFCBK',
+      countIn: DateTime(2026, 7, 1),
+    );
+    expect(topMerchants([moved], month: month).single.total, 700);
+    expect(topMerchants([moved], month: DateTime(2026, 6)), isEmpty);
+  });
+
   test('digits-only merchants (phone/VPA numbers) are excluded', () {
     final result = topMerchants([
       sms(amount: 3000, date: DateTime(2026, 7, 2), merchant: '9215676766'),

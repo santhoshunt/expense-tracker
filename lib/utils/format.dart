@@ -64,6 +64,16 @@ String fmtDateCompact(DateTime d) => (d.hour == 0 && d.minute == 0)
     ? _dayMonth.format(d)
     : '${_dayMonth.format(d)}, ${_time.format(d)}';
 
+/// A Count in moment (`Tx.countIn`) as the edit sheet's chip and the bulk
+/// confirm show it: "Thu 1 Oct", with the time only when it isn't midnight
+/// (see [fmtDateMaybeTime]).
+String fmtCountIn(DateTime d) {
+  final day = _weekdayDayMonth.format(d);
+  return (d.hour == 0 && d.minute == 0) ? day : '$day, ${_time.format(d)}';
+}
+
+final DateFormat _weekdayDayMonth = DateFormat('EEE d MMM');
+
 /// Inclusive day range, collapsing whatever the two ends share:
 /// "3 – 9 Aug 2026", "12 Jun – 3 Aug 2026", "20 Dec 2025 – 4 Jan 2026".
 String fmtDateRange(DateTimeRange r) {

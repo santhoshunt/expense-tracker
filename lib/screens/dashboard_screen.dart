@@ -1061,9 +1061,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // running month, one before the records, one they start part-way
       // through or one with nothing recorded (an import gap) would drag it
       // down. The usual month skips those too.
-      final oldest = finance.transactions.isEmpty
-          ? null
-          : finance.transactions.last.date;
+      final oldest = finance.firstTransactionDate;
       final firstMonth = oldest == null
           ? null
           : DateTime(oldest.year, oldest.month + (oldest.day == 1 ? 0 : 1));
@@ -1349,7 +1347,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   rows: [
                     for (final t in byTag)
                       _CategoryRow(
-                        icon: Icons.sell_outlined,
+                        icon: Icons.label_outline,
                         color: finance.tagColor(t.tag) ?? scheme.tertiary,
                         label: t.tag,
                         amount: t.spent,

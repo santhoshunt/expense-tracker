@@ -396,10 +396,13 @@ class FinanceProvider extends ChangeNotifier {
   }();
 
   /// Confirmed transactions bucketed by month — see [_Derived.byMonth].
+  /// Keyed on [Tx.effectiveDate]: a row counted in another month is that
+  /// month's for every period figure.
   Map<int, List<Tx>> get _byMonth => _d.byMonth ??= () {
     final buckets = <int, List<Tx>>{};
     for (final (t, _) in _ordered) {
-      (buckets[t.date.year * 12 + t.date.month] ??= []).add(t);
+      final d = t.effectiveDate;
+      (buckets[d.year * 12 + d.month] ??= []).add(t);
     }
     return buckets;
   }();
@@ -432,7 +435,7 @@ class FinanceProvider extends ChangeNotifier {
     final key = month.year * 12 + month.month;
     return _d.partialMonths['$key|$day'] ??= _totals([
       for (final t in _byMonth[key] ?? const <Tx>[])
-        if (t.date.day <= day) t,
+        if (t.effectiveDate.day <= day) t,
     ]);
   }
 
@@ -447,8 +450,10 @@ class FinanceProvider extends ChangeNotifier {
     int day,
   ) => _monthTotalsThrough(month, day).byCategory;
 
-  /// Date of the earliest confirmed transaction, or null on an empty ledger.
-  /// No cache slot: `_ordered` is memoised and sorted by date.
+  /// Date of the earliest confirmed transaction, or null on an empty ledger:
+  /// when the records start. The real date, not [Tx.effectiveDate]: a row
+  /// counted in earlier says nothing about the days before it being on
+  /// record. No cache slot: `_ordered` is memoised and sorted by date.
   DateTime? get firstTransactionDate =>
       _ordered.isEmpty ? null : _ordered.first.$1.date;
 
@@ -592,7 +597,8 @@ class FinanceProvider extends ChangeNotifier {
       if (t.type != TxType.expense || isTransferCategory(t.categoryId)) {
         continue;
       }
-      byDay[t.date.day] = (byDay[t.date.day] ?? 0) + t.spendAmount;
+      final day = t.effectiveDate.day;
+      byDay[day] = (byDay[day] ?? 0) + t.spendAmount;
     }
     return byDay;
   }
@@ -604,7 +610,7 @@ class FinanceProvider extends ChangeNotifier {
     var spent = 0.0;
     var count = 0;
     for (final t in rows ?? const <Tx>[]) {
-      if (t.date.day != day.day ||
+      if (t.effectiveDate.day != day.day ||
           t.type != TxType.expense ||
           isTransferCategory(t.categoryId)) {
         continue;
@@ -615,15 +621,15 @@ class FinanceProvider extends ChangeNotifier {
     return (spent: spent, count: count);
   }
 
-  /// Confirmed money-out rows on one calendar [day] — the heatmap's
-  /// day-tap sheet.
+  /// Confirmed money-out rows counted on one calendar [day], for the
+  /// heatmap's day-tap sheet.
   List<Tx> expensesOnDay(DateTime day) => [
     for (final t in transactions)
       if (t.type == TxType.expense &&
           !isTransferCategory(t.categoryId) &&
-          t.date.year == day.year &&
-          t.date.month == day.month &&
-          t.date.day == day.day)
+          t.effectiveDate.year == day.year &&
+          t.effectiveDate.month == day.month &&
+          t.effectiveDate.day == day.day)
         t,
   ];
 
@@ -639,13 +645,15 @@ class FinanceProvider extends ChangeNotifier {
     final rows = _ordered;
     if (rows.isEmpty) return List.filled(7, 0);
     final totals = List<double>.filled(7, 0);
-    var first = rows.first.$1.date;
+    // The day a row counts on, like the heatmap cells beside this strip.
+    var first = rows.first.$1.effectiveDate;
     for (final (t, _) in rows) {
-      if (t.date.isBefore(first)) first = t.date;
+      final d = t.effectiveDate;
+      if (d.isBefore(first)) first = d;
       if (t.type != TxType.expense || isTransferCategory(t.categoryId)) {
         continue;
       }
-      totals[t.date.weekday - 1] += t.spendAmount;
+      totals[d.weekday - 1] += t.spendAmount;
     }
     final start = DateTime(first.year, first.month, first.day);
     final now = DateTime.now();
@@ -1644,6 +1652,7 @@ class FinanceProvider extends ChangeNotifier {
     List<String> tags = const [],
     List<SplitShare> people = const [],
     String? repaidBy,
+    DateTime? countIn,
   }) async {
     final id = _newId();
     _transactions.add(
@@ -1660,6 +1669,7 @@ class FinanceProvider extends ChangeNotifier {
           tags: normalizeTags(tags),
           people: people,
           repaidBy: repaidBy,
+          countIn: Tx.normalizeCountIn(countIn, date),
         ),
       ),
     );
@@ -3029,8 +3039,8 @@ class FinanceProvider extends ChangeNotifier {
     for (final t in all) {
       if (t.type == TxType.expense &&
           !isTransferCategory(t.categoryId) &&
-          !t.date.isBefore(monthStart) &&
-          t.date.isBefore(monthEnd)) {
+          !t.effectiveDate.isBefore(monthStart) &&
+          t.effectiveDate.isBefore(monthEnd)) {
         // Group splits: only the user's own share, like the Spent card.
         spentThisMonth += t.spendAmount;
       }
@@ -4067,13 +4077,17 @@ class FinanceProvider extends ChangeNotifier {
     return before;
   }
 
-  /// Stamps the same date and time on every transaction in [ids]. Returns
-  /// how many rows changed.
+  /// Stamps the same date and time on every transaction in [ids], and puts
+  /// them back on their own dates: a Count in chosen for the old date
+  /// (a 30 Sep salary counted in October) says nothing about the new one.
+  /// Returns how many rows changed.
   Future<int> setDateTimeForMany(Set<String> ids, DateTime dateTime) async {
     var changed = 0;
     for (var i = 0; i < _transactions.length; i++) {
       final t = _transactions[i];
-      if (!ids.contains(t.id) || t.date == dateTime) continue;
+      if (!ids.contains(t.id) || (t.date == dateTime && t.countIn == null)) {
+        continue;
+      }
       // Day moves drop the stated "Avl Bal" — see updateTransaction: an
       // anchor re-dated away from its SMS's moment corrupts the balance.
       final dayChanged =
@@ -4083,7 +4097,28 @@ class FinanceProvider extends ChangeNotifier {
       _transactions[i] = t.copyWith(
         date: dateTime,
         clearBalanceAfter: dayChanged && t.balanceAfter != null,
+        clearCountIn: true,
       );
+      changed++;
+    }
+    if (changed > 0) {
+      notifyListeners();
+      await _persist(tx: true);
+    }
+    return changed;
+  }
+
+  /// Counts every transaction in [ids] in [stamp] ([Tx.countIn]); null puts
+  /// them back on their own dates. Their real dates and stated balances stay,
+  /// so account balances don't move. Returns how many rows changed.
+  Future<int> setCountInForMany(Set<String> ids, DateTime? stamp) async {
+    var changed = 0;
+    for (var i = 0; i < _transactions.length; i++) {
+      final t = _transactions[i];
+      if (!ids.contains(t.id)) continue;
+      final next = Tx.normalizeCountIn(stamp, t.date);
+      if (next == t.countIn) continue;
+      _transactions[i] = t.copyWith(countIn: next, clearCountIn: next == null);
       changed++;
     }
     if (changed > 0) {
@@ -4581,7 +4616,8 @@ class FinanceProvider extends ChangeNotifier {
     // key → cycle name).
     // v17: reminders may carry `cycle`, `anchorMonth`, `autoAdd`,
     // `accountId` and `autoSince`.
-    'version': 17,
+    // v18: transactions may carry `countIn`.
+    'version': 18,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),

@@ -42,7 +42,9 @@ List<MerchantSpend> topMerchants(
   final newest = <String, Tx>{};
   for (final t in txs) {
     if (t.type != TxType.expense) continue;
-    if (t.date.isBefore(start) || !t.date.isBefore(end)) continue;
+    // The month the row counts in, like the month totals.
+    final d = t.effectiveDate;
+    if (d.isBefore(start) || !d.isBefore(end)) continue;
     final key = recurringKeyOf(t);
     if (key == null) continue;
     totals[key] = (totals[key] ?? 0) + t.spendAmount;

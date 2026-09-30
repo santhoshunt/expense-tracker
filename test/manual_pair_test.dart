@@ -61,19 +61,35 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
   }
 
-  final pairButton = find.byTooltip('Pair as transfer');
+  // Pair sits in the selection bar's More menu, listed only with exactly
+  // two rows selected.
+  final pairButton = find.byKey(const ValueKey('bulk-more-pair'));
+  Future<void> openMore(WidgetTester tester) async {
+    await tester.tap(find.byTooltip('More actions'));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> closeMore(WidgetTester tester) async {
+    // The menu's barrier: a tap outside dismisses it.
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pumpAndSettle();
+  }
 
   testWidgets('two opposite rows pair, link, and undo unlinks', (tester) async {
     final p = await seeded();
     await pump(tester, p);
 
     await tester.longPress(find.textContaining('billdebit'));
-    await tester.pump();
-    expect(pairButton, findsNothing, reason: 'one selected');
-
-    await tester.tap(find.textContaining('cardack'));
     // Past the selection bar's fold-in, so its buttons are tappable.
     await tester.pump(const Duration(milliseconds: 300));
+    await openMore(tester);
+    expect(find.byKey(const ValueKey('bulk-more-tags')), findsOneWidget);
+    expect(pairButton, findsNothing, reason: 'one selected');
+    await closeMore(tester);
+
+    await tester.tap(find.textContaining('cardack'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await openMore(tester);
     expect(pairButton, findsOneWidget);
 
     await tester.tap(pairButton);
@@ -119,6 +135,7 @@ void main() {
     await tester.tap(find.textContaining('coffeerun'));
     // Past the selection bar's fold-in, so its buttons are tappable.
     await tester.pump(const Duration(milliseconds: 300));
+    await openMore(tester);
     await tester.tap(pairButton);
     await tester.pump(const Duration(milliseconds: 400));
 
@@ -138,7 +155,10 @@ void main() {
     await tester.tap(find.textContaining('cardack'));
     await tester.pump();
     await tester.tap(find.textContaining('coffeerun'));
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await openMore(tester);
+    // The menu is open, so an absent Pair means it isn't listed.
+    expect(find.byKey(const ValueKey('bulk-more-tags')), findsOneWidget);
     expect(pairButton, findsNothing);
   });
 }

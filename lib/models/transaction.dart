@@ -472,6 +472,12 @@ class Tx {
   /// everywhere else.
   final String? repaidBy;
 
+  /// The moment period figures (month totals, budgets, the recap, Trends,
+  /// Breakdown) count this row in, when the user moved it: a salary paid on
+  /// the 30th counted in the next month. Null means its own [date]. Balances,
+  /// reminders, pairing and import dedup always use [date].
+  final DateTime? countIn;
+
   const Tx({
     required this.id,
     required this.type,
@@ -493,7 +499,16 @@ class Tx {
     this.tags = const [],
     this.people = const [],
     this.repaidBy,
+    this.countIn,
   });
+
+  /// The date period figures use: [countIn] when set, else [date].
+  DateTime get effectiveDate => countIn ?? date;
+
+  /// Null when [countIn] is absent or equals [date], so a row that counts on
+  /// its own date never carries the key.
+  static DateTime? normalizeCountIn(DateTime? countIn, DateTime date) =>
+      countIn == null || countIn.isAtSameMomentAs(date) ? null : countIn;
 
   TxCategory get category => categoryById(categoryId, fallbackType: type);
 
@@ -544,6 +559,7 @@ class Tx {
       tags: tags,
       people: people,
       repaidBy: repaidBy,
+      countIn: countIn,
     );
   }
 
@@ -574,6 +590,8 @@ class Tx {
     List<SplitShare>? people,
     String? repaidBy,
     bool clearRepaidBy = false,
+    DateTime? countIn,
+    bool clearCountIn = false,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -598,6 +616,10 @@ class Tx {
     tags: tags == null ? this.tags : normalizeTags(tags),
     people: people == null ? this.people : List.unmodifiable(people),
     repaidBy: clearRepaidBy ? null : (repaidBy ?? this.repaidBy),
+    // Re-dating a row onto its count-in moment drops the key.
+    countIn: clearCountIn
+        ? null
+        : normalizeCountIn(countIn ?? this.countIn, date ?? this.date),
   );
 
   Map<String, dynamic> toJson() => {
@@ -621,39 +643,47 @@ class Tx {
     if (tags.isNotEmpty) 'tags': tags,
     if (people.isNotEmpty) 'people': [for (final p in people) p.toJson()],
     if (repaidBy != null) 'repaidBy': repaidBy,
+    if (countIn != null) 'countIn': countIn!.toIso8601String(),
   };
 
-  factory Tx.fromJson(Map<String, dynamic> json) => Tx(
-    id: json['id'] as String,
-    type: TxType.values.byName(json['type'] as String),
-    categoryId: json['categoryId'] as String,
-    amount: (json['amount'] as num).toDouble(),
-    note: json['note'] as String? ?? '',
-    smsBody: json['smsBody'] as String? ?? '',
-    date: DateTime.parse(json['date'] as String),
-    source: TxSource.values.byName(json['source'] as String? ?? 'manual'),
-    sender: json['sender'] as String? ?? '',
-    externalRef: json['externalRef'] as String?,
-    pending: json['pending'] as bool? ?? false,
-    suspectedSpam: json['suspectedSpam'] as bool? ?? false,
-    userCategorized: json['userCategorized'] as bool? ?? false,
-    acctKey: json['acctKey'] as String?,
-    balanceAfter: (json['balanceAfter'] as num?)?.toDouble(),
-    myShare: (json['myShare'] as num?)?.toDouble(),
-    pairId: json['pairId'] as String?,
-    // Tolerant: a hand-edited or foreign backup may hold anything here.
-    tags: switch (json['tags']) {
-      final List<dynamic> list => normalizeTags(list.whereType<String>()),
-      _ => const [],
-    },
-    people: switch (json['people']) {
-      final List<dynamic> list => List.unmodifiable([
-        for (final e in list) ?SplitShare.tryFromJson(e),
-      ]),
-      _ => const [],
-    },
-    repaidBy: json['repaidBy'] is String ? json['repaidBy'] as String : null,
-  );
+  factory Tx.fromJson(Map<String, dynamic> json) {
+    final date = DateTime.parse(json['date'] as String);
+    return Tx(
+      id: json['id'] as String,
+      type: TxType.values.byName(json['type'] as String),
+      categoryId: json['categoryId'] as String,
+      amount: (json['amount'] as num).toDouble(),
+      note: json['note'] as String? ?? '',
+      smsBody: json['smsBody'] as String? ?? '',
+      date: date,
+      source: TxSource.values.byName(json['source'] as String? ?? 'manual'),
+      sender: json['sender'] as String? ?? '',
+      externalRef: json['externalRef'] as String?,
+      pending: json['pending'] as bool? ?? false,
+      suspectedSpam: json['suspectedSpam'] as bool? ?? false,
+      userCategorized: json['userCategorized'] as bool? ?? false,
+      acctKey: json['acctKey'] as String?,
+      balanceAfter: (json['balanceAfter'] as num?)?.toDouble(),
+      myShare: (json['myShare'] as num?)?.toDouble(),
+      pairId: json['pairId'] as String?,
+      // Tolerant: a hand-edited or foreign backup may hold anything here.
+      tags: switch (json['tags']) {
+        final List<dynamic> list => normalizeTags(list.whereType<String>()),
+        _ => const [],
+      },
+      people: switch (json['people']) {
+        final List<dynamic> list => List.unmodifiable([
+          for (final e in list) ?SplitShare.tryFromJson(e),
+        ]),
+        _ => const [],
+      },
+      repaidBy: json['repaidBy'] is String ? json['repaidBy'] as String : null,
+      countIn: normalizeCountIn(switch (json['countIn']) {
+        final String s => DateTime.tryParse(s),
+        _ => null,
+      }, date),
+    );
+  }
 }
 
 /// One person's part of a group split ([Tx.people]).

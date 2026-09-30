@@ -149,7 +149,7 @@ class TagsTab extends StatelessWidget {
                 if (summaries.isEmpty)
                   const EmptyState(
                     compact: true,
-                    icon: Icons.sell_outlined,
+                    icon: Icons.label_outline,
                     message: 'Add tags when you add or edit a transaction.',
                   ),
                 for (final s in summaries)

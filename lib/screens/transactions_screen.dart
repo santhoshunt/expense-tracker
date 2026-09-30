@@ -23,6 +23,7 @@ import '../utils/haptics.dart';
 import '../utils/search_text.dart';
 import '../widgets/category_chip_label.dart';
 import '../widgets/cycle_label.dart';
+import '../widgets/date_time_picker.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
@@ -319,7 +320,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       for (final u in finance.allTags)
         if (_tagFilter.contains(tagKey(u.tag)))
           chip(
-            avatar: const Icon(Icons.sell_outlined, size: 16),
+            avatar: const Icon(Icons.label_outline, size: 16),
             label: 'Tag · ${u.tag}',
             onDeleted: () => setState(() => _tagFilter.remove(tagKey(u.tag))),
           ),
@@ -420,8 +421,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           finance.accountForKey(t.acctKey)?.id != _accountId) {
         return false;
       }
+      // The month a row counts in: a dashboard tap-through lists what its
+      // total counted.
       final m = _monthFilter;
-      if (m != null && (t.date.year != m.year || t.date.month != m.month)) {
+      final counts = t.effectiveDate;
+      if (m != null && (counts.year != m.year || counts.month != m.month)) {
         return false;
       }
       if (rangeStart != null &&
@@ -549,10 +553,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final filtered = _applyFilters(allConfirmed, finance, f);
 
     // Group by month, months always newest-first; sort within each month.
+    // Rows sit under the month they happened in, except in a month-filtered
+    // view: an October tap-through would otherwise show a September header
+    // holding only the salary that counts in October. Either way a header
+    // totals the rows under it, so every row is in exactly one total.
+    final byCounted = _monthFilter != null;
     final groups = <DateTime, List<Tx>>{};
     for (final tx in filtered) {
-      final month = DateTime(tx.date.year, tx.date.month);
-      groups.putIfAbsent(month, () => []).add(tx);
+      final d = byCounted ? tx.effectiveDate : tx.date;
+      groups.putIfAbsent(DateTime(d.year, d.month), () => []).add(tx);
     }
     final months = groups.keys.toList()..sort((a, b) => b.compareTo(a));
     for (final list in groups.values) {
@@ -873,6 +882,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   ),
                   onCategory: () => _bulkCategory(filtered),
                   onAccount: _bulkAccount,
+                  onCountIn: _bulkCountIn,
                   onDateTime: _bulkDateTime,
                   onTags: _bulkTags,
                   onSubscription: _bulkSubscription,
@@ -1062,19 +1072,23 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
   }
 
+  /// [done] replaces the `<what> set on N transactions.` wording for an
+  /// edit that takes something off rather than setting it.
   void _afterBulk(
     int changed,
     String what, {
     required IconData icon,
     VoidCallback? onUndo,
+    String? done,
   }) {
     if (!mounted) return;
     showAppToast(
       context,
       changed == 0
           ? 'No rows changed.'
-          : '$what set on $changed transaction'
-                '${changed == 1 ? '' : 's'}.',
+          : done ??
+                '$what set on $changed transaction'
+                    '${changed == 1 ? '' : 's'}.',
       tone: changed == 0 ? AppToastTone.info : AppToastTone.change,
       icon: changed == 0 ? null : icon,
       duration: const Duration(seconds: 5),
@@ -1234,35 +1248,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   Future<void> _bulkDateTime() async {
     if (_selected.isEmpty) return;
-    final date = await showDatePicker(
-      context: context,
-      initialDate: DateTime.now(),
+    final now = DateTime.now();
+    final stamp = await pickDateThenTime(
+      context,
+      initial: now,
       firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
+      lastDate: now.add(const Duration(days: 1)),
     );
-    if (date == null || !mounted) return;
-    final time = await showTimePicker(
-      context: context,
-      initialTime: TimeOfDay.now(),
-    );
-    if (time == null || !mounted) return;
-    final stamp = DateTime(
-      date.year,
-      date.month,
-      date.day,
-      time.hour,
-      time.minute,
-    );
+    if (stamp == null || !mounted) return;
     final n = _selected.length;
     final finance = context.read<FinanceProvider>();
     // The one bulk edit whose old values cannot be re-derived from the rows
     // themselves — confirm with the count, and keep an Undo snapshot.
+    final moved = _selectedSnapshot(finance).any((t) => t.countIn != null);
     if (!await _confirmBulk(
       'Set date & time on $n transaction${n == 1 ? '' : 's'}?',
       'Every selected transaction is stamped '
           '${MaterialLocalizations.of(context).formatMediumDate(stamp)}, '
           '${TimeOfDay.fromDateTime(stamp).format(context)}. '
-          'Their original dates are replaced.',
+          'Their original dates are replaced'
+          '${moved ? ', and any Count in date is removed' : ''}.',
     )) {
       return;
     }
@@ -1271,8 +1276,99 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _afterBulk(
       changed,
       'Date & time',
-      icon: Icons.event_outlined,
+      icon: Icons.edit_calendar_outlined,
       onUndo: () => finance.restoreEditedTransactions(snapshot),
+    );
+  }
+
+  /// Bulk Count in: the month figures count the selected rows in another
+  /// moment while their own dates, and so account balances, stay put.
+  Future<void> _bulkCountIn() async {
+    if (_selected.isEmpty) return;
+    final finance = context.read<FinanceProvider>();
+    final selectedTxs = _selectedSnapshot(finance);
+    if (selectedTxs.isEmpty) return;
+    // Rows already moved can go back to their own dates in one step.
+    final movedCount = selectedTxs.where((t) => t.countIn != null).length;
+    if (movedCount > 0) {
+      final choice = await showPickerSheet<bool>(
+        context: context,
+        title: 'Count in',
+        items: [
+          const PickerItem(
+            value: true,
+            label: 'Pick a date…',
+            leading: Icon(Icons.event_repeat_outlined, size: 18),
+          ),
+          PickerItem(
+            value: false,
+            label: movedCount == 1
+                ? 'Count on its own date'
+                : 'Count on their own dates',
+            leading: const Icon(Icons.undo, size: 18),
+          ),
+        ],
+      );
+      if (choice == null || !mounted) return;
+      if (choice.value == false) {
+        await _applyCountIn(finance, null);
+        return;
+      }
+    }
+    if (!mounted) return;
+    // Opens on a Count in already chosen, else the 1st of the month after
+    // the newest selected row: the salary-on-the-30th case.
+    final newest = selectedTxs
+        .map((t) => t.date)
+        .reduce((a, b) => a.isAfter(b) ? a : b);
+    final existing = [for (final t in selectedTxs) ?t.countIn];
+    final now = DateTime.now();
+    final later = newest.isAfter(now) ? newest : now;
+    final stamp = await pickDateThenTime(
+      context,
+      initial: existing.isNotEmpty
+          ? existing.first
+          : DateTime(newest.year, newest.month + 1),
+      firstDate: DateTime(2000),
+      // The end of the next month.
+      lastDate: DateTime(later.year, later.month + 2, 0, 23, 59),
+    );
+    if (stamp == null || !mounted) return;
+    await _applyCountIn(finance, stamp);
+  }
+
+  Future<void> _applyCountIn(FinanceProvider finance, DateTime? stamp) async {
+    String rows(int n) => '$n transaction${n == 1 ? '' : 's'}';
+    // Clearing touches only the rows that were moved; say that many.
+    final moved = _selectedSnapshot(
+      finance,
+    ).where((t) => t.countIn != null).length;
+    final ok = stamp == null
+        ? await _confirmBulk(
+            'Put ${rows(moved)} back on ${moved == 1 ? 'its' : 'their'} own '
+                'date${moved == 1 ? '' : 's'}?',
+            'Monthly totals, budgets, the recap, Trends and Breakdown go back '
+                'to counting ${moved == 1 ? 'it on the date it' : 'them on '
+                          'the dates they'} happened.',
+          )
+        : await _confirmBulk(
+            'Count ${rows(_selected.length)} on ${fmtCountIn(stamp)}?',
+            "Their own dates stay, so account balances don't change. Monthly "
+                'totals, budgets, the recap, Trends and Breakdown count them '
+                'in ${fmtMonth(stamp)}.',
+          );
+    if (!ok) return;
+    final snapshot = _selectedSnapshot(finance);
+    final changed = await finance.setCountInForMany(Set.of(_selected), stamp);
+    _afterBulk(
+      changed,
+      'Count in',
+      icon: Icons.event_repeat_outlined,
+      onUndo: () => finance.restoreEditedTransactions(snapshot),
+      done: stamp == null
+          ? '${rows(changed)} back on '
+                '${changed == 1 ? 'its own date' : 'their own dates'}.'
+          : null,
     );
   }
 
@@ -1327,7 +1423,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _afterBulk(
       before.length,
       'Tags',
-      icon: Icons.sell_outlined,
+      icon: Icons.label_outline,
       onUndo: () => finance.restoreEditedTransactions(before),
     );
   }
@@ -1880,7 +1976,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                     FilterChip(
                                       label: Text(tag),
                                       avatar: const Icon(
-                                        Icons.sell_outlined,
+                                        Icons.label_outline,
                                         size: 16,
                                       ),
                                       selected: selectedTags.contains(
@@ -2126,18 +2222,22 @@ class _BulkTagSheetState extends State<_BulkTagSheet> {
   }
 }
 
-/// Action bar shown while transactions are selected: count, select-all for
-/// the current filter, and the three bulk edits.
+enum _MoreAction { selectAll, tags, subscription, dateTime, pair }
+
+/// Action bar shown while transactions are selected: the count, the four
+/// most used bulk edits as labelled icons, and the rest behind More. A
+/// fixed row: nothing scrolls off screen, whatever the width or text size.
 class _SelectionBar extends StatelessWidget {
   final int count;
   final VoidCallback onSelectAll;
   final VoidCallback onCategory;
   final VoidCallback onAccount;
+  final VoidCallback onCountIn;
   final VoidCallback onDateTime;
   final VoidCallback onTags;
   final VoidCallback onSubscription;
 
-  /// Null hides the button (shown only with exactly two rows selected).
+  /// Null hides the menu item (shown only with exactly two rows selected).
   final VoidCallback? onPair;
   final VoidCallback onDelete;
   final VoidCallback onClose;
@@ -2147,6 +2247,7 @@ class _SelectionBar extends StatelessWidget {
     required this.onSelectAll,
     required this.onCategory,
     required this.onAccount,
+    required this.onCountIn,
     required this.onDateTime,
     required this.onTags,
     required this.onSubscription,
@@ -2154,6 +2255,23 @@ class _SelectionBar extends StatelessWidget {
     required this.onDelete,
     required this.onClose,
   });
+
+  PopupMenuItem<_MoreAction> _item(
+    _MoreAction value,
+    String key,
+    IconData icon,
+    String label,
+  ) => PopupMenuItem(
+    key: ValueKey('bulk-more-$key'),
+    value: value,
+    child: Row(
+      children: [
+        Icon(icon, size: 20),
+        const SizedBox(width: 12),
+        Flexible(child: Text(label)),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -2163,7 +2281,7 @@ class _SelectionBar extends StatelessWidget {
       child: FrostedPanel(
         radius: BorderRadius.circular(16),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           child: Row(
             children: [
               IconButton(
@@ -2179,77 +2297,180 @@ class _SelectionBar extends StatelessWidget {
                   color: scheme.primary,
                 ),
               ),
-              // Scrolls sideways rather than overflowing: seven or eight
-              // actions no longer fit a narrow phone's width. Reversed so
-              // the row sits at the end and Delete stays in view.
               Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  reverse: true,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: 'Select all shown',
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.select_all, size: 20),
-                        onPressed: onSelectAll,
-                      ),
-                      IconButton(
-                        tooltip: 'Set category',
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.category_outlined, size: 20),
-                        onPressed: onCategory,
-                      ),
-                      IconButton(
-                        tooltip: 'Tags',
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.sell_outlined, size: 20),
-                        onPressed: onTags,
-                      ),
-                      IconButton(
-                        tooltip: 'Mark as subscription',
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.autorenew, size: 20),
-                        onPressed: onSubscription,
-                      ),
-                      IconButton(
-                        tooltip: 'Assign account',
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(
-                          Icons.account_balance_outlined,
-                          size: 20,
-                        ),
-                        onPressed: onAccount,
-                      ),
-                      IconButton(
-                        tooltip: 'Set date & time',
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.schedule, size: 20),
-                        onPressed: onDateTime,
-                      ),
-                      if (onPair != null)
-                        IconButton(
-                          tooltip: 'Pair as transfer',
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(Icons.link, size: 20),
-                          onPressed: onPair,
-                        ),
-                      IconButton(
-                        tooltip: 'Delete',
-                        visualDensity: VisualDensity.compact,
-                        icon: Icon(
-                          Icons.delete_outline,
-                          size: 20,
-                          color: scheme.error,
-                        ),
-                        onPressed: onDelete,
-                      ),
-                    ],
-                  ),
+                child: _BarAction(
+                  icon: Icons.category_outlined,
+                  label: 'Category',
+                  tooltip: 'Set category',
+                  onTap: onCategory,
                 ),
               ),
+              Expanded(
+                child: _BarAction(
+                  icon: Icons.account_balance_outlined,
+                  label: 'Account',
+                  tooltip: 'Assign account',
+                  onTap: onAccount,
+                ),
+              ),
+              Expanded(
+                child: _BarAction(
+                  icon: Icons.event_repeat_outlined,
+                  label: 'Count in',
+                  tooltip: 'Count in another date',
+                  onTap: onCountIn,
+                ),
+              ),
+              Expanded(
+                child: _BarAction(
+                  icon: Icons.delete_outline,
+                  label: 'Delete',
+                  tooltip: 'Delete',
+                  onTap: onDelete,
+                  color: scheme.error,
+                ),
+              ),
+              PopupMenuButton<_MoreAction>(
+                tooltip: 'More actions',
+                icon: const Icon(Icons.more_vert, size: 20),
+                // Compact like Close, so each labelled action keeps about
+                // 48dp of width on a 320dp phone.
+                style: IconButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                // Instant, as on the Accounts menu: the grow animation
+                // re-clamps the menu's position every frame.
+                popUpAnimationStyle: const AnimationStyle(
+                  duration: Duration.zero,
+                ),
+                onSelected: (v) {
+                  switch (v) {
+                    case _MoreAction.selectAll:
+                      onSelectAll();
+                    case _MoreAction.tags:
+                      onTags();
+                    case _MoreAction.subscription:
+                      onSubscription();
+                    case _MoreAction.dateTime:
+                      onDateTime();
+                    case _MoreAction.pair:
+                      onPair?.call();
+                  }
+                },
+                itemBuilder: (_) => [
+                  _item(
+                    _MoreAction.selectAll,
+                    'select-all',
+                    Icons.select_all,
+                    'Select all shown',
+                  ),
+                  _item(_MoreAction.tags, 'tags', Icons.label_outline, 'Tags'),
+                  _item(
+                    _MoreAction.subscription,
+                    'subscription',
+                    Icons.autorenew,
+                    'Mark as subscription',
+                  ),
+                  _item(
+                    _MoreAction.dateTime,
+                    'date-time',
+                    Icons.edit_calendar_outlined,
+                    'Date & time',
+                  ),
+                  if (onPair != null)
+                    _item(
+                      _MoreAction.pair,
+                      'pair',
+                      Icons.link,
+                      'Pair as transfer',
+                    ),
+                ],
+              ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The smallest a selection-bar label may be scaled to fit, as a share of
+/// its size at the user's text scale.
+@visibleForTesting
+const double kMinLabelScale = 0.75;
+
+/// One labelled selection-bar action: icon over a one-line label, or the
+/// icon alone when the label can't fit readably.
+class _BarAction extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String tooltip;
+  final VoidCallback onTap;
+  final Color? color;
+
+  const _BarAction({
+    required this.icon,
+    required this.label,
+    required this.tooltip,
+    required this.onTap,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(
+      context,
+    ).textTheme.labelSmall?.copyWith(color: color);
+    // One node for screen readers: the name once, and the tap re-exposed
+    // because excludeSemantics drops the InkWell's own action.
+    return Semantics(
+      button: true,
+      label: tooltip,
+      onTap: onTap,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: tooltip,
+        excludeFromSemantics: true,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+              child: LayoutBuilder(
+                builder: (context, box) {
+                  // The label shrinks a little to fit ("Category" is wider
+                  // than its quarter of a 320dp bar), but never below
+                  // kMinLabelScale: large text would otherwise come out
+                  // small. Past that the action is its icon alone, named by
+                  // the tooltip and the screen-reader label.
+                  final painter = TextPainter(
+                    text: TextSpan(text: label, style: style),
+                    maxLines: 1,
+                    textDirection: Directionality.of(context),
+                    textScaler: MediaQuery.textScalerOf(context),
+                  )..layout();
+                  final natural = painter.width;
+                  painter.dispose();
+                  final fits = natural * kMinLabelScale <= box.maxWidth;
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(icon, size: 20, color: color),
+                      if (fits) ...[
+                        const SizedBox(height: 2),
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(label, maxLines: 1, style: style),
+                        ),
+                      ],
+                    ],
+                  );
+                },
+              ),
+            ),
           ),
         ),
       ),

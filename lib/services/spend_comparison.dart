@@ -185,6 +185,9 @@ List<DateTime> usualWindow(FinanceProvider finance, DateTime month) {
     final m = DateTime(month.year, month.month - k);
     if (!covered.contains(m.year * 12 + m.month)) break;
     if (m.year == first.year && m.month == first.month && first.day > 1) break;
+    // A month before the records start holds only rows counted in from
+    // later (Tx.countIn), never a month on record.
+    if (m.isBefore(DateTime(first.year, first.month))) break;
     out.add(m);
   }
   return out.reversed.toList();
@@ -201,11 +204,16 @@ MonthComparison buildMonthComparison(
   final throughDay = running ? now.day.clamp(1, days) : days;
   final partial = throughDay < days;
   final previous = DateTime(anchor.year, anchor.month - 1);
-  final window = usualWindow(finance, anchor);
+  // A month that hasn't started yet exists only through rows counted in
+  // ahead (a salary on the 30th counted on the 1st). Its references would be
+  // this month, still running, taken as if whole: compare against nothing.
+  final future = anchor.isAfter(DateTime(now.year, now.month));
+  final window = future ? const <DateTime>[] : usualWindow(finance, anchor);
   final first = finance.firstTransactionDate;
   // Last month only counts as a reference when the records cover all of it:
   // started part-way through, its "same day" figure is a few days of data.
   final previousCovered =
+      !future &&
       first != null &&
       !DateTime(first.year, first.month, first.day).isAfter(previous);
   // This month's own span on record, for the flat pace.
@@ -375,7 +383,7 @@ List<CategoryCompare> _categories(
   final firstSpend = <String, DateTime>{};
   for (final t in finance.transactions) {
     if (t.type != TxType.expense) continue;
-    final m = DateTime(t.date.year, t.date.month);
+    final m = DateTime(t.effectiveDate.year, t.effectiveDate.month);
     final seen = firstSpend[t.categoryId];
     if (seen == null || m.isBefore(seen)) firstSpend[t.categoryId] = m;
   }

@@ -9,6 +9,7 @@ import '../services/recurring_detector.dart';
 import '../services/subscriptions.dart';
 import '../utils/format.dart';
 import '../widgets/cycle_label.dart';
+import '../widgets/date_time_picker.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/undo_snackbar.dart';
@@ -83,6 +84,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   late _EntryKind _kind;
   late String _categoryId;
   late DateTime _date;
+
+  /// The moment month figures count this row in ([Tx.countIn]); null = its
+  /// own [_date].
+  DateTime? _countIn;
   String? _accountId;
 
   /// What the account dropdown started as, so saving an edit only reassigns
@@ -164,6 +169,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     if (_subscriptionChange() case final s?) 'sub:${s.on}:${s.cycle.name}',
     _accountId ?? '',
     _date.toIso8601String(),
+    _countIn?.toIso8601String() ?? '',
   ].join('|');
 
   @override
@@ -187,6 +193,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _categoryId =
         e?.categoryId ?? prefill?.categoryId ?? _categoriesFor(_kind).first.id;
     _date = e?.date ?? DateTime.now();
+    _countIn = e?.countIn;
     final startAmount = e?.amount ?? prefill?.amount;
     _amountCtrl = TextEditingController(
       text: startAmount == null ? '' : startAmount.toStringAsFixed(2),
@@ -445,6 +452,22 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     });
   }
 
+  /// Picks the Count in moment. Starts on the 1st of the month after the
+  /// row's date, the salary-on-the-30th case, and reaches the end of the
+  /// next month.
+  Future<void> _pickCountIn() async {
+    final now = DateTime.now();
+    final later = _date.isAfter(now) ? _date : now;
+    final picked = await pickDateThenTime(
+      context,
+      initial: _countIn ?? DateTime(_date.year, _date.month + 1),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(later.year, later.month + 2, 0, 23, 59),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _countIn = picked);
+  }
+
   Future<void> _save() async {
     if (_busy) return;
     if (!_formKey.currentState!.validate()) return;
@@ -508,6 +531,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             people: people,
             repaidBy: from.isEmpty ? null : from,
             clearRepaidBy: from.isEmpty,
+            countIn: _countIn,
+            clearCountIn: _countIn == null,
           ),
         );
         if (_accountId != null && _accountId != _initialAccountId) {
@@ -525,6 +550,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           tags: tags,
           people: people,
           repaidBy: from.isEmpty ? null : from,
+          countIn: _countIn,
         );
         if (_accountId != null) await finance.assignAccount(id, _accountId!);
         newId = id;
@@ -1102,15 +1128,22 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                             ),
                           );
                           if (picked == null) return;
-                          setState(
-                            () => _date = DateTime(
+                          setState(() {
+                            final moved =
+                                picked.year != _date.year ||
+                                picked.month != _date.month ||
+                                picked.day != _date.day;
+                            _date = DateTime(
                               picked.year,
                               picked.month,
                               picked.day,
                               _date.hour,
                               _date.minute,
-                            ),
-                          );
+                            );
+                            // A Count in chosen for the old day says nothing
+                            // about the new one, as with bulk Date & time.
+                            if (moved) _countIn = null;
+                          });
                         },
                       ),
                     ),
@@ -1138,6 +1171,34 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                       ),
                     ),
                   ],
+                ),
+                // Count in: month figures use another moment, the row keeps
+                // its own date (and so the account balance stays right).
+                // Same top gap either way, so setting or clearing it doesn't
+                // shift the buttons below.
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: _countIn == null
+                        ? TextButton(
+                            onPressed: _pickCountIn,
+                            child: const Text(
+                              'Count in another date ›',
+                              semanticsLabel: 'Count in another date',
+                            ),
+                          )
+                        : InputChip(
+                            avatar: const Icon(
+                              Icons.event_repeat_outlined,
+                              size: 18,
+                            ),
+                            label: Text('Counts in ${fmtCountIn(_countIn!)}'),
+                            onPressed: _pickCountIn,
+                            onDeleted: () => setState(() => _countIn = null),
+                            deleteButtonTooltipMessage: 'Count on its own date',
+                          ),
+                  ),
                 ),
                 const SizedBox(height: 20),
                 if (!isEditing)

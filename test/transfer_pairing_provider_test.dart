@@ -285,7 +285,10 @@ void main() {
 
     final csv = BackupService.buildCsv(p);
     // pairId was appended last in its release; tags came after it.
-    expect(csv.split('\r\n').first, endsWith(',pairId,tags,people,repaidBy'));
+    expect(
+      csv.split('\r\n').first,
+      endsWith(',pairId,tags,people,repaidBy,countIn'),
+    );
     final rows = BackupService.txsFromCsv(csv);
     expect(rows.where((t) => t.pairId == pairId), hasLength(2));
   });

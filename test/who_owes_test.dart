@@ -601,7 +601,10 @@ void main() {
       );
       final back = await repaid(p, 'Arun', 400);
       final csv = BackupService.buildCsv(p);
-      expect(csv.split('\r\n').first, endsWith(',tags,people,repaidBy'));
+      expect(
+        csv.split('\r\n').first,
+        endsWith(',tags,people,repaidBy,countIn'),
+      );
       final rows = {for (final t in BackupService.txsFromCsv(csv)) t.id: t};
       expect(rows[bill]!.people, row(p, bill).people);
       expect(rows[back]!.repaidBy, 'Arun');
@@ -612,7 +615,7 @@ void main() {
       final bill = await dinner(p);
       await repaid(p, 'Priya', 500);
       final data = p.exportData();
-      expect(data['version'], 17);
+      expect(data['version'], 18);
 
       final fresh = await loaded();
       await fresh.importData(

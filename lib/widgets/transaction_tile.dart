@@ -237,7 +237,19 @@ class TransactionTile extends StatelessWidget {
                               ),
                             ],
                           ),
-                          // Only rows with tags grow a third line.
+                          // Why a row listed on the 30th shows up in next
+                          // month's totals. Its own line, so the note and
+                          // date above never get squeezed for it.
+                          if (tx.countIn != null)
+                            Text(
+                              'Counts in ${fmtDateCompact(tx.countIn!)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: textTheme.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          // Rows with tags grow a line for them.
                           if (tx.tags.isNotEmpty)
                             Text(
                               tx.tags.map((t) => '# $t').join('  '),

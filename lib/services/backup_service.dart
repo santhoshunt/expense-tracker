@@ -181,6 +181,8 @@ class BackupService {
     // normalizePersonName keeps both separators out of names.
     'people',
     'repaidBy',
+    // ISO moment the row counts in (Tx.countIn); empty = its own date.
+    'countIn',
   ];
 
   /// A split's people as one CSV cell:
@@ -316,6 +318,7 @@ class BackupService {
           _csvEscape(t.tags.join(' | ')),
           _csvEscape(_peopleCell(t.people)),
           _csvEscape(t.repaidBy ?? ''),
+          _csvEscape(t.countIn?.toIso8601String() ?? ''),
         ].join(','),
       );
     }
@@ -453,6 +456,7 @@ class BackupService {
     final tagsCol = col('tags');
     final peopleCol = col('people');
     final repaidByCol = col('repaidby');
+    final countInCol = col('countin');
 
     String cell(List<String> r, int? c) {
       final v = c == null || c >= r.length ? '' : r[c].trim();
@@ -537,6 +541,10 @@ class BackupService {
           '' => null,
           final p => p,
         },
+        countIn: Tx.normalizeCountIn(
+          DateTime.tryParse(cell(r, countInCol)),
+          date,
+        ),
       );
       // CSVs written before the smsBody column existed kept the raw SMS in
       // the note, so that note has to be moved. Files with either the
@@ -674,8 +682,9 @@ class BackupService {
     );
     final txs = year != null
         ? [
+            // The year a row counts in, so the table matches incomeInYear.
             for (final t in finance.transactions)
-              if (t.date.year == year) t,
+              if (t.effectiveDate.year == year) t,
           ]
         : rowsInRange(finance.transactions, range);
     // Summary figures follow the same population as the table: whole-ledger
@@ -714,10 +723,13 @@ class BackupService {
       sumSavings = finance.totalSavingsTransfers;
     }
 
-    // Group transactions by month, newest first.
+    // Group transactions by month, newest first: the month a row counts in,
+    // like the app's month figures, except in a range export, which is
+    // about dates things happened.
     final byMonth = <DateTime, List<Tx>>{};
     for (final t in txs) {
-      byMonth.putIfAbsent(DateTime(t.date.year, t.date.month), () => []).add(t);
+      final d = range == null ? t.effectiveDate : t.date;
+      byMonth.putIfAbsent(DateTime(d.year, d.month), () => []).add(t);
     }
     final months = byMonth.keys.toList()..sort((a, b) => b.compareTo(a));
     for (final list in byMonth.values) {
@@ -1021,10 +1033,15 @@ class BackupService {
                     // while every total on the page counts only the share —
                     // without the annotation the statement doesn't add up
                     // from the artifact alone.
-                    t.isSplit
-                        ? '${t.category.label} '
-                              '(split — own share ${_money.format(t.spendAmount)})'
-                        : t.category.label,
+                    [
+                      t.isSplit
+                          ? '${t.category.label} '
+                                '(split — own share ${_money.format(t.spendAmount)})'
+                          : t.category.label,
+                      // Why a Sep 30 row sits under October.
+                      if (t.countIn != null)
+                        'counts in ${DateFormat('d MMM').format(t.countIn!)}',
+                    ].join(' · '),
                     // The user's own words only — no fallback. Blank stays
                     // blank; the raw SMS body never leaves the app.
                     clip(t.note),
