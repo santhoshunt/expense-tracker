@@ -70,14 +70,10 @@ void main() {
   }
 
   Future<void> select(WidgetTester tester, String note) async {
-    // The whole tile: at 2x its note text is squeezed to a sliver.
+    // Found by its row, not its text: at 2x on 320dp the tile leaves the
+    // note out to keep the date.
     await tester.longPress(
-      find
-          .ancestor(
-            of: find.textContaining(note),
-            matching: find.byType(TransactionTile),
-          )
-          .first,
+      find.byWidgetPredicate((w) => w is TransactionTile && w.tx.note == note),
     );
     // Past the bar's fold-in, so its buttons are tappable.
     await tester.pump(const Duration(milliseconds: 300));
@@ -87,17 +83,7 @@ void main() {
     testWidgets('fits 320dp at text scale $scale', (tester) async {
       final p = await seeded();
       await pump(tester, p, size: const Size(320, 640), textScale: scale);
-      // At 2x the tile's own note line already overflows its 52dp before
-      // anything is selected, a separate issue. Taken here so only what
-      // selecting draws, the bar, is checked below.
-      if (scale == 2.0) {
-        // One per tile, reported together when there are two.
-        expect(
-          tester.takeException().toString(),
-          matches(RegExp('overflowed|Multiple exceptions')),
-          reason: 'the known tile overflow',
-        );
-      }
+      expect(tester.takeException(), isNull);
       await select(tester, 'coffeerun');
       expect(tester.takeException(), isNull);
       for (final tip in [

@@ -10,6 +10,24 @@ import '../utils/format.dart';
 import 'glossy.dart';
 import 'motion.dart';
 
+/// Width of [text] laid out on one line the way a `Text` with [style] would
+/// render it here: same default style, bold-text setting and text scale.
+double _textWidth(BuildContext context, String text, TextStyle? style) {
+  var effective = DefaultTextStyle.of(context).style.merge(style);
+  if (MediaQuery.boldTextOf(context)) {
+    effective = effective.merge(const TextStyle(fontWeight: FontWeight.bold));
+  }
+  final painter = TextPainter(
+    text: TextSpan(text: text, style: effective),
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+    maxLines: 1,
+  )..layout();
+  final width = painter.width;
+  painter.dispose();
+  return width;
+}
+
 class TransactionTile extends StatelessWidget {
   final Tx tx;
 
@@ -70,6 +88,9 @@ class TransactionTile extends StatelessWidget {
     // Compact (no year): the list already groups under month headers, and
     // the full form crowded the note off the line at large font scales.
     final dateLabel = fmtDateCompact(tx.date);
+    final lineStyle = textTheme.bodySmall?.copyWith(
+      color: scheme.onSurfaceVariant,
+    );
 
     // One timing for every selection change on the row, so the border, the
     // fill and the icon swap move together.
@@ -202,40 +223,57 @@ class TransactionTile extends StatelessWidget {
                           // the line entirely: a rigid date used to leave a
                           // squeezed note zero width (an orphan "·" before
                           // the date) at large font scales. Unused flex space
-                          // just trails off — the line is left-aligned.
-                          Row(
-                            children: [
-                              if (note != null) ...[
-                                Flexible(
-                                  flex: 3,
-                                  child: Text(
-                                    note,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: textTheme.bodySmall?.copyWith(
-                                      color: scheme.onSurfaceVariant,
+                          // just trails off, since the line is left-aligned.
+                          // The " · " is rigid and can alone be wider than
+                          // the line (73px of 52 at 320dp and 2x in tests).
+                          // So the note and it drop out, leaving the date the
+                          // whole line, once the date's 2/5 share of what is
+                          // left after the " · " can't hold even a "…".
+                          LayoutBuilder(
+                            builder: (context, constraints) {
+                              String? shownNote;
+                              if (note != null) {
+                                final left =
+                                    constraints.maxWidth -
+                                    _textWidth(context, ' · ', lineStyle);
+                                final ellipsis = _textWidth(
+                                  context,
+                                  '…',
+                                  lineStyle,
+                                );
+                                if (left * 2 / 5 >= ellipsis) shownNote = note;
+                              }
+                              return Row(
+                                children: [
+                                  if (shownNote != null) ...[
+                                    Flexible(
+                                      flex: 3,
+                                      child: Text(
+                                        shownNote,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: lineStyle,
+                                      ),
+                                    ),
+                                    Text(' · ', style: lineStyle),
+                                  ],
+                                  Flexible(
+                                    flex: 2,
+                                    child: Text(
+                                      dateLabel,
+                                      // TalkBack still reads a note left out.
+                                      semanticsLabel:
+                                          note != null && shownNote == null
+                                          ? '$note · $dateLabel'
+                                          : null,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: lineStyle,
                                     ),
                                   ),
-                                ),
-                                Text(
-                                  ' · ',
-                                  style: textTheme.bodySmall?.copyWith(
-                                    color: scheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              ],
-                              Flexible(
-                                flex: 2,
-                                child: Text(
-                                  dateLabel,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: textTheme.bodySmall?.copyWith(
-                                    color: scheme.onSurfaceVariant,
-                                  ),
-                                ),
-                              ),
-                            ],
+                                ],
+                              );
+                            },
                           ),
                           // Why a row listed on the 30th shows up in next
                           // month's totals. Its own line, so the note and
