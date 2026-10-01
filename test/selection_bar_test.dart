@@ -86,10 +86,17 @@ void main() {
       expect(tester.takeException(), isNull);
       await select(tester, 'coffeerun');
       expect(tester.takeException(), isNull);
-      // The count is shaped like an action: number over "selected".
+      // The count is the number alone, level with the Clear button.
       expect(find.text('1'), findsOneWidget);
-      expect(find.text('selected'), findsOneWidget);
+      expect(find.text('selected'), findsNothing);
       expect(find.bySemanticsLabel('1 selected'), findsOneWidget);
+      expect(
+        tester.getCenter(find.text('1')).dy,
+        moreOrLessEquals(
+          tester.getCenter(find.byTooltip('Clear selection')).dy,
+          epsilon: 0.5,
+        ),
+      );
       for (final tip in [
         'Set category',
         'Assign account',

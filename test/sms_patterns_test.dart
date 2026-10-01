@@ -18,7 +18,7 @@ void main() {
       SmsTxnParser.parse(sender, body, smsDate, relaxedSender: true)!;
 
   group('account key', () {
-    test('ICICI "Acc XX246" keys the account and keeps the balance', () {
+    test('ICICI "Acc XX512" keys the account and keeps the balance', () {
       final r = parse(
         'JD-ICICIT-S',
         'ICICI Bank Acc XX512 debited Rs. 2,150.00 on 12-Sep-26 '

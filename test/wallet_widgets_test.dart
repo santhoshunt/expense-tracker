@@ -10,6 +10,7 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/add_transaction_sheet.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
+import 'package:expense_tracker/widgets/transaction_tile.dart';
 
 /// Wallet screens: the add dialog, the Accounts Wallets section and the
 /// edit sheet's "Count as spending" switch.
@@ -198,6 +199,43 @@ void main() {
     expect(find.text('Not counted'), findsOneWidget);
     // The month header counts the tea only: never ₹330 with the wallet row.
     expect(find.textContaining('330'), findsNothing);
+  });
+
+  testWidgets('the Expense tab a subscription opens leaves wallet rows out', (
+    tester,
+  ) async {
+    final p = await loaded();
+    final wallet = await p.addAccount(
+      name: 'me',
+      type: AccountType.wallet,
+      service: 'Amazon Pay',
+    );
+    final onWallet = await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 199,
+      note: 'streamflix',
+      date: DateTime(2026, 9, 12, 10),
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 199,
+      note: 'streamflix',
+      date: DateTime(2026, 8, 12, 10),
+    );
+    await p.assignAccount(onWallet, wallet);
+    // As the Subscriptions tile asks: its type plus the payee's search.
+    const request = TxFilterRequest(type: TxType.expense, query: 'streamflix');
+    await pump(tester, p, const TransactionsScreen(request: request));
+    await pump(
+      tester,
+      p,
+      const TransactionsScreen(request: request, filterToken: 1),
+    );
+    expect(find.text('Not counted'), findsNothing);
+    // The August row only; the search box also shows the text.
+    expect(find.byType(TransactionTile), findsOneWidget);
   });
 
   testWidgets('the edit sheet offers Count as spending on a wallet only', (

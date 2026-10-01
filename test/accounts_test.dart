@@ -909,7 +909,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final p = FinanceProvider();
     await p.load();
-    // The user's exact message: the Avl Bal describes ICICI ••246, but "Acc"
+    // A user's message, reworded: the Avl Bal describes ICICI ••246, but "Acc"
     // derives no key, so the row imports unassigned with the figure attached.
     await p.addImported([
       ParsedTxn(

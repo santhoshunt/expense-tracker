@@ -161,8 +161,6 @@ void goDashboard(BuildContext c) =>
 void goAllTransactions(BuildContext c) =>
     AppNav.instance.openTransactions(c, const TxFilterRequest());
 void goAccounts(BuildContext c) => AppNav.instance.openAccounts(c);
-void goSavingsAccounts(BuildContext c) =>
-    AppNav.instance.openAccounts(c, type: AccountType.savings);
 void goNewReminder(BuildContext c) => showReminderEditor(c);
 
 /// Who owes you, pushed over whatever is open.

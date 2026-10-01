@@ -6,8 +6,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/screens/app_nav.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
+import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/animated_fold.dart';
 
@@ -147,6 +149,35 @@ void main() {
           .first,
     );
     expect(name.controller?.text, 'Netflix');
+  });
+
+  testWidgets('a tap opens its own tab, so uncounted wallet rows stay out', (
+    tester,
+  ) async {
+    final p = await seeded();
+    TxFilterRequest? opened;
+    final owner = Object();
+    AppNav.instance.attachHome(
+      owner,
+      setTab: (_) {},
+      openTransactions: (r) => opened = r,
+    );
+    addTearDown(() => AppNav.instance.detachHome(owner));
+    await tester.pumpWidget(
+      app(
+        p,
+        await settings(),
+        const ClassifiersScreen(initialTab: kCockpitTabSubscriptions),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Netflix'));
+    await tester.pumpAndSettle();
+    // The Expense tab, not All: All also lists wallet rows that the
+    // subscription's figures leave out.
+    expect(opened?.type, TxType.expense);
+    expect(opened?.query, 'netflix');
   });
 
   testWidgets('the Breakdown line opens the Subscriptions tab', (tester) async {

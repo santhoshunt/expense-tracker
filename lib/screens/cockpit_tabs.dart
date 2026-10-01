@@ -322,7 +322,9 @@ class _SubscriptionTile extends StatelessWidget {
       dense: true,
       onTap: () => AppNav.instance.openTransactions(
         context,
-        TxFilterRequest(query: item.identity),
+        // The subscription's own tab: All would also list uncounted wallet
+        // rows that its figures leave out.
+        TxFilterRequest(type: hit.type, query: item.identity),
       ),
       onLongPress: () => _actions(context),
       leading: CircleAvatar(

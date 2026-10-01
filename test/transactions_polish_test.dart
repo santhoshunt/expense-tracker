@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
+import 'package:expense_tracker/utils/format.dart';
 
 /// Transactions screen motion: the sticky month header, the review cards
 /// folding away, and the selection bar folding in on a long-press.
@@ -22,12 +24,20 @@ void main() {
     setBuiltinOverrides(const {});
   });
 
-  Widget screen(FinanceProvider p) => MultiProvider(
+  Widget screen(FinanceProvider p, {double textScale = 1}) => MultiProvider(
     providers: [
       ChangeNotifierProvider.value(value: p),
       ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
     ],
-    child: const MaterialApp(home: Scaffold(body: TransactionsScreen())),
+    child: MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
+      home: const Scaffold(body: TransactionsScreen()),
+    ),
   );
 
   /// The header's label: the bare month name inside the current year, with
@@ -98,6 +108,65 @@ void main() {
     }
     expect(sticky, findsNothing);
   });
+
+  // 3x: past the scale where the band outgrows the button's 40dp.
+  for (final scale in [1.0, 3.0]) {
+    testWidgets('the band takes over where the header label is, totals level, '
+        'text x$scale', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      for (var d = 1; d <= 20; d++) {
+        await p.addTransaction(
+          type: TxType.expense,
+          categoryId: 'food',
+          amount: 10.0 + d,
+          note: 'jul $d',
+          date: DateTime(2026, 7, d),
+        );
+      }
+      await tester.pumpWidget(screen(p, textScale: scale));
+      await tester.pumpAndSettle();
+
+      final july = monthLabel(DateTime(2026, 7));
+      final total = find.text('−${fmtMoneyCompact(410)}');
+      final labelTop = tester.getTopLeft(july).dy;
+      final totalRight = tester.getTopRight(total).dx;
+      final list = tester.state<ScrollableState>(
+        find
+            .descendant(
+              of: find.byType(ScrollablePositionedList),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      Future<void> scrollTo(double px) async {
+        list.position.jumpTo(px);
+        // Positions publish after layout; the band rebuilds a frame later.
+        await tester.pump();
+        await tester.pump();
+        expect(list.position.pixels, px);
+      }
+
+      // The label is still below the band's spot: one name, no band.
+      await scrollTo(10);
+      expect(sticky, findsNothing);
+      expect(july, findsOneWidget);
+
+      // Just past the hand-off the band's label sits where the list
+      // header's label was, and its total ends where the header's did.
+      await scrollTo(25);
+      expect(sticky, findsOneWidget);
+      final pinned = find.descendant(of: sticky, matching: july);
+      expect(
+        tester.getTopLeft(pinned).dy,
+        moreOrLessEquals(labelTop - 24, epsilon: 0.1),
+      );
+      expect(
+        tester.getTopRight(find.descendant(of: sticky, matching: total)).dx,
+        moreOrLessEquals(totalRight, epsilon: 0.5),
+      );
+    });
+  }
 
   testWidgets('tapping the sticky header opens the month list', (tester) async {
     final p = FinanceProvider();

@@ -2529,44 +2529,6 @@ class _BalanceCard extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
               ),
-              if (finance.totalSavingsTransfers > 0) ...[
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Icon(
-                      Icons.savings,
-                      size: 16,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: InfoLabel(
-                          label: Text(
-                            '${fmtMoney(finance.totalSavingsTransfers)} moved '
-                            'to savings',
-                            style: TextStyle(color: scheme.onSurfaceVariant),
-                          ),
-                          tip: const InfoTip(
-                            title: 'Moved to savings',
-                            message:
-                                'All money moved to savings since your first '
-                                'transaction. It is already taken out of the '
-                                "figure above. Your savings accounts' value "
-                                'shows under Accounts.',
-                            link: InfoLink(
-                              prompt: 'Where is the money now?',
-                              label: 'See savings accounts',
-                              onTap: goSavingsAccounts,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
             ],
           ),
         ),

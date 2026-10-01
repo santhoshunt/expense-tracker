@@ -632,6 +632,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   final _jumping = ValueNotifier(false);
 
+  /// The list's height in px, as the sticky band last laid out: positions
+  /// are fractions of it.
+  double _viewport = 0;
+
   /// Whether the list is scrolling (a fling included), and whether the
   /// current touch landed while it was: tapping the top of the screen to
   /// stop a fling is a habit, and must not open the month list.
@@ -657,9 +661,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     if (up) {
       var current = headers.lastIndexWhere((h) => h <= top.index);
       if (current < 0) current = 0;
-      // Already sitting on this month's header → go to the previous month.
+      // Already sitting on this month's header (its label still below the
+      // sticky band's spot, as _stickyMonth decides) → previous month.
       final atHeader =
-          headers[current] == top.index && top.itemLeadingEdge >= -0.001;
+          headers[current] == top.index &&
+          top.itemLeadingEdge * _viewport + _kMonthHeaderTop > 0;
       final target = (current - (atHeader ? 1 : 0)).clamp(
         0,
         headers.length - 1,
@@ -683,19 +689,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   /// The month the sticky header should name for [positions], or null when
   /// it should not show: at the very top, or while the month's own header
-  /// row sits fully on screen at the top (two headers would stack).
-  DateTime? _stickyMonth(_PageData data, Iterable<ItemPosition> positions) {
+  /// row is at the top with its label still below the band's label. The
+  /// band takes over once the two labels line up, so the name never shows
+  /// twice or jumps.
+  DateTime? _stickyMonth(
+    _PageData data,
+    Iterable<ItemPosition> positions,
+    double viewport,
+  ) {
     final shown = positions.where((p) => p.itemTrailingEdge > 0);
     if (shown.isEmpty) return null;
     final top = shown.reduce((a, b) => a.index < b.index ? a : b);
     // Positions can still describe the previous, longer list for a frame
     // after a delete or a filter change.
     if (top.index >= data.rowMonths.length) return null;
-    // Same tolerance as _stepMonth: a scrollTo can leave the header a hair
-    // above the viewport's top edge.
-    final headerAtTop =
-        data.rows[top.index].$1 != null && top.itemLeadingEdge >= -0.001;
-    return headerAtTop ? null : data.rowMonths[top.index];
+    // The band and a header row's content share one height, so the labels
+    // line up once the row's top padding has scrolled away.
+    final labelBelowBand =
+        data.rows[top.index].$1 != null &&
+        top.itemLeadingEdge * viewport + _kMonthHeaderTop > 0;
+    return labelBelowBand ? null : data.rowMonths[top.index];
   }
 
   Widget _stickyBand(
@@ -704,11 +717,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _Filter f,
     double viewport,
   ) {
+    _viewport = viewport;
     if (_jumping.value || viewport <= 0) return const SizedBox.shrink();
     final positions = _listPositions[f]!.itemPositions.value;
-    final month = _stickyMonth(data, positions);
+    final month = _stickyMonth(data, positions, viewport);
     if (month == null) return const SizedBox.shrink();
-    final band = MediaQuery.textScalerOf(context).scale(12) * 1.4 + 16;
+    // A header row's content height, so the band's label sits where the
+    // row's was at the hand-off.
+    final band = _monthHeaderRowHeight(context);
     // The first header below the top row: once it reaches the band, the
     // band slides up with it.
     var push = 0.0;
@@ -765,6 +781,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     color: (colors.cardFill ?? scheme.surface).withValues(
                       alpha: 0.97,
                     ),
+                  ),
+                  // Drawn over the content: a border in [decoration] pads
+                  // the child by its width and lifts the label off the
+                  // row's by half a pixel at the hand-off.
+                  foregroundDecoration: BoxDecoration(
                     border: Border(
                       bottom: BorderSide(color: scheme.outlineVariant),
                     ),
@@ -2312,8 +2333,6 @@ class _SelectionBar extends StatelessWidget {
                 icon: const Icon(Icons.close, size: _kBarIconSize),
                 onPressed: onClose,
               ),
-              // Shaped like the actions: the number where their icon sits,
-              // 'selected' where their label does.
               _SelectedCount(count: count, color: scheme.primary),
               Expanded(
                 child: _BarAction(
@@ -2415,9 +2434,8 @@ class _SelectionBar extends StatelessWidget {
 /// Icon size across the selection bar: close, actions and More alike.
 const double _kBarIconSize = 18;
 
-/// The selection count as a bar action looks: the number in the icon's
-/// place and weight, "selected" in the label's. Shrinks to fit rather than
-/// crowding the actions at large text.
+/// The selection count: the number alone at the icons' size, centred in
+/// the bar's height. Shrinks to fit rather than crowding the actions.
 class _SelectedCount extends StatelessWidget {
   final int count;
   final Color color;
@@ -2425,7 +2443,6 @@ class _SelectedCount extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label = Theme.of(context).textTheme.labelSmall;
     return Semantics(
       label: '$count selected',
       excludeSemantics: true,
@@ -2433,28 +2450,19 @@ class _SelectedCount extends StatelessWidget {
         constraints: const BoxConstraints(minHeight: 48, maxWidth: 56),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+          // FittedBox centres the number in the 48dp height.
           child: FittedBox(
             fit: BoxFit.scaleDown,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // The icons' height, so the number lines up with them.
-                SizedBox(
-                  height: _kBarIconSize,
-                  child: Text(
-                    '$count',
-                    textScaler: TextScaler.noScaling,
-                    style: TextStyle(
-                      fontSize: _kBarIconSize,
-                      height: 1,
-                      fontWeight: FontWeight.w700,
-                      color: color,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text('selected', maxLines: 1, style: label),
-              ],
+            child: Text(
+              '$count',
+              maxLines: 1,
+              textScaler: TextScaler.noScaling,
+              style: TextStyle(
+                fontSize: _kBarIconSize,
+                height: 1,
+                fontWeight: FontWeight.w700,
+                color: color,
+              ),
             ),
           ),
         ),
@@ -2683,6 +2691,15 @@ class _SearchAndFilterBar extends StatelessWidget {
   }
 }
 
+/// Space above a list month header's label.
+const double _kMonthHeaderTop = 24;
+
+/// A month header's content height, list row and sticky band alike: the
+/// Select month button's compact tap target, or taller for large text.
+/// One value for both, so the labels line up at the hand-off.
+double _monthHeaderRowHeight(BuildContext context) =>
+    math.max(40, MediaQuery.textScalerOf(context).scale(12) * 1.4);
+
 class _MonthHeader extends StatelessWidget {
   final DateTime month;
   final List<Tx> txs;
@@ -2721,8 +2738,11 @@ class _MonthHeader extends StatelessWidget {
       // never slides under the nav pill.
       padding: compact
           ? const EdgeInsets.fromLTRB(20, 0, 52, 0)
-          : const EdgeInsets.fromLTRB(20, 24, 52, 6),
-      child: _row(context, scheme, label, income, expense),
+          : const EdgeInsets.fromLTRB(20, _kMonthHeaderTop, 52, 6),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: _monthHeaderRowHeight(context)),
+        child: _row(context, scheme, label, income, expense),
+      ),
     );
   }
 
@@ -2759,38 +2779,56 @@ class _MonthHeader extends StatelessWidget {
     double expense,
   ) => Row(
     children: [
-      Flexible(
-        child: Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          // accentTextColor, not scheme.primary: same 4.5:1 fix as
-          // UppercaseSectionHeader — the raw accent read at ~2.5:1 on
-          // the light surface (the amounts beside it were already
-          // bumped for exactly this).
-          style: TextStyle(
-            color: accentTextColor(context),
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 1.4,
-          ),
+      // Expanded, so the totals always end at the right edge. With a
+      // Flexible name beside a Spacer the two split the free space, and the
+      // totals moved with the name's length and the icon beside it: the
+      // pinned copy's sat left of the list header's.
+      Expanded(
+        child: Row(
+          children: [
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                // accentTextColor, not scheme.primary: same 4.5:1 fix as
+                // UppercaseSectionHeader — the raw accent read at ~2.5:1 on
+                // the light surface (the amounts beside it were already
+                // bumped for exactly this).
+                style: TextStyle(
+                  color: accentTextColor(context),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.4,
+                ),
+              ),
+            ),
+            // The pinned copy opens the month list: the arrow says so.
+            if (compact)
+              Icon(
+                Icons.arrow_drop_down,
+                size: 18,
+                color: accentTextColor(context),
+              ),
+            // Beside the name, not the amounts: it acts on the month, and
+            // next to the totals it read as an amount action.
+            if (onSelectMonth != null)
+              IconButton(
+                tooltip: 'Select month',
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                constraints: const BoxConstraints(),
+                icon: Icon(
+                  Icons.checklist,
+                  size: 18,
+                  color: scheme.onSurfaceVariant,
+                ),
+                onPressed: onSelectMonth,
+              ),
+          ],
         ),
       ),
-      // The pinned copy opens the month list: the arrow says so.
-      if (compact)
-        Icon(Icons.arrow_drop_down, size: 18, color: accentTextColor(context)),
-      // Beside the name, not the amounts: it acts on the month, and next
-      // to the totals it read as an amount action.
-      if (onSelectMonth != null)
-        IconButton(
-          tooltip: 'Select month',
-          visualDensity: VisualDensity.compact,
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          constraints: const BoxConstraints(),
-          icon: Icon(Icons.checklist, size: 18, color: scheme.onSurfaceVariant),
-          onPressed: onSelectMonth,
-        ),
-      const Spacer(),
+      const SizedBox(width: 8),
       // Width-capped as one unit: at large text scales the pair shrinks
       // to fit instead of overflowing past the jump controls.
       if (income > 0 || expense > 0)
