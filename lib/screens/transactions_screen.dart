@@ -2309,16 +2309,12 @@ class _SelectionBar extends StatelessWidget {
               IconButton(
                 tooltip: 'Clear selection',
                 visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.close, size: 20),
+                icon: const Icon(Icons.close, size: _kBarIconSize),
                 onPressed: onClose,
               ),
-              Text(
-                '$count',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: scheme.primary,
-                ),
-              ),
+              // Shaped like the actions: the number where their icon sits,
+              // 'selected' where their label does.
+              _SelectedCount(count: count, color: scheme.primary),
               Expanded(
                 child: _BarAction(
                   icon: Icons.category_outlined,
@@ -2354,7 +2350,7 @@ class _SelectionBar extends StatelessWidget {
               ),
               PopupMenuButton<_MoreAction>(
                 tooltip: 'More actions',
-                icon: const Icon(Icons.more_vert, size: 20),
+                icon: const Icon(Icons.more_vert, size: _kBarIconSize),
                 // Compact like Close, so each labelled action keeps about
                 // 48dp of width on a 320dp phone.
                 style: IconButton.styleFrom(
@@ -2409,6 +2405,57 @@ class _SelectionBar extends StatelessWidget {
                 ],
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Icon size across the selection bar: close, actions and More alike.
+const double _kBarIconSize = 18;
+
+/// The selection count as a bar action looks: the number in the icon's
+/// place and weight, "selected" in the label's. Shrinks to fit rather than
+/// crowding the actions at large text.
+class _SelectedCount extends StatelessWidget {
+  final int count;
+  final Color color;
+  const _SelectedCount({required this.count, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = Theme.of(context).textTheme.labelSmall;
+    return Semantics(
+      label: '$count selected',
+      excludeSemantics: true,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48, maxWidth: 56),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // The icons' height, so the number lines up with them.
+                SizedBox(
+                  height: _kBarIconSize,
+                  child: Text(
+                    '$count',
+                    textScaler: TextScaler.noScaling,
+                    style: TextStyle(
+                      fontSize: _kBarIconSize,
+                      height: 1,
+                      fontWeight: FontWeight.w700,
+                      color: color,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text('selected', maxLines: 1, style: label),
+              ],
+            ),
           ),
         ),
       ),
@@ -2480,7 +2527,7 @@ class _BarAction extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(icon, size: 20, color: color),
+                      Icon(icon, size: _kBarIconSize, color: color),
                       if (fits) ...[
                         const SizedBox(height: 2),
                         FittedBox(

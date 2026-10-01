@@ -86,6 +86,10 @@ void main() {
       expect(tester.takeException(), isNull);
       await select(tester, 'coffeerun');
       expect(tester.takeException(), isNull);
+      // The count is shaped like an action: number over "selected".
+      expect(find.text('1'), findsOneWidget);
+      expect(find.text('selected'), findsOneWidget);
+      expect(find.bySemanticsLabel('1 selected'), findsOneWidget);
       for (final tip in [
         'Set category',
         'Assign account',
