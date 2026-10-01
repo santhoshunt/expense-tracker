@@ -180,9 +180,9 @@ void main() {
       expect(r.balanceAfter, 195000.00);
     });
 
-    // Real messages for three issuers. Each used to import attached to no
-    // account (or with its stated limit discarded), so the payment could never
-    // bring the card's outstanding down.
+    // Reported messages for three issuers, reworded with made-up numbers. Each
+    // used to import attached to no account (or with its stated limit
+    // discarded), so the payment could never bring the card's outstanding down.
     test('ICICI "Credit Card Account 4xxx7031" resolves to the card', () {
       final r = SmsTxnParser.parse(
         'AX-ICICIT-S',
@@ -431,9 +431,10 @@ void main() {
   });
 
   group('Yes Bank card formats', () {
-    test('real "spent on YES BANK Card @UPI_" alert parses fully', () {
-      // Exact message reported as not importing — proves the parser accepts
-      // it; the import failure is upstream (message not in the SMS provider).
+    test('reported "spent on YES BANK Card @UPI_" alert parses fully', () {
+      // A reported message, reworded, that did not import. Proves the parser
+      // accepts it; the import failure is upstream (message not in the SMS
+      // provider).
       final r = SmsTxnParser.parse(
         'AX-YESBNK-S',
         'INR 1,840.00 spent on YES BANK Card xxxx @UPI_NOVA TILES AND N '
@@ -495,8 +496,8 @@ void main() {
 
   group('Indian Bank formats', () {
     test('debit alert parses with account key and UPI ref', () {
-      // Exact message reported as not importing: INDBNK was missing from the
-      // bank-code allowlist, so the sender check rejected everything.
+      // A reported message, reworded, that did not import: INDBNK was missing
+      // from the bank-code allowlist, so the sender check rejected everything.
       final r = SmsTxnParser.parse(
         'BV-INDBNK-S',
         'A/c *7316 debited Rs. 412.64 on 03-07-26 to BOOKMYSHOW. '
@@ -529,7 +530,7 @@ void main() {
     });
 
     test('"Sent" debit alert carries account key AND Avl Bal', () {
-      // Exact message reported as not moving the balance (01-08-2026).
+      // A reported message, reworded, that did not move the balance.
       final r = SmsTxnParser.parse(
         'BV-INDBNK-S',
         'Sent Rs.140.00 from A/c *7316 on 31-07-26 to Ms LATHA  R..'

@@ -15,7 +15,7 @@ import 'package:expense_tracker/services/sms_parser.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
 
 /// Count in ([Tx.countIn]): a row keeps its real date for balances while
-/// every period figure counts it in another moment. the owner's case is a
+/// every period figure counts it in another moment. The typical case is a
 /// salary paid on the 30th that belongs to next month.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

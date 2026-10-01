@@ -135,7 +135,7 @@ void main() {
         final acc = p.accounts.single;
         expect(p.accountBalance(acc), 95000);
 
-        // the owner's move: salary belongs to next month's budget.
+        // The user's move: salary belongs to next month's budget.
         final salary = p.transactions.firstWhere(
           (t) => t.type == TxType.income,
         );

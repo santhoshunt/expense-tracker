@@ -762,9 +762,9 @@ void main() {
 
   test('a debit alert stating Avl Bal anchors the balance; later spends '
       'subtract from it', () async {
-    // End-to-end with the exact Indian Bank message reported as not moving
-    // the balance, then the user's own example: 500 spent off a stated
-    // figure must read as figure − 500.
+    // End-to-end with a reported Indian Bank message, reworded, that did not
+    // move the balance, then a follow-up case: 500 spent off a stated figure
+    // must read as figure − 500.
     SharedPreferences.setMockInitialValues({});
     final p = FinanceProvider();
     await p.load();

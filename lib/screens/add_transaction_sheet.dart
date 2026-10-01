@@ -1245,7 +1245,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                                     label: Text(label),
                                     tip: InfoTip(
                                       title: label,
-                                      // the owner's wording for spending; on a
+                                      // The owner's wording for spending; on a
                                       // credit, the income side of it.
                                       message: _kind == _EntryKind.income
                                           ? 'Turn on to count this wallet '
