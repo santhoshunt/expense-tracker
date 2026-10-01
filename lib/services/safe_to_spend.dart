@@ -160,7 +160,8 @@ SafeToSpend? computeSafeToSpend(
   bool spend(Tx t) =>
       t.type == TxType.expense &&
       !t.suspectedSpam &&
-      !isTransferCategory(t.categoryId);
+      !isTransferCategory(t.categoryId) &&
+      finance.countsInTotals(t);
   var pendingMonth = 0.0;
   var pendingToday = 0.0;
   for (final t in finance.pendingTransactions) {

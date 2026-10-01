@@ -478,6 +478,11 @@ class Tx {
   /// reminders, pairing and import dedup always use [date].
   final DateTime? countIn;
 
+  /// On a wallet row: the user turned "Count as spending" on. Wallet rows
+  /// stay out of income, spend and budget figures otherwise (see
+  /// FinanceProvider.countsInTotals); inert on every other account.
+  final bool walletCounted;
+
   const Tx({
     required this.id,
     required this.type,
@@ -500,6 +505,7 @@ class Tx {
     this.people = const [],
     this.repaidBy,
     this.countIn,
+    this.walletCounted = false,
   });
 
   /// The date period figures use: [countIn] when set, else [date].
@@ -560,6 +566,7 @@ class Tx {
       people: people,
       repaidBy: repaidBy,
       countIn: countIn,
+      walletCounted: walletCounted,
     );
   }
 
@@ -592,6 +599,7 @@ class Tx {
     bool clearRepaidBy = false,
     DateTime? countIn,
     bool clearCountIn = false,
+    bool? walletCounted,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -620,6 +628,7 @@ class Tx {
     countIn: clearCountIn
         ? null
         : normalizeCountIn(countIn ?? this.countIn, date ?? this.date),
+    walletCounted: walletCounted ?? this.walletCounted,
   );
 
   Map<String, dynamic> toJson() => {
@@ -644,6 +653,7 @@ class Tx {
     if (people.isNotEmpty) 'people': [for (final p in people) p.toJson()],
     if (repaidBy != null) 'repaidBy': repaidBy,
     if (countIn != null) 'countIn': countIn!.toIso8601String(),
+    if (walletCounted) 'walletCounted': true,
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) {
@@ -682,6 +692,7 @@ class Tx {
         final String s => DateTime.tryParse(s),
         _ => null,
       }, date),
+      walletCounted: json['walletCounted'] == true,
     );
   }
 }

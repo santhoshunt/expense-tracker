@@ -50,7 +50,7 @@ class HomeWidgetsService {
       // The whole month's, for safe to spend's bills; Upcoming's window of
       // them is what detectRecurring would keep.
       _patterns = detectRecurringPatterns(
-        finance.transactions,
+        finance.countedTransactions,
         now: now,
         alias: finance.merchantAlias,
         pinned: finance.subscriptionPins,
@@ -121,7 +121,7 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
     patterns:
         patterns ??
         detectRecurringPatterns(
-          finance.transactions,
+          finance.countedTransactions,
           now: now,
           alias: finance.merchantAlias,
           pinned: finance.subscriptionPins,

@@ -15,7 +15,13 @@ enum AccountType {
   /// property, crypto… The user names the kind ([Account.kind]) and picks an
   /// icon; deposits/purchases are "To savings" transactions and the current
   /// market value is kept via "Set balance".
-  savings('Savings');
+  savings('Savings'),
+
+  /// Money or points that can only be spent inside one platform (Amazon
+  /// Pay, Zomato Money, Swiggy coins). Out of net balance, and its rows
+  /// count in spending only when the user turns that on per row
+  /// (`Tx.walletCounted`).
+  wallet('Wallet');
 
   final String label;
   const AccountType(this.label);
@@ -24,6 +30,7 @@ enum AccountType {
     bank => Icons.account_balance_outlined,
     creditCard => Icons.credit_card,
     savings => Icons.savings_outlined,
+    wallet => Icons.account_balance_wallet_outlined,
   };
 }
 
@@ -95,6 +102,18 @@ class Account {
   /// which orphans the transactions. Null = open.
   final DateTime? closedAt;
 
+  /// Wallets only: the platform the money lives on ("Amazon Pay"). [name]
+  /// then holds which login it belongs to ("me"), so one service can carry
+  /// any number of wallets.
+  final String? service;
+
+  /// Wallets only: holds points rather than money. Amounts are still stored
+  /// in ₹; [pointValue] converts for display and entry.
+  final bool holdsPoints;
+
+  /// Points wallets only: ₹ per point.
+  final double? pointValue;
+
   Account({
     required this.id,
     required this.name,
@@ -110,17 +129,38 @@ class Account {
     this.kindIcon,
     this.goalAmount,
     this.closedAt,
+    this.service,
+    this.holdsPoints = false,
+    this.pointValue,
   });
 
   bool get isCard => type == AccountType.creditCard;
 
+  bool get isWallet => type == AccountType.wallet;
+
   bool get isClosed => closedAt != null;
 
-  /// Display label: the custom kind for savings/assets, else the type label.
-  String get typeLabel =>
-      (type == AccountType.savings && (kind?.isNotEmpty ?? false))
-      ? kind!
-      : type.label;
+  /// Display label: the custom kind for savings/assets, the points/money
+  /// split for wallets, else the type label.
+  String get typeLabel => switch (type) {
+    AccountType.savings when kind?.isNotEmpty ?? false => kind!,
+    AccountType.wallet => holdsPoints ? 'Points wallet' : 'Wallet',
+    _ => type.label,
+  };
+
+  /// The name pickers and lists show: "Amazon Pay · me" for a wallet with a
+  /// service, else [name].
+  String get displayName {
+    final s = service?.trim() ?? '';
+    return isWallet && s.isNotEmpty ? '$s · $name' : name;
+  }
+
+  /// [rupees] as points on a points wallet with a value per point; null
+  /// otherwise.
+  double? pointsOf(double rupees) {
+    final v = pointValue;
+    return isWallet && holdsPoints && v != null && v > 0 ? rupees / v : null;
+  }
 
   /// Display icon: the chosen asset icon for savings/assets, else per type.
   IconData get icon =>
@@ -149,6 +189,11 @@ class Account {
     bool clearGoalAmount = false,
     DateTime? closedAt,
     bool clearClosedAt = false,
+    String? service,
+    bool clearService = false,
+    bool? holdsPoints,
+    double? pointValue,
+    bool clearPointValue = false,
   }) => Account(
     id: id,
     name: name ?? this.name,
@@ -172,6 +217,9 @@ class Account {
     kindIcon: clearKind ? null : (kindIcon ?? this.kindIcon),
     goalAmount: clearGoalAmount ? null : (goalAmount ?? this.goalAmount),
     closedAt: clearClosedAt ? null : (closedAt ?? this.closedAt),
+    service: clearService ? null : (service ?? this.service),
+    holdsPoints: holdsPoints ?? this.holdsPoints,
+    pointValue: clearPointValue ? null : (pointValue ?? this.pointValue),
   );
 
   Map<String, dynamic> toJson() => {
@@ -190,6 +238,9 @@ class Account {
     if (kindIcon != null) 'kindIcon': kindIcon,
     if (goalAmount != null) 'goalAmount': goalAmount,
     if (closedAt != null) 'closedAt': closedAt!.toIso8601String(),
+    if (service != null) 'service': service,
+    if (holdsPoints) 'holdsPoints': true,
+    if (pointValue != null) 'pointValue': pointValue,
   };
 
   factory Account.fromJson(Map<String, dynamic> json) {
@@ -223,6 +274,12 @@ class Account {
       closedAt: json['closedAt'] is String
           ? DateTime.parse(json['closedAt'] as String)
           : null,
+      service: json['service'] is String ? json['service'] as String : null,
+      holdsPoints: json['holdsPoints'] == true,
+      pointValue: switch (json['pointValue']) {
+        final num v when v.isFinite && v > 0 => v.toDouble(),
+        _ => null,
+      },
     );
   }
 

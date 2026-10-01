@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/account.dart';
+import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../services/card_bill.dart';
 import '../services/savings_goal.dart';
@@ -39,6 +40,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
     AccountType.bank,
     AccountType.creditCard,
     AccountType.savings,
+    AccountType.wallet,
   ];
 
   late final PageController _pageCtrl = PageController();
@@ -133,8 +135,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                               title: 'Net balance',
                               message:
                                   'Bank balances minus credit card '
-                                  'outstanding. Savings and asset accounts '
-                                  'are not included.',
+                                  'outstanding. Savings, asset and wallet '
+                                  'accounts are not included.',
                               example: () =>
                                   '${fmtMoney(finance.bankBalanceTotal)} in '
                                   'banks − '
@@ -152,7 +154,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
             ),
           ),
         ),
-        // Type filter: All / Bank / Cards / Savings.
+        // Type filter: All / Bank / Cards / Savings / Wallets.
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: GlassSegmented<AccountType?>(
@@ -161,13 +163,18 @@ class _AccountsScreenState extends State<AccountsScreen> {
               (AccountType.bank, 'Banks'),
               (AccountType.creditCard, 'Cards'),
               (AccountType.savings, 'Savings'),
+              (AccountType.wallet, 'Wallets'),
             ],
-            icons: const [
-              Icons.account_balance_wallet_outlined,
-              Icons.account_balance_outlined,
-              Icons.credit_card,
-              Icons.savings_outlined,
-            ],
+            // Five labels only fit a narrow phone without their icons.
+            icons: MediaQuery.sizeOf(context).width < 400
+                ? null
+                : const [
+                    Icons.apps,
+                    Icons.account_balance_outlined,
+                    Icons.credit_card,
+                    Icons.savings_outlined,
+                    Icons.account_balance_wallet_outlined,
+                  ],
             selected: _typeFilter,
             onChanged: _setTypeFilter,
             pager: _pageCtrl,
@@ -184,6 +191,33 @@ class _AccountsScreenState extends State<AccountsScreen> {
         ),
       ],
     );
+  }
+
+  /// Wallets grouped by service ("Amazon Pay"), alphabetically, each group
+  /// headed by its name and ₹ total; wallets with no service come last,
+  /// under "Other wallets".
+  List<Widget> _walletGroups(FinanceProvider finance, List<Account> wallets) {
+    final groups = <String, List<Account>>{};
+    for (final a in wallets) {
+      (groups[a.service?.trim().toLowerCase() ?? ''] ??= []).add(a);
+    }
+    final keys = groups.keys.toList()
+      ..sort((a, b) {
+        if (a.isEmpty != b.isEmpty) return a.isEmpty ? 1 : -1;
+        return a.compareTo(b);
+      });
+    return [
+      for (final k in keys) ...[
+        _WalletServiceHeader(
+          service: k.isEmpty
+              ? 'Other wallets'
+              : groups[k]!.first.service!.trim(),
+          total: groups[k]!.fold(0.0, (s, a) => s + finance.accountBalance(a)),
+        ),
+        for (final a in groups[k]!)
+          _AccountCard(account: a, onView: widget.onViewAccount),
+      ],
+    ];
   }
 
   /// One pager page. Computes its own filtered lists for [t]: during a drag
@@ -206,14 +240,16 @@ class _AccountsScreenState extends State<AccountsScreen> {
           ? EmptyState(
               icon: Icons.account_balance_wallet_outlined,
               message: t != null
-                  ? 'No ${t.label.toLowerCase()} accounts yet.'
+                  ? (t == AccountType.wallet
+                        ? 'No wallets yet.'
+                        : 'No ${t.label.toLowerCase()} accounts yet.')
                   : 'No accounts yet.\n\nAccounts are detected '
                         'automatically from the account and card '
                         'numbers in your bank SMS. Import messages '
                         'to populate them.',
               // Same words as the floating button on this tab.
               actionLabel: 'New account',
-              onAction: () => showAddAccountDialog(context),
+              onAction: () => showAddAccountDialog(context, initialType: t),
             )
           : Builder(
               builder: (context) {
@@ -222,8 +258,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 // full tap/menu behavior — only dimmed. The All view
                 // groups open accounts by type under section headers;
                 // a filtered view IS one type, so it stays flat.
+                final wallets = [
+                  for (final a in accounts)
+                    if (a.isWallet) a,
+                ];
                 final items = <Widget>[
-                  if (t == null)
+                  if (t == null) ...[
                     for (final (type, header) in const [
                       (AccountType.bank, 'Banks'),
                       (AccountType.creditCard, 'Credit cards'),
@@ -241,7 +281,16 @@ class _AccountsScreenState extends State<AccountsScreen> {
                               onView: widget.onViewAccount,
                             ),
                       ],
-                    ]
+                    ],
+                    if (wallets.isNotEmpty) ...[
+                      UppercaseSectionHeader(
+                        'Wallets',
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      ..._walletGroups(finance, wallets),
+                    ],
+                  ] else if (t == AccountType.wallet)
+                    ..._walletGroups(finance, wallets)
                   else
                     for (final a in accounts)
                       _AccountCard(account: a, onView: widget.onViewAccount),
@@ -337,7 +386,11 @@ class _AccountCard extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            account.name,
+                            // Under its service header a wallet is its
+                            // login; closed, it has no header to lean on.
+                            account.isWallet && account.isClosed
+                                ? account.displayName
+                                : account.name,
                             style: Theme.of(context).textTheme.titleMedium,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -365,6 +418,36 @@ class _AccountCard extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// A service's row above its wallets: "Amazon Pay" and what they hold in ₹.
+class _WalletServiceHeader extends StatelessWidget {
+  final String service;
+  final double total;
+  const _WalletServiceHeader({required this.service, required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              service,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: text.titleSmall,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(fmtMoney(total), style: text.titleSmall?.copyWith(color: muted)),
+        ],
       ),
     );
   }
@@ -421,10 +504,13 @@ class _BankBalance extends StatelessWidget {
                 ),
                 InfoTip(
                   title: 'Balance',
-                  message:
-                      'The newest known balance wins, whether you set it or '
-                      'a bank alert stated it. Transactions after it are '
-                      'added on.',
+                  message: account.isWallet
+                      ? 'The balance you set, plus transactions dated '
+                            'after it, counted as spending or not. '
+                            'Wallets stay out of net balance.'
+                      : 'The newest known balance wins, whether you set it '
+                            'or a bank alert stated it. Transactions after it '
+                            'are added on.',
                   link: InfoLink(
                     prompt: 'Balance looks off?',
                     label: 'Set the balance',
@@ -453,6 +539,13 @@ class _BankBalance extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 4),
+        // A points wallet reads in points first: "500 points · ₹0.25 each".
+        if (account.pointsOf(finance.accountBalance(account))
+            case final points?)
+          Text(
+            '${fmtPoints(points)} · ${fmtPerPoint(account.pointValue!)} each',
+            style: TextStyle(color: scheme.onSurface, fontSize: 13),
+          ),
         Text(
           provenance,
           style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
@@ -567,8 +660,15 @@ class _GoalProgress extends StatelessWidget {
 /// being set and the tile snapped back to the SMS-derived number.
 Future<void> showSetBalanceDialog(BuildContext context, Account account) async {
   final isCard = account.isCard;
+  // A points wallet takes points and stores their ₹ value.
+  final perPoint = account.pointsOf(1) == null ? null : account.pointValue;
+  final manual = account.manualBalance;
   final ctrl = TextEditingController(
-    text: account.manualBalance?.toStringAsFixed(2) ?? '',
+    text: manual == null
+        ? ''
+        : perPoint == null
+        ? manual.toStringAsFixed(2)
+        : fmtFieldNumber(manual / perPoint),
   );
   String? error;
   await showDialog(
@@ -584,13 +684,22 @@ Future<void> showSetBalanceDialog(BuildContext context, Account account) async {
           content: TextField(
             controller: ctrl,
             autofocus: true,
+            onChanged: perPoint == null ? null : (_) => setState(() {}),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-              labelText: isCard ? 'Current outstanding' : 'Current balance',
-              prefixText: '₹ ',
-              helperText:
-                  'A newer bank alert takes over automatically. '
-                  'Leave blank to go back to SMS figures only.',
+              labelText: isCard
+                  ? 'Current outstanding'
+                  : perPoint != null
+                  ? 'Current points'
+                  : 'Current balance',
+              prefixText: perPoint == null ? '₹ ' : null,
+              helperText: account.isWallet
+                  ? (perPoint != null && parseAmount(ctrl.text) != null
+                        ? '= ${fmtMoney(parseAmount(ctrl.text)! * perPoint)}'
+                        : 'Transactions after it are added on. Leave blank '
+                              'to clear it.')
+                  : 'A newer bank alert takes over automatically. '
+                        'Leave blank to go back to SMS figures only.',
               border: const OutlineInputBorder(),
               errorText: error,
             ),
@@ -616,7 +725,10 @@ Future<void> showSetBalanceDialog(BuildContext context, Account account) async {
                   setState(() => error = 'Enter a number, e.g. 45000');
                   return;
                 }
-                ctx.read<FinanceProvider>().setManualBalance(account.id, v);
+                ctx.read<FinanceProvider>().setManualBalance(
+                  account.id,
+                  perPoint == null ? v : v * perPoint,
+                );
                 Navigator.pop(ctx);
               },
               child: const Text('Save'),
@@ -1061,6 +1173,8 @@ class _AccountMenu extends StatelessWidget {
             _rename(context);
           case 'numbers':
             _showLinkedNumbers(context);
+          case 'wallet':
+            showWalletDetailsDialog(context, account);
           case 'type':
             _toggleType(context);
           case 'kind':
@@ -1095,10 +1209,17 @@ class _AccountMenu extends StatelessWidget {
             ]
           : [
               const PopupMenuItem(value: 'rename', child: Text('Rename')),
-              const PopupMenuItem(
-                value: 'numbers',
-                child: Text('Linked numbers…'),
-              ),
+              // Wallets are entered by hand; no bank number resolves to one.
+              if (!account.isWallet)
+                const PopupMenuItem(
+                  value: 'numbers',
+                  child: Text('Linked numbers…'),
+                ),
+              if (account.isWallet)
+                const PopupMenuItem(
+                  value: 'wallet',
+                  child: Text('Wallet details…'),
+                ),
               const PopupMenuItem(value: 'type', child: Text('Change type…')),
               if (account.type == AccountType.savings)
                 const PopupMenuItem(value: 'kind', child: Text('Kind & icon…')),
@@ -1121,7 +1242,7 @@ class _AccountMenu extends StatelessWidget {
                 ),
               ),
               const PopupMenuItem(value: 'merge', child: Text('Merge into…')),
-              if (account.type == AccountType.savings)
+              if (account.type == AccountType.savings || account.isWallet)
                 const PopupMenuItem(
                   value: 'close',
                   child: Text('Close account'),
@@ -1231,9 +1352,9 @@ class _AccountMenu extends StatelessWidget {
               controller: ctrl,
               autofocus: true,
               onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(
-                labelText: 'Name',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(
+                labelText: account.isWallet ? 'Login label' : 'Name',
+                border: const OutlineInputBorder(),
               ),
             ),
             actions: [
@@ -1263,18 +1384,101 @@ class _AccountMenu extends StatelessWidget {
   }
 
   Future<void> _toggleType(BuildContext context) async {
+    final finance = context.read<FinanceProvider>();
+    final walletOk = finance.canBecomeWallet(account);
     final result = await showPickerSheet<AccountType>(
       context: context,
       title: 'Account type',
       items: [
         for (final t in AccountType.values)
-          PickerItem(value: t, label: t.label, leading: Icon(t.icon, size: 20)),
+          // An account with linked bank or card numbers can't be a wallet:
+          // its SMS rows would land there.
+          if (t != AccountType.wallet || walletOk || account.isWallet)
+            PickerItem(
+              value: t,
+              label: t.label,
+              leading: Icon(t.icon, size: 20),
+            ),
       ],
       selected: account.type,
     );
     final t = result?.value;
-    if (t == null || !context.mounted) return;
-    context.read<FinanceProvider>().setAccountType(account.id, t);
+    if (t == null || t == account.type || !context.mounted) return;
+    // Crossing the wallet line changes what counts: say how much first.
+    if (t == AccountType.wallet || account.isWallet) {
+      final toWallet = t == AccountType.wallet;
+      // Rows whose counting changes: all of them into a wallet, the
+      // uncounted ones out of it.
+      // Transfers never count either way, so they aren't in it.
+      final n = finance
+          .transactionsForAccount(account.id)
+          .where(
+            (r) =>
+                !isTransferCategory(r.categoryId) &&
+                (toWallet || !r.walletCounted),
+          )
+          .length;
+      // Only banks and cards make up net balance; savings stay out anyway.
+      final netType = toWallet ? account.type : t;
+      final netMoves =
+          netType == AccountType.bank || netType == AccountType.creditCard;
+      final net = !netMoves
+          ? ''
+          : toWallet
+          ? 'It leaves net balance.'
+          : 'It joins net balance.';
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (dCtx) => AlertDialog(
+          title: Text(
+            toWallet
+                ? 'Make "${account.name}" a wallet?'
+                : 'Make "${account.displayName}" a ${t.label.toLowerCase()} '
+                      'account?',
+          ),
+          content: Text(
+            [
+              if (n > 0)
+                toWallet
+                    ? (n == 1
+                          ? '1 transaction on it stops counting in spending '
+                                'and income. You can count it again from its '
+                                'edit sheet.'
+                          : '$n transactions on it stop counting in spending '
+                                'and income. You can count any of them again '
+                                'from their edit sheets.')
+                    : (n == 1
+                          ? '1 transaction on it starts counting in spending '
+                                'and income.'
+                          : '$n transactions on it start counting in '
+                                'spending and income.'),
+              if (net.isNotEmpty) net,
+              if (n == 0 && net.isEmpty) 'Nothing on it changes.',
+            ].join(' '),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dCtx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dCtx, true),
+              child: const Text('Change'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !context.mounted) return;
+    }
+    // The navigator's context, not this menu's: changing the type can move
+    // the card off this page (the last Savings account) and unmount it.
+    final navContext = Navigator.of(context).context;
+    final changed = await finance.setAccountType(account.id, t);
+    if (!changed || !navContext.mounted) return;
+    if (t == AccountType.wallet) {
+      final updated = finance.accountById(account.id);
+      if (updated != null) await showWalletDetailsDialog(navContext, updated);
+    }
   }
 
   void _setLimit(BuildContext context) =>
@@ -1348,7 +1552,7 @@ class _AccountMenu extends StatelessWidget {
     finance.closeAccount(account.id);
     showUndoSnackBar(
       context,
-      'Closed "${account.name}"',
+      'Closed "${account.displayName}"',
       () => finance.reopenAccount(account.id),
       icon: Icons.archive_outlined,
       tone: AppToastTone.removal,
@@ -1357,11 +1561,18 @@ class _AccountMenu extends StatelessWidget {
 
   Future<void> _merge(BuildContext context) async {
     final finance = context.read<FinanceProvider>();
+    // Wallets merge only with wallets, money accounts only with money
+    // accounts (see FinanceProvider.mergeAccounts).
     final others = finance.openAccounts
-        .where((a) => a.id != account.id)
+        .where((a) => a.id != account.id && a.isWallet == account.isWallet)
         .toList();
     if (others.isEmpty) {
-      showAppToast(context, 'No other account to merge into.');
+      showAppToast(
+        context,
+        account.isWallet
+            ? 'No other wallet to merge into.'
+            : 'No other account to merge into.',
+      );
       return;
     }
     // Picking a target only selects it — the merge itself is confirmed
@@ -1369,10 +1580,14 @@ class _AccountMenu extends StatelessWidget {
     // credit limit) with no undo.
     final result = await showPickerSheet<Account>(
       context: context,
-      title: 'Merge "${account.name}" into…',
+      title: 'Merge "${account.displayName}" into…',
       items: [
         for (final a in others)
-          PickerItem(value: a, label: a.name, leading: Icon(a.icon, size: 20)),
+          PickerItem(
+            value: a,
+            label: a.displayName,
+            leading: Icon(a.icon, size: 20),
+          ),
       ],
     );
     final a = result?.value;
@@ -1383,11 +1598,11 @@ class _AccountMenu extends StatelessWidget {
     final ok = await showDialog<bool>(
       context: context,
       builder: (dCtx) => AlertDialog(
-        title: Text('Merge "${account.name}"?'),
+        title: Text('Merge "${account.displayName}"?'),
         content: Text(
           '$txCount transaction${txCount == 1 ? '' : 's'} '
-          'move${txCount == 1 ? 's' : ''} to "${a.name}". '
-          '"${account.name}" is removed permanently, along '
+          'move${txCount == 1 ? 's' : ''} to "${a.displayName}". '
+          '"${account.displayName}" is removed permanently, along '
           'with its name, type, manual balance and credit '
           'limit. This cannot be undone.',
         ),
@@ -1409,29 +1624,55 @@ class _AccountMenu extends StatelessWidget {
   }
 
   void _delete(BuildContext context) async {
-    final ok = await showDialog<bool>(
+    final finance = context.read<FinanceProvider>();
+    // Off a wallet its uncounted rows start counting; Close keeps them out.
+    final uncounted = !account.isWallet
+        ? 0
+        : finance
+              .transactionsForAccount(account.id)
+              .where(
+                (t) => !t.walletCounted && !isTransferCategory(t.categoryId),
+              )
+              .length;
+    final ok = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Delete "${account.name}"?'),
-        content: const Text(
-          'The account is removed. Its transactions stay but become '
-          'unassigned. This does not delete any transactions.',
+        title: Text('Delete "${account.displayName}"?'),
+        content: Text(
+          [
+            'The account is removed. Its transactions stay but become '
+                'unassigned. This does not delete any transactions.',
+            if (uncounted == 1)
+              '1 of them is out of spending and income now and would count '
+                  'once unassigned.',
+            if (uncounted > 1)
+              '$uncounted of them are out of spending and income now and '
+                  'would count once unassigned.',
+            if (uncounted > 0 && !account.isClosed)
+              'Close the wallet instead to keep '
+                  '${uncounted == 1 ? 'it' : 'them'} out.',
+          ].join(' '),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
+            onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
+          if (uncounted > 0 && !account.isClosed)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'close'),
+              child: const Text('Close instead'),
+            ),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
+            onPressed: () => Navigator.pop(ctx, 'delete'),
             child: const Text('Delete'),
           ),
         ],
       ),
     );
-    if (ok == true && context.mounted) {
-      context.read<FinanceProvider>().deleteAccount(account.id);
-    }
+    if (!context.mounted) return;
+    if (ok == 'close') _close(context);
+    if (ok == 'delete') finance.deleteAccount(account.id);
   }
 }
 
@@ -1572,13 +1813,116 @@ class _AssetIconPicker extends StatelessWidget {
   }
 }
 
+/// A wallet's service, money or points, and ₹ per point. Changing the
+/// value keeps the point count (FinanceProvider.setWalletDetails).
+Future<void> showWalletDetailsDialog(
+  BuildContext context,
+  Account account,
+) async {
+  final serviceCtrl = TextEditingController(text: account.service ?? '');
+  final valueCtrl = TextEditingController(
+    text: account.pointValue == null
+        ? ''
+        : fmtPerPointField(account.pointValue!),
+  );
+  var holdsPoints = account.holdsPoints;
+  await showDialog(
+    context: context,
+    builder: (ctx) => DisposeScope(
+      disposables: [serviceCtrl, valueCtrl],
+      child: StatefulBuilder(
+        builder: (ctx, setState) {
+          final value = parseAmount(valueCtrl.text);
+          final ready = !holdsPoints || (value != null && value > 0);
+          return AlertDialog(
+            title: const Text('Wallet details'),
+            scrollable: true,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 8),
+                TextField(
+                  controller: serviceCtrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Service',
+                    hintText: 'e.g. Amazon Pay, Zomato',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('Money')),
+                    ButtonSegment(value: true, label: Text('Points')),
+                  ],
+                  selected: {holdsPoints},
+                  onSelectionChanged: (s) =>
+                      setState(() => holdsPoints = s.first),
+                ),
+                if (holdsPoints) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: valueCtrl,
+                    onChanged: (_) => setState(() {}),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Value per point',
+                      prefixText: '₹ ',
+                      hintText: 'e.g. 0.25',
+                      helperText: 'Past transactions keep their ₹ amounts.',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: !ready
+                    ? null
+                    : () {
+                        ctx.read<FinanceProvider>().setWalletDetails(
+                          account.id,
+                          service: serviceCtrl.text,
+                          holdsPoints: holdsPoints,
+                          pointValue: holdsPoints ? value : null,
+                        );
+                        Navigator.pop(ctx);
+                      },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    ),
+  );
+}
+
 /// Creates an account by hand: name, type, and optionally a first linked
 /// number so imports start matching immediately.
-Future<void> showAddAccountDialog(BuildContext context) async {
+Future<void> showAddAccountDialog(
+  BuildContext context, {
+  AccountType? initialType,
+}) async {
   final nameCtrl = TextEditingController();
   final kindCtrl = TextEditingController();
-  var type = AccountType.bank;
+  final serviceCtrl = TextEditingController();
+  final pointValueCtrl = TextEditingController();
+  final balanceCtrl = TextEditingController();
+  // A page's own empty state opens on its own type.
+  var type = initialType ?? AccountType.bank;
   var kindIcon = 'savings';
+  var holdsPoints = false;
   String? key;
   // Re-entrancy latch: Create awaits the account write before popping, and
   // a second tap in that window minted a duplicate account.
@@ -1587,144 +1931,257 @@ Future<void> showAddAccountDialog(BuildContext context) async {
   await showDialog(
     context: context,
     builder: (ctx) => DisposeScope(
-      disposables: [nameCtrl, kindCtrl],
+      disposables: [
+        nameCtrl,
+        kindCtrl,
+        serviceCtrl,
+        pointValueCtrl,
+        balanceCtrl,
+      ],
       child: StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: const Text('New account'),
-          // Top padding keeps the Name field's floating label from clipping.
-          content: SingleChildScrollView(
-            padding: const EdgeInsets.only(top: 8),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  autofocus: true,
-                  onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Name (e.g. HDFC Salary)',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                // No per-segment icons: with three segments the icon + label
-                // won't fit the dialog width and the labels wrap ("Sa/vin/gs").
-                SegmentedButton<AccountType>(
-                  showSelectedIcon: false,
-                  segments: [
-                    for (final t in AccountType.values)
-                      ButtonSegment(
-                        value: t,
-                        label: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            t == AccountType.creditCard ? 'Card' : t.label,
-                            maxLines: 1,
+        builder: (ctx, setState) {
+          final wallet = type == AccountType.wallet;
+          final pointValue = parseAmount(pointValueCtrl.text);
+          final balanceText = balanceCtrl.text.trim();
+          final balance = parseAmount(balanceText);
+          // Points need a value per point to be stored in ₹; a typed
+          // balance must read as a number.
+          final walletReady =
+              !wallet ||
+              ((!holdsPoints || (pointValue != null && pointValue > 0)) &&
+                  (balanceText.isEmpty || balance != null));
+          return AlertDialog(
+            title: const Text('New account'),
+            // Narrower side margins than the 40dp default: four type
+            // segments need the width on a small phone.
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 24,
+            ),
+            // Top padding keeps the Name field's floating label from clipping.
+            content: SingleChildScrollView(
+              padding: const EdgeInsets.only(top: 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Type first: picking Wallet swaps the fields below it.
+                  // No per-segment icons: with four segments the icon + label
+                  // won't fit the dialog width and the labels wrap ("Sa/vin/gs").
+                  SegmentedButton<AccountType>(
+                    showSelectedIcon: false,
+                    // Tight padding leaves the labels their size.
+                    style: const ButtonStyle(
+                      padding: WidgetStatePropertyAll(
+                        EdgeInsets.symmetric(horizontal: 4),
+                      ),
+                    ),
+                    segments: [
+                      for (final t in AccountType.values)
+                        ButtonSegment(
+                          value: t,
+                          tooltip: t.label,
+                          label: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              t == AccountType.creditCard ? 'Card' : t.label,
+                              maxLines: 1,
+                            ),
                           ),
                         ),
-                      ),
-                  ],
-                  selected: {type},
-                  onSelectionChanged: (s) => setState(() => type = s.first),
-                ),
-                if (type == AccountType.savings) ...[
+                    ],
+                    selected: {type},
+                    onSelectionChanged: (s) => setState(() => type = s.first),
+                  ),
                   const SizedBox(height: 12),
+                  if (wallet) ...[
+                    TextField(
+                      controller: serviceCtrl,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Service',
+                        hintText: 'e.g. Amazon Pay, Zomato',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   TextField(
-                    controller: kindCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Kind',
-                      hintText: 'e.g. RD, Stocks, Gold, Mutual fund',
-                      border: OutlineInputBorder(),
+                    controller: nameCtrl,
+                    autofocus: true,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      labelText: wallet
+                          ? 'Login label (e.g. me, mom)'
+                          : 'Name (e.g. HDFC Salary)',
+                      border: const OutlineInputBorder(),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  _AssetIconPicker(
-                    selected: kindIcon,
-                    onChanged: (v) => setState(() => kindIcon = v),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Record deposits/purchases as "To savings" transactions from '
-                    'your bank account; keep the current value with '
-                    '"Set balance…" in this account\'s ⋮ menu.',
-                    style: Theme.of(ctx).textTheme.bodySmall,
-                  ),
+                  if (wallet) ...[
+                    const SizedBox(height: 12),
+                    SegmentedButton<bool>(
+                      showSelectedIcon: false,
+                      segments: const [
+                        ButtonSegment(value: false, label: Text('Money')),
+                        ButtonSegment(value: true, label: Text('Points')),
+                      ],
+                      selected: {holdsPoints},
+                      onSelectionChanged: (s) =>
+                          setState(() => holdsPoints = s.first),
+                    ),
+                    if (holdsPoints) ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: pointValueCtrl,
+                        onChanged: (_) => setState(() {}),
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Value per point',
+                          prefixText: '₹ ',
+                          hintText: 'e.g. 0.25',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: balanceCtrl,
+                      onChanged: (_) => setState(() {}),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: holdsPoints
+                            ? 'Points now (optional)'
+                            : 'Balance now (optional)',
+                        prefixText: holdsPoints ? null : '₹ ',
+                        helperText:
+                            holdsPoints && balance != null && pointValue != null
+                            ? '= ${fmtMoney(balance * pointValue)}'
+                            : 'Wallets stay out of net balance.',
+                        errorText: balanceText.isNotEmpty && balance == null
+                            ? 'Enter a number, e.g. 840'
+                            : null,
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                  if (type == AccountType.savings) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: kindCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Kind',
+                        hintText: 'e.g. RD, Stocks, Gold, Mutual fund',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _AssetIconPicker(
+                      selected: kindIcon,
+                      onChanged: (v) => setState(() => kindIcon = v),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Record deposits/purchases as "To savings" transactions from '
+                      'your bank account; keep the current value with '
+                      '"Set balance…" in this account\'s ⋮ menu.',
+                      style: Theme.of(ctx).textTheme.bodySmall,
+                    ),
+                  ],
+                  // Wallets are entered by hand: no bank number to link.
+                  if (!wallet) ...[
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      icon: Icon(
+                        key == null ? Icons.add_link : Icons.link,
+                        size: 18,
+                      ),
+                      label: Text(
+                        key == null
+                            ? 'Link a number (optional)'
+                            : key!.replaceFirst(':', ' ••'),
+                      ),
+                      onPressed: () async {
+                        final k = await showAccountKeyDialog(ctx);
+                        if (k != null) setState(() => key = k);
+                      },
+                    ),
+                  ],
                 ],
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  icon: Icon(
-                    key == null ? Icons.add_link : Icons.link,
-                    size: 18,
-                  ),
-                  label: Text(
-                    key == null
-                        ? 'Link a number (optional)'
-                        : key!.replaceFirst(':', ' ••'),
-                  ),
-                  onPressed: () async {
-                    final k = await showAccountKeyDialog(ctx);
-                    if (k != null) setState(() => key = k);
-                  },
-                ),
-              ],
+              ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              // Disabled while the name is empty instead of a silent no-op,
-              // and while a save is already in flight.
-              onPressed: nameCtrl.text.trim().isEmpty || saving
-                  ? null
-                  : () async {
-                      setState(() => saving = true);
-                      final name = nameCtrl.text.trim();
-                      final finance = ctx.read<FinanceProvider>();
-                      final navigator = Navigator.of(ctx);
-                      final messenger = ScaffoldMessenger.of(context);
-                      final kind = kindCtrl.text.trim();
-                      // A throw used to leave the dialog open forever with no
-                      // message — surface it and keep the dialog for a retry.
-                      try {
-                        final id = await finance.addAccount(
-                          name: name,
-                          type: type,
-                          kind: type == AccountType.savings && kind.isNotEmpty
-                              ? kind
-                              : null,
-                          kindIcon: type == AccountType.savings
-                              ? kindIcon
-                              : null,
-                        );
-                        if (key != null) {
-                          final ok = await finance.addAccountKey(id, key!);
-                          if (!ok) {
-                            showAppToastOn(
-                              messenger,
-                              'That number is already linked to another '
-                              'account — account created without it.',
-                              tone: AppToastTone.error,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                // Disabled while the name is empty instead of a silent no-op,
+                // and while a save is already in flight.
+                onPressed:
+                    nameCtrl.text.trim().isEmpty || saving || !walletReady
+                    ? null
+                    : () async {
+                        setState(() => saving = true);
+                        final name = nameCtrl.text.trim();
+                        final finance = ctx.read<FinanceProvider>();
+                        final navigator = Navigator.of(ctx);
+                        final messenger = ScaffoldMessenger.of(context);
+                        final kind = kindCtrl.text.trim();
+                        // A throw used to leave the dialog open forever with no
+                        // message — surface it and keep the dialog for a retry.
+                        try {
+                          final id = await finance.addAccount(
+                            name: name,
+                            type: type,
+                            kind: type == AccountType.savings && kind.isNotEmpty
+                                ? kind
+                                : null,
+                            kindIcon: type == AccountType.savings
+                                ? kindIcon
+                                : null,
+                            service: wallet ? serviceCtrl.text.trim() : null,
+                            holdsPoints: wallet && holdsPoints,
+                            pointValue: wallet && holdsPoints
+                                ? pointValue
+                                : null,
+                          );
+                          // Stored in ₹: points at their value.
+                          if (wallet && balance != null) {
+                            await finance.setManualBalance(
+                              id,
+                              holdsPoints ? balance * pointValue! : balance,
                             );
                           }
+                          if (key != null && !wallet) {
+                            final ok = await finance.addAccountKey(id, key!);
+                            if (!ok) {
+                              showAppToastOn(
+                                messenger,
+                                'That number is already linked to another '
+                                'account — account created without it.',
+                                tone: AppToastTone.error,
+                              );
+                            }
+                          }
+                          navigator.pop();
+                        } catch (e) {
+                          setState(() => saving = false);
+                          showAppToastOn(
+                            messenger,
+                            'Could not create account: $e',
+                            tone: AppToastTone.error,
+                          );
                         }
-                        navigator.pop();
-                      } catch (e) {
-                        setState(() => saving = false);
-                        showAppToastOn(
-                          messenger,
-                          'Could not create account: $e',
-                          tone: AppToastTone.error,
-                        );
-                      }
-                    },
-              child: const Text('Create'),
-            ),
-          ],
-        ),
+                      },
+                child: const Text('Create'),
+              ),
+            ],
+          );
+        },
       ),
     ),
   );

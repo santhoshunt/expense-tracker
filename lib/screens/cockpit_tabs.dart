@@ -482,7 +482,7 @@ class _SubscriptionTile extends StatelessWidget {
         // A merchant the app would still spot on its own is hidden too,
         // or it would stay on the list as a detected subscription.
         final spotted = detectRecurringPatterns(
-          finance.transactions,
+          finance.countedTransactions,
           now: DateTime.now(),
         ).any((h) => h.key == hit.key);
         // Both writes first, then the toast: an Undo tapped mid-write would

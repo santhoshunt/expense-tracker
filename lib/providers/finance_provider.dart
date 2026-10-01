@@ -150,6 +150,9 @@ class _Derived {
   /// `Tx.id` is not — `…_9` sorts after `…_10`.
   List<(Tx, int)>? ordered;
   List<Tx>? confirmed;
+
+  /// [confirmed] less the wallet rows that don't count.
+  List<Tx>? counted;
   List<Tx>? pending;
   int? pendingCount;
   Map<String, List<Tx>>? byAccount;
@@ -479,6 +482,8 @@ class FinanceProvider extends ChangeNotifier {
     final transfersBy = <String, double>{};
     final transfersOutBy = <String, double>{};
     for (final t in rows) {
+      // A wallet row left uncounted is in no figure at all, transfers too.
+      if (!countsInTotals(t)) continue;
       // Only money moving OUT counts as saved — an income-typed row in this
       // category (import-reachable) would otherwise inflate `savings` and
       // make `balance` subtract money that actually came in.
@@ -594,7 +599,9 @@ class FinanceProvider extends ChangeNotifier {
     if (rows == null) return const {};
     final byDay = <int, double>{};
     for (final t in rows) {
-      if (t.type != TxType.expense || isTransferCategory(t.categoryId)) {
+      if (t.type != TxType.expense ||
+          isTransferCategory(t.categoryId) ||
+          !countsInTotals(t)) {
         continue;
       }
       final day = t.effectiveDate.day;
@@ -612,7 +619,8 @@ class FinanceProvider extends ChangeNotifier {
     for (final t in rows ?? const <Tx>[]) {
       if (t.effectiveDate.day != day.day ||
           t.type != TxType.expense ||
-          isTransferCategory(t.categoryId)) {
+          isTransferCategory(t.categoryId) ||
+          !countsInTotals(t)) {
         continue;
       }
       spent += t.spendAmount;
@@ -627,6 +635,7 @@ class FinanceProvider extends ChangeNotifier {
     for (final t in transactions)
       if (t.type == TxType.expense &&
           !isTransferCategory(t.categoryId) &&
+          countsInTotals(t) &&
           t.effectiveDate.year == day.year &&
           t.effectiveDate.month == day.month &&
           t.effectiveDate.day == day.day)
@@ -650,7 +659,9 @@ class FinanceProvider extends ChangeNotifier {
     for (final (t, _) in rows) {
       final d = t.effectiveDate;
       if (d.isBefore(first)) first = d;
-      if (t.type != TxType.expense || isTransferCategory(t.categoryId)) {
+      if (t.type != TxType.expense ||
+          isTransferCategory(t.categoryId) ||
+          !countsInTotals(t)) {
         continue;
       }
       totals[d.weekday - 1] += t.spendAmount;
@@ -771,7 +782,7 @@ class FinanceProvider extends ChangeNotifier {
   /// Whether one transaction counts toward [b] — the row-level twin of
   /// [budgetSpentFor]; the two must stay in agreement.
   bool countsTowardBudget(Tx t, SpendBudget b) {
-    if (t.type != TxType.expense) return false;
+    if (t.type != TxType.expense || !countsInTotals(t)) return false;
     switch (b.mode) {
       case BudgetMode.include:
         return b.categoryIds.contains(t.categoryId);
@@ -1653,6 +1664,7 @@ class FinanceProvider extends ChangeNotifier {
     List<SplitShare> people = const [],
     String? repaidBy,
     DateTime? countIn,
+    bool walletCounted = false,
   }) async {
     final id = _newId();
     _transactions.add(
@@ -1670,6 +1682,7 @@ class FinanceProvider extends ChangeNotifier {
           people: people,
           repaidBy: repaidBy,
           countIn: Tx.normalizeCountIn(countIn, date),
+          walletCounted: walletCounted,
         ),
       ),
     );
@@ -1777,6 +1790,12 @@ class FinanceProvider extends ChangeNotifier {
     final a = _transactions[ia];
     final b = _transactions[ib];
     if (a.type == b.type || a.pairId != null || b.pairId != null) return null;
+    // A wallet top-up stays two rows: the bank debit keeps counting as
+    // spend, the wallet credit doesn't, so nothing counts twice.
+    if (accountForKey(a.acctKey)?.isWallet == true ||
+        accountForKey(b.acctKey)?.isWallet == true) {
+      return null;
+    }
     final out = a.type == TxType.expense ? a : b;
     final inn = a.type == TxType.expense ? b : a;
     // A manual pairing of a card-side debit is still honoured as a plain
@@ -2561,7 +2580,7 @@ class FinanceProvider extends ChangeNotifier {
     );
     final ai = r.accountId == null
         ? -1
-        : _accounts.indexWhere((a) => a.id == r.accountId);
+        : _accounts.indexWhere((a) => a.id == r.accountId && !a.isWallet);
     final accounts = ai != -1 && _assignInPlace(_transactions.length - 1, ai);
     final key = monthKey(due);
     final was = r.lastPaidMonth;
@@ -2596,9 +2615,11 @@ class FinanceProvider extends ChangeNotifier {
       // A deleted account: the added expenses then go on no account. Not
       // while the accounts failed to load: they only look deleted.
       final account = r.accountId;
+      // A wallet too: its rows count only when turned on, so bills added
+      // there would go quietly missing from spend.
       if (account != null &&
           !_loadWarnings.contains('accounts') &&
-          !_accounts.any((a) => a.id == account)) {
+          !_accounts.any((a) => a.id == account && !a.isWallet)) {
         r = r.copyWith(clearAccountId: true);
       }
       if (!identical(r, _reminders[i])) {
@@ -2651,7 +2672,7 @@ class FinanceProvider extends ChangeNotifier {
         );
         final ai = r.accountId == null
             ? -1
-            : _accounts.indexWhere((a) => a.id == r.accountId);
+            : _accounts.indexWhere((a) => a.id == r.accountId && !a.isWallet);
         if (ai != -1 && _assignInPlace(_transactions.length - 1, ai)) {
           accountsTouched = true;
         }
@@ -2933,6 +2954,19 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   Account? accountById(String id) => _accountsById[id];
+
+  /// Whether [t] counts in income, spend and budget figures: every row
+  /// except a wallet row whose "Count as spending" is off. The one rule
+  /// every total, fold and tap-through list asks, so they always agree.
+  bool countsInTotals(Tx t) =>
+      t.walletCounted || accountForKey(t.acctKey)?.type != AccountType.wallet;
+
+  /// [transactions] that count ([countsInTotals]), newest first. For
+  /// callers that fold rows themselves (top merchants, recurring detection).
+  List<Tx> get countedTransactions => _d.counted ??= [
+    for (final t in transactions)
+      if (countsInTotals(t)) t,
+  ];
 
   /// accountId → its confirmed transactions, oldest first (so index order is
   /// also `(date, insertionIndex)` order). Built once per notification.
@@ -3239,6 +3273,16 @@ class FinanceProvider extends ChangeNotifier {
   /// don't depend on the SMS history being complete.
   double get netWorth => bankBalanceTotal - cardOutstandingTotal;
 
+  /// Open wallets' balances in ₹, points at their value. Shown beside net
+  /// balance, never inside it: wallet money only spends on its platform.
+  double get walletBalanceTotal => _accounts
+      .where((a) => !a.isClosed && a.isWallet)
+      .fold(0.0, (s, a) => s + accountBalance(a));
+
+  /// Whether any account feeds [netWorth]: with only wallets, net balance
+  /// falls back to the ledger, as with no accounts at all.
+  bool get hasNetAccounts => _accounts.any((a) => !a.isWallet);
+
   /// This-month spend on the account (expenses only).
   double accountSpentThisMonth(Account account) =>
       _figures(account).spentThisMonth;
@@ -3251,7 +3295,11 @@ class FinanceProvider extends ChangeNotifier {
     double? creditLimit,
     String? kind,
     String? kindIcon,
+    String? service,
+    bool holdsPoints = false,
+    double? pointValue,
   }) async {
+    final wallet = type == AccountType.wallet;
     final acc = Account(
       id: _newAccountId(),
       name: name.trim(),
@@ -3260,6 +3308,11 @@ class FinanceProvider extends ChangeNotifier {
       creditLimit: creditLimit,
       kind: kind,
       kindIcon: kindIcon,
+      service: wallet ? service?.trim() : null,
+      holdsPoints: wallet && holdsPoints,
+      pointValue: wallet && holdsPoints && _validPointValue(pointValue)
+          ? pointValue
+          : null,
     );
     _accounts.add(acc);
     notifyListeners();
@@ -3283,15 +3336,66 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(accounts: true);
   }
 
+  static bool _validPointValue(double? v) => v != null && v.isFinite && v > 0;
+
+  /// A wallet's service, money-or-points and ₹ per point. Changing the
+  /// value per point re-anchors the balance so the point count holds
+  /// (500 points stay 500 points); past rows keep their ₹ amounts.
+  Future<void> setWalletDetails(
+    String id, {
+    String? service,
+    bool? holdsPoints,
+    double? pointValue,
+  }) async {
+    final i = _accounts.indexWhere((a) => a.id == id);
+    if (i == -1 || !_accounts[i].isWallet) return;
+    final before = _accounts[i];
+    final points = holdsPoints ?? before.holdsPoints;
+    final value = !points
+        ? null
+        : (_validPointValue(pointValue) ? pointValue : before.pointValue);
+    var next = before.copyWith(
+      service: service?.trim(),
+      holdsPoints: points,
+      pointValue: value,
+      clearPointValue: value == null,
+    );
+    final oldPoints = before.pointsOf(accountBalance(before));
+    if (oldPoints != null &&
+        points &&
+        value != null &&
+        value != before.pointValue) {
+      // Rows dated later today are already in the balance and would be
+      // added again after a "now" anchor: take them out of it first.
+      final now = DateTime.now();
+      var laterToday = 0.0;
+      for (final t in transactionsForAccount(id)) {
+        if (t.date.isAfter(now) &&
+            t.date.isBefore(DateTime(now.year, now.month, now.day + 1))) {
+          laterToday += t.type == TxType.income ? t.amount : -t.amount;
+        }
+      }
+      next = next.copyWith(
+        manualBalance: oldPoints * value - laterToday,
+        manualBalanceAt: now,
+      );
+    }
+    _accounts[i] = next;
+    notifyListeners();
+    await _persist(accounts: true);
+  }
+
   /// Links an account/card number key (`"BANK:1234"`) to [accountId] so SMS
   /// carrying that fragment resolve to it — past transactions included.
-  /// Returns false when another account already owns the key.
+  /// Returns false when another account already owns the key, or when a
+  /// wallet is asked to own a bank number (wallets are entered by hand).
   Future<bool> addAccountKey(String accountId, String key) async {
     final k = key.trim().toUpperCase();
     final owner = _keyIndex[k];
     if (owner != null && owner != accountId) return false;
     final i = _accounts.indexWhere((a) => a.id == accountId);
     if (i == -1) return false;
+    if (_accounts[i].isWallet) return false;
     _accounts[i] = _accounts[i].copyWith(keys: {..._accounts[i].keys, k});
     _keyIndex[k] = accountId;
     notifyListeners();
@@ -3319,13 +3423,57 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(accounts: true);
   }
 
-  Future<void> setAccountType(String id, AccountType type) async {
+  /// Returns false, changing nothing, when [type] is Wallet and the account
+  /// can't be one ([canBecomeWallet]).
+  ///
+  /// Crossing the wallet line clears "Count as spending" on the account's
+  /// rows, so an old setting can't come back from an earlier stint as a
+  /// wallet. Leaving it, a wallet takes its "Service · login" as its name.
+  Future<bool> setAccountType(String id, AccountType type) async {
     final i = _accounts.indexWhere((a) => a.id == id);
-    if (i == -1) return;
-    _accounts[i] = _accounts[i].copyWith(type: type);
+    if (i == -1) return false;
+    final before = _accounts[i];
+    if (type == AccountType.wallet && !canBecomeWallet(before)) return false;
+    final crossing = before.isWallet != (type == AccountType.wallet);
+    final leaving = before.isWallet && crossing;
+    // Leaving, the service moves into the name and the wallet fields go,
+    // so a later return to Wallet can't read "Amazon Pay · Amazon Pay · me".
+    _accounts[i] = before.copyWith(
+      type: type,
+      name: leaving ? before.displayName : null,
+      clearService: leaving,
+      holdsPoints: leaving ? false : null,
+      clearPointValue: leaving,
+    );
+    var txChanged = false;
+    if (crossing) {
+      for (var j = 0; j < _transactions.length; j++) {
+        final t = _transactions[j];
+        if (t.walletCounted && before.keys.contains(t.acctKey)) {
+          _transactions[j] = t.copyWith(walletCounted: false);
+          txChanged = true;
+        }
+      }
+    }
+    // A reminder paying from it can't add its bill on a wallet.
+    final reminders = _sanitizeReminders();
     notifyListeners();
-    await _persist(accounts: true);
+    await _persist(accounts: true, tx: txChanged, reminders: reminders);
+    return true;
   }
+
+  /// Only an account holding hand-assigned rows alone can be a wallet, and
+  /// none of them a transfer: a paired bank leg would stay a transfer while
+  /// the wallet leg stopped counting, and a "To savings" row on a savings
+  /// account would flip sign and leave the savings totals. Either way the
+  /// money would be in no figure at all.
+  bool canBecomeWallet(Account a) =>
+      a.keys.every((k) => k.startsWith('manual:')) &&
+      !_transactions.any(
+        (t) =>
+            a.keys.contains(t.acctKey) &&
+            (t.pairId != null || isTransferCategory(t.categoryId)),
+      );
 
   Future<void> setCreditLimit(String id, double? limit) async {
     final i = _accounts.indexWhere((a) => a.id == id);
@@ -3442,7 +3590,7 @@ class FinanceProvider extends ChangeNotifier {
             (t.amount * 100).round() == cents &&
             t.date.difference(paidOn).abs() <= kPairDateWindow &&
             switch (accountForKey(t.acctKey)) {
-              final Account a => !a.isCard,
+              final Account a => !a.isCard && !a.isWallet,
               null => false,
             })
           t,
@@ -3504,6 +3652,9 @@ class FinanceProvider extends ChangeNotifier {
     final si = _accounts.indexWhere((a) => a.id == sourceId);
     final ti = _accounts.indexWhere((a) => a.id == targetId);
     if (si == -1 || ti == -1) return;
+    // Wallets and money accounts never fuse: bank numbers would land on a
+    // wallet, or wallet rows would start counting.
+    if (_accounts[si].isWallet != _accounts[ti].isWallet) return;
     final merged = {..._accounts[ti].keys, ..._accounts[si].keys};
     _accounts[ti] = _accounts[ti].copyWith(keys: merged);
     _accounts.removeAt(si);
@@ -3515,12 +3666,25 @@ class FinanceProvider extends ChangeNotifier {
   /// Deletes an account. Its transactions remain but become unassigned
   /// (their acctKey no longer resolves to any account).
   Future<void> deleteAccount(String id) async {
+    final gone = _accounts.where((a) => a.id == id).firstOrNull;
     _accounts.removeWhere((a) => a.id == id);
     _rebuildKeyIndex();
+    // A deleted wallet's rows are unassigned now: their "Count as spending"
+    // means nothing, and must not come back if one lands on a wallet again.
+    var txChanged = false;
+    if (gone != null && gone.isWallet) {
+      for (var j = 0; j < _transactions.length; j++) {
+        final t = _transactions[j];
+        if (t.walletCounted && gone.keys.contains(t.acctKey)) {
+          _transactions[j] = t.copyWith(walletCounted: false);
+          txChanged = true;
+        }
+      }
+    }
     // Reminders paying from it now add their expenses on no account.
     final reminders = _sanitizeReminders();
     notifyListeners();
-    await _persist(accounts: true, reminders: reminders);
+    await _persist(accounts: true, reminders: reminders, tx: txChanged);
   }
 
   /// Assigns a transaction to [accountId], moving ONLY that transaction.
@@ -3544,13 +3708,15 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// The move itself, shared by [assignAccount] and [assignAccountToMany].
-  /// Returns false when the transaction already resolves to the target.
+  /// Returns false when the transaction already resolves to the target, or
+  /// when a transfer leg would land on a wallet (see [canBecomeWallet]).
   /// Caller is responsible for notifyListeners + _persist.
   bool _assignInPlace(int ti, int ai) {
     final t = _transactions[ti];
     final accountId = _accounts[ai].id;
     // Already resolves there — leave the key structure untouched.
     if (t.acctKey != null && _keyIndex[t.acctKey] == accountId) return false;
+    if (t.pairId != null && _accounts[ai].isWallet) return false;
     final key = 'manual:${t.id}';
     // A previous by-hand assignment may have parked this synthetic key in
     // another account's key set; retract it so exactly one account owns it.
@@ -3576,6 +3742,9 @@ class FinanceProvider extends ChangeNotifier {
     _transactions[ti] = t.copyWith(
       acctKey: key,
       clearBalanceAfter: !keepBalance,
+      // "Count as spending" is a wallet setting: off a wallet it resets, so
+      // a row moved back onto one starts uncounted again.
+      walletCounted: _accounts[ai].isWallet && t.walletCounted,
     );
     _accounts[ai] = _accounts[ai].copyWith(keys: {..._accounts[ai].keys, key});
     _keyIndex[key] = accountId;
@@ -3665,8 +3834,11 @@ class FinanceProvider extends ChangeNotifier {
     for (final t in transactions) {
       // The totals engine's money-out rule: expense rows outside the
       // transfer categories, and only the user's share of a split.
+      // An uncounted wallet row still carries the tag, at no spend.
       final spend =
-          t.type == TxType.expense && !isTransferCategory(t.categoryId)
+          t.type == TxType.expense &&
+              !isTransferCategory(t.categoryId) &&
+              countsInTotals(t)
           ? t.spendAmount
           : 0.0;
       for (final tag in t.tags) {
@@ -3712,7 +3884,9 @@ class FinanceProvider extends ChangeNotifier {
     final spelling = {for (final u in allTags) tagKey(u.tag): u.tag};
     final spent = <String, double>{};
     for (final t in rows) {
-      if (t.type != TxType.expense || isTransferCategory(t.categoryId)) {
+      if (t.type != TxType.expense ||
+          isTransferCategory(t.categoryId) ||
+          !countsInTotals(t)) {
         continue;
       }
       final amount = t.spendAmount;
@@ -4617,7 +4791,9 @@ class FinanceProvider extends ChangeNotifier {
     // v17: reminders may carry `cycle`, `anchorMonth`, `autoAdd`,
     // `accountId` and `autoSince`.
     // v18: transactions may carry `countIn`.
-    'version': 18,
+    // v19: accounts may be type `wallet` and carry `service`, `holdsPoints`
+    // and `pointValue`; transactions may carry `walletCounted`.
+    'version': 19,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
@@ -4955,15 +5131,44 @@ class FinanceProvider extends ChangeNotifier {
     final foldedInto = <String, String>{};
     for (final a in accounts) {
       if (acctIds.contains(a.id)) continue;
-      final ownerIdx = _accounts.indexWhere((e) => e.keys.any(a.keys.contains));
+      // A same-class owner first: a wallet sharing one stray key mustn't
+      // stop a bank from folding into the device's own bank.
+      final sameClass = _accounts.indexWhere(
+        (e) => e.isWallet == a.isWallet && e.keys.any(a.keys.contains),
+      );
+      final ownerIdx = sameClass != -1
+          ? sameClass
+          : _accounts.indexWhere((e) => e.keys.any(a.keys.contains));
+      // Never fold across the wallet line (see mergeAccounts): the import
+      // comes in as its own account, less the keys the device already owns.
+      if (ownerIdx != -1 && _accounts[ownerIdx].isWallet != a.isWallet) {
+        newAccounts.add(
+          a.copyWith(
+            keys: {
+              for (final k in a.keys)
+                if (_keyIndex[k] == null) k,
+            },
+          ),
+        );
+        continue;
+      }
       if (ownerIdx != -1) foldedInto[a.id] = _accounts[ownerIdx].id;
       if (ownerIdx == -1) {
         newAccounts.add(a);
-      } else if (!_accounts[ownerIdx].keys.containsAll(a.keys)) {
-        _accounts[ownerIdx] = _accounts[ownerIdx].copyWith(
-          keys: {..._accounts[ownerIdx].keys, ...a.keys},
-        );
-        accountKeysFolded = true;
+      } else {
+        // Only keys no other device account owns: one key, one owner, or
+        // a row could cross the wallet line on the next index rebuild.
+        final owner = _accounts[ownerIdx];
+        final adding = {
+          for (final k in a.keys)
+            if (_keyIndex[k] == null || _keyIndex[k] == owner.id) k,
+        };
+        if (!owner.keys.containsAll(adding)) {
+          _accounts[ownerIdx] = owner.copyWith(
+            keys: {...owner.keys, ...adding},
+          );
+          accountKeysFolded = true;
+        }
       }
     }
     // Merge categories by id — existing definitions win, like tx/accounts.

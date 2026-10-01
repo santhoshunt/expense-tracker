@@ -40,9 +40,12 @@ class PairSuggestion {
 }
 
 /// Null when the move is not a transfer at all: a debit on a CARD followed
-/// by a credit elsewhere is a refund or cashback, never a self-transfer.
+/// by a credit elsewhere is a refund or cashback, never a self-transfer. A
+/// wallet on either side is never paired either: a top-up is a counted bank
+/// debit plus an uncounted wallet credit, which pairing would undo.
 PairKind? pairKindFor({required Account? send, required Account? recv}) {
   if (send?.isCard == true) return null;
+  if (send?.isWallet == true || recv?.isWallet == true) return null;
   if (recv?.type == AccountType.creditCard) return PairKind.cardPayment;
   if (recv?.type == AccountType.savings) return PairKind.savings;
   return PairKind.transfer;

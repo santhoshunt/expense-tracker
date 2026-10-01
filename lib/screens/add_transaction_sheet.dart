@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/account.dart';
 import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
@@ -10,6 +11,7 @@ import '../services/subscriptions.dart';
 import '../utils/format.dart';
 import '../widgets/cycle_label.dart';
 import '../widgets/date_time_picker.dart';
+import '../widgets/info_tip.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/undo_snackbar.dart';
@@ -94,6 +96,14 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   /// when the user actually changed it — assignAccount is not a harmless
   /// re-affirmation, it rewrites the transaction's account key.
   String? _initialAccountId;
+
+  /// "Count as spending" for a row on a wallet ([Tx.walletCounted]).
+  bool _walletCounted = false;
+
+  /// The amount field's text as the sheet opened: an edit on a points
+  /// wallet keeps the stored ₹ unless the points were retyped, so a
+  /// rounded point count can't shift the amount.
+  late final String _initialAmountText;
   late final TextEditingController _amountCtrl;
   late final TextEditingController _noteCtrl;
   late final TextEditingController _senderCtrl;
@@ -170,7 +180,45 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _accountId ?? '',
     _date.toIso8601String(),
     _countIn?.toIso8601String() ?? '',
+    _walletCounted.toString(),
   ].join('|');
+
+  /// The picked account when it is a wallet.
+  Account? _wallet(FinanceProvider finance) {
+    final id = _accountId;
+    final a = id == null ? null : finance.accountById(id);
+    return a != null && a.isWallet ? a : null;
+  }
+
+  /// ₹ per point of the picked account, when it is a points wallet.
+  double? _walletPointValue(FinanceProvider finance) {
+    final w = _wallet(finance);
+    return w?.pointsOf(1) == null ? null : w!.pointValue;
+  }
+
+  /// ₹ per point while the amount field takes points: a points wallet, and
+  /// not a group split, whose shares are money owed in ₹.
+  double? _perPoint(FinanceProvider finance) =>
+      _kind == _EntryKind.expense && _isSplit
+      ? null
+      : _walletPointValue(finance);
+
+  /// Runs [change] (a new account, or the split switched) and re-expresses
+  /// a typed amount between ₹ and points, so the value itself stays.
+  void _keepAmount(FinanceProvider finance, void Function() change) {
+    final before = _perPoint(finance);
+    change();
+    final after = _perPoint(finance);
+    final typed = parseAmount(_amountCtrl.text);
+    if (typed == null || before == after) return;
+    final rupees = before == null ? typed : typed * before;
+    _amountCtrl.text = after == null
+        ? rupees.toStringAsFixed(2)
+        : fmtFieldNumber(rupees / after);
+  }
+
+  void _pickAccount(FinanceProvider finance, String? id) =>
+      _keepAmount(finance, () => _accountId = id);
 
   @override
   void initState() {
@@ -212,13 +260,18 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       text: e?.myShare == null ? '' : e!.myShare!.toStringAsFixed(2),
     );
     // Preselect the account this transaction already resolves to.
+    final finance = context.read<FinanceProvider>();
     if (e?.acctKey != null) {
-      _accountId = context
-          .read<FinanceProvider>()
-          .accountForKey(e!.acctKey)
-          ?.id;
+      _accountId = finance.accountForKey(e!.acctKey)?.id;
     }
     _initialAccountId = _accountId;
+    _walletCounted = e?.walletCounted ?? false;
+    // On a points wallet the field shows points.
+    final perPoint = _perPoint(finance);
+    if (perPoint != null && startAmount != null) {
+      _amountCtrl.text = fmtFieldNumber(startAmount / perPoint);
+    }
+    _initialAmountText = _amountCtrl.text;
     _initialFingerprint = _fingerprint();
   }
 
@@ -295,7 +348,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     }
     await finance.setSubscriptionPins({key: null});
     final spotted = detectRecurringPatterns(
-      finance.transactions,
+      finance.countedTransactions,
       now: DateTime.now(),
     ).any((h) => h.key == key);
     if (spotted) await settings?.hideUpcoming(key);
@@ -471,9 +524,25 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   Future<void> _save() async {
     if (_busy) return;
     if (!_formKey.currentState!.validate()) return;
-    final amount = parseAmount(_amountCtrl.text)!;
+    final finance = context.read<FinanceProvider>();
+    final typed = parseAmount(_amountCtrl.text)!;
+    final perPoint = _perPoint(finance);
+    // Points are stored as ₹. An edit that left the points and account as
+    // they were keeps the stored ₹, which a rounded count could shift.
+    final unchanged =
+        isEditing &&
+        _accountId == _initialAccountId &&
+        _amountCtrl.text == _initialAmountText;
+    final amount = perPoint == null
+        ? typed
+        : unchanged
+        ? widget.existing!.amount
+        : _paise(typed * perPoint);
+    // A transfer has no switch: on a wallet it never counts.
+    final onWallet = _wallet(finance) != null && _kind != _EntryKind.transfer;
     // The share is only meaningful on plain expenses; income and transfer
-    // kinds hide the checkbox, so saving them always clears it.
+    // kinds hide the checkbox, so saving them always clears it. (A split
+    // on a points wallet is entered in ₹: see [_perPoint].)
     final split = _kind == _EntryKind.expense && _isSplit;
     final tracked = split && _people.isNotEmpty;
     // A share settled by hand stays settled through the edit.
@@ -500,7 +569,6 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     final from = _categoryId == kRepaidToMeCategoryId
         ? normalizePersonName(_fromCtrl.text)
         : '';
-    final finance = context.read<FinanceProvider>();
     final navigator = Navigator.of(context);
     SettingsProvider? settings;
     try {
@@ -533,6 +601,11 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             clearRepaidBy: from.isEmpty,
             countIn: _countIn,
             clearCountIn: _countIn == null,
+            // "Unassigned" leaves the row where it is (no unassign on
+            // save), so it keeps its own setting there.
+            walletCounted: _accountId == null
+                ? widget.existing!.walletCounted && _kind != _EntryKind.transfer
+                : onWallet && _walletCounted,
           ),
         );
         if (_accountId != null && _accountId != _initialAccountId) {
@@ -551,6 +624,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           people: people,
           repaidBy: from.isEmpty ? null : from,
           countIn: _countIn,
+          walletCounted: onWallet && _walletCounted,
         );
         if (_accountId != null) await finance.assignAccount(id, _accountId!);
         newId = id;
@@ -898,12 +972,15 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     ),
                   ],
                   selected: {_kind},
-                  onSelectionChanged: (s) => setState(() {
-                    _kind = s.first;
-                    _categoryId = _categoriesFor(_kind).first.id;
-                    // Splits are an expense-only concept.
-                    if (_kind != _EntryKind.expense) _isSplit = false;
-                  }),
+                  onSelectionChanged: (s) => setState(
+                    // Split or not decides ₹ vs points on a points wallet.
+                    () => _keepAmount(context.read<FinanceProvider>(), () {
+                      _kind = s.first;
+                      _categoryId = _categoriesFor(_kind).first.id;
+                      // Splits are an expense-only concept.
+                      if (_kind != _EntryKind.expense) _isSplit = false;
+                    }),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 // Category sits right under the kind toggle: picking what the
@@ -935,27 +1012,59 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  decoration: const InputDecoration(
-                    labelText: 'Amount',
-                    prefixText: '₹ ',
-                  ),
+                  // A points wallet takes points and says what they're worth.
+                  decoration: switch (_perPoint(
+                    context.watch<FinanceProvider>(),
+                  )) {
+                    null => const InputDecoration(
+                      labelText: 'Amount',
+                      prefixText: '₹ ',
+                    ),
+                    final perPoint => InputDecoration(
+                      labelText: 'Points',
+                      helperText: switch (parseAmount(_amountCtrl.text)) {
+                        final p? => '= ${fmtMoney(p * perPoint)}',
+                        null => '${fmtPerPoint(perPoint)} each',
+                      },
+                    ),
+                  },
                   validator: (v) {
                     // parseAmount, not double.tryParse: people type "1,500".
                     final parsed = parseAmount(v ?? '');
                     if (parsed == null || parsed <= 0) {
-                      return 'Enter an amount greater than 0';
+                      return _perPoint(context.read<FinanceProvider>()) == null
+                          ? 'Enter an amount greater than 0'
+                          : 'Enter points greater than 0';
+                    }
+                    // Points are stored in ₹: a value that rounds to ₹0
+                    // would be a row no backup could restore.
+                    final perPoint = _perPoint(context.read<FinanceProvider>());
+                    if (perPoint != null && _paise(parsed * perPoint) <= 0) {
+                      return 'Worth less than ₹0.01; enter more points';
                     }
                     return null;
                   },
                   // Keeps the split field's helper text (the live remainder)
-                  // in step while the total is being typed.
-                  onChanged: _isSplit ? (_) => setState(() {}) : null,
+                  // and the points helper in step while typing.
+                  onChanged: (_) => setState(() {}),
                 ),
                 const SizedBox(height: 16),
-                if (_kind == _EntryKind.expense) ...[
+                // Hidden on a points wallet, unless the row is (or was, as
+                // the sheet opened) a split: it stays editable, in ₹, and an
+                // accidental untick can be undone.
+                if (_kind == _EntryKind.expense &&
+                    (_isSplit ||
+                        widget.existing?.myShare != null ||
+                        _walletPointValue(context.read<FinanceProvider>()) ==
+                            null)) ...[
                   CheckboxListTile(
                     value: _isSplit,
-                    onChanged: (v) => setState(() => _isSplit = v ?? false),
+                    onChanged: (v) => setState(
+                      () => _keepAmount(
+                        context.read<FinanceProvider>(),
+                        () => _isSplit = v ?? false,
+                      ),
+                    ),
                     controlAffinity: ListTileControlAffinity.leading,
                     contentPadding: EdgeInsets.zero,
                     title: const Text('Group split payment'),
@@ -1082,28 +1191,87 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     // Open accounts only — but keep the row's own account
                     // even when closed, so editing an old transaction shows
                     // (and preserves) its real assignment.
+                    // A transfer leg never goes on a wallet: the bank side
+                    // would stay a transfer and the money be in no figure.
+                    final paired = widget.existing?.pairId != null;
                     final accounts = [
-                      ...finance.openAccounts,
+                      for (final a in finance.openAccounts)
+                        if (!paired || !a.isWallet || a.id == _accountId) a,
                       if (_accountId != null &&
                           (finance.accountById(_accountId!)?.isClosed ?? false))
                         finance.accountById(_accountId!)!,
                     ];
                     if (accounts.isEmpty) return const SizedBox.shrink();
+                    final onWallet = _wallet(finance) != null;
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 16),
-                      child: AppDropdownField<String>(
-                        label: 'Account (optional)',
-                        value: _accountId,
-                        items: [
-                          const PickerItem(value: null, label: 'Unassigned'),
-                          for (final a in accounts)
-                            PickerItem(
-                              value: a.id,
-                              label: a.name,
-                              leading: Icon(a.icon, size: 18),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          AppDropdownField<String>(
+                            label: 'Account (optional)',
+                            value: _accountId,
+                            items: [
+                              const PickerItem(
+                                value: null,
+                                label: 'Unassigned',
+                              ),
+                              for (final a in accounts)
+                                PickerItem(
+                                  value: a.id,
+                                  label: a.displayName,
+                                  leading: Icon(a.icon, size: 18),
+                                ),
+                            ],
+                            onChanged: (v) =>
+                                setState(() => _pickAccount(finance, v)),
+                          ),
+                          // Wallet rows stay out of spending and income
+                          // unless turned on here. Not on a transfer, which
+                          // is never spending or income. A ListTile with its
+                          // own Switch, not a SwitchListTile: that merges
+                          // the tip into the switch, so a screen reader
+                          // could only toggle it (see settings_screen
+                          // _TipSwitchTile).
+                          if (onWallet && _kind != _EntryKind.transfer)
+                            Builder(
+                              builder: (context) {
+                                final label = _kind == _EntryKind.income
+                                    ? 'Count as income'
+                                    : 'Count as spending';
+                                return ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  title: InfoLabel(
+                                    label: Text(label),
+                                    tip: InfoTip(
+                                      title: label,
+                                      // the owner's wording for spending; on a
+                                      // credit, the income side of it.
+                                      message: _kind == _EntryKind.income
+                                          ? 'Turn on to count this wallet '
+                                                'credit as income, e.g. '
+                                                'cashback or a gift card.'
+                                          : 'Turn on when this wallet money '
+                                                "wasn't counted on the way "
+                                                'in, e.g. cashback or a gift '
+                                                'card.',
+                                    ),
+                                  ),
+                                  trailing: Semantics(
+                                    label: label,
+                                    child: Switch(
+                                      value: _walletCounted,
+                                      onChanged: (v) =>
+                                          setState(() => _walletCounted = v),
+                                    ),
+                                  ),
+                                  onTap: () => setState(
+                                    () => _walletCounted = !_walletCounted,
+                                  ),
+                                );
+                              },
                             ),
                         ],
-                        onChanged: (v) => setState(() => _accountId = v),
                       ),
                     );
                   },

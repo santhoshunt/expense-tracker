@@ -381,7 +381,7 @@ List<CategoryCompare> _categories(
   // Each category's usual starts at its own first spend: months before it
   // existed say nothing about it.
   final firstSpend = <String, DateTime>{};
-  for (final t in finance.transactions) {
+  for (final t in finance.countedTransactions) {
     if (t.type != TxType.expense) continue;
     final m = DateTime(t.effectiveDate.year, t.effectiveDate.month);
     final seen = firstSpend[t.categoryId];

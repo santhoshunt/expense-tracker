@@ -16,7 +16,8 @@ Future<void> showBalanceBreakdownSheet(
   BuildContext context,
   FinanceProvider finance,
 ) {
-  final useAccounts = finance.accounts.isNotEmpty;
+  // Wallets alone don't: they are never part of net balance.
+  final useAccounts = finance.hasNetAccounts;
   return showModalBottomSheet(
     context: context,
     backgroundColor: Colors.transparent,
@@ -133,6 +134,17 @@ Future<void> showBalanceBreakdownSheet(
                       label: 'Available balance',
                       amount: fmtMoney(finance.balance),
                       bold: true,
+                    ),
+                  ],
+                  // Either way, beside the total and never in it: wallet
+                  // money only spends on its own platform.
+                  if (finance.walletBalanceTotal > 0) ...[
+                    const SizedBox(height: 8),
+                    BreakdownRow(
+                      icon: Icons.account_balance_wallet_outlined,
+                      color: AppColors.of(ctx).orange,
+                      label: 'In wallets (not in net balance)',
+                      amount: fmtMoney(finance.walletBalanceTotal),
                     ),
                   ],
                 ],

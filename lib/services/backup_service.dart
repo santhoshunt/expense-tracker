@@ -183,6 +183,8 @@ class BackupService {
     'repaidBy',
     // ISO moment the row counts in (Tx.countIn); empty = its own date.
     'countIn',
+    // A wallet row the user counts as spending.
+    'walletCounted',
   ];
 
   /// A split's people as one CSV cell:
@@ -319,6 +321,7 @@ class BackupService {
           _csvEscape(_peopleCell(t.people)),
           _csvEscape(t.repaidBy ?? ''),
           _csvEscape(t.countIn?.toIso8601String() ?? ''),
+          t.walletCounted.toString(),
         ].join(','),
       );
     }
@@ -457,6 +460,7 @@ class BackupService {
     final peopleCol = col('people');
     final repaidByCol = col('repaidby');
     final countInCol = col('countin');
+    final walletCountedCol = col('walletcounted');
 
     String cell(List<String> r, int? c) {
       final v = c == null || c >= r.length ? '' : r[c].trim();
@@ -545,6 +549,7 @@ class BackupService {
           DateTime.tryParse(cell(r, countInCol)),
           date,
         ),
+        walletCounted: cell(r, walletCountedCol).toLowerCase() == 'true',
       );
       // CSVs written before the smsBody column existed kept the raw SMS in
       // the note, so that note has to be moved. Files with either the
@@ -695,22 +700,29 @@ class BackupService {
     final double sumExpense;
     final double sumSavings;
     if (range != null) {
+      // countsInTotals: an uncounted wallet row is in no total, as in-app.
       sumIncome = txs
           .where(
-            (t) => t.type == TxType.income && !isTransferCategory(t.categoryId),
+            (t) =>
+                t.type == TxType.income &&
+                !isTransferCategory(t.categoryId) &&
+                finance.countsInTotals(t),
           )
           .fold(0.0, (s, t) => s + t.amount);
       sumExpense = txs
           .where(
             (t) =>
-                t.type == TxType.expense && !isTransferCategory(t.categoryId),
+                t.type == TxType.expense &&
+                !isTransferCategory(t.categoryId) &&
+                finance.countsInTotals(t),
           )
           .fold(0.0, (s, t) => s + t.spendAmount);
       sumSavings = txs
           .where(
             (t) =>
                 t.type == TxType.expense &&
-                t.categoryId == kSavingsTransferCategoryId,
+                t.categoryId == kSavingsTransferCategoryId &&
+                finance.countsInTotals(t),
           )
           .fold(0.0, (s, t) => s + t.amount);
     } else if (year != null) {
@@ -741,7 +753,10 @@ class BackupService {
     // totals) — including them let category shares exceed 100%.
     final catTotals = <String, double>{};
     for (final t in txs.where(
-      (t) => t.type == TxType.expense && !isTransferCategory(t.categoryId),
+      (t) =>
+          t.type == TxType.expense &&
+          !isTransferCategory(t.categoryId) &&
+          finance.countsInTotals(t),
     )) {
       // Group splits contribute only the user's own share, like the totals.
       catTotals[t.categoryId] = (catTotals[t.categoryId] ?? 0) + t.spendAmount;
@@ -875,9 +890,10 @@ class BackupService {
               data: [
                 for (final a in finance.openAccounts)
                   [
-                    a.name,
+                    a.displayName,
                     a.typeLabel,
-                    a.keys.isEmpty
+                    // A wallet's keys are per-row by-hand links, not numbers.
+                    a.keys.isEmpty || a.isWallet
                         ? '—'
                         : [
                             for (final k in a.keys) k.replaceFirst(':', ' ••'),
@@ -992,8 +1008,8 @@ class BackupService {
                   pw.Text(
                     // Transfers excluded — these mirror the app's own month
                     // header figures; transfer rows stay in the table below.
-                    'in ${_money.format(byMonth[month]!.where((t) => t.type == TxType.income && !isTransferCategory(t.categoryId)).fold(0.0, (s, t) => s + t.amount))}'
-                    '   out ${_money.format(byMonth[month]!.where((t) => t.type == TxType.expense && !isTransferCategory(t.categoryId)).fold(0.0, (s, t) => s + t.spendAmount))}',
+                    'in ${_money.format(byMonth[month]!.where((t) => t.type == TxType.income && !isTransferCategory(t.categoryId) && finance.countsInTotals(t)).fold(0.0, (s, t) => s + t.amount))}'
+                    '   out ${_money.format(byMonth[month]!.where((t) => t.type == TxType.expense && !isTransferCategory(t.categoryId) && finance.countsInTotals(t)).fold(0.0, (s, t) => s + t.spendAmount))}',
                     style: const pw.TextStyle(
                       fontSize: 8,
                       color: PdfColors.grey700,

@@ -271,7 +271,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (activeAccount != null)
         chip(
           avatar: Icon(activeAccount.icon, size: 16),
-          label: 'Account · ${activeAccount.name}',
+          label: 'Account · ${activeAccount.displayName}',
           onDeleted: () => setState(() => _accountId = null),
         ),
       if (_monthFilter != null)
@@ -432,17 +432,25 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           (t.date.isBefore(rangeStart) || !t.date.isBefore(rangeEnd!))) {
         return false;
       }
+      // The Income, Expense and Transfers tabs list what the totals count,
+      // so an uncounted wallet row shows under All only.
       switch (f) {
         case _Filter.income:
-          if (t.type != TxType.income || isTransferCategory(t.categoryId)) {
+          if (t.type != TxType.income ||
+              isTransferCategory(t.categoryId) ||
+              !finance.countsInTotals(t)) {
             return false;
           }
         case _Filter.expense:
-          if (t.type != TxType.expense || isTransferCategory(t.categoryId)) {
+          if (t.type != TxType.expense ||
+              isTransferCategory(t.categoryId) ||
+              !finance.countsInTotals(t)) {
             return false;
           }
         case _Filter.transfers:
-          if (!isTransferCategory(t.categoryId)) return false;
+          if (!isTransferCategory(t.categoryId) || !finance.countsInTotals(t)) {
+            return false;
+          }
         case _Filter.all:
           break;
       }
@@ -460,7 +468,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             : _groupFilter.contains(kUngroupedFilterKey) &&
                   finance.isGroupable(t.category) &&
                   !t.category.isTransfer;
-        if (!matches) return false;
+        // Group totals leave uncounted wallet rows out; so does the list.
+        if (!matches || !finance.countsInTotals(t)) return false;
       }
       if (budgetFilterList.isNotEmpty &&
           !budgetFilterList.any((b) => finance.countsTowardBudget(t, b))) {
@@ -475,7 +484,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (q.isNotEmpty) {
         final hay = _haystacks[t.id] ??= searchHaystack(
           t,
-          accountName: finance.accountForKey(t.acctKey)?.name,
+          accountName: finance.accountForKey(t.acctKey)?.displayName,
           merchantAlias: finance.merchantAliasFor(t),
         );
         if (!hay.contains(q)) return false;
@@ -1209,7 +1218,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final finance = context.read<FinanceProvider>();
     // Open accounts only — bulk-assigning rows INTO a closed account is
     // always a mistake; existing history on closed accounts is untouched.
-    final accounts = finance.openAccounts;
+    // No wallets while a transfer leg is selected: it can't go on one.
+    final paired = _selectedSnapshot(finance).any((t) => t.pairId != null);
+    final accounts = [
+      for (final a in finance.openAccounts)
+        if (!paired || !a.isWallet) a,
+    ];
     if (accounts.isEmpty) {
       showAppToast(context, 'No accounts yet.');
       return;
@@ -1221,7 +1235,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         for (final a in accounts)
           PickerItem(
             value: a.id,
-            label: a.name,
+            label: a.displayName,
             leading: Icon(a.icon, size: 18),
           ),
       ],
@@ -1234,7 +1248,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     // snapshot cannot restore — the dialog carries the weight instead.
     if (!await _confirmBulk(
       'Assign $n transaction${n == 1 ? '' : 's'}?',
-      'The selected transactions move to "${target.name}". Any stated '
+      'The selected transactions move to "${target.displayName}". Any stated '
           'balance they carry for another account is dropped.',
     )) {
       return;
@@ -1568,10 +1582,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final pairId = await finance.pairTransactions(ids[0], ids[1]);
     if (!mounted) return;
     if (pairId == null) {
+      final onWallet = finance.transactions.any(
+        (t) =>
+            ids.contains(t.id) &&
+            finance.accountForKey(t.acctKey)?.isWallet == true,
+      );
       showAppToast(
         context,
-        'Pick one money-in and one money-out row; neither can already '
-        'be part of a pair.',
+        onWallet
+            ? "Wallet rows can't be paired as a transfer: the wallet "
+                  'side stays out of totals.'
+            : 'Pick one money-in and one money-out row; neither can '
+                  'already be part of a pair.',
       );
       return;
     }
@@ -1748,7 +1770,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           label.toLowerCase().contains(filterQuery);
                       final visAccounts = [
                         for (final a in accounts)
-                          if (has(a.name) || accountId == a.id) a,
+                          if (has(a.displayName) || accountId == a.id) a,
                       ];
                       final visBudgets = [
                         for (final b in budgets)
@@ -1871,7 +1893,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                   ),
                                   for (final a in visAccounts)
                                     ChoiceChip(
-                                      label: Text(a.name),
+                                      label: Text(a.displayName),
                                       avatar: Icon(a.icon, size: 16),
                                       selected: accountId == a.id,
                                       onSelected: (_) =>
@@ -2637,7 +2659,9 @@ class _MonthHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (income, expense) = _totals[txs] ??= _sum();
+    final (income, expense) = _totals[txs] ??= _sum(
+      context.read<FinanceProvider>(),
+    );
     final scheme = Theme.of(context).colorScheme;
 
     final now = DateTime.now();
@@ -2655,17 +2679,24 @@ class _MonthHeader extends StatelessWidget {
     );
   }
 
-  (double, double) _sum() {
+  (double, double) _sum(FinanceProvider finance) {
     // Own-account transfers are audit entries — the header totals mirror the
-    // dashboard's income/expense figures, which exclude them.
+    // dashboard's income/expense figures, which exclude them, and leave out
+    // uncounted wallet rows the same way.
     final income = txs
         .where(
-          (t) => t.type == TxType.income && !isTransferCategory(t.categoryId),
+          (t) =>
+              t.type == TxType.income &&
+              !isTransferCategory(t.categoryId) &&
+              finance.countsInTotals(t),
         )
         .fold(0.0, (s, t) => s + t.amount);
     final expense = txs
         .where(
-          (t) => t.type == TxType.expense && !isTransferCategory(t.categoryId),
+          (t) =>
+              t.type == TxType.expense &&
+              !isTransferCategory(t.categoryId) &&
+              finance.countsInTotals(t),
         )
         // spendAmount: group splits count only the user's own share here,
         // matching the dashboard's Spent card.

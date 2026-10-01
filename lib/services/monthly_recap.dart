@@ -91,7 +91,7 @@ MonthlyRecap? buildMonthlyRecap(
   if (!finance.monthsWithData.contains(month)) return null;
 
   final merchants = topMerchants(
-    finance.transactions,
+    finance.countedTransactions,
     month: month,
     limit: 1,
     alias: finance.merchantAlias,

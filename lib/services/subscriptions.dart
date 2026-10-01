@@ -126,8 +126,9 @@ SubscriptionSummary cachedSubscriptions(
   }
   // Marks live on the provider, so finance.revision already changes with
   // them and needs no key of its own here.
+  // Counted rows only: an uncounted wallet payment isn't spend.
   final summary = buildSubscriptions(
-    finance.transactions,
+    finance.countedTransactions,
     now: now,
     alias: finance.merchantAlias,
     hidden: hidden,

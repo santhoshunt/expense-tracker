@@ -350,7 +350,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _patternsRev = finance.revision;
       _patternsDay = day;
       _patternHits = detectRecurringPatterns(
-        finance.transactions,
+        finance.countedTransactions,
         now: now,
         alias: finance.merchantAlias,
         pinned: finance.subscriptionPins,
@@ -371,7 +371,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _merchantsRev = finance.revision;
       _merchantsMonth = _month;
       _merchants = topMerchants(
-        finance.transactions,
+        finance.countedTransactions,
         month: _month,
         // Every merchant: the card shows five and folds the rest.
         limit: 1 << 20,
@@ -2443,7 +2443,8 @@ class _BalanceCard extends StatelessWidget {
   /// With accounts, the headline is the bank-stated net worth — ledger
   /// arithmetic (income − expense) is unreliable when the SMS history has no
   /// opening balances. Without accounts, fall back to the ledger figure.
-  bool get _useAccounts => finance.accounts.isNotEmpty;
+  /// Wallets alone don't: they are never part of net balance.
+  bool get _useAccounts => finance.hasNetAccounts;
 
   @override
   Widget build(BuildContext context) {
@@ -2476,8 +2477,9 @@ class _BalanceCard extends StatelessWidget {
                                 title: 'Net balance',
                                 message:
                                     'Bank balances minus what you owe on '
-                                    'credit cards. Savings and closed '
-                                    'accounts are left out. A card with no '
+                                    'credit cards. Savings, wallet and '
+                                    'closed accounts are left out. A card '
+                                    'with no '
                                     'known outstanding counts as zero.',
                                 // The balance breakdown sheet's own figures.
                                 example: () =>

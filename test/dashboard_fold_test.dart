@@ -40,7 +40,9 @@ void main() {
       categoryId: 'food',
       amount: 900,
       note: 'Zomato order',
-      date: DateTime(now.year, now.month, 2),
+      // The 1st: on the 1st of a month a later day hasn't happened yet,
+      // and the same-day comparisons would see nothing.
+      date: DateTime(now.year, now.month, 1),
       tags: const ['Goa trip'],
     );
     await p.addTransaction(
@@ -48,7 +50,7 @@ void main() {
       categoryId: 'transport',
       amount: 400,
       note: 'cab',
-      date: DateTime(now.year, now.month - 1, 2),
+      date: DateTime(now.year, now.month - 1, 1),
     );
     // Records from before last month, so last month counts in full.
     await p.addTransaction(

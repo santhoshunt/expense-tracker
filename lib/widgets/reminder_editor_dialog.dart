@@ -49,9 +49,15 @@ Future<void> showReminderEditor(
   // Open accounts, plus a closed one this reminder already pays from, so a
   // rename does not quietly drop it.
   final kept = accountId == null ? null : finance.accountById(accountId);
+  // No wallets: an expense added there would stay out of spending unless
+  // turned on by hand, while the bill still reads as paid.
   final accounts = [
-    ...finance.openAccounts,
-    if (kept != null && !finance.openAccounts.any((a) => a.id == kept.id)) kept,
+    for (final a in finance.openAccounts)
+      if (!a.isWallet) a,
+    if (kept != null &&
+        !kept.isWallet &&
+        !finance.openAccounts.any((a) => a.id == kept.id))
+      kept,
   ];
   if (accountId != null && !accounts.any((a) => a.id == accountId)) {
     accountId = null;
@@ -233,7 +239,7 @@ Future<void> showReminderEditor(
                       items: [
                         const PickerItem(value: null, label: 'No account'),
                         for (final a in accounts)
-                          PickerItem(value: a.id, label: a.name),
+                          PickerItem(value: a.id, label: a.displayName),
                       ],
                       onChanged: (v) => setState(() => accountId = v),
                     ),

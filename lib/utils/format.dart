@@ -20,6 +20,28 @@ final DateFormat _monthYear = DateFormat('MMMM yyyy');
 const String kMaskedAmount = '₹••••';
 
 String fmtMoney(double v) => _currency.format(v);
+
+final NumberFormat _points = NumberFormat('#,##0.##');
+
+/// A wallet's points: "1,250 points", "12.5 points", "1 point".
+String fmtPoints(double v) {
+  final n = _points.format(v);
+  return '$n point${n == '1' ? '' : 's'}';
+}
+
+/// [v] for an editable field: no grouping, at most two decimals ("1250",
+/// "12.5").
+String fmtFieldNumber(double v) => _fieldNumber.format(v);
+
+final NumberFormat _fieldNumber = NumberFormat('0.##');
+
+/// A wallet's ₹ per point, to four places so ₹0.004 doesn't read ₹0.00.
+String fmtPerPoint(double v) => '₹${_perPoint.format(v)}';
+
+/// [fmtPerPoint] without the ₹, for an editable field.
+String fmtPerPointField(double v) => _perPoint.format(v);
+
+final NumberFormat _perPoint = NumberFormat('0.00##');
 String fmtMoneyCompact(double v) => _currencyCompact.format(v);
 
 /// [fmtMoney] without a trailing ".00": the forced two decimals read as

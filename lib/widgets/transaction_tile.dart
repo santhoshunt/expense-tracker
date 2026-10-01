@@ -77,7 +77,15 @@ class TransactionTile extends StatelessWidget {
     final isIncome = tx.type == TxType.income;
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final amountColor = isIncome ? AppColors.of(context).green : scheme.error;
+    // A wallet row left out of spending reads muted, like a note.
+    final counted = context.select<FinanceProvider, bool>(
+      (f) => f.countsInTotals(tx),
+    );
+    final amountColor = !counted
+        ? scheme.onSurfaceVariant
+        : isIncome
+        ? AppColors.of(context).green
+        : scheme.error;
 
     // The category leads — the SMS sender (bank shortcode) used to headline
     // every imported row and just repeated what the account view already
@@ -275,10 +283,20 @@ class TransactionTile extends StatelessWidget {
                               );
                             },
                           ),
+                          // Why a wallet purchase isn't in the totals; its
+                          // own line, like Counts in below.
+                          if (!counted)
+                            Text(
+                              'Not counted',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: lineStyle,
+                            ),
                           // Why a row listed on the 30th shows up in next
                           // month's totals. Its own line, so the note and
-                          // date above never get squeezed for it.
-                          if (tx.countIn != null)
+                          // date above never get squeezed for it. Moot on
+                          // a row that counts nowhere.
+                          if (tx.countIn != null && counted)
                             Text(
                               'Counts in ${fmtDateCompact(tx.countIn!)}',
                               maxLines: 1,
@@ -339,7 +357,10 @@ class TransactionTile extends StatelessWidget {
                           // as the user's own spend.
                           // Expense rows outside the transfers only, the
                           // one place a share means anything.
+                          // Not on an uncounted wallet row: no share of it
+                          // counts.
                           if (tx.isSplit &&
+                              counted &&
                               tx.type == TxType.expense &&
                               !isTransferCategory(tx.categoryId))
                             FittedBox(

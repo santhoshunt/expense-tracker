@@ -81,7 +81,7 @@ void main() {
 
       await openTip(tester, 'Net balance');
       expect(
-        find.textContaining('Savings and closed accounts'),
+        find.textContaining('Savings, wallet and closed accounts'),
         findsOneWidget,
       );
       expect(

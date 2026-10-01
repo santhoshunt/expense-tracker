@@ -111,7 +111,7 @@ class UpcomingMonitor {
       }
 
       final hits = detectRecurring(
-        finance.transactions,
+        finance.countedTransactions,
         now: now,
         alias: finance.merchantAlias,
         pinned: finance.subscriptionPins,
