@@ -11,9 +11,11 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequest
 import androidx.work.PeriodicWorkRequest
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -27,7 +29,9 @@ import java.util.concurrent.TimeUnit
  * one only when it is not; the app's `main()` calls awaitIdle first, so an
  * app opened mid-run waits for the headless engine to finish.
  *
- * Every field is touched on the main thread only.
+ * Every field is touched on the main thread only. Enqueueing ([enqueueNow])
+ * runs on its own executor and keeps its state in SharedPreferences, which
+ * the worker thread also clears.
  */
 object BackgroundImport {
     const val CHANNEL = "expense_tracker/background"
@@ -88,7 +92,10 @@ object BackgroundImport {
             wm.cancelUniqueWork(PERIODIC_WORK)
         }
         val everySms = mode == "everySms"
-        if (!everySms) wm.cancelUniqueWork(NOW_WORK)
+        if (!everySms) {
+            wm.cancelUniqueWork(NOW_WORK)
+            clearWaiting(context)
+        }
         context.packageManager.setComponentEnabledSetting(
             ComponentName(context, SmsArrivalReceiver::class.java),
             if (everySms) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
@@ -103,12 +110,46 @@ object BackgroundImport {
             ComponentName(context, SmsArrivalReceiver::class.java)
         ) == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
 
+    /** Reads WorkManager's state and enqueues off the main thread, one call
+     * at a time. A run can still start between the read and the enqueue
+     * and be replaced mid-import; nothing is lost, since the SMS marker and
+     * the notification ack only move after a save, so the replacing run
+     * reads the same alerts again. */
+    private val enqueuer = Executors.newSingleThreadExecutor()
+
+    /** Prefs key: when the SMS run now waiting was first put off; absent
+     * while none is. Stored, not held in memory: the app is often killed
+     * between two SMS, and a reset cap would let a trickle wait forever.
+     * Cleared when a run starts ([runStarted]) or the run is cancelled
+     * ([configure]). */
+    private const val KEY_WAITING_SINCE = "waiting_since"
+
+    /** Longest a steady trickle of SMS (OTPs, promos) may keep putting off
+     * the import by replacing the waiting run. */
+    private const val MAX_DEBOUNCE_MILLIS = 120_000L
+
     /** A new SMS ([TRIGGER_SMS], run once the SMS app has stored it) or a
      * captured notification ([TRIGGER_NOTIF], already buffered, so no delay
      * of its own; queued behind a pending SMS run, it then usually finds
-     * itself covered). Appended, so an alert arriving during a run gets a
-     * run of its own; [isCovered] then skips the runs an earlier one did. */
-    fun enqueueNow(context: Context, trigger: String) {
+     * itself covered).
+     *
+     * An SMS with no run in progress replaces the run still waiting, so a
+     * burst of alerts makes one run, 30 s after the last of them. During a
+     * run it is appended, so an alert arriving mid-run gets a run of its
+     * own; [isCovered] then skips the runs an earlier one did. [done] is
+     * called once the work is enqueued, on the enqueue thread. */
+    fun enqueueNow(context: Context, trigger: String, done: () -> Unit = {}) {
+        val app = context.applicationContext
+        enqueuer.execute {
+            try {
+                enqueue(app, trigger)
+            } finally {
+                done()
+            }
+        }
+    }
+
+    private fun enqueue(context: Context, trigger: String) {
         val request = OneTimeWorkRequest.Builder(SmsImportWorker::class.java)
             .setBackoffCriteria(BackoffPolicy.LINEAR, 30, TimeUnit.SECONDS)
             .setInputData(
@@ -118,11 +159,35 @@ object BackgroundImport {
                     .build()
             )
         if (trigger == TRIGGER_SMS) request.setInitialDelay(SMS_DELAY_SECONDS, TimeUnit.SECONDS)
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            NOW_WORK,
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
-            request.build()
-        )
+        val wm = WorkManager.getInstance(context)
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        val since = prefs.getLong(KEY_WAITING_SINCE, 0L)
+        // Replaced only for a while: past the cap the waiting run keeps its
+        // time and this one queues behind it.
+        val replace = trigger == TRIGGER_SMS &&
+            (since == 0L || now - since in 0 until MAX_DEBOUNCE_MILLIS) &&
+            !runInProgress(wm)
+        if (replace && since == 0L) prefs.edit().putLong(KEY_WAITING_SINCE, now).apply()
+        val policy = if (replace) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.APPEND_OR_REPLACE
+        wm.enqueueUniqueWork(NOW_WORK, policy, request.build())
+    }
+
+    /** A run began: the next SMS starts a fresh wait. */
+    fun runStarted(context: Context) = clearWaiting(context)
+
+    private fun clearWaiting(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().remove(KEY_WAITING_SINCE).apply()
+    }
+
+    /** Whether a run of [NOW_WORK] is executing now. Unknown counts as yes:
+     * appending, as before, never cancels a run. */
+    private fun runInProgress(wm: WorkManager): Boolean = try {
+        wm.getWorkInfosForUniqueWork(NOW_WORK).get()
+            .any { it.state == WorkInfo.State.RUNNING }
+    } catch (_: Exception) {
+        true
     }
 
     /** True when a run that started after this alert was readable has

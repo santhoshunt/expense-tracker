@@ -13,6 +13,7 @@ import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
 import '../services/card_bill.dart';
 import '../services/merchant_stats.dart';
+import '../services/month_forecast.dart';
 import '../services/monthly_recap.dart';
 import '../services/recurring_detector.dart';
 import '../services/spend_comparison.dart';
@@ -877,6 +878,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       safe: safe,
                     ),
                   ),
+                );
+              },
+            ),
+          ],
+        ),
+        DashboardSection.forecast: (
+          visible: true,
+          title: null,
+          summary: null,
+          tip: null,
+          body: () => [
+            // Where this month is heading, so only under this month's
+            // figures. Shows without a monthly cap too.
+            Builder(
+              key: const ValueKey('presence-month-forecast'),
+              builder: (context) {
+                final budget = context.select<SettingsProvider, double>(
+                  (s) => s.monthlyBudget,
+                );
+                // Hiding an Upcoming row changes the bills it counts.
+                context.select<SettingsProvider, String>(
+                  (s) => hiddenListKey(s.hiddenUpcoming),
+                );
+                final now = DateTime.now();
+                final forecast =
+                    _yearMode || _month != DateTime(now.year, now.month)
+                    ? null
+                    : computeMonthForecast(
+                        finance,
+                        patterns: _patterns(finance, now),
+                        hidden: context.read<SettingsProvider>().hiddenUpcoming,
+                        now: now,
+                        cap: budget,
+                      );
+                // Nothing spent, due or usual: no forecast worth a card.
+                final showing = forecast != null && forecast.total > 0;
+                return AnimatedPresence(
+                  visible: showing,
+                  child: !showing
+                      ? const SizedBox.shrink()
+                      : Padding(
+                          padding: const EdgeInsets.only(top: 16),
+                          child: _ForecastCard(forecast: forecast),
+                        ),
                 );
               },
             ),
@@ -2671,6 +2716,152 @@ class _BudgetCard extends StatelessWidget {
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Where this month is heading: spent so far, the bills still due and
+/// everyday spending for the days left, against the monthly cap when one
+/// is set ([computeMonthForecast]).
+class _ForecastCard extends StatelessWidget {
+  final MonthForecast forecast;
+  const _ForecastCard({required this.forecast});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final f = forecast;
+    final muted = TextStyle(color: scheme.onSurfaceVariant);
+    final by = fmtDateCompact(f.lastDay);
+    final days =
+        '${f.daysAfterToday} ${f.daysAfterToday == 1 ? 'day' : 'days'}';
+    final everydayLabel = switch (f.basis) {
+      EverydayBasis.usual => 'Usual, $days',
+      EverydayBasis.pace => "At this month's pace, $days",
+      EverydayBasis.none => null,
+    };
+    final showEveryday = everydayLabel != null && f.daysAfterToday > 0;
+    final under = f.underCap;
+
+    Widget row(String label, double amount) => Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: muted,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Shrinks under its cap rather than overflowing at large text,
+          // as the balance breakdown's rows do.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 140),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(fmtMoney(amount)),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return FrostedPanel(
+      radius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.trending_up,
+                  size: 18,
+                  color: scheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: InfoLabel(
+                    label: Text(
+                      'Month-end forecast',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: muted,
+                    ),
+                    tip: InfoTip(
+                      title: 'Month-end forecast',
+                      message:
+                          'Spent so far, including alerts still to review, '
+                          'plus the bills still unpaid (due by the month '
+                          'end, or up to a week overdue; not card bills or '
+                          'transfers), plus what you usually spend on the '
+                          'days left, leaving bills out. Usual is the middle '
+                          'of your last complete months (the lower, with '
+                          'only two); with fewer than '
+                          'two, this month\'s own pace once $kMinDaysOfData '
+                          'of its days are on record.',
+                      example: () {
+                        final parts = [
+                          '${fmtMoney(f.spentSoFar)} spent',
+                          if (f.billsDue > 0)
+                            '${fmtMoney(f.billsDue)} bills due',
+                          if (showEveryday) '${fmtMoney(f.everyday)} everyday',
+                        ];
+                        return '${parts.join(' + ')} = ${fmtMoney(f.total)}';
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              f.basis == EverydayBasis.none
+                  ? 'At least ${fmtMoneyCompact(f.total)} by $by'
+                  : 'About ${fmtMoneyCompact(f.total)} by $by',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 4),
+            row('Spent so far', f.spentSoFar),
+            if (f.billsDue > 0) row('Bills due', f.billsDue),
+            if (showEveryday) row(everydayLabel, f.everyday),
+            if (under != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                under >= 0
+                    ? '${fmtMoneyCompact(under)} under your '
+                          '${fmtMoneyCompact(f.cap!)} budget'
+                    : '${fmtMoneyCompact(-under)} over your '
+                          '${fmtMoneyCompact(f.cap!)} budget',
+                style: TextStyle(
+                  color: under >= 0
+                      ? AppColors.of(context).green
+                      : scheme.error,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+            if (f.basis == EverydayBasis.none && f.daysAfterToday > 0) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Everyday spending joins once two complete months, or '
+                '$kMinDaysOfData days of this one, are on record.',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+            ],
           ],
         ),
       ),

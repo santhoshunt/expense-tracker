@@ -7,7 +7,7 @@ The repo still has `web/` and `ios/` folders from the Flutter template, and the 
 ## What it does
 
 - **Dashboard.** Three tabs:
-  - Overview: balance, the month's income, spend and savings, budgets, upcoming bills, and who owes you. For the first week of a month it also shows a recap of the month before.
+  - Overview: balance, the month's income, spend and savings, budgets, upcoming bills, and who owes you. For the first week of a month it also shows a recap of the month before. A month-end forecast adds what is spent so far, the bills still due and your usual everyday spending for the days left, against the monthly budget.
   - Trends: the month's pace, and this month against last month and a usual month, overall and by category.
   - Breakdown: spend by category, tag, merchant and group, transfers, subscriptions, and a spending heatmap.
 - **Transactions.** Search, and filter by type, category, tag and amount. Imported rows wait in a review queue and stay out of the totals until confirmed. Suspected spam has its own queue. Long-press starts a selection for bulk category, account, Count in, tags, date, subscription, transfer pairing or delete, with Undo on all but account changes. Count in puts a row in another month's figures, such as a salary paid on the 30th, while its own date and the account balance stay as they are. The add and edit sheet sets it too.

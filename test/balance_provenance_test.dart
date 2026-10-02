@@ -246,6 +246,11 @@ void main() {
     testWidgets('the All view groups accounts by type under headers', (
       tester,
     ) async {
+      // Tall enough for every section: each account has a number and no
+      // rows, so each card also carries the empty-account hint.
+      tester.view.physicalSize = const Size(800, 2000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
       final p = await load(
         txs: const [],
         accounts: [

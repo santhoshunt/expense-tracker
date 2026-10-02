@@ -10,6 +10,7 @@ enum DashboardPage { overview, trends, breakdown }
 enum DashboardSection {
   // Overview
   monthlyBudget(DashboardPage.overview, 'Monthly budget', true),
+  forecast(DashboardPage.overview, 'Month-end forecast', true),
   recap(DashboardPage.overview, "Last month's recap", true),
   upcoming(DashboardPage.overview, 'Upcoming', true),
   budgets(DashboardPage.overview, 'Budgets', true),

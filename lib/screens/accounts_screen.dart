@@ -414,6 +414,40 @@ class _AccountCard extends StatelessWidget {
                   _CardFigures(account: account, onView: onView)
                 else
                   _BankBalance(account: account),
+                // An account the 1.28 re-key emptied keeps its set balance
+                // in net balance: say so, and offer the two ways out.
+                if (finance.isOrphanedAccount(account)) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    [
+                      'No transactions use this account.',
+                      // Only what a figure set by hand still adds to net
+                      // balance; savings sit outside it.
+                      if (account.manualBalance != null)
+                        if (account.isCard)
+                          'Its set outstanding still counts in net balance.'
+                        else if (account.type == AccountType.bank)
+                          'Its set balance still counts in net balance.',
+                    ].join(' '),
+                    style: TextStyle(
+                      color: scheme.onSurfaceVariant,
+                      fontSize: 12,
+                    ),
+                  ),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      TextButton(
+                        onPressed: () => mergeAccountFlow(context, account),
+                        child: const Text('Merge into…'),
+                      ),
+                      TextButton(
+                        onPressed: () => deleteAccountFlow(context, account),
+                        child: const Text('Delete'),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -1188,13 +1222,13 @@ class _AccountMenu extends StatelessWidget {
           case 'balance':
             showSetBalanceDialog(context, account);
           case 'merge':
-            _merge(context);
+            mergeAccountFlow(context, account);
           case 'close':
-            _close(context);
+            closeAccountFlow(context, account);
           case 'reopen':
             context.read<FinanceProvider>().reopenAccount(account.id);
           case 'delete':
-            _delete(context);
+            deleteAccountFlow(context, account);
         }
       },
       // A closed account is an archive entry: everything except Reopen and
@@ -1544,136 +1578,134 @@ class _AccountMenu extends StatelessWidget {
       ),
     );
   }
+}
 
-  /// No confirm dialog: closing is fully reversible (Reopen / the snackbar),
-  /// unlike merge and delete which destroy the account's identity.
-  void _close(BuildContext context) {
-    final finance = context.read<FinanceProvider>();
-    finance.closeAccount(account.id);
-    showUndoSnackBar(
+/// No confirm dialog: closing is fully reversible (Reopen / the snackbar),
+/// unlike merge and delete which destroy the account's identity.
+void closeAccountFlow(BuildContext context, Account account) {
+  final finance = context.read<FinanceProvider>();
+  finance.closeAccount(account.id);
+  showUndoSnackBar(
+    context,
+    'Closed "${account.displayName}"',
+    () => finance.reopenAccount(account.id),
+    icon: Icons.archive_outlined,
+    tone: AppToastTone.removal,
+  );
+}
+
+Future<void> mergeAccountFlow(BuildContext context, Account account) async {
+  final finance = context.read<FinanceProvider>();
+  // Wallets merge only with wallets, money accounts only with money
+  // accounts (see FinanceProvider.mergeAccounts).
+  final others = finance.openAccounts
+      .where((a) => a.id != account.id && a.isWallet == account.isWallet)
+      .toList();
+  if (others.isEmpty) {
+    showAppToast(
       context,
-      'Closed "${account.displayName}"',
-      () => finance.reopenAccount(account.id),
-      icon: Icons.archive_outlined,
-      tone: AppToastTone.removal,
+      account.isWallet
+          ? 'No other wallet to merge into.'
+          : 'No other account to merge into.',
     );
+    return;
   }
-
-  Future<void> _merge(BuildContext context) async {
-    final finance = context.read<FinanceProvider>();
-    // Wallets merge only with wallets, money accounts only with money
-    // accounts (see FinanceProvider.mergeAccounts).
-    final others = finance.openAccounts
-        .where((a) => a.id != account.id && a.isWallet == account.isWallet)
-        .toList();
-    if (others.isEmpty) {
-      showAppToast(
-        context,
-        account.isWallet
-            ? 'No other wallet to merge into.'
-            : 'No other account to merge into.',
-      );
-      return;
-    }
-    // Picking a target only selects it — the merge itself is confirmed
-    // separately: it permanently removes this account (name, balance,
-    // credit limit) with no undo.
-    final result = await showPickerSheet<Account>(
-      context: context,
-      title: 'Merge "${account.displayName}" into…',
-      items: [
-        for (final a in others)
-          PickerItem(
-            value: a,
-            label: a.displayName,
-            leading: Icon(a.icon, size: 20),
-          ),
+  // Picking a target only selects it — the merge itself is confirmed
+  // separately: it permanently removes this account (name, balance,
+  // credit limit) with no undo.
+  final result = await showPickerSheet<Account>(
+    context: context,
+    title: 'Merge "${account.displayName}" into…',
+    items: [
+      for (final a in others)
+        PickerItem(
+          value: a,
+          label: a.displayName,
+          leading: Icon(a.icon, size: 20),
+        ),
+    ],
+  );
+  final a = result?.value;
+  if (a == null || !context.mounted) return;
+  final txCount = finance.transactions
+      .where((t) => t.acctKey != null && account.keys.contains(t.acctKey))
+      .length;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (dCtx) => AlertDialog(
+      title: Text('Merge "${account.displayName}"?'),
+      content: Text(
+        '$txCount transaction${txCount == 1 ? '' : 's'} '
+        'move${txCount == 1 ? 's' : ''} to "${a.displayName}". '
+        '"${account.displayName}" is removed permanently, along '
+        'with its name, type, manual balance and credit '
+        'limit. This cannot be undone.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dCtx, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dCtx, true),
+          child: const Text('Merge'),
+        ),
       ],
-    );
-    final a = result?.value;
-    if (a == null || !context.mounted) return;
-    final txCount = finance.transactions
-        .where((t) => t.acctKey != null && account.keys.contains(t.acctKey))
-        .length;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dCtx) => AlertDialog(
-        title: Text('Merge "${account.displayName}"?'),
-        content: Text(
-          '$txCount transaction${txCount == 1 ? '' : 's'} '
-          'move${txCount == 1 ? 's' : ''} to "${a.displayName}". '
-          '"${account.displayName}" is removed permanently, along '
-          'with its name, type, manual balance and credit '
-          'limit. This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dCtx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dCtx, true),
-            child: const Text('Merge'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) {
-      finance.mergeAccounts(account.id, a.id);
-    }
+    ),
+  );
+  if (ok == true) {
+    finance.mergeAccounts(account.id, a.id);
   }
+}
 
-  void _delete(BuildContext context) async {
-    final finance = context.read<FinanceProvider>();
-    // Off a wallet its uncounted rows start counting; Close keeps them out.
-    final uncounted = !account.isWallet
-        ? 0
-        : finance
-              .transactionsForAccount(account.id)
-              .where(
-                (t) => !t.walletCounted && !isTransferCategory(t.categoryId),
-              )
-              .length;
-    final ok = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete "${account.displayName}"?'),
-        content: Text(
-          [
-            'The account is removed. Its transactions stay but become '
-                'unassigned. This does not delete any transactions.',
-            if (uncounted == 1)
-              '1 of them is out of spending and income now and would count '
-                  'once unassigned.',
-            if (uncounted > 1)
-              '$uncounted of them are out of spending and income now and '
-                  'would count once unassigned.',
-            if (uncounted > 0 && !account.isClosed)
-              'Close the wallet instead to keep '
-                  '${uncounted == 1 ? 'it' : 'them'} out.',
-          ].join(' '),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
+Future<void> deleteAccountFlow(BuildContext context, Account account) async {
+  final finance = context.read<FinanceProvider>();
+  // Off a wallet its uncounted rows start counting; Close keeps them out.
+  final uncounted = !account.isWallet
+      ? 0
+      : finance
+            .transactionsForAccount(account.id)
+            .where((t) => !t.walletCounted && !isTransferCategory(t.categoryId))
+            .length;
+  final ok = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('Delete "${account.displayName}"?'),
+      content: Text(
+        [
+          'The account is removed. Its transactions stay but become '
+              'unassigned. This does not delete any transactions.',
+          if (uncounted == 1)
+            '1 of them is out of spending and income now and would count '
+                'once unassigned.',
+          if (uncounted > 1)
+            '$uncounted of them are out of spending and income now and '
+                'would count once unassigned.',
           if (uncounted > 0 && !account.isClosed)
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'close'),
-              child: const Text('Close instead'),
-            ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, 'delete'),
-            child: const Text('Delete'),
-          ),
-        ],
+            'Close the wallet instead to keep '
+                '${uncounted == 1 ? 'it' : 'them'} out.',
+        ].join(' '),
       ),
-    );
-    if (!context.mounted) return;
-    if (ok == 'close') _close(context);
-    if (ok == 'delete') finance.deleteAccount(account.id);
-  }
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancel'),
+        ),
+        if (uncounted > 0 && !account.isClosed)
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'close'),
+            child: const Text('Close instead'),
+          ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, 'delete'),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (!context.mounted) return;
+  if (ok == 'close') closeAccountFlow(context, account);
+  if (ok == 'delete') finance.deleteAccount(account.id);
 }
 
 /// Bank + last-4 picker, returning an account key like `"HDFC:1234"`.

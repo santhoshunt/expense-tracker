@@ -410,6 +410,11 @@ class FinanceProvider extends ChangeNotifier {
     return buckets;
   }();
 
+  /// Confirmed rows whose [Tx.effectiveDate] falls in [month], oldest first.
+  /// Uncounted wallet rows are included: filter with [countsInTotals].
+  List<Tx> confirmedInMonth(DateTime month) =>
+      _byMonth[month.year * 12 + month.month] ?? const [];
+
   /// Months holding at least one confirmed transaction, newest first — the
   /// dashboard's month jump offers these.
   List<DateTime> get monthsWithData {
@@ -2987,6 +2992,19 @@ class FinanceProvider extends ChangeNotifier {
   /// How many confirmed transactions belong to [accountId] — no copy, no sort.
   int transactionCountForAccount(String accountId) =>
       _byAccount[accountId]?.length ?? 0;
+
+  /// Whether [a] holds bank numbers that no transaction uses any more, as
+  /// the 1.28 re-key could leave an account whose rows all moved away. Its
+  /// set balance still counts in net balance. An account made by hand with
+  /// no linked number, a wallet and a closed account never qualify.
+  bool isOrphanedAccount(Account a) {
+    if (a.isWallet || a.isClosed) return false;
+    if (!a.keys.any((k) => !k.startsWith('manual:'))) return false;
+    if (transactionCountForAccount(a.id) > 0) return false;
+    return !pendingTransactions.any(
+      (t) => t.acctKey != null && a.keys.contains(t.acctKey),
+    );
+  }
 
   /// Every figure for one account, from a single pass over its transactions.
   ///

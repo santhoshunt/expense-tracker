@@ -73,7 +73,16 @@ class DueBill {
   final DateTime due;
   final String label;
   final double amount;
-  const DueBill({required this.due, required this.label, required this.amount});
+
+  /// The detected payment's identity ([RecurringHit.key]); null for a
+  /// reminder.
+  final String? patternKey;
+  const DueBill({
+    required this.due,
+    required this.label,
+    required this.amount,
+    this.patternKey,
+  });
 }
 
 /// Unpaid bills due from [from] through [to] (calendar dates), soonest
@@ -128,10 +137,37 @@ List<DueBill> billsDue(
     )) {
       continue;
     }
-    out.add(DueBill(due: due, label: h.label, amount: h.expectedAmount));
+    out.add(
+      DueBill(
+        due: due,
+        label: h.label,
+        amount: h.expectedAmount,
+        patternKey: h.key,
+      ),
+    );
   }
   out.sort((a, b) => a.due.compareTo(b.due));
   return out;
+}
+
+/// Whether a row waiting for review counts as money already spent: an
+/// expense, not suspected spam, not a transfer, and counted in totals.
+bool pendingIsSpend(FinanceProvider finance, Tx t) =>
+    t.type == TxType.expense &&
+    !t.suspectedSpam &&
+    !isTransferCategory(t.categoryId) &&
+    finance.countsInTotals(t);
+
+/// Spend on rows still waiting for review whose effective date is in
+/// [month].
+double pendingSpendIn(FinanceProvider finance, DateTime month) {
+  var sum = 0.0;
+  for (final t in finance.pendingTransactions) {
+    final d = t.effectiveDate;
+    if (d.year != month.year || d.month != month.month) continue;
+    if (pendingIsSpend(finance, t)) sum += t.spendAmount;
+  }
+  return sum;
 }
 
 /// Null without a cap ([cap] <= 0).
@@ -157,16 +193,15 @@ SafeToSpend? computeSafeToSpend(
     to: DateTime(now.year, now.month, last),
     now: now,
   ).fold(0.0, (s, b) => s + b.amount);
-  bool spend(Tx t) =>
-      t.type == TxType.expense &&
-      !t.suspectedSpam &&
-      !isTransferCategory(t.categoryId) &&
-      finance.countsInTotals(t);
   var pendingMonth = 0.0;
   var pendingToday = 0.0;
   for (final t in finance.pendingTransactions) {
     final d = t.effectiveDate;
-    if (!spend(t) || d.year != now.year || d.month != now.month) continue;
+    if (!pendingIsSpend(finance, t) ||
+        d.year != now.year ||
+        d.month != now.month) {
+      continue;
+    }
     pendingMonth += t.spendAmount;
     if (d.day == now.day) pendingToday += t.spendAmount;
   }

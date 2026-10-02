@@ -15,6 +15,12 @@ import android.provider.Telephony
 class SmsArrivalReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
-        BackgroundImport.enqueueNow(context.applicationContext, BackgroundImport.TRIGGER_SMS)
+        // Kept alive until the work is enqueued: that reads WorkManager's
+        // state off the main thread.
+        val pending = goAsync()
+        BackgroundImport.enqueueNow(
+            context.applicationContext,
+            BackgroundImport.TRIGGER_SMS
+        ) { pending.finish() }
     }
 }

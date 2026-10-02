@@ -59,6 +59,20 @@ void main() {
       );
     });
 
+    test('a 1.30 Overview order gains the forecast after the budget', () {
+      final l = DashboardPageLayout.fromJson(DashboardPage.overview, {
+        'order': ['upcoming', 'monthlyBudget', 'recap', 'budgets', 'owed'],
+      });
+      expect(l.order, [
+        DashboardSection.upcoming,
+        DashboardSection.monthlyBudget,
+        DashboardSection.forecast,
+        DashboardSection.recap,
+        DashboardSection.budgets,
+        DashboardSection.owed,
+      ]);
+    });
+
     test('a section missing from a stored order returns at its place', () {
       // As if a later release added "usual" between these two.
       final l = DashboardPageLayout.fromJson(DashboardPage.trends, {

@@ -31,6 +31,8 @@ class SmsImportWorker(context: Context, params: WorkerParameters) :
     override fun doWork(): Result {
         val trigger = inputData.getString(BackgroundImport.KEY_TRIGGER) ?: "periodic"
         val enqueuedAt = inputData.getLong(BackgroundImport.KEY_ENQUEUED_AT, 0L)
+        // This run reads every SMS so far: a new one starts a fresh wait.
+        BackgroundImport.runStarted(applicationContext)
         // An earlier run in the chain already read this alert.
         if (BackgroundImport.isCovered(applicationContext, trigger, enqueuedAt)) {
             return Result.success()
