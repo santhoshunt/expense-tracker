@@ -2738,39 +2738,88 @@ class _ForecastCard extends StatelessWidget {
     final by = fmtDateCompact(f.lastDay);
     final days =
         '${f.daysAfterToday} ${f.daysAfterToday == 1 ? 'day' : 'days'}';
-    final everydayLabel = switch (f.basis) {
-      EverydayBasis.usual => 'Usual, $days',
-      EverydayBasis.pace => "At this month's pace, $days",
+    // How the everyday figure was worked out, under its row. Whole rupees:
+    // the compact format prints "₹240.0" under a thousand.
+    final perDay = fmtMoneyTidy(f.perDay.roundToDouble());
+    // The day count leads: on a narrow screen at large text the label
+    // wraps, and this is the part that must not be cut.
+    final everydayHow = switch (f.basis) {
+      EverydayBasis.usual when f.usualMonths == 2 =>
+        'Next $days, about $perDay a day: the lower of 2 recent months',
+      EverydayBasis.usual =>
+        'Next $days, about $perDay a day: the middle of '
+            '${f.usualMonths} recent months',
+      EverydayBasis.pace =>
+        "Next $days, about $perDay a day at this month's pace",
       EverydayBasis.none => null,
     };
-    final showEveryday = everydayLabel != null && f.daysAfterToday > 0;
+    final showEveryday = everydayHow != null && f.daysAfterToday > 0;
     final under = f.underCap;
 
-    Widget row(String label, double amount) => Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: muted,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+    Widget row(
+      String label,
+      double amount, {
+      String? detail,
+      VoidCallback? onTap,
+    }) {
+      final line = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: muted,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (detail != null)
+                    Text(
+                      detail,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          // Shrinks under its cap rather than overflowing at large text,
-          // as the balance breakdown's rows do.
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 140),
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(fmtMoney(amount)),
+            const SizedBox(width: 8),
+            // Shrinks under its cap rather than overflowing at large text,
+            // as the balance breakdown's rows do.
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 140),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(fmtMoney(amount)),
+              ),
             ),
-          ),
-        ],
-      ),
-    );
+            // Every row keeps the chevron's width, so the amounts line up.
+            SizedBox(
+              width: 18,
+              child: onTap == null
+                  ? null
+                  : Icon(
+                      Icons.chevron_right,
+                      size: 18,
+                      color: scheme.onSurfaceVariant,
+                    ),
+            ),
+          ],
+        ),
+      );
+      if (onTap == null) return line;
+      return InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Align(alignment: Alignment.centerLeft, child: line),
+        ),
+      );
+    }
 
     return FrostedPanel(
       radius: BorderRadius.circular(20),
@@ -2812,7 +2861,9 @@ class _ForecastCard extends StatelessWidget {
                           '${fmtMoney(f.spentSoFar)} spent',
                           if (f.billsDue > 0)
                             '${fmtMoney(f.billsDue)} bills due',
-                          if (showEveryday) '${fmtMoney(f.everyday)} everyday',
+                          if (showEveryday)
+                            '${fmtMoney(f.everyday)} everyday (about '
+                                '$perDay a day for $days)',
                         ];
                         return '${parts.join(' + ')} = ${fmtMoney(f.total)}';
                       },
@@ -2834,8 +2885,14 @@ class _ForecastCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             row('Spent so far', f.spentSoFar),
-            if (f.billsDue > 0) row('Bills due', f.billsDue),
-            if (showEveryday) row(everydayLabel, f.everyday),
+            if (f.billsDue > 0)
+              row(
+                'Bills due (${f.bills.length})',
+                f.billsDue,
+                onTap: () => _showForecastBills(context, f),
+              ),
+            if (showEveryday)
+              row('Everyday spending', f.everyday, detail: everydayHow),
             if (under != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -2867,6 +2924,122 @@ class _ForecastCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The forecast's bills, one row each: what it is, when it is due, what it
+/// costs, and whether it is a reminder or a payment the app detected.
+Future<void> _showForecastBills(BuildContext context, MonthForecast f) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  return showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.black.withValues(alpha: 0.5),
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (ctx) {
+      final scheme = Theme.of(ctx).colorScheme;
+      final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+          child: FrostedPanel(
+            radius: BorderRadius.circular(28),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Bills still due',
+                      style: Theme.of(ctx).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Reminders not yet paid, and regular payments the '
+                      'app has spotted in your history, due by ${fmtDateCompact(f.lastDay)} or up '
+                      'to a week overdue. Paying one takes it off.',
+                      style: muted,
+                    ),
+                    const SizedBox(height: 12),
+                    for (final b in f.bills)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    b.label,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  Text(
+                                    [
+                                      // A detected payment's date is the
+                                      // app's guess: expected, not due.
+                                      switch ((
+                                        b.patternKey == null,
+                                        b.due.isBefore(today),
+                                      )) {
+                                        (true, true) =>
+                                          'Overdue since ${fmtDateCompact(b.due)}',
+                                        (true, false) =>
+                                          'Due ${fmtDateCompact(b.due)}',
+                                        (false, true) =>
+                                          'Expected ${fmtDateCompact(b.due)}, '
+                                              'not seen yet',
+                                        (false, false) =>
+                                          'Expected ${fmtDateCompact(b.due)}',
+                                      },
+                                      b.patternKey == null
+                                          ? 'reminder'
+                                          : 'regular payment',
+                                    ].join(' · '),
+                                    style: muted,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 140),
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(fmtMoney(b.amount)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    const Divider(height: 24),
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Total',
+                            style: TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        Text(
+                          fmtMoney(f.billsDue),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }
 
 class _StatCard extends StatelessWidget {

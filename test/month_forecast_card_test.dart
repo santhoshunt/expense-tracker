@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/dashboard_layout.dart';
+import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -83,6 +84,32 @@ void main() {
     expect(find.text('Spent so far'), findsOneWidget);
     expect(find.textContaining('under your'), findsNothing);
     expect(find.textContaining('over your'), findsNothing);
+  });
+
+  testWidgets('Bills due opens the list of what is due', (tester) async {
+    final p = await ledger(1200);
+    final now = DateTime.now();
+    // Due on the month's last day: always ahead, or today.
+    await p.restoreReminder(
+      Reminder(
+        id: 'broadband',
+        name: 'Broadband',
+        dayOfMonth: DateTime(now.year, now.month + 1, 0).day,
+        categoryId: 'other_expense',
+        expectedAmount: 799,
+        // Last month's paid, so only this month's is due (an unpaid one
+        // from the last week would show as overdue too).
+        lastPaidMonth:
+            '${DateTime(now.year, now.month - 1).year}-'
+            '${DateTime(now.year, now.month - 1).month.toString().padLeft(2, '0')}',
+      ),
+    );
+    await pump(tester, p, await settings(), const DashboardScreen());
+    await tester.tap(find.text('Bills due (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Bills still due'), findsOneWidget);
+    expect(find.text('Broadband'), findsOneWidget);
+    expect(find.textContaining('· reminder'), findsOneWidget);
   });
 
   testWidgets('says how far under or over the cap', (tester) async {

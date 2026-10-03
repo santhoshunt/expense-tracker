@@ -42,6 +42,9 @@ class MonthForecast {
   /// Everyday spend expected after today; 0 when [basis] is none.
   final double everyday;
 
+  /// [everyday] per day after today.
+  final double perDay;
+
   /// The month's last day less today's day-of-month.
   final int daysAfterToday;
 
@@ -61,6 +64,7 @@ class MonthForecast {
     required this.bills,
     required this.billsDue,
     required this.everyday,
+    required this.perDay,
     required this.daysAfterToday,
     required this.basis,
     required this.usualMonths,
@@ -195,6 +199,7 @@ MonthForecast? computeMonthForecast(
     bills: bills,
     billsDue: bills.fold(0.0, (s, b) => s + b.amount),
     everyday: perDay * daysAfter,
+    perDay: perDay,
     daysAfterToday: daysAfter,
     basis: basis,
     usualMonths: usualMonths,
