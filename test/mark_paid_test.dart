@@ -169,7 +169,7 @@ void main() {
       final (p, hits) = await streaming();
       await p.markPatternPaid(hits.single.key, DateTime(2026, 10, 2));
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 20);
+      expect(data['version'], 21);
       expect(data['patternPaid'], {hits.single.key: '2026-10-02'});
 
       final other = await load();

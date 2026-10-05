@@ -131,6 +131,102 @@ void main() {
     expect(f.underCap, isNull);
   });
 
+  test('a bill paid 13 days early is not counted twice', () async {
+    final p = await withHistory();
+    await p.restoreReminder(rent);
+    // Rent due the 25th, paid on the 12th.
+    await spend(
+      p,
+      DateTime(2026, 10, 12, 10),
+      15000,
+      category: 'other_expense',
+    );
+    final f = forecast(p);
+    expect(f.spentSoFar, 15000);
+    expect(f.bills, isEmpty);
+    expect(f.billsDue, 0);
+  });
+
+  test('a usual month\'s bill paid early is not everyday spend', () async {
+    final p = await load();
+    // Rent due the 5th, paid on the 25th of the month before: 11 days
+    // early, inside the days after the 20th the everyday figure reads.
+    for (final m in [7, 8, 9]) {
+      await spend(p, DateTime(2026, m, 1, 10), 400);
+      await spend(p, DateTime(2026, m, 25, 10), 1100);
+      await spend(
+        p,
+        DateTime(2026, m, 25, 11),
+        15000,
+        category: 'other_expense',
+      );
+    }
+    await p.restoreReminder(rent.copyWith(dayOfMonth: 5));
+    final f = forecast(p);
+    expect(f.basis, EverydayBasis.usual);
+    expect(f.everyday, closeTo(1100, 0.01));
+  });
+
+  test("a pinned merchant's other purchases are everyday spend", () async {
+    final p = await withHistory();
+    await p.restoreReminder(rent);
+    // A ₹499 monthly plan on the 26th, paid this month on the 3rd, and
+    // ₹200 of shopping at the same merchant on the 27th of August and
+    // September.
+    for (final (d, amount) in [
+      (DateTime(2026, 7, 26, 12), 499.0),
+      (DateTime(2026, 8, 26, 12), 499.0),
+      (DateTime(2026, 8, 27, 12), 200.0),
+      (DateTime(2026, 9, 26, 12), 499.0),
+      (DateTime(2026, 9, 27, 12), 200.0),
+      (DateTime(2026, 10, 3, 12), 499.0),
+    ]) {
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'shopping',
+        amount: amount,
+        note: 'ShopMart',
+        date: d,
+      );
+    }
+    await p.setSubscriptionPins({
+      'expense|shopmart': SubscriptionCycle.monthly,
+    });
+    final f = forecast(p);
+    expect(f.billsDue, 15000);
+    // Per day after the 20th: July 1100 / 11 (the ₹499 is the bill),
+    // August 1300 / 11, September 1300 / 10; the middle is August's.
+    expect(f.everyday, closeTo(1300, 0.01));
+  });
+
+  test('a bill paid early in the month before is still a bill', () async {
+    final p = await load();
+    // Power bill on the 2nd, paid on 18 October for November.
+    for (final d in [
+      DateTime(2026, 7, 2, 9),
+      DateTime(2026, 8, 2, 9),
+      DateTime(2026, 9, 2, 9),
+      DateTime(2026, 10, 2, 9),
+      DateTime(2026, 10, 18, 9),
+    ]) {
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'bills',
+        amount: 1200,
+        note: 'PowerCo',
+        date: d,
+      );
+    }
+    for (final m in [7, 8, 9, 10]) {
+      await spend(p, DateTime(2026, m, 1, 8), 400);
+      await spend(p, DateTime(2026, m, 10, 10), 100);
+    }
+    final f = forecast(p, at: DateTime(2026, 11, 1, 12));
+    expect(f.basis, EverydayBasis.usual);
+    // Everyday is the ₹100 a month, not the power bill.
+    expect(f.everyday, lessThan(150));
+  });
+
   test("with no history it uses this month's pace after 14 days", () async {
     final p = await load();
     await spend(p, DateTime(2026, 10, 1, 10), 1200);
@@ -377,10 +473,97 @@ void main() {
   });
 
   group('isOrphanedAccount', () {
+    /// An account holding an SMS-made number, as a backup brings it back.
+    Future<String> restoredWithKey(FinanceProvider p) async {
+      await p.importData({
+        'app': 'expense_tracker',
+        'version': 21,
+        'transactions': <Object>[],
+        'accounts': [
+          {
+            'id': 'acc_restored',
+            'name': 'HDFC',
+            'type': 'bank',
+            'keys': ['HDFC:4321'],
+          },
+        ],
+      }, replace: false);
+      return 'acc_restored';
+    }
+
     test('a numbered account no row uses', () async {
+      final p = await load();
+      final id = await restoredWithKey(p);
+      expect(p.isOrphanedAccount(p.accountById(id)!), isTrue);
+    });
+
+    test('a number linked by hand is waiting, not emptied', () async {
       final p = await load();
       final id = await p.addAccount(name: 'HDFC', type: AccountType.bank);
       await p.addAccountKey(id, 'HDFC:4321');
+      expect(p.accountById(id)!.linkedByHand, {'HDFC:4321'});
+      expect(p.isOrphanedAccount(p.accountById(id)!), isFalse);
+    });
+
+    test('a typed number alerts already used is an SMS one', () async {
+      final p = await load();
+      final old = await restoredWithKey(p);
+      await p.addImported([
+        ParsedTxn(
+          type: TxType.expense,
+          amount: 70,
+          merchant: 'SHOP',
+          date: DateTime(2026, 10, 19, 10),
+          ref: 'R4',
+          categoryId: 'food',
+          sender: 'VM-HDFCBK',
+          rawBody: 'Rs.70 debited from a/c XX4321 on 19-10-26.',
+          acctKey: 'HDFC:4321',
+        ),
+      ]);
+      await p.deleteAccount(old);
+      final id = await p.addAccount(name: 'HDFC', type: AccountType.bank);
+      await p.addAccountKey(id, 'HDFC:4321');
+      expect(p.accountById(id)!.linkedByHand, isEmpty);
+    });
+
+    test('typing in an SMS number again keeps it one', () async {
+      final p = await load();
+      final id = await restoredWithKey(p);
+      await p.addAccountKey(id, 'HDFC:4321');
+      expect(p.accountById(id)!.linkedByHand, isEmpty);
+      expect(p.isOrphanedAccount(p.accountById(id)!), isTrue);
+    });
+
+    test('a hand-linked number an alert arrived on is an SMS one', () async {
+      final p = await load();
+      final id = await p.addAccount(name: 'HDFC', type: AccountType.bank);
+      await p.addAccountKey(id, 'HDFC:4321');
+      await p.addImported([
+        ParsedTxn(
+          type: TxType.expense,
+          amount: 60,
+          merchant: 'SHOP',
+          date: DateTime(2026, 10, 19, 10),
+          ref: 'R3',
+          categoryId: 'food',
+          sender: 'VM-HDFCBK',
+          rawBody: 'Rs.60 debited from a/c XX4321 on 19-10-26.',
+          acctKey: 'HDFC:4321',
+        ),
+      ]);
+      expect(p.accountById(id)!.linkedByHand, isEmpty);
+      // Its only row gone, it reads as emptied again.
+      await p.deleteTransactions([p.pendingTransactions.single.id]);
+      expect(p.isOrphanedAccount(p.accountById(id)!), isTrue);
+    });
+
+    test('undoing the unlink of an SMS number keeps it one', () async {
+      final p = await load();
+      final id = await restoredWithKey(p);
+      await p.removeAccountKey(id, 'HDFC:4321');
+      await p.addAccountKey(id, 'HDFC:4321', byHand: false);
+      expect(p.accountById(id)!.linkedByHand, isEmpty);
       expect(p.isOrphanedAccount(p.accountById(id)!), isTrue);
     });
 
@@ -402,8 +585,7 @@ void main() {
 
     test('not while a confirmed or pending row uses it', () async {
       final p = await load();
-      final id = await p.addAccount(name: 'HDFC', type: AccountType.bank);
-      await p.addAccountKey(id, 'HDFC:4321');
+      final id = await restoredWithKey(p);
       await p.addImported([
         ParsedTxn(
           type: TxType.expense,

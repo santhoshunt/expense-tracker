@@ -260,6 +260,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _subscriptionPinsKey = 'subscription_pins_v1';
   static const _patternPaidKey = 'pattern_paid_v1';
   static const _remindersKey = 'reminders_v1';
+  static const _remindersEarlyRescanKey = 'reminders_early_rescan_v1';
 
   final List<Tx> _transactions = [];
   final List<ClassifierRule> _rules = [];
@@ -1362,6 +1363,24 @@ class FinanceProvider extends ChangeNotifier {
     // half-pair (a leg deleted by an older build, a hand-edited backup)
     // unlinked.
     if (_sanitizeReminders()) await _persist(reminders: true);
+    // Once: payments already imported that paid a reminder 4 to 15 days
+    // early, which the narrower window of older builds missed. Forward-only
+    // like every mark, so it never reopens an occurrence.
+    if (!(prefs.getBool(_remindersEarlyRescanKey) ?? false) &&
+        !_loadWarnings.contains('transactions') &&
+        !_loadWarnings.contains('reminders')) {
+      final since = DateTime.now().subtract(const Duration(days: 31));
+      final rows = [
+        for (final t in _transactions)
+          if (!t.date.isBefore(since)) t,
+      ]..sort((a, b) => a.date.compareTo(b.date));
+      if (_markRemindersPaidBy(rows, replay: true)) {
+        await _persist(reminders: true);
+      }
+      // A save that failed leaves the marks in memory only: try again on
+      // the next launch.
+      if (!_persistFailed) await prefs.setBool(_remindersEarlyRescanKey, true);
+    }
     if (_clearOrphanPairs()) await _persist(tx: true);
     // Also final for the split rules: older builds left shares on rows that
     // later became income or transfers. Not when the category registry
@@ -2787,21 +2806,44 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// Marks a plain reminder paid when one of [rows] is its payment: money
-  /// out of the same amount (to the rupee) dated from 3 days before to 7
+  /// out of the same amount (to the rupee) dated from 15 days before to 7
   /// days after a due date not yet marked. Each row pays at most one
-  /// reminder, the one due nearest to it. A row typed in by hand must also
-  /// share the reminder's category: a ₹499 grocery bill is not the ₹499
-  /// broadband. Add it for me reminders never match: they add their own
-  /// row, and a match would count a cash bill twice. Returns whether any
-  /// reminder changed; the caller persists.
-  bool _markRemindersPaidBy(Iterable<Tx> rows) {
+  /// reminder: one due from 3 days after it to 7 before (the window older
+  /// builds used) ahead of one paid further ahead, then the nearest. A row
+  /// typed in by hand must also share the reminder's category: a ₹499
+  /// grocery bill is not the ₹499 broadband. Add it for me reminders never
+  /// match: they add their own row, and a match would count a cash bill
+  /// twice. On a reminder with a history (a mark, or a created date), a
+  /// match more than 3 days before its due date also needs the occurrence
+  /// before it done. Rows go oldest first: a scan reads the inbox newest
+  /// first, and last month's bill must be marked before this month's early
+  /// payment is checked against it.
+  /// [replay] is the load-time rescan of rows already seen: it only looks
+  /// for early payments older builds missed, and skips rows an Add it for
+  /// me reminder recorded and rows that reach an occurrence already marked.
+  /// Returns whether any reminder changed; the caller persists.
+  bool _markRemindersPaidBy(Iterable<Tx> rows, {bool replay = false}) {
     var changed = false;
-    for (final t in rows) {
+    final ordered = rows.toList()..sort((a, b) => a.date.compareTo(b.date));
+    for (final t in ordered) {
       if (t.type != TxType.expense || t.suspectedSpam) continue;
+      // A row an Add it for me reminder recorded is that reminder's own.
+      if (replay &&
+          _reminders.any(
+            (r) =>
+                r.autoAdd &&
+                r.name == t.note &&
+                (t.amount - (r.expectedAmount ?? double.nan)).abs() < 1,
+          )) {
+        continue;
+      }
       final day = DateTime(t.date.year, t.date.month, t.date.day);
       var best = -1;
+      var bestEarly = false;
       var bestGap = 0;
       DateTime? bestDue;
+      var paidAlready = false;
+      final earlyFrom = day.add(const Duration(days: 3));
       for (var i = 0; i < _reminders.length; i++) {
         final r = _reminders[i];
         final expected = r.expectedAmount;
@@ -2810,25 +2852,52 @@ class FinanceProvider extends ChangeNotifier {
         if (t.source == TxSource.manual && t.categoryId != r.categoryId) {
           continue;
         }
-        // Every occurrence the row can pay: due 7 days before it to 3
-        // after (a day-31 bill paid on the 2nd included). Only forward of
-        // the mark, so a backfill of old alerts never reopens this month.
+        // Every occurrence the row can pay: due 7 days before it to 15
+        // after (a day-31 bill paid on the 2nd, or one paid when it
+        // arrives). Only forward of the mark, so a backfill of old alerts
+        // never reopens this month.
         final was = r.lastPaidMonth;
         for (final due in reminderDueDatesBetween(
           r,
-          day.subtract(const Duration(days: 7)),
-          day.add(const Duration(days: 3)),
+          day.subtract(const Duration(days: kReminderGraceDays)),
+          day.add(const Duration(days: kReminderEarlyPayDays)),
         )) {
-          if (was != null && monthKey(due).compareTo(was) <= 0) continue;
+          if (was != null && monthKey(due).compareTo(was) <= 0) {
+            paidAlready = true;
+            continue;
+          }
+          final early = due.isAfter(earlyFrom);
+          // The rescan only looks for what older builds missed; the rest
+          // they matched, or the user cleared.
+          if (replay && !early) continue;
+          // More than 3 days ahead, only once the occurrence before is
+          // done: a bill paid 16 days late is that bill, not next month's
+          // paid early. A reminder with no mark and no created date has no
+          // such history to check.
+          if (early && (was != null || r.createdOn != null)) {
+            final before = reminderDueDatesBetween(
+              r,
+              DateTime(due.year, due.month - r.cycle.months),
+              due.subtract(const Duration(days: 1)),
+            );
+            if (before.isNotEmpty && !reminderOccurrenceDone(r, before.last)) {
+              continue;
+            }
+          }
           final gap = day.difference(due).inDays.abs();
-          if (best == -1 || gap < bestGap) {
+          if (best == -1 ||
+              (bestEarly && !early) ||
+              (bestEarly == early && gap < bestGap)) {
             best = i;
+            bestEarly = early;
             bestGap = gap;
             bestDue = due;
           }
         }
       }
-      if (best == -1) continue;
+      // Replayed, a row that reaches a marked occurrence most likely paid
+      // it already: it must not go on to pay a second reminder.
+      if (best == -1 || (replay && paidAlready)) continue;
       _reminders[best] = _reminders[best].copyWith(
         lastPaidMonth: monthKey(bestDue!),
       );
@@ -2998,6 +3067,17 @@ class FinanceProvider extends ChangeNotifier {
     _keyIndex[key] = acc.id;
   }
 
+  /// A number linked by hand that an alert has now arrived on is an SMS
+  /// number from here on: if its rows all leave later, the account shows
+  /// the emptied hint like any other ([isOrphanedAccount]).
+  void _alertArrivedOn(String key) {
+    final ai = _accounts.indexWhere((a) => a.id == _keyIndex[key]);
+    if (ai == -1 || !_accounts[ai].linkedByHand.contains(key)) return;
+    _accounts[ai] = _accounts[ai].copyWith(
+      linkedByHand: {..._accounts[ai].linkedByHand}..remove(key),
+    );
+  }
+
   /// Re-derivation of a machine-made key ([oldKey] → [newKey]): the account
   /// that owned [oldKey] takes [newKey] too, and loses a default name that
   /// spelled the old key. False, changing nothing, when some account owns
@@ -3091,9 +3171,15 @@ class FinanceProvider extends ChangeNotifier {
   /// the 1.28 re-key could leave an account whose rows all moved away. Its
   /// set balance still counts in net balance. An account made by hand with
   /// no linked number, a wallet and a closed account never qualify.
+  /// Numbers linked by hand don't count: that account is waiting for its
+  /// first alert.
   bool isOrphanedAccount(Account a) {
     if (a.isWallet || a.isClosed) return false;
-    if (!a.keys.any((k) => !k.startsWith('manual:'))) return false;
+    if (!a.keys.any(
+      (k) => !k.startsWith('manual:') && !a.linkedByHand.contains(k),
+    )) {
+      return false;
+    }
     if (transactionCountForAccount(a.id) > 0) return false;
     return !pendingTransactions.any(
       (t) => t.acctKey != null && a.keys.contains(t.acctKey),
@@ -3501,14 +3587,33 @@ class FinanceProvider extends ChangeNotifier {
   /// carrying that fragment resolve to it — past transactions included.
   /// Returns false when another account already owns the key, or when a
   /// wallet is asked to own a bank number (wallets are entered by hand).
-  Future<bool> addAccountKey(String accountId, String key) async {
+  /// [byHand] records it as typed in ([Account.linkedByHand]); false puts
+  /// back a number an SMS made (the Unlink undo).
+  Future<bool> addAccountKey(
+    String accountId,
+    String key, {
+    bool byHand = true,
+  }) async {
     final k = key.trim().toUpperCase();
     final owner = _keyIndex[k];
     if (owner != null && owner != accountId) return false;
     final i = _accounts.indexWhere((a) => a.id == accountId);
     if (i == -1) return false;
     if (_accounts[i].isWallet) return false;
-    _accounts[i] = _accounts[i].copyWith(keys: {..._accounts[i].keys, k});
+    final a = _accounts[i];
+    // A number the account holds already keeps how it was linked: typing
+    // in an SMS-made one again doesn't make it hand-linked. Nor does one
+    // alerts already used (rows a deleted account left behind).
+    final held = a.keys.contains(k);
+    final typed = byHand && !_transactions.any((t) => t.acctKey == k);
+    _accounts[i] = a.copyWith(
+      keys: {...a.keys, k},
+      linkedByHand: held
+          ? null
+          : typed
+          ? {...a.linkedByHand, k}
+          : ({...a.linkedByHand}..remove(k)),
+    );
     _keyIndex[k] = accountId;
     notifyListeners();
     await _persist(accounts: true);
@@ -3521,7 +3626,10 @@ class FinanceProvider extends ChangeNotifier {
     final i = _accounts.indexWhere((a) => a.id == accountId);
     if (i == -1) return;
     final keys = {..._accounts[i].keys}..remove(key);
-    _accounts[i] = _accounts[i].copyWith(keys: keys);
+    _accounts[i] = _accounts[i].copyWith(
+      keys: keys,
+      linkedByHand: {..._accounts[i].linkedByHand}..remove(key),
+    );
     _rebuildKeyIndex();
     notifyListeners();
     await _persist(accounts: true);
@@ -3768,7 +3876,13 @@ class FinanceProvider extends ChangeNotifier {
     // wallet, or wallet rows would start counting.
     if (_accounts[si].isWallet != _accounts[ti].isWallet) return;
     final merged = {..._accounts[ti].keys, ..._accounts[si].keys};
-    _accounts[ti] = _accounts[ti].copyWith(keys: merged);
+    _accounts[ti] = _accounts[ti].copyWith(
+      keys: merged,
+      linkedByHand: {
+        ..._accounts[ti].linkedByHand,
+        ..._accounts[si].linkedByHand,
+      },
+    );
     _accounts.removeAt(si);
     _rebuildKeyIndex();
     notifyListeners();
@@ -4627,7 +4741,10 @@ class FinanceProvider extends ChangeNotifier {
           balanceAfter: p.balanceAfter,
         ),
       );
-      if (p.acctKey != null) _ensureAccount(p.acctKey!, isCard: p.isCard);
+      if (p.acctKey != null) {
+        _ensureAccount(p.acctKey!, isCard: p.isCard);
+        _alertArrivedOn(p.acctKey!);
+      }
       // The new row must block later duplicates in this same batch, exactly
       // as it would have when the old code rescanned _transactions each time.
       if (p.ref != null) refKeys.add('${p.type.name}|${p.ref}');
@@ -4908,7 +5025,8 @@ class FinanceProvider extends ChangeNotifier {
     // and `pointValue`; transactions may carry `walletCounted`.
     // v20: reminders may carry `createdOn`; `patternPaid` (detected
     // payment key → due date marked paid).
-    'version': 20,
+    // v21: accounts may carry `linkedByHand` (keys typed in by hand).
+    'version': 21,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
@@ -5267,12 +5385,14 @@ class FinanceProvider extends ChangeNotifier {
       // Never fold across the wallet line (see mergeAccounts): the import
       // comes in as its own account, less the keys the device already owns.
       if (ownerIdx != -1 && _accounts[ownerIdx].isWallet != a.isWallet) {
+        final kept = {
+          for (final k in a.keys)
+            if (_keyIndex[k] == null) k,
+        };
         newAccounts.add(
           a.copyWith(
-            keys: {
-              for (final k in a.keys)
-                if (_keyIndex[k] == null) k,
-            },
+            keys: kept,
+            linkedByHand: a.linkedByHand.intersection(kept),
           ),
         );
         continue;
@@ -5288,9 +5408,15 @@ class FinanceProvider extends ChangeNotifier {
           for (final k in a.keys)
             if (_keyIndex[k] == null || _keyIndex[k] == owner.id) k,
         };
+        // Only keys new to the owner: a number the device already holds
+        // keeps the device's own record of how it was linked.
+        final handAdded = a.linkedByHand
+            .intersection(adding)
+            .difference(owner.keys);
         if (!owner.keys.containsAll(adding)) {
           _accounts[ownerIdx] = owner.copyWith(
             keys: {...owner.keys, ...adding},
+            linkedByHand: {...owner.linkedByHand, ...handAdded},
           );
           accountKeysFolded = true;
         }

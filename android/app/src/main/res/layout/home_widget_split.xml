@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Spending split (4×2): this month's spend as a donut (a bitmap drawn in
      HomeWidgets.kt, total inside) beside the largest three categories and
-     Other. Fixed rows: four fit two cells and never scroll. Top-aligned:
-     at the smallest size with large text the last row clips, never the
-     title. -->
+     Other. Fixed rows: four fit two cells and never scroll. The title sits
+     at the top and the body is centred in the height left under it, so a
+     taller cell leaves no gap at the bottom. At the smallest size with
+     large text the rows column is capped at that height and its last row
+     clips, never the title. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/hw_root"
     android:layout_width="match_parent"
@@ -39,7 +41,8 @@
         <LinearLayout
             android:id="@+id/hw_body"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="0dp"
+            android:layout_weight="1"
             android:layout_marginTop="4dp"
             android:gravity="center_vertical"
             android:orientation="horizontal">

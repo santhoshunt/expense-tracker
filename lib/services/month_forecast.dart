@@ -79,16 +79,28 @@ class MonthForecast {
   double? get underCap => cap == null ? null : cap! - total;
 }
 
+/// A pinned merchant's row is its bill only within this share of the usual
+/// amount; other rows there are everyday shopping.
+const double kPinnedBillTolerance = 0.10;
+
 /// Whether [t] is a bill payment: a row of a pattern whose bill this
 /// month's forecast already holds ([billKeys], [recurringKeyOf]
-/// identities), or a row that pays a reminder by the rule that marks
-/// reminders paid: the expected amount to the rupee, dated from 3 days
-/// before to 7 days after one of its due dates, and the reminder's category
-/// too for a row typed in by hand or an Add it for me reminder (an alert's
-/// category is often not the bill's: rent by IMPS lands in Other).
-bool isBillRow(Tx t, Set<String> billKeys, List<Reminder> reminders) {
+/// identities, mapped to the usual amount for a pinned merchant, whose row
+/// must also be within [kPinnedBillTolerance] of it), or a row that pays a
+/// reminder by the rule that marks reminders paid: the expected amount to
+/// the rupee, dated from 15 days before to 7 days after one of its due
+/// dates, and the reminder's category too for a row typed in by hand or an
+/// Add it for me reminder (an alert's category is often not the bill's:
+/// rent by IMPS lands in Other).
+bool isBillRow(Tx t, Map<String, double?> billKeys, List<Reminder> reminders) {
   final key = recurringKeyOf(t);
-  if (key != null && billKeys.contains(key)) return true;
+  if (key != null && billKeys.containsKey(key)) {
+    final usual = billKeys[key];
+    if (usual == null ||
+        (t.amount - usual).abs() <= usual * kPinnedBillTolerance) {
+      return true;
+    }
+  }
   final day = DateTime(t.date.year, t.date.month, t.date.day);
   for (final r in reminders) {
     final expected = r.expectedAmount;
@@ -100,8 +112,8 @@ bool isBillRow(Tx t, Set<String> billKeys, List<Reminder> reminders) {
     }
     if (reminderDueDatesBetween(
       r,
-      day.subtract(const Duration(days: 7)),
-      day.add(const Duration(days: 3)),
+      day.subtract(const Duration(days: kReminderGraceDays)),
+      day.add(const Duration(days: kReminderEarlyPayDays)),
     ).isNotEmpty) {
       return true;
     }
@@ -137,17 +149,32 @@ MonthForecast? computeMonthForecast(
   // A pattern's past payments are bills only while this month's figures
   // already hold its payment: due (in [bills]) or paid this month (in
   // spent so far). Otherwise they are everyday spend: a hidden pattern, or
-  // a merchant pinned for one yearly payment that is not due now. Shopped
-  // at this month as well, that merchant's rows still read as bills.
-  final billKeys = <String>{
+  // a merchant pinned for one yearly payment that is not due now. A pinned
+  // merchant's other purchases stay everyday spend: only rows near its
+  // usual amount are the bill.
+  // The cycle a payment paid is one interval before the next due date:
+  // its own month, or the next one for a bill paid early across a month
+  // end (paid 18 October for 2 November).
+  bool paidFor(RecurringHit h) {
+    final slot = h.nextDue.subtract(Duration(days: h.intervalDays));
+    return slot.year == now.year && slot.month == now.month;
+  }
+
+  final keys = <String>{
     for (final b in bills) ?b.patternKey,
     for (final h in patterns)
       if (h.type == TxType.expense &&
           !hidden.contains(h.key) &&
           ((h.lastDate.year == now.year && h.lastDate.month == now.month) ||
+              paidFor(h) ||
               hitMarkedPaid(finance, h)))
         h.key,
   };
+  final pinnedUsual = <String, double>{
+    for (final h in patterns)
+      if (h.cycle != null) h.key: h.expectedAmount,
+  };
+  final billKeys = <String, double?>{for (final k in keys) k: pinnedUsual[k]};
   final reminders = finance.reminders;
   bool everyday(Tx t) =>
       t.type == TxType.expense &&

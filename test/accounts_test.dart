@@ -368,6 +368,43 @@ void main() {
     expect(p.transactionsForAccount(id), isEmpty);
   });
 
+  group('numbers linked by hand', () {
+    test('round-trip through JSON, and stay out of it when none', () {
+      final a = Account(
+        id: 'a1',
+        name: 'Bank',
+        type: AccountType.bank,
+        keys: {'HDFC:2222', 'SBI:3333'},
+        linkedByHand: {'HDFC:2222'},
+      );
+      final back = Account.fromJson(
+        jsonDecode(jsonEncode(a.toJson())) as Map<String, dynamic>,
+      );
+      expect(back.linkedByHand, {'HDFC:2222'});
+      final none = a.copyWith(linkedByHand: {});
+      expect(none.toJson().containsKey('linkedByHand'), isFalse);
+      expect(Account.fromJson(none.toJson()).linkedByHand, isEmpty);
+    });
+
+    test('a merge keeps both sides, an unlink drops it', () async {
+      SharedPreferences.setMockInitialValues({});
+      final p = FinanceProvider();
+      await p.load();
+      final a = await p.addAccount(name: 'A', type: AccountType.bank);
+      final b = await p.addAccount(name: 'B', type: AccountType.bank);
+      await p.addAccountKey(a, 'HDFC:2222');
+      await p.addAccountKey(b, 'SBI:3333');
+      await p.mergeAccounts(b, a);
+      expect(p.accountById(a)!.linkedByHand, {'HDFC:2222', 'SBI:3333'});
+      await p.removeAccountKey(a, 'SBI:3333');
+      expect(p.accountById(a)!.linkedByHand, {'HDFC:2222'});
+      // Survives a reload.
+      final again = FinanceProvider();
+      await again.load();
+      expect(again.accountById(a)!.linkedByHand, {'HDFC:2222'});
+    });
+  });
+
   test(
     'backfill derives accounts from existing SMS notes on first load',
     () async {

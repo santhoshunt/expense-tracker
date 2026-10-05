@@ -180,6 +180,99 @@ void main() {
       expect(hits, isEmpty, reason: '87-day gap breaks the pattern');
     });
 
+    group('one payment made early', () {
+      List<RecurringHit> detect(List<DateTime> days, DateTime now) =>
+          detectRecurringPatterns([
+            for (final d in days) sms(amount: 799, date: d),
+          ], now: now);
+
+      test('as the latest payment, due a cycle after its slot', () {
+        final hits = detect([
+          DateTime(2026, 6, 20),
+          DateTime(2026, 7, 20),
+          DateTime(2026, 8, 20),
+          DateTime(2026, 9, 20),
+          DateTime(2026, 10, 6),
+        ], DateTime(2026, 10, 10));
+        expect(hits, hasLength(1));
+        expect(hits.single.lastDate, DateTime(2026, 10, 6));
+        expect(hits.single.intervalDays, 31);
+        // Two intervals after 20 September, not one after 6 October.
+        expect(hits.single.nextDue, DateTime(2026, 11, 21));
+      });
+
+      test('between on-time ones, its two gaps make two cycles', () {
+        final hits = detect([
+          DateTime(2026, 6, 20),
+          DateTime(2026, 7, 20),
+          DateTime(2026, 8, 20),
+          DateTime(2026, 9, 5),
+          DateTime(2026, 10, 20),
+        ], DateTime(2026, 10, 25));
+        expect(hits, hasLength(1));
+        expect(hits.single.nextDue, DateTime(2026, 11, 20));
+      });
+
+      test('two short gaps in a row are not a pattern', () {
+        // 16 and 17 days: together not two cycles.
+        final hits = detect([
+          DateTime(2026, 6, 20),
+          DateTime(2026, 7, 20),
+          DateTime(2026, 8, 20),
+          DateTime(2026, 9, 5),
+          DateTime(2026, 9, 22),
+        ], DateTime(2026, 9, 25));
+        expect(hits, isEmpty);
+      });
+
+      test('two early payments a cycle apart are not a pattern', () {
+        // Two regular gaps, then a visit every two months plus an extra
+        // purchase between: each pair makes two cycles, but only one early
+        // payment is allowed.
+        final hits = detect([
+          DateTime(2026, 1, 1),
+          DateTime(2026, 2, 1),
+          DateTime(2026, 3, 4),
+          DateTime(2026, 3, 20),
+          DateTime(2026, 5, 6),
+          DateTime(2026, 5, 22),
+          DateTime(2026, 7, 8),
+        ], DateTime(2026, 7, 10));
+        expect(hits, isEmpty);
+      });
+
+      test('a 15-day gap is an extra purchase, not an early payment', () {
+        final hits = detect([
+          DateTime(2026, 6, 20),
+          DateTime(2026, 7, 20),
+          DateTime(2026, 8, 20),
+          DateTime(2026, 9, 20),
+          DateTime(2026, 10, 5),
+        ], DateTime(2026, 10, 10));
+        expect(hits, isEmpty);
+      });
+
+      test('an extra purchase 8 days after a payment is not one', () {
+        final hits = detect([
+          DateTime(2026, 6, 20),
+          DateTime(2026, 7, 20),
+          DateTime(2026, 8, 20),
+          DateTime(2026, 9, 20),
+          DateTime(2026, 9, 28),
+        ], DateTime(2026, 10, 1));
+        expect(hits, isEmpty);
+      });
+
+      test('it does not count toward the three payments', () {
+        final hits = detect([
+          DateTime(2026, 8, 20),
+          DateTime(2026, 9, 20),
+          DateTime(2026, 10, 6),
+        ], DateTime(2026, 10, 10));
+        expect(hits, isEmpty);
+      });
+    });
+
     test('same-day duplicates collapse to one occurrence', () {
       final now = DateTime(2026, 9, 1);
       final hits = detectRecurring([

@@ -375,7 +375,7 @@ void main() {
       final p = await loaded();
       await walletWithSpend(p, counted: true, points: true);
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 20);
+      expect(data['version'], 21);
       final q = await loaded();
       await q.importData(data as Map<String, dynamic>, replace: true);
       final a = q.accounts.single;

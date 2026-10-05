@@ -201,7 +201,8 @@ void main() {
     final p = FinanceProvider();
     await p.load();
     final id = await p.addAccount(name: 'Old HDFC', type: AccountType.bank);
-    await p.addAccountKey(id, 'HDFC:4321');
+    // An SMS-made number: one typed in by hand is waiting, not emptied.
+    await p.addAccountKey(id, 'HDFC:4321', byHand: false);
     await p.setManualBalance(id, 5000);
     final hand = await p.addAccount(name: 'Cash', type: AccountType.bank);
     await p.setManualBalance(hand, 800);

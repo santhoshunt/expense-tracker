@@ -26,11 +26,12 @@ class RecurringHit {
   /// Date of the newest occurrence.
   final DateTime lastDate;
 
-  /// Median gap between occurrences, in days; for a marked merchant, its
-  /// cycle's length.
+  /// Median gap between occurrences (an early payment's gaps left out), in
+  /// days; for a marked merchant, its cycle's length.
   final int intervalDays;
 
-  /// Predicted next occurrence: [lastDate] + [intervalDays], or one
+  /// Predicted next occurrence: [lastDate] + [intervalDays] (two intervals
+  /// after the payment before it when the newest was paid early), or one
   /// [cycle] after it for a marked merchant.
   final DateTime nextDue;
 
@@ -126,8 +127,10 @@ List<RecurringHit> detectRecurring(
 /// predicted date, soonest first.
 ///
 /// Qualifies a group when, over the last 12 months and after collapsing
-/// same-day repeats: ≥3 occurrences, every consecutive gap 20–40 days, and
-/// the median gap 25–35 days.
+/// same-day repeats: ≥3 occurrences, not counting one paid early; every
+/// consecutive gap 20–40 days, except one early payment's 16–19 day gap
+/// (the latest one, or one whose next gap makes two cycles of 50–70 days);
+/// at least two regular gaps, with a median of 25–35 days.
 ///
 /// A key in [pinned] (marked as a subscription by the user) qualifies from
 /// one payment in the last 24 months, whatever the gaps, and is due one
@@ -176,10 +179,41 @@ List<RecurringHit> detectRecurringPatterns(
         for (var i = 1; i < days.length; i++)
           days[i].difference(days[i - 1]).inDays,
       ];
-      if (gaps.any((g) => g < 20 || g > 40)) return;
-      interval = _median(gaps.map((g) => g.toDouble()).toList()).round();
+      // One payment made early (a bill paid when it arrives) shortens one
+      // gap and, unless it is the latest, stretches the next: together they
+      // still make two cycles. Only the regular gaps set the interval. A
+      // gap under 16 days (paid more than about 15 days early, further
+      // than a reminder takes) is an extra purchase, not an early payment.
+      final regular = <int>[];
+      var early = 0;
+      var lastEarly = false;
+      for (var i = 0; i < gaps.length; i++) {
+        final g = gaps[i];
+        if (g >= 20 && g <= 40) {
+          regular.add(g);
+        } else if (g >= 16 && g < 20 && i == gaps.length - 1) {
+          early++;
+          lastEarly = true;
+        } else if (g >= 16 &&
+            g < 20 &&
+            g + gaps[i + 1] >= 50 &&
+            g + gaps[i + 1] <= 70) {
+          early++;
+          i++;
+        } else {
+          return;
+        }
+      }
+      if (early > 1 || byDay.length - early < 3 || regular.length < 2) {
+        return;
+      }
+      interval = _median(regular.map((g) => g.toDouble()).toList()).round();
       if (interval < 25 || interval > 35) return;
-      nextDue = days.last.add(Duration(days: interval));
+      // A latest payment made early paid the cycle due one interval after
+      // the payment before it; the next one is due one interval after that.
+      nextDue = lastEarly
+          ? days[days.length - 2].add(Duration(days: interval * 2))
+          : days.last.add(Duration(days: interval));
     }
 
     final ordered = [for (final d in days) byDay[d]!];

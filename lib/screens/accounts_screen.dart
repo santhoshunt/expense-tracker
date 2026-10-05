@@ -1408,13 +1408,23 @@ class _AccountMenu extends StatelessWidget {
                           tooltip: 'Unlink',
                           icon: const Icon(Icons.link_off, size: 18),
                           onPressed: () {
+                            // How it was linked travels with the undo: an
+                            // SMS-made number stays one.
+                            final hand =
+                                (finance.accountById(account.id) ?? account)
+                                    .linkedByHand
+                                    .contains(k);
                             finance.removeAccountKey(account.id, k);
                             // Relinking by hand means re-typing bank + digits;
                             // addAccountKey is the exact inverse, so offer it.
                             showUndoSnackBar(
                               context,
                               'Unlinked ${k.replaceFirst(':', ' ••')}',
-                              () => finance.addAccountKey(account.id, k),
+                              () => finance.addAccountKey(
+                                account.id,
+                                k,
+                                byHand: hand,
+                              ),
                               icon: Icons.link_off,
                               tone: AppToastTone.removal,
                             );

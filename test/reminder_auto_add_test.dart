@@ -9,8 +9,10 @@ import 'package:expense_tracker/models/subscription_cycle.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/services/recurring_detector.dart';
+import 'package:expense_tracker/services/safe_to_spend.dart';
 import 'package:expense_tracker/services/sms_parser.dart';
 import 'package:expense_tracker/services/upcoming_items.dart';
+import 'package:expense_tracker/utils/dates.dart';
 
 /// Add it for me reminders record their own expenses; plain ones are marked
 /// paid by the SMS that pays them.
@@ -199,14 +201,167 @@ void main() {
       expect(again.reminders.single.lastPaidMonth, '2026-09');
     });
 
-    test('three days early counts, five days early does not', () async {
+    test('fifteen days early counts, sixteen days early does not', () async {
       final p = await fresh();
       await p.restoreReminder(plain());
-      await p.addImported([debit(499, DateTime(2026, 9, 5, 10))]);
+      await p.addImported([debit(499, DateTime(2026, 8, 25, 10))]);
       expect(p.reminders.single.lastPaidMonth, isNull);
-      await p.addImported([debit(499, DateTime(2026, 9, 7, 10))]);
+      await p.addImported([debit(499, DateTime(2026, 8, 26, 10))]);
       expect(p.reminders.single.lastPaidMonth, '2026-09');
     });
+
+    test('paid 16 days late, it never pays next month early', () async {
+      final p = await fresh();
+      // Paid through August; September's bill (the 10th) is paid on the
+      // 26th, 14 days before October's.
+      await p.restoreReminder(plain().copyWith(lastPaidMonth: '2026-08'));
+      await p.addImported([debit(499, DateTime(2026, 9, 26, 10))]);
+      expect(p.reminders.single.lastPaidMonth, '2026-08');
+    });
+
+    test(
+      'a reminder made earlier, never marked, checks the bill before',
+      () async {
+        final p = await fresh();
+        await p.restoreReminder(plain().copyWith(createdOn: '2026-08-20'));
+        await p.addImported([debit(499, DateTime(2026, 9, 26, 10))]);
+        expect(p.reminders.single.lastPaidMonth, isNull);
+      },
+    );
+
+    test('a bill paid a few days late beats another paid early', () async {
+      final p = await fresh();
+      // Broadband due the 10th, Phone the 22nd, both paid through September.
+      await p.restoreReminder(plain().copyWith(lastPaidMonth: '2026-09'));
+      await p.restoreReminder(
+        const Reminder(
+          id: 'rem_phone',
+          name: 'Phone',
+          dayOfMonth: 22,
+          categoryId: 'other_expense',
+          expectedAmount: 499,
+          lastPaidMonth: '2026-09',
+        ),
+      );
+      // 7 days after Broadband, 5 before Phone.
+      await p.addImported([debit(499, DateTime(2026, 10, 17, 10))]);
+      final byId = {for (final r in p.reminders) r.id: r.lastPaidMonth};
+      expect(byId['rem_net'], '2026-10');
+      expect(byId['rem_phone'], '2026-09');
+    });
+
+    test('a scan reading newest first still marks both months', () async {
+      final p = await fresh();
+      await p.restoreReminder(plain().copyWith(lastPaidMonth: '2026-08'));
+      // October's bill paid 9 days early, listed before September's.
+      await p.addImported([
+        debit(499, DateTime(2026, 10, 1, 10)),
+        debit(499, DateTime(2026, 9, 10, 10)),
+      ]);
+      expect(p.reminders.single.lastPaidMonth, '2026-10');
+    });
+
+    test('the rescan never lets a paid row pay a second reminder', () async {
+      // Dated against the real clock, like the rescan.
+      final today = DateTime.now();
+      final paid = DateTime(today.year, today.month, today.day - 3, 10);
+      DateTime plus(int days) =>
+          DateTime(paid.year, paid.month, paid.day + days);
+      final p = await fresh();
+      await p.restoreReminder(plain().copyWith(dayOfMonth: plus(1).day));
+      await p.addImported([debit(499, paid)]);
+      expect(p.reminders.single.lastPaidMonth, monthKey(plus(1)));
+      // Another ₹499 bill, due 13 days after that payment.
+      await p.restoreReminder(
+        Reminder(
+          id: 'rem_phone',
+          name: 'Phone',
+          dayOfMonth: plus(13).day,
+          categoryId: 'other_expense',
+          expectedAmount: 499,
+        ),
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('reminders_early_rescan_v1');
+      final again = await fresh();
+      final byId = {for (final r in again.reminders) r.id: r.lastPaidMonth};
+      expect(byId['rem_net'], monthKey(plus(1)));
+      expect(byId['rem_phone'], isNull);
+    });
+
+    test('a bill paid 12 days early leaves the bills due', () async {
+      final p = await fresh();
+      await p.restoreReminder(plain());
+      final now = DateTime(2026, 9, 1, 12);
+      List<String> due() => [
+        for (final b in billsDue(
+          p,
+          patterns: const [],
+          hidden: const {},
+          from: DateTime(2026, 8, 25),
+          to: DateTime(2026, 9, 30),
+          now: now,
+        ))
+          b.label,
+      ];
+      expect(due(), ['Broadband']);
+      await p.addImported([debit(499, DateTime(2026, 8, 29, 10))]);
+      expect(due(), isEmpty);
+    });
+
+    test(
+      'a typed-in payment 10 days early in another category does not',
+      () async {
+        final p = await fresh();
+        await p.restoreReminder(plain());
+        await p.addTransaction(
+          type: TxType.expense,
+          categoryId: 'food',
+          amount: 499,
+          note: 'groceries',
+          date: DateTime(2026, 8, 31, 12),
+        );
+        expect(p.reminders.single.lastPaidMonth, isNull);
+      },
+    );
+
+    test(
+      'the first load after the update marks an early payment once',
+      () async {
+        // An early alert already in the ledger, from a build whose window
+        // missed it. Dated against the real clock: the rescan looks back 31
+        // days from now.
+        final today = DateTime.now();
+        final paid = DateTime(today.year, today.month, today.day - 3, 10);
+        final dueDay = DateTime(paid.year, paid.month, paid.day + 10);
+        final reminder = plain().copyWith(dayOfMonth: dueDay.day);
+        final old = await fresh();
+        await old.restoreReminder(reminder);
+        await old.addTransaction(
+          type: TxType.expense,
+          categoryId: 'food',
+          amount: 499,
+          note: 'typed before the update',
+          date: paid,
+        );
+        expect(old.reminders.single.lastPaidMonth, isNull);
+        // A bulk category change marks nothing: the row now pays the reminder
+        // but sits unmarked, as an older build's narrower window left it.
+        await old.setCategoryForMany({
+          old.transactions.single.id,
+        }, 'other_expense');
+        expect(old.reminders.single.lastPaidMonth, isNull);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('reminders_early_rescan_v1');
+        final p = await fresh();
+        expect(p.reminders.single.lastPaidMonth, monthKey(dueDay));
+        expect(prefs.getBool('reminders_early_rescan_v1'), isTrue);
+        // Once only: a mark cleared afterwards stays cleared on the next load.
+        await p.clearReminderPaid('rem_net');
+        final again = await fresh();
+        expect(again.reminders.single.lastPaidMonth, isNull);
+      },
+    );
 
     test('a different amount does not', () async {
       final p = await fresh();

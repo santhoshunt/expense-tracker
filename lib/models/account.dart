@@ -56,6 +56,11 @@ class Account {
   /// Account-match keys (`"<bankCode>:<last4>"`) that resolve to this account.
   final Set<String> keys;
 
+  /// Keys from [keys] the user typed in (Linked numbers, the add dialog)
+  /// rather than ones an SMS made. An account holding only these is waiting
+  /// for its first alert, not emptied.
+  final Set<String> linkedByHand;
+
   /// Total credit limit, cards only. When set, outstanding is derived as
   /// `creditLimit - availableLimit`; when null the app falls back to the
   /// largest available-limit ever seen.
@@ -119,6 +124,7 @@ class Account {
     required this.name,
     required this.type,
     required this.keys,
+    this.linkedByHand = const {},
     this.creditLimit,
     this.manualBalance,
     this.manualBalanceAt,
@@ -171,6 +177,7 @@ class Account {
     String? name,
     AccountType? type,
     Set<String>? keys,
+    Set<String>? linkedByHand,
     double? creditLimit,
     bool clearCreditLimit = false,
     double? manualBalance,
@@ -199,6 +206,7 @@ class Account {
     name: name ?? this.name,
     type: type ?? this.type,
     keys: keys ?? this.keys,
+    linkedByHand: linkedByHand ?? this.linkedByHand,
     creditLimit: clearCreditLimit ? null : (creditLimit ?? this.creditLimit),
     manualBalance: clearManualBalance
         ? null
@@ -227,6 +235,7 @@ class Account {
     'name': name,
     'type': type.name,
     'keys': keys.toList(),
+    if (linkedByHand.isNotEmpty) 'linkedByHand': linkedByHand.toList(),
     if (creditLimit != null) 'creditLimit': creditLimit,
     if (manualBalance != null) 'manualBalance': manualBalance,
     if (manualBalanceAt != null)
@@ -262,6 +271,10 @@ class Account {
           AccountType.values.asNameMap()[json['type'] as String?] ??
           AccountType.bank,
       keys: {for (final k in (json['keys'] as List? ?? const [])) k as String},
+      linkedByHand: {
+        for (final k in (json['linkedByHand'] as List? ?? const []))
+          k as String,
+      },
       creditLimit: (json['creditLimit'] as num?)?.toDouble(),
       manualBalance: manualBalance,
       manualBalanceAt: manualBalanceAt,
