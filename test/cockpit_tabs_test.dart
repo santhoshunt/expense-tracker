@@ -70,10 +70,10 @@ void main() {
     final hub = <(String, String, String, String)>[
       (
         'Classify',
-        'Rules, import filters, review',
+        'Rules, import rules, review',
         // Only the rule added above: built-ins are not the user's own.
         '1 rule · '
-            '${n(p.importRules.length, 'import filter', 'import filters')}',
+            '${n(p.importRules.length, 'import rule', 'import rules')}',
         'Rules',
       ),
       (
@@ -186,14 +186,14 @@ void main() {
     await tester.tap(find.text('Categories and rules'));
     await pumpThrough(tester);
     await tester.scrollUntilVisible(
-      find.text('Rules, import filters, categories, budgets and reminders'),
+      find.text('Rules, import rules, categories, budgets and reminders'),
       300,
       scrollable: find.byType(Scrollable).first,
     );
     await tester.pump();
     expect(find.text('Open Cockpit'), findsOneWidget);
     expect(
-      find.text('Rules, import filters, categories, budgets and reminders'),
+      find.text('Rules, import rules, categories, budgets and reminders'),
       findsOneWidget,
     );
   });

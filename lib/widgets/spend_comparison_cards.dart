@@ -775,7 +775,6 @@ class _Section extends StatelessWidget {
         child: Padding(padding: const EdgeInsets.all(16), child: child),
       );
     }
-    final scheme = Theme.of(context).colorScheme;
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -794,10 +793,17 @@ class _Section extends StatelessWidget {
                       'See chart',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: scheme.primary, fontSize: 13),
+                      style: TextStyle(
+                        color: accentTextColor(context),
+                        fontSize: 13,
+                      ),
                     ),
                   ),
-                  Icon(Icons.chevron_right, size: 18, color: scheme.primary),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: accentTextColor(context),
+                  ),
                 ],
               ),
             ],

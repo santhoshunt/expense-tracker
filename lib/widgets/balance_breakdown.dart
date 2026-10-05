@@ -70,7 +70,7 @@ Future<void> showBalanceBreakdownSheet(
                       icon: Icons.credit_card,
                       color: Theme.of(ctx).colorScheme.error,
                       label: 'Credit card outstanding',
-                      amount: '-${fmtMoney(finance.cardOutstandingTotal)}',
+                      amount: '−${fmtMoney(finance.cardOutstandingTotal)}',
                     ),
                     // Cards with no total credit limit contribute nothing above,
                     // so say so — otherwise the net figure reads as complete
@@ -81,8 +81,8 @@ Future<void> showBalanceBreakdownSheet(
                         color: AppColors.of(ctx).orange,
                         label:
                             '${finance.cardsMissingLimit} card'
-                            '${finance.cardsMissingLimit == 1 ? '' : 's'} '
-                            'need a credit limit — not counted',
+                            '${finance.cardsMissingLimit == 1 ? ' needs' : 's need'}'
+                            ' a credit limit, not counted',
                         amount: '?',
                       ),
                     const Divider(height: 24),
@@ -118,14 +118,14 @@ Future<void> showBalanceBreakdownSheet(
                       icon: Icons.arrow_upward,
                       color: Theme.of(ctx).colorScheme.error,
                       label: 'Expenses (all time)',
-                      amount: '-${fmtMoney(finance.totalExpense)}',
+                      amount: '−${fmtMoney(finance.totalExpense)}',
                     ),
                     if (finance.totalSavingsTransfers > 0)
                       BreakdownRow(
                         icon: Icons.savings_outlined,
                         color: AppColors.of(ctx).orange,
                         label: 'Moved to savings',
-                        amount: '-${fmtMoney(finance.totalSavingsTransfers)}',
+                        amount: '−${fmtMoney(finance.totalSavingsTransfers)}',
                       ),
                     const Divider(height: 24),
                     BreakdownRow(

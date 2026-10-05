@@ -267,8 +267,10 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: isSelected
+                          // Plain text on the tinted row: the tint marks
+                          // the choice.
                           ? TextStyle(
-                              color: scheme.primary,
+                              color: scheme.onSurface,
                               fontWeight: FontWeight.w600,
                             )
                           : null,
@@ -296,6 +298,9 @@ class AppDropdownField<T> extends StatelessWidget {
   final String label;
   final String? hint;
 
+  /// A line under the field explaining the current choice.
+  final String? helper;
+
   const AppDropdownField({
     super.key,
     required this.items,
@@ -303,6 +308,7 @@ class AppDropdownField<T> extends StatelessWidget {
     required this.onChanged,
     required this.label,
     this.hint,
+    this.helper,
   });
 
   @override
@@ -329,6 +335,7 @@ class AppDropdownField<T> extends StatelessWidget {
       child: InputDecorator(
         decoration: InputDecoration(
           labelText: label,
+          helperText: helper,
           suffixIcon: const Icon(Icons.arrow_drop_down),
         ),
         isEmpty: selectedItem == null,

@@ -133,7 +133,7 @@ Future<void> showBudgetDialog(
                         ),
                       ),
                       const InfoTip(
-                        title: 'Only these / All except',
+                        title: 'Only these or All except',
                         message:
                             'Only these: counts spending in the picked '
                             'categories, including money-out transfers you '

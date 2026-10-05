@@ -63,22 +63,18 @@ class HueColorPicker extends StatelessWidget {
     final columns = kCategoryHueNames.length;
     String name(Color c) => hueColorName(c, none: none, noneLabel: noneLabel);
 
-    Widget swatch(Color c) => SizedBox(
-      width: cell,
-      height: cell,
-      child: Center(
-        child: _Swatch(
-          size: cell - 6,
-          // Always the hue's own name, even when it equals [none].
-          label: hueColorName(c),
-          // When the none choice is itself a palette colour (a theme accent
-          // that is Coral), only the none swatch shows as selected.
-          selected: !isNone && c == value,
-          onTap: () => onChanged(c),
-          decoration: BoxDecoration(color: c, shape: BoxShape.circle),
-          checkColor: onSwatch(c),
-        ),
-      ),
+    // The whole cell answers the tap, not just the circle inside it.
+    Widget swatch(Color c) => _Swatch(
+      size: cell - 6,
+      hit: cell,
+      // Always the hue's own name, even when it equals [none].
+      label: hueColorName(c),
+      // When the none choice is itself a palette colour (a theme accent
+      // that is Coral), only the none swatch shows as selected.
+      selected: !isNone && c == value,
+      onTap: () => onChanged(c),
+      decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+      checkColor: onSwatch(c),
     );
 
     return Column(
@@ -176,6 +172,9 @@ const _rainbow = [
 /// selected a ring plus a check in [checkColor] (or [iconColor]).
 class _Swatch extends StatelessWidget {
   final double size;
+
+  /// The square tap area around the circle; null taps the circle only.
+  final double? hit;
   final String label;
   final bool selected;
   final VoidCallback onTap;
@@ -186,6 +185,7 @@ class _Swatch extends StatelessWidget {
 
   const _Swatch({
     required this.size,
+    this.hit,
     required this.label,
     required this.selected,
     required this.onTap,
@@ -209,22 +209,28 @@ class _Swatch extends StatelessWidget {
         child: InkWell(
           customBorder: const CircleBorder(),
           onTap: onTap,
-          child: Container(
-            width: size,
-            height: size,
-            decoration: decoration.copyWith(
-              border: Border.all(
-                color: selected ? ring : Colors.transparent,
-                width: 2,
+          child: SizedBox(
+            width: hit ?? size,
+            height: hit ?? size,
+            child: Center(
+              child: Container(
+                width: size,
+                height: size,
+                decoration: decoration.copyWith(
+                  border: Border.all(
+                    color: selected ? ring : Colors.transparent,
+                    width: 2,
+                  ),
+                ),
+                child: glyph == null
+                    ? null
+                    : Icon(
+                        glyph,
+                        size: size * 0.5,
+                        color: (selected ? checkColor : null) ?? iconColor,
+                      ),
               ),
             ),
-            child: glyph == null
-                ? null
-                : Icon(
-                    glyph,
-                    size: size * 0.5,
-                    color: (selected ? checkColor : null) ?? iconColor,
-                  ),
           ),
         ),
       ),

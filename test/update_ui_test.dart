@@ -155,6 +155,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Android needs your OK first'), findsOneWidget);
     expect(downloader.downloads, 0);
+    // The sheet scrolls; the Release page link pushed the button down.
+    await tester.ensureVisible(find.text('Open settings'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Open settings'));
     await tester.pump();
     expect(installer.settingsOpened, 1);

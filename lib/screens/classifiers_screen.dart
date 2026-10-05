@@ -48,7 +48,7 @@ const int kCockpitTabDashBreakdown = 10;
 /// (kCockpitTab* ids, in tab order). Six tabs on one bar were too many to
 /// scan, so the hub splits them by what they steer, as Settings does.
 enum CockpitGroup {
-  classify('Classify', 'Rules, import filters, review', Icons.rule, [
+  classify('Classify', 'Rules, import rules, review', Icons.rule, [
     kCockpitTabRules,
     kCockpitTabImport,
     kCockpitTabTransactions,
@@ -184,7 +184,7 @@ class _CockpitHub extends StatelessWidget {
     final counts = {
       CockpitGroup.classify: [
         _count(ownRules, 'rule', 'rules'),
-        _count(finance.importRules.length, 'import filter', 'import filters'),
+        _count(finance.importRules.length, 'import rule', 'import rules'),
       ],
       // What the Categories tab lists: your categories plus the built-ins.
       CockpitGroup.organise: [
@@ -515,8 +515,9 @@ class _RulesTabState extends State<_RulesTab> {
                 'No rules yet.\n\nRules categorise SMS imports automatically, '
                 'e.g. if the message contains "Starbucks" → Food & Dining.\n\n'
                 'A rule with the Spam category drops matching messages '
-                'entirely — they are never imported.',
-            actionLabel: 'Add rule',
+                'entirely. They are never imported.',
+            // Same words as the floating button on this tab.
+            actionLabel: 'New rule',
             onAction: () => _showRuleDialog(context),
           ),
         ),
@@ -652,7 +653,7 @@ class _RulesTabState extends State<_RulesTab> {
                   ),
                 )
               : ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 88),
+                  padding: const EdgeInsets.only(bottom: 120),
                   itemCount: items.length,
                   itemBuilder: (context, i) => items[i],
                 ),
@@ -680,7 +681,6 @@ class _RuleSelectionBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
       child: FrostedPanel(
@@ -699,7 +699,7 @@ class _RuleSelectionBar extends StatelessWidget {
                 '$count',
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
-                  color: scheme.primary,
+                  color: accentTextColor(context),
                 ),
               ),
               const Spacer(),
@@ -784,6 +784,7 @@ class _RuleTile extends StatelessWidget {
           : () => _showRuleDialog(context, existing: rule, sibling: sib),
       onLongPress: onToggleSelect,
       selected: selected,
+      selectedColor: accentTextColor(context),
       // The avatar flips to a check when picked (TransactionTile precedent —
       // clearer than a checkbox column that reflows the whole list). Same
       // motion as the transaction tile: the fill eases over and the glyphs
@@ -849,7 +850,7 @@ class _RuleTile extends StatelessWidget {
             'or ${rule.patterns.length - 1} more condition'
                 '${rule.patterns.length == 2 ? '' : 's'}',
           if (isSpam)
-            'Spam — never imported'
+            'Spam, never imported'
           else if (sibCat != null)
             // Expense side first, whichever rule owns the tile.
             [
@@ -934,7 +935,7 @@ class _ImportTab extends StatelessWidget {
         const EmptyState(
           compact: true,
           icon: Icons.filter_alt_off_outlined,
-          message: 'No ignore rules — every bank alert imports.',
+          message: 'No ignore rules. Every bank alert imports.',
         ),
       ...ignoreRules.map((r) => _ImportRuleTile(rule: r)),
       const _TipHeader(
@@ -956,7 +957,7 @@ class _ImportTab extends StatelessWidget {
         const EmptyState(
           compact: true,
           icon: Icons.report_off_outlined,
-          message: 'No spam signals — nothing gets flagged for review.',
+          message: 'No spam signals. Nothing gets flagged for review.',
         ),
       ...spamRules.map((r) => _ImportRuleTile(rule: r)),
       Padding(
@@ -991,7 +992,7 @@ class _ImportTab extends StatelessWidget {
       ),
     ];
     return ListView.builder(
-      padding: const EdgeInsets.only(bottom: 88),
+      padding: const EdgeInsets.only(bottom: 120),
       itemCount: items.length,
       itemBuilder: (context, i) => items[i],
     );
@@ -1067,7 +1068,7 @@ class _CoreChecksCard extends StatelessWidget {
               ),
               check(
                 Icons.currency_rupee,
-                'The message must state an amount (Rs / INR / ₹).',
+                'The message must state an amount in Rs, INR or ₹.',
               ),
               check(
                 Icons.swap_vert,
@@ -1078,7 +1079,7 @@ class _CoreChecksCard extends StatelessWidget {
                 Icons.credit_card,
                 'Credit-card bill payments import on both sides: the bank '
                 'debit as a "Card bill" expense, the card confirmation as a '
-                '"Card payment" income — they cancel out.',
+                '"Card payment" income. The two cancel out.',
               ),
               const SizedBox(height: 8),
               Text(
@@ -1121,8 +1122,8 @@ class _ImportRuleTile extends StatelessWidget {
       ),
       subtitle: Text(
         isIgnore
-            ? 'Ignored — never imported'
-            : 'Flagged for individual review — still imported',
+            ? 'Ignored, never imported'
+            : 'Flagged for individual review, still imported',
       ),
       trailing: IconButton(
         tooltip: 'Delete rule',
@@ -1416,7 +1417,7 @@ List<PickerItem<String>> _categoryPickerItems(
     const PickerItem.header('Spam'),
     PickerItem(
       value: kSpamCategoryId,
-      label: 'Spam — do not import',
+      label: 'Spam, do not import',
       leading: Icon(
         Icons.block,
         color: Theme.of(context).colorScheme.error,
@@ -1482,11 +1483,12 @@ Future<void> _showTestMessageDialog(BuildContext context) async {
                       return Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(12),
+                        // Pass or fail lives on the outline and icon; the
+                        // text stays plain so it never sits on a tint.
                         decoration: BoxDecoration(
-                          color: tint.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: tint.withValues(alpha: 0.45),
+                            color: tint.withValues(alpha: 0.6),
                           ),
                         ),
                         child: Row(
@@ -1503,20 +1505,8 @@ Future<void> _showTestMessageDialog(BuildContext context) async {
                             Expanded(
                               child: Text(
                                 verdict!,
-                                // Tinted like the icon so the pass/fail meaning
-                                // isn't carried by an 8%-alpha background alone
-                                // — but through accentTextColor for the success
-                                // branch: the raw accent measured 2.6:1 on its
-                                // own light-mode tint while the error branch
-                                // passed, leaving the reassuring verdict the
-                                // unreadable one.
                                 style: Theme.of(ctx).textTheme.bodySmall
-                                    ?.copyWith(
-                                      color: rejected
-                                          ? scheme.error
-                                          : accentTextColor(ctx),
-                                      fontWeight: FontWeight.w500,
-                                    ),
+                                    ?.copyWith(fontWeight: FontWeight.w500),
                               ),
                             ),
                           ],
@@ -1565,8 +1555,8 @@ Future<void> _showTestMessageDialog(BuildContext context) async {
                           if (!r.matches(bodyCtrl.text)) continue;
                           if (r.isSpamRule) {
                             v +=
-                                '\nDropped by your spam rule "${r.pattern}" — '
-                                'never imported.';
+                                '\nDropped by your spam rule "${r.pattern}". '
+                                'Never imported.';
                             break;
                           }
                           final target = categoryById(r.categoryId);
@@ -1574,14 +1564,15 @@ Future<void> _showTestMessageDialog(BuildContext context) async {
                             v +=
                                 '\nRule "${r.pattern}" matches but targets '
                                 '${target.type == TxType.income ? 'income' : 'expense'}'
-                                ' — skipped for this '
+                                ', so this '
                                 '${parsed.type == TxType.income ? 'income' : 'expense'}'
-                                ' message. Add a rule for the other direction '
+                                ' message skips it. Add a rule for the other '
+                                'direction '
                                 'to classify both ways.';
                             continue;
                           }
                           v +=
-                              '\nClassifier rule "${r.pattern}" applies → '
+                              '\nRule "${r.pattern}" applies → '
                               '${target.label}.';
                           break;
                         }
@@ -1637,17 +1628,18 @@ Future<void> _showImportRuleDialog(
                   ),
                 ),
                 const SizedBox(height: 16),
+                // Short names fit the dialog's field; the helper explains.
                 AppDropdownField<ImportRuleKind>(
                   label: 'Then',
                   value: kind,
+                  helper: kind == ImportRuleKind.ignore
+                      ? 'Never imported.'
+                      : 'Imported, but held for you to review one by one.',
                   items: const [
-                    PickerItem(
-                      value: ImportRuleKind.ignore,
-                      label: 'Ignore — never import',
-                    ),
+                    PickerItem(value: ImportRuleKind.ignore, label: 'Ignore'),
                     PickerItem(
                       value: ImportRuleKind.spamSignal,
-                      label: 'Flag as spam — review individually',
+                      label: 'Flag as spam',
                     ),
                   ],
                   onChanged: (v) {
@@ -1750,7 +1742,7 @@ Future<void> _showRuleDialog(
         builder: (ctx, setState) => AlertDialog(
           title: Text(
             existing == null
-                ? 'New classifier rule'
+                ? 'New rule'
                 : twin == null
                 ? 'Edit rule'
                 : 'Edit rule pair',
@@ -1910,8 +1902,8 @@ Future<void> _showRuleDialog(
                               // '|' is the stored OR separator — typed here it
                               // would silently split into extra conditions.
                               errorText: ctrls[i].text.contains('|')
-                                  ? 'Remove "|" — use "Add another condition" '
-                                        'for OR'
+                                  ? 'Remove "|". Use "Add another condition" '
+                                        'for OR.'
                                   : null,
                               suffixIcon: i == 0
                                   ? const InfoTip(

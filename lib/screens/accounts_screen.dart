@@ -18,6 +18,7 @@ import '../widgets/dispose_scope.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
+import '../widgets/link_pill.dart';
 import '../widgets/motion.dart';
 import '../widgets/section_header.dart';
 import '../widgets/undo_snackbar.dart';
@@ -119,16 +120,16 @@ class _AccountsScreenState extends State<AccountsScreen> {
                             style: TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.w800,
-                              color: scheme.primary,
+                              color: accentTextColor(context),
                             ),
                           ),
                           InfoLabel(
+                            // The chevron says the card opens the breakdown.
                             label: Text(
                               netAccounts == 1
                                   ? 'Net across 1 bank or card account'
-                                        ' · tap for breakdown'
                                   : 'Net across $netAccounts bank and card '
-                                        'accounts · tap for breakdown',
+                                        'accounts',
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(color: scheme.onSurfaceVariant),
@@ -365,7 +366,13 @@ class _AccountCard extends StatelessWidget {
     final String figure;
     if (isCard) {
       final owed = finance.accountOutstanding(account);
-      figure = owed == null ? 'Limit needed' : '${fmtMoney(owed)} due';
+      // No figure: name the same blocker the open card explains.
+      figure = owed != null
+          ? fmtMoney(owed)
+          : finance.accountProvenance(account).blocker ==
+                OutstandingBlocker.noAlert
+          ? 'No balance yet'
+          : 'Limit needed';
     } else {
       figure = fmtMoney(finance.accountBalance(account));
     }
@@ -404,10 +411,10 @@ class _AccountCard extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      // The name gets the larger share of the row: a long
-                      // card name beside a short figure.
+                      // Name over figure, each with the full width: side by
+                      // side, a long name and a shrink-to-fit figure left
+                      // every card's amount a different size.
                       Expanded(
-                        flex: 3,
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -426,41 +433,37 @@ class _AccountCard extends StatelessWidget {
                                 '${account.typeLabel} · $txCount '
                                 'txn${txCount == 1 ? '' : 's'}',
                                 style: muted,
+                              )
+                            else
+                              // Shrinks only past the full width (a huge
+                              // font): cut off, a balance hides its digits.
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  figure,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
                               ),
                           ],
                         ),
                       ),
-                      if (!expanded) ...[
-                        // The hint lives in the open card; closed, a mark
-                        // says there is one.
-                        if (orphaned)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4),
-                            child: Tooltip(
-                              message: 'No transactions use this account',
-                              child: Icon(
-                                Icons.info_outline,
-                                size: 16,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ),
-                        // Shares the row with the name and shrinks to fit:
-                        // a fixed width overflowed at large text.
-                        Flexible(
-                          flex: 2,
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            alignment: Alignment.centerRight,
-                            child: Text(
-                              figure,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
+                      // The hint lives in the open card; closed, a mark
+                      // says there is one.
+                      if (!expanded && orphaned)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Tooltip(
+                            message: 'No transactions use this account',
+                            child: Icon(
+                              Icons.info_outline,
+                              size: 16,
+                              color: scheme.onSurfaceVariant,
                             ),
                           ),
                         ),
-                      ],
                       Icon(
                         expanded ? Icons.expand_less : Icons.expand_more,
                         // No label: the card's Semantics(expanded:) says it.
@@ -641,7 +644,7 @@ class _BankBalance extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
-                    color: scheme.primary,
+                    color: accentTextColor(context),
                   ),
                 ),
               ),
@@ -810,7 +813,6 @@ Future<void> showSetBalanceDialog(BuildContext context, Account account) async {
                               'to clear it.')
                   : 'A newer bank alert takes over automatically. '
                         'Leave blank to go back to SMS figures only.',
-              border: const OutlineInputBorder(),
               errorText: error,
             ),
           ),
@@ -876,10 +878,9 @@ Future<void> showCreditLimitDialog(
               labelText: 'Total credit limit',
               prefixText: '₹ ',
               helperText:
-                  'Alerts state only the available limit — the total '
+                  'Alerts state only the available limit. The total '
                   'is needed to work out what is owed. Leave blank to clear.',
               helperMaxLines: 4,
-              border: const OutlineInputBorder(),
               errorText: error,
             ),
           ),
@@ -906,7 +907,7 @@ Future<void> showCreditLimitDialog(
                 if (v <= 0) {
                   setState(
                     () => error =
-                        'Enter an amount above 0 — leave empty to clear',
+                        'Enter an amount above 0, or leave blank to clear',
                   );
                   return;
                 }
@@ -952,7 +953,6 @@ Future<void> showSavingsGoalDialog(
                   'The account card shows progress and a projected date '
                   'from your recent deposits. Leave blank to clear.',
               helperMaxLines: 4,
-              border: const OutlineInputBorder(),
               errorText: error,
             ),
           ),
@@ -977,7 +977,7 @@ Future<void> showSavingsGoalDialog(
                 if (v <= 0) {
                   setState(
                     () => error =
-                        'Enter an amount above 0 — leave empty to clear',
+                        'Enter an amount above 0, or leave blank to clear',
                   );
                   return;
                 }
@@ -1024,7 +1024,6 @@ Future<void> showCardCycleDialog(BuildContext context, Account account) async {
                       'Day of month the statement is generated. '
                       'Leave blank if unknown.',
                   helperMaxLines: 3,
-                  border: const OutlineInputBorder(),
                   errorText: stmtError,
                 ),
               ),
@@ -1035,11 +1034,10 @@ Future<void> showCardCycleDialog(BuildContext context, Account account) async {
                 decoration: InputDecoration(
                   labelText: 'Payment due day',
                   helperText:
-                      'Day of month the bill is due — drives the '
+                      'Day of month the bill is due. It sets the '
                       '"bill due" reminder. Shorter months use their last '
                       'day. Leave blank to clear.',
                   helperMaxLines: 4,
-                  border: const OutlineInputBorder(),
                   errorText: dueError,
                 ),
               ),
@@ -1124,7 +1122,7 @@ class _CardFigures extends StatelessWidget {
               child: FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Text(
-                  outstanding == null ? '—' : fmtMoney(outstanding),
+                  outstanding == null ? 'Unknown' : fmtMoney(outstanding),
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -1148,25 +1146,18 @@ class _CardFigures extends StatelessWidget {
                       'limit is needed.',
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
+          const SizedBox(height: 8),
+          // The app's link pill: the one control that unblocks
+          // "Outstanding Unknown".
           Align(
             alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () => p.blocker == OutstandingBlocker.noAlert
+            child: LinkPill(
+              onTap: () => p.blocker == OutstandingBlocker.noAlert
                   ? showSetBalanceDialog(context, account)
                   : showCreditLimitDialog(context, account),
-              icon: const Icon(Icons.arrow_forward, size: 16),
-              label: Text(
-                p.blocker == OutstandingBlocker.noAlert
-                    ? 'Set outstanding…'
-                    : "Set credit limit to see what's owed",
-              ),
-              // Keep the small text, not the small target: Size.zero +
-              // shrinkWrap left ~24dp of tap height on the one control that
-              // unblocks "Outstanding —".
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                textStyle: const TextStyle(fontSize: 12),
-              ),
+              label: p.blocker == OutstandingBlocker.noAlert
+                  ? 'Set outstanding…'
+                  : 'Set credit limit…',
             ),
           ),
         ] else ...[
@@ -1342,7 +1333,7 @@ class _AccountMenu extends StatelessWidget {
               if (account.isCard)
                 const PopupMenuItem(
                   value: 'limit',
-                  child: Text('Set credit limit'),
+                  child: Text('Set credit limit…'),
                 ),
               if (account.isCard)
                 const PopupMenuItem(
@@ -1478,7 +1469,6 @@ class _AccountMenu extends StatelessWidget {
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
                 labelText: account.isWallet ? 'Login label' : 'Name',
-                border: const OutlineInputBorder(),
               ),
             ),
             actions: [
@@ -1635,7 +1625,6 @@ class _AccountMenu extends StatelessWidget {
                       labelText: 'Kind',
                       hintText: 'e.g. RD, Stocks, Gold',
                       helperText: 'Leave blank for plain "Savings"',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -1810,7 +1799,7 @@ Future<String?> showAccountKeyDialog(BuildContext context) async {
       disposables: [digitsCtrl],
       child: StatefulBuilder(
         builder: (ctx, setState) => AlertDialog(
-          title: const Text('Account / card number'),
+          title: const Text('Account or card number'),
           // Scrollable: keyboard + dropdown clip the fixed column on small
           // screens and in landscape. Top padding keeps the first field's
           // floating label from clipping.
@@ -1841,7 +1830,8 @@ Future<String?> showAccountKeyDialog(BuildContext context) async {
                   onChanged: (_) => setState(() {}),
                   decoration: const InputDecoration(
                     labelText: 'Last digits',
-                    helperText: 'The last 3–4 digits shown in the bank\'s SMS',
+                    helperText:
+                        'The last 3 or 4 digits shown in the bank\'s SMS',
                     helperMaxLines: 2,
                     counterText: '',
                   ),
@@ -1970,7 +1960,6 @@ Future<void> showWalletDetailsDialog(
                   decoration: const InputDecoration(
                     labelText: 'Service',
                     hintText: 'e.g. Amazon Pay, Zomato',
-                    border: OutlineInputBorder(),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -1997,7 +1986,6 @@ Future<void> showWalletDetailsDialog(
                       prefixText: '₹ ',
                       hintText: 'e.g. 0.25',
                       helperText: 'Past transactions keep their ₹ amounts.',
-                      border: OutlineInputBorder(),
                     ),
                   ),
                 ],
@@ -2123,7 +2111,6 @@ Future<void> showAddAccountDialog(
                       decoration: const InputDecoration(
                         labelText: 'Service',
                         hintText: 'e.g. Amazon Pay, Zomato',
-                        border: OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -2136,7 +2123,6 @@ Future<void> showAddAccountDialog(
                       labelText: wallet
                           ? 'Login label (e.g. me, mom)'
                           : 'Name (e.g. HDFC Salary)',
-                      border: const OutlineInputBorder(),
                     ),
                   ),
                   if (wallet) ...[
@@ -2163,7 +2149,6 @@ Future<void> showAddAccountDialog(
                           labelText: 'Value per point',
                           prefixText: '₹ ',
                           hintText: 'e.g. 0.25',
-                          border: OutlineInputBorder(),
                         ),
                       ),
                     ],
@@ -2186,7 +2171,6 @@ Future<void> showAddAccountDialog(
                         errorText: balanceText.isNotEmpty && balance == null
                             ? 'Enter a number, e.g. 840'
                             : null,
-                        border: const OutlineInputBorder(),
                       ),
                     ),
                   ],
@@ -2197,7 +2181,6 @@ Future<void> showAddAccountDialog(
                       decoration: const InputDecoration(
                         labelText: 'Kind',
                         hintText: 'e.g. RD, Stocks, Gold, Mutual fund',
-                        border: OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 10),
@@ -2207,8 +2190,9 @@ Future<void> showAddAccountDialog(
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Record deposits/purchases as "To savings" transactions from '
-                      'your bank account; keep the current value with '
+                      'Record deposits or purchases as "To savings" '
+                      'transactions from your bank account. Keep the current '
+                      'value with '
                       '"Set balance…" in this account\'s ⋮ menu.',
                       style: Theme.of(ctx).textTheme.bodySmall,
                     ),
@@ -2284,7 +2268,7 @@ Future<void> showAddAccountDialog(
                               showAppToastOn(
                                 messenger,
                                 'That number is already linked to another '
-                                'account — account created without it.',
+                                'account. The account was created without it.',
                                 tone: AppToastTone.error,
                               );
                             }

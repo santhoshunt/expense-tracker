@@ -238,7 +238,7 @@ void main() {
     await pumpThrough(tester);
     await expectTip(
       tester,
-      'Only these / All except',
+      'Only these or All except',
       'Only these: counts spending',
     );
   });

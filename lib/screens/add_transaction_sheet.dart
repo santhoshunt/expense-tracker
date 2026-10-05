@@ -671,23 +671,32 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         ? 'other leg missing'
         : '${partner.type == TxType.income ? '+' : '−'}'
               '${fmtMoney(partner.amount)} · ${fmtDateCompact(partner.date)}';
+    // Outlined, not tinted; two lines, so the other leg's date and time
+    // are never cut off.
+    final small = Theme.of(context).textTheme.bodySmall;
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
       decoration: BoxDecoration(
-        color: scheme.secondaryContainer.withValues(alpha: 0.4),
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
       ),
       child: Row(
         children: [
           Icon(Icons.link, size: 18, color: scheme.onSurfaceVariant),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              'Paired transfer · $summary',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.bodySmall,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Paired transfer', style: small),
+                Text(
+                  summary,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: small?.copyWith(color: scheme.onSurfaceVariant),
+                ),
+              ],
             ),
           ),
           TextButton(
@@ -1069,7 +1078,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     contentPadding: EdgeInsets.zero,
                     title: const Text('Group split payment'),
                     subtitle: Text(
-                      'You paid the full bill for the group — only your own '
+                      'You paid the full bill for the group. Only your own '
                       'share counts as spending.',
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
@@ -1177,7 +1186,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   decoration: const InputDecoration(
                     labelText: 'Sender (optional)',
                     helperText:
-                        'Who the money moved to/from — filled automatically for SMS imports',
+                        'Who the money moved to or from. SMS imports fill this in.',
                   ),
                   textInputAction: TextInputAction.done,
                   onFieldSubmitted: (_) => _save(),

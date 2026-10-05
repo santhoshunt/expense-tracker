@@ -88,7 +88,7 @@ void main() {
       expect(find.text(fmtMoney(600)), findsOneWidget);
       expect(find.text('60% of spending'), findsOneWidget);
 
-      await tester.tap(find.text('See transactions →'));
+      await tester.tap(find.text('See transactions'));
       await tester.pumpAndSettle();
       expect(tapped, 'food');
       expect(find.text('60% of spending'), findsNothing);

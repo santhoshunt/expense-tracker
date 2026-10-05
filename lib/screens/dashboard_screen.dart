@@ -25,6 +25,7 @@ import '../services/safe_to_spend.dart';
 import '../services/subscriptions.dart';
 import '../services/upcoming_items.dart';
 import '../utils/app_theme.dart';
+import '../utils/contrast.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../widgets/animated_fold.dart';
@@ -635,6 +636,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
               title: Text(_yearMode ? '${m.year}' : fmtMonth(m)),
               selected: isCurrent(m),
+              selectedColor: accentTextColor(ctx),
               onTap: () => Navigator.pop(ctx, m),
             ),
         ],
@@ -1244,7 +1246,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       String? against(SpendCompare? c, String what) {
         // Nothing either side is the card's "Nothing recorded", not a match.
         if (c == null || c.state != CompareState.ok || c.empty) return null;
-        if (c.negligible) return 'Same as $what';
+        if (c.negligible) return 'About the same as $what';
         final p = c.deltaPct;
         if (p == null) return null;
         final n = (p.abs() * 100).round();
@@ -1497,8 +1499,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             message:
                 "The percentage is this category's share of the "
                 "${_yearMode ? "year's" : "month's"} spending. Long-press a "
-                'row to set or edit a budget for it; "of ₹X" shows that '
-                'budget.',
+                'row to set or edit a budget for it. "₹X / ₹Y" is the '
+                'spending against that budget.',
             link: const InfoLink(
               prompt: 'Transactions not classified right?',
               label: 'Set up transaction rules',
@@ -1762,7 +1764,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Flexible(
+                        // A cap, as on the Owed card: a loose flex child
+                        // shrank the total at half the row.
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 180),
                           child: FittedBox(
                             fit: BoxFit.scaleDown,
                             child: Text(
@@ -2050,7 +2055,10 @@ class _OwedCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Flexible(
+                // A cap, not Flexible: a loose flex child capped the total
+                // at half the row and left a gap before the chevron.
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 180),
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Text(
@@ -2499,8 +2507,8 @@ class _UpcomingCard extends StatelessWidget {
                   leading: const Icon(Icons.check_circle_outline),
                   title: const Text('Mark paid for this cycle'),
                   subtitle: const Text(
-                    'The amount keeps showing what has built up since — '
-                    'that belongs to the next bill.',
+                    'The amount keeps showing what has built up since. '
+                    'That belongs to the next bill.',
                   ),
                   onTap: () {
                     Navigator.pop(ctx);
@@ -2519,7 +2527,7 @@ class _UpcomingCard extends StatelessWidget {
                 leading: const Icon(Icons.payments_outlined),
                 title: const Text('Record a payment…'),
                 subtitle: const Text(
-                  'For a payment the app never saw — the amount drops by '
+                  'Use this for a payment the app never saw. The amount drops by '
                   'what you paid.',
                 ),
                 onTap: () {
@@ -2576,10 +2584,9 @@ class _UpcomingCard extends StatelessWidget {
                     labelText: 'Amount paid',
                     prefixText: '₹ ',
                     helperText:
-                        'The bill amount you paid — this cycle is marked '
+                        'The bill amount you paid. This cycle is marked '
                         'paid and the outstanding drops by it.',
                     helperMaxLines: 4,
-                    border: const OutlineInputBorder(),
                     errorText: error,
                   ),
                 ),
@@ -2767,7 +2774,7 @@ class _BalanceCard extends StatelessWidget {
               MorphingAmount(
                 value: _useAccounts ? finance.netWorth : finance.balance,
                 style: TextStyle(
-                  color: scheme.primary,
+                  color: accentTextColor(context),
                   fontSize: 34,
                   fontWeight: FontWeight.w800,
                 ),
@@ -3560,8 +3567,8 @@ class _CategoryRow extends StatelessWidget {
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
 
-  /// Cap of the single-category budget on this row, if any — shown as an
-  /// "of ₹X" suffix rather than a second bar in an already dense list.
+  /// Cap of the single-category budget on this row, if any, shown as a
+  /// "₹X / ₹Y" figure rather than a second bar in an already dense list.
   final double? budgetLimit;
 
   const _CategoryRow({
@@ -3615,14 +3622,16 @@ class _CategoryRow extends StatelessWidget {
                       // Width-capped + scale-down, not Flexible: a loose
                       // flex child leaves a trailing gap and the amount
                       // drifts off the right edge (transaction-tile pattern).
+                      // 180 fits "₹X / ₹Y" at full size; only a huge font
+                      // still shrinks it.
                       ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 120),
+                        constraints: const BoxConstraints(maxWidth: 180),
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
                             budgetLimit == null
                                 ? fmtMoney(amount)
-                                : '${fmtMoney(amount)} of '
+                                : '${fmtMoney(amount)} / '
                                       '${fmtMoneyCompact(budgetLimit!)}',
                             style: TextStyle(
                               fontWeight: FontWeight.w600,

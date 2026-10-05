@@ -492,7 +492,7 @@ void main() {
     expect(count, findsOneWidget);
   });
 
-  testWidgets('review cards collapse; Reject all discards with Undo', (
+  testWidgets('review cards collapse; Discard all discards with Undo', (
     tester,
   ) async {
     Tx pendingTx(String id, double amount, {bool spam = false}) => Tx(
@@ -549,11 +549,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.getSize(pendingFold).height, greaterThan(50));
 
-    // Reject all: dialog → queue emptied (spam untouched) → Undo restores.
-    await tester.tap(find.text('Reject all'));
+    // Discard all: dialog → queue emptied (spam untouched) → Undo restores.
+    await tester.tap(find.text('Discard all'));
     await tester.pumpAndSettle();
-    expect(find.text('Reject all 2 imports?'), findsOneWidget);
-    await tester.tap(find.text('Reject all').last);
+    expect(find.text('Discard all 2 imports?'), findsOneWidget);
+    await tester.tap(find.text('Discard all').last);
     await tester.pumpAndSettle();
 
     expect(p.pendingTransactions.where((t) => !t.suspectedSpam), isEmpty);
@@ -809,11 +809,13 @@ void main() {
         .first;
     // The single category owns 100% of the month — that share label exists
     // only on the row, so scrolling to it mounts the row.
-    await tester.scrollUntilVisible(
-      find.text('100%'),
-      300,
-      scrollable: verticalScrollable(),
-    );
+    // By hand, not scrollUntilVisible: the By group row below can mount in
+    // the same scroll step, and that helper needs exactly one match.
+    for (var i = 0; i < 20 && find.text('100%').evaluate().isEmpty; i++) {
+      await tester.drag(verticalScrollable(), const Offset(0, -300));
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(find.text('100%').first);
     await tester.pumpAndSettle();
     await tester.longPress(row);
     await tester.pumpAndSettle();
@@ -835,7 +837,7 @@ void main() {
     expect(b.categoryIds, {'food'});
     expect(b.limit, 5000);
     // The row now shows the cap beside the spend.
-    expect(find.textContaining(' of ₹'), findsOneWidget);
+    expect(find.textContaining(' / ₹'), findsOneWidget);
 
     // A second long-press edits that budget instead of creating another.
     await tester.longPress(row);

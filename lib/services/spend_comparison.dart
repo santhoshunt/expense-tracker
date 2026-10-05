@@ -308,11 +308,11 @@ List<double>? usualCumulativeByDay(FinanceProvider finance, DateTime month) {
   ];
 }
 
-/// "₹3,100 (21%) more", "₹900 less", "the same" — the magnitude without
+/// "₹3,100 (21%) more", "₹900 less", "About the same": the magnitude without
 /// naming what it is measured against, so both cards share one phrasing.
 String deltaPhrase(SpendCompare c) {
   final d = c.delta;
-  if (c.negligible) return 'the same';
+  if (c.negligible) return 'About the same';
   final pct = c.deltaPct;
   final suffix = pct == null ? '' : ' (${(pct.abs() * 100).round()}%)';
   return '${fmtMoney(d.abs())}$suffix ${d > 0 ? 'more' : 'less'}';

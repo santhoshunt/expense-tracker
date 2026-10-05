@@ -245,7 +245,7 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Set outstanding…'), findsOneWidget);
-      expect(find.text("Set credit limit to see what's owed"), findsNothing);
+      expect(find.text('Set credit limit…'), findsNothing);
 
       await tester.tap(find.text('Set outstanding…'));
       await tester.pump();

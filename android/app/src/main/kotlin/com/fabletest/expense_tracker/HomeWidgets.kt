@@ -188,7 +188,7 @@ object HomeWidgets {
         val sub = when {
             cap > 0 -> "${(spent / cap * 100).toInt()}% of ${pace.optString("capLabel")} cap"
             usualToday == null -> "Spent this month"
-            abs(spent - usualToday) < 1 -> "Same as usual by today"
+            abs(spent - usualToday) < 1 -> "About the same as usual by today"
             spent < usualToday -> "${rupees(usualToday - spent)} under usual by today"
             else -> "${rupees(spent - usualToday)} over usual by today"
         }

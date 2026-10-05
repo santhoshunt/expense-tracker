@@ -9,6 +9,7 @@ import '../providers/settings_provider.dart';
 import '../services/update_downloader.dart';
 import '../services/update_installer.dart';
 import '../services/update_service.dart';
+import 'link_pill.dart';
 import 'undo_snackbar.dart';
 
 /// The app's own package, named in the sheet's list of checks.
@@ -231,6 +232,16 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
             '(release-assets.githubusercontent.com)',
             style: muted,
           ),
+          const SizedBox(height: 8),
+          // The page, not the APK: a browser download skips the checks below.
+          Align(
+            alignment: Alignment.centerLeft,
+            child: LinkPill(
+              label: 'Release page',
+              external: true,
+              onTap: () => openWebLink(context, _picked.pageUrl),
+            ),
+          ),
           const SizedBox(height: 12),
           Text(
             'Before installing, the app checks',
@@ -292,7 +303,7 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
         if (open)
           Padding(
             padding: const EdgeInsets.fromLTRB(48, 0, 8, 8),
-            child: Text(o.notes, style: muted),
+            child: LinkifiedText(o.notes, style: muted),
           ),
       ],
     );

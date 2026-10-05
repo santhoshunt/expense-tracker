@@ -297,12 +297,15 @@ class SpendingHeatmap extends StatelessWidget {
                   // split bill — say so on the row, or a ₹125 header over a
                   // single −₹500 row doesn't add up (same annotation as the
                   // main transaction tile).
-                  subtitle: Text(
-                    t.isSplit
-                        ? '${t.category.label} · your share '
-                              '${fmtMoney(t.myShare!)}'
-                        : t.category.label,
-                  ),
+                  // Left out when it would repeat the title (no note).
+                  subtitle: t.isSplit
+                      ? Text(
+                          '${t.category.label} · your share '
+                          '${fmtMoney(t.myShare!)}',
+                        )
+                      : t.note.isEmpty
+                      ? null
+                      : Text(t.category.label),
                   trailing: Text(
                     '−${fmtMoney(t.amount)}',
                     style: const TextStyle(fontWeight: FontWeight.w600),

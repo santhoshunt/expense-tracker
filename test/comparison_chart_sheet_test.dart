@@ -131,7 +131,9 @@ void main() {
         size: const Size(400, 1400),
       );
       expect(find.text(fmtMoney(52340)), findsWidgets);
-      expect(find.text('${fmtMoney(12062)} due'), findsOneWidget);
+      // Hit-testable: the folded details hold the same figure.
+      expect(find.text(fmtMoney(12062)).hitTestable(), findsOneWidget);
+      expect(find.text('${fmtMoney(12062)} due'), findsNothing);
       expect(
         find.widgetWithText(TextButton, 'View transactions').hitTestable(),
         findsNothing,

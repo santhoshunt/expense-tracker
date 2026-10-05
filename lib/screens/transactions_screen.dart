@@ -971,7 +971,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         children: [
                           const EmptyState(
                             icon: Icons.search_off,
-                            message: 'Nothing matches your search/filters.',
+                            message: 'Nothing matches your search or filters.',
                           ),
                           TextButton.icon(
                             icon: const Icon(Icons.filter_alt_off, size: 18),
@@ -1190,7 +1190,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     'Mixed selection: the category applies only to rows of '
-                    'its own type (income/expense).',
+                    'its own type, income or expense.',
                     style: Theme.of(ctx).textTheme.bodySmall,
                   ),
                 ),
@@ -2889,8 +2889,9 @@ class _JumpControls extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // The list runs newest first, so up is the newer month.
           IconButton(
-            tooltip: 'Previous month',
+            tooltip: 'Newer month',
             visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.keyboard_double_arrow_up, size: 20),
             onPressed: onUp,
@@ -2902,7 +2903,7 @@ class _JumpControls extends StatelessWidget {
             onPressed: () => _showMonthPicker(context),
           ),
           IconButton(
-            tooltip: 'Next month',
+            tooltip: 'Older month',
             visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.keyboard_double_arrow_down, size: 20),
             onPressed: onDown,
@@ -2961,13 +2962,13 @@ class _PendingReviewCard extends StatelessWidget {
     if (ok == true) await finance.confirmAllPending();
   }
 
-  Future<void> _rejectAll(BuildContext context) async {
+  Future<void> _discardAll(BuildContext context) async {
     final finance = context.read<FinanceProvider>();
     final count = pending.length;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Reject all $count import${count == 1 ? '' : 's'}?'),
+        title: Text('Discard all $count import${count == 1 ? '' : 's'}?'),
         content: const Text(
           'They leave the review queue without joining the ledger. '
           'Suspected spam stays in its own queue. Undo restores them.',
@@ -2983,7 +2984,7 @@ class _PendingReviewCard extends StatelessWidget {
               foregroundColor: Theme.of(ctx).colorScheme.onError,
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Reject all'),
+            child: const Text('Discard all'),
           ),
         ],
       ),
@@ -3006,9 +3007,9 @@ class _PendingReviewCard extends StatelessWidget {
     final collapsed = context.watch<SettingsProvider>().isSectionCollapsed(
       'pending_review',
     );
+    // The plain card fill: tinted, every line on it was text on a colour.
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      color: scheme.secondaryContainer.withValues(alpha: 0.4),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3080,13 +3081,15 @@ class _PendingReviewCard extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
+                      // Plain text: the dialog's red button carries the
+                      // warning.
                       TextButton(
                         style: TextButton.styleFrom(
-                          foregroundColor: scheme.error,
+                          foregroundColor: scheme.onSurface,
                           visualDensity: VisualDensity.compact,
                         ),
-                        onPressed: () => _rejectAll(context),
-                        child: const Text('Reject all'),
+                        onPressed: () => _discardAll(context),
+                        child: const Text('Discard all'),
                       ),
                       TextButton(
                         style: TextButton.styleFrom(
@@ -3219,9 +3222,13 @@ class _SuspectedSpamCard extends StatelessWidget {
     final collapsed = context.watch<SettingsProvider>().isSectionCollapsed(
       'spam_review',
     );
+    // The warning lives on the outline and icon, not a pink fill under text.
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      color: scheme.errorContainer.withValues(alpha: 0.35),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.card),
+        side: BorderSide(color: scheme.error.withValues(alpha: 0.6)),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3244,7 +3251,8 @@ class _SuspectedSpamCard extends StatelessWidget {
                       alignment: Alignment.centerLeft,
                       child: InfoLabel(
                         label: Text(
-                          'Suspected spam · ${suspects.length} — review one by one',
+                          'Suspected spam · ${suspects.length}, review one by '
+                          'one',
                           style: Theme.of(context).textTheme.titleSmall,
                         ),
                         tip: const InfoTip(
@@ -3321,7 +3329,7 @@ class _PendingRow extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
       ),
       subtitle: Text(
-        '${isIncome ? '+' : '-'}${fmtMoney(tx.amount)} · '
+        '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)} · '
         '${fmtDateMaybeTime(tx.date)}\n${tx.smsText}',
         maxLines: 2,
         overflow: TextOverflow.ellipsis,

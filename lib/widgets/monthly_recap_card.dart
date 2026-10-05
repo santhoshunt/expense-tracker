@@ -61,7 +61,7 @@ class MonthlyRecapCard extends StatelessWidget {
     final compare = recap.vsPrevious;
     final showDelta = compare.state == CompareState.ok;
     final deltaText = compare.negligible
-        ? 'Same as $prevShort'
+        ? 'About the same as $prevShort'
         : '${deltaPhrase(compare)} than $prevShort';
     final merchant = recap.topMerchant;
 
@@ -116,7 +116,9 @@ class MonthlyRecapCard extends StatelessWidget {
               _Line(
                 label: 'Top',
                 onTap: null,
+                linkRow: onViewCategory != null,
                 child: Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     for (final (i, e) in recap.topCategories.indexed) ...[
                       if (i > 0) Text(' · ', style: muted),
@@ -413,10 +415,25 @@ class _BudgetLine extends StatelessWidget {
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.control),
       onTap: onTap,
-      child: body,
+      child: _TapHeight(child: body),
     );
   }
 }
+
+/// At least [_kTapHeight] tall, content centred: a bare line of small text
+/// was a 20 to 24dp target.
+class _TapHeight extends StatelessWidget {
+  final Widget child;
+  const _TapHeight({required this.child});
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(minHeight: _kTapHeight),
+    child: Align(alignment: Alignment.centerLeft, widthFactor: 1, child: child),
+  );
+}
+
+const _kTapHeight = 40.0;
 
 class _Stat extends StatelessWidget {
   final String label;
@@ -470,14 +487,30 @@ class _Line extends StatelessWidget {
   final VoidCallback? onTap;
   final Widget child;
 
-  const _Line({required this.label, required this.onTap, required this.child});
+  /// The [child] is a row of [_Link]s: the label centres on their first
+  /// row instead of sitting at their top edge.
+  final bool linkRow;
+
+  const _Line({
+    required this.label,
+    required this.onTap,
+    required this.child,
+    this.linkRow = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
+    final labelText = Text(
+      '$label: ',
+      style: text.bodySmall?.copyWith(
+        color: scheme.onSurface,
+        fontWeight: FontWeight.w600,
+      ),
+    );
     final body = Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: EdgeInsets.symmetric(vertical: linkRow ? 0 : 4),
       // The label wraps within half the row instead of pushing the value
       // off the card at a large font size on a narrow phone.
       child: LayoutBuilder(
@@ -486,13 +519,7 @@ class _Line extends StatelessWidget {
           children: [
             ConstrainedBox(
               constraints: BoxConstraints(maxWidth: box.maxWidth * 0.5),
-              child: Text(
-                '$label: ',
-                style: text.bodySmall?.copyWith(
-                  color: scheme.onSurface,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+              child: linkRow ? _TapHeight(child: labelText) : labelText,
             ),
             Expanded(child: child),
           ],
@@ -503,7 +530,7 @@ class _Line extends StatelessWidget {
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.control),
       onTap: onTap,
-      child: body,
+      child: _TapHeight(child: body),
     );
   }
 }
@@ -524,7 +551,10 @@ class _Link extends StatelessWidget {
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.control),
       onTap: onTap,
-      child: label,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: _kTapHeight),
+        child: Align(widthFactor: 1, child: label),
+      ),
     );
   }
 }

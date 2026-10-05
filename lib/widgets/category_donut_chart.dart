@@ -299,9 +299,10 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
           ),
         ),
         const SizedBox(height: 12),
+        // No run spacing: each entry is 40dp tall itself, a target a finger
+        // can hit rather than a 16dp line of text.
         Wrap(
           spacing: 12,
-          runSpacing: 6,
           alignment: WrapAlignment.center,
           children: [
             for (final (i, e) in data.indexed)
@@ -310,32 +311,36 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
                 onTap: widget.onCategoryTap == null
                     ? null
                     : () => widget.onCategoryTap!(e.key.id),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        color: colors[i],
-                        shape: BoxShape.circle,
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 40),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: colors[i],
+                          shape: BoxShape.circle,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 5),
-                    // Flexible: Wrap bounds the row's width, and a single
-                    // legend entry wider than the card is otherwise a
-                    // guaranteed RenderFlex overflow (long custom labels at
-                    // large font scale).
-                    Flexible(
-                      child: Text(
-                        '${e.key.label} '
-                        '${(e.value / total * 100).toStringAsFixed(0)}%',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodySmall,
+                      const SizedBox(width: 5),
+                      // Flexible: Wrap bounds the row's width, and a single
+                      // legend entry wider than the card is otherwise a
+                      // guaranteed RenderFlex overflow (long custom labels at
+                      // large font scale).
+                      Flexible(
+                        child: Text(
+                          '${e.key.label} '
+                          '${(e.value / total * 100).toStringAsFixed(0)}%',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall,
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
           ],

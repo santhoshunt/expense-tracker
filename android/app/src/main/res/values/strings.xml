@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Shown in the launcher's widget picker under each preview. -->
-    <string name="budget_widget_description">One budget\'s monthly progress at a glance — name, amounts and bar.</string>
+    <string name="budget_widget_description">One budget\'s monthly progress at a glance: name, amounts and bar.</string>
     <string name="budget_widget_detailed_description">One budget\'s monthly progress with percent used, amount left and last update.</string>
     <string name="home_widget_pace_label">Month pace</string>
     <string name="home_widget_pace_description">This month\'s spend against your cap and a usual month by today.</string>

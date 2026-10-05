@@ -844,7 +844,7 @@ class SmsTxnParser {
     final strictOk = senderLooksFinancial(sender);
     final brandOk = senderLooksBankBrand(sender);
     if (!strictOk && !brandOk) {
-      return 'Not imported — sender "$sender" is not recognised as a bank or '
+      return 'Not imported. Sender "$sender" is not recognised as a bank or '
           'payment app.';
     }
 
@@ -853,27 +853,27 @@ class SmsTxnParser {
     // imports — the diagnostic must never contradict the pipeline.
     for (final p in ignorePhrases) {
       if (p.isNotEmpty && patternMatchesText(p, body)) {
-        return 'Not imported — matches the ignore rule "$p".';
+        return 'Not imported. It matches the ignore rule "$p".';
       }
     }
 
     final amountMatch = _pickAmountMatch(body);
     if (amountMatch == null) {
       return _amountRe.hasMatch(body)
-          ? 'Not imported — the only amount found is the balance/limit '
+          ? 'Not imported. The only amount found is the balance or limit '
                 'figure, not a transaction amount.'
-          : 'Not imported — no amount (Rs / INR / ₹) found.';
+          : 'Not imported. No amount in Rs, INR or ₹ found.';
     }
     final amount = double.tryParse(
       _amountText(amountMatch).replaceAll(',', ''),
     );
     if (amount == null || amount <= 0) {
-      return 'Not imported — the amount could not be read.';
+      return 'Not imported. The amount could not be read.';
     }
 
     final type = _direction(body, amountMatch.start);
     if (type == null) {
-      return 'Not imported — no debit verb (debited, spent, paid…) or '
+      return 'Not imported. No debit verb (debited, spent, paid…) or '
           'credit verb (credited, received…) found.';
     }
 
@@ -911,24 +911,24 @@ class SmsTxnParser {
       else
         'Account: none detected',
       if (result.balanceAfter != null)
-        'Reported balance/limit: ₹${result.balanceAfter!.toStringAsFixed(2)}',
+        'Reported balance or limit: ₹${result.balanceAfter!.toStringAsFixed(2)}',
       if (result.ref != null) 'Reference: ${result.ref}',
       if (result.spamSuspect)
-        'Flagged as suspected spam (matches "$spamHit") — individual review',
+        'Flagged as suspected spam (matches "$spamHit"), held for review one by one',
       if (type == TxType.income && result.type == TxType.expense)
         _payeeReceivedRe.hasMatch(body)
-            ? 'Note: "has received … from your A/c" is the payee\'s side — '
-                  'imported as money leaving your account.'
-            : 'Note: "credited to" names another bank or the beneficiary — '
-                  'treated as an outward transfer (money leaving your '
+            ? 'Note: "has received … from your A/c" is the payee\'s side. '
+                  'Imported as money leaving your account.'
+            : 'Note: "credited to" names another bank or the beneficiary. '
+                  'Treated as an outward transfer (money leaving your '
                   'account).',
       if (type == TxType.expense && result.type == TxType.income)
         _sentToYouRe.hasMatch(body) && !_reversalRe.hasMatch(body)
-            ? 'Note: "sent to your" account — imported as money coming in.'
-            : 'Note: reversal alert — imported as money returned, not a '
+            ? 'Note: "sent to your" account. Imported as money coming in.'
+            : 'Note: reversal alert. Imported as money returned, not a '
                   'second expense.',
       if (!strictOk)
-        'Note: sender only matches as a brand name — imported via '
+        'Note: sender only matches as a brand name. Imported through '
             'notification capture, not inbox SMS scans.',
     ];
     return parts.join('\n');

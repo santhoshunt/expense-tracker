@@ -19,7 +19,17 @@ final DateFormat _monthYear = DateFormat('MMMM yyyy');
 /// Hide income). Totals render this; the underlying value never changes.
 const String kMaskedAmount = '₹••••';
 
-String fmtMoney(double v) => _currency.format(v);
+/// A negative amount takes the true minus sign "−", as the ledger rows do,
+/// not the format's hyphen.
+String fmtMoney(double v) => _signed(v, _currency);
+
+/// [format] of [v] with "−" for a negative that does not round to zero; -0.0
+/// and -0.001 print as zero, with no sign at all.
+String _signed(double v, NumberFormat format) {
+  final magnitude = format.format(v.abs());
+  if (!v.isNegative || magnitude == format.format(0)) return magnitude;
+  return '−$magnitude';
+}
 
 final NumberFormat _points = NumberFormat('#,##0.##');
 
@@ -42,7 +52,7 @@ String fmtPerPoint(double v) => '₹${_perPoint.format(v)}';
 String fmtPerPointField(double v) => _perPoint.format(v);
 
 final NumberFormat _perPoint = NumberFormat('0.00##');
-String fmtMoneyCompact(double v) => _currencyCompact.format(v);
+String fmtMoneyCompact(double v) => _signed(v, _currencyCompact);
 
 /// [fmtMoney] without a trailing ".00": the forced two decimals read as
 /// clutter at home-screen widget size ("₹60,000.00 of ₹60,000.00").

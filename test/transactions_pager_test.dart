@@ -178,7 +178,7 @@ void main() {
     // mid-slide their buttons sit off-screen and the tap would miss.
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.byTooltip('Next month'));
+    await tester.tap(find.byTooltip('Older month'));
     await tester.pumpAndSettle();
 
     expect(juneHeader, findsOneWidget, reason: 'the Expenses list scrolled');

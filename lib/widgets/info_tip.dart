@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
+import 'link_pill.dart';
 import 'motion.dart';
 
 /// The outlined "i" that explains the label next to it. A tap opens an
@@ -147,7 +148,7 @@ Future<void> showAnchoredBubble(
   },
 );
 
-/// The accent "label →" link row, closing the bubble before [InfoLink.onTap]
+/// The [LinkPill] link row, closing the bubble before [InfoLink.onTap]
 /// runs from [host] (the screen that opened it).
 class InfoLinkRow extends StatelessWidget {
   final InfoLink link;
@@ -173,21 +174,15 @@ class InfoLinkRow extends StatelessWidget {
               color: scheme.onSurfaceVariant,
             ),
           ),
-        InkWell(
-          borderRadius: BorderRadius.circular(6),
-          onTap: () {
-            Navigator.pop(context);
-            if (host.mounted) link.onTap(host);
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: Text(
-              '${link.label} →',
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: accentTextColor(context),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+        const SizedBox(height: 6),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: LinkPill(
+            label: link.label,
+            onTap: () {
+              Navigator.pop(context);
+              if (host.mounted) link.onTap(host);
+            },
           ),
         ),
       ],

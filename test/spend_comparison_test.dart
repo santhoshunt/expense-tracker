@@ -436,7 +436,7 @@ void main() {
       expect(deltaPhrase(c(1200, 1000)), contains('more'));
       expect(deltaPhrase(c(1200, 1000)), contains('20%'));
       expect(deltaPhrase(c(800, 1000)), contains('less'));
-      expect(deltaPhrase(c(1000.4, 1000)), 'the same');
+      expect(deltaPhrase(c(1000.4, 1000)), 'About the same');
     });
   });
 

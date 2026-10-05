@@ -246,17 +246,22 @@ class GlassSegmented<T> extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: scheme.outlineVariant),
       ),
-      padding: const EdgeInsets.all(4),
+      // Side inset only: the tabs answer taps over the bar's full height,
+      // and the thumb keeps its 4dp inset top and bottom.
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final segmentWidth = constraints.maxWidth / options.length;
+          // Below 90dp a tab can't hold an icon and its label at full
+          // size: the longer labels shrank while "All" did not.
+          final withIcons = icons != null && segmentWidth >= 90;
           return Stack(
             children: [
               _buildThumb(context, scheme, segmentWidth, index),
               Row(
                 children: [
                   for (var i = 0; i < options.length; i++)
-                    Expanded(child: _buildTab(context, scheme, i)),
+                    Expanded(child: _buildTab(context, scheme, i, withIcons)),
                 ],
               ),
             ],
@@ -285,8 +290,8 @@ class GlassSegmented<T> extends StatelessWidget {
         duration: motionDuration(context, const Duration(milliseconds: 260)),
         curve: Curves.easeOutCubic,
         left: index * segmentWidth,
-        top: 0,
-        bottom: 0,
+        top: 4,
+        bottom: 4,
         width: segmentWidth,
         child: thumb,
       );
@@ -301,8 +306,8 @@ class GlassSegmented<T> extends StatelessWidget {
             : index.toDouble();
         return Positioned(
           left: page.clamp(0.0, (options.length - 1).toDouble()) * segmentWidth,
-          top: 0,
-          bottom: 0,
+          top: 4,
+          bottom: 4,
           width: segmentWidth,
           child: thumb,
         );
@@ -310,7 +315,12 @@ class GlassSegmented<T> extends StatelessWidget {
     );
   }
 
-  Widget _buildTab(BuildContext context, ColorScheme scheme, int i) {
+  Widget _buildTab(
+    BuildContext context,
+    ColorScheme scheme,
+    int i,
+    bool withIcons,
+  ) {
     final (value, label) = options[i];
     final isSelected = value == selected;
     final color = isSelected ? scheme.onSurface : scheme.onSurfaceVariant;
@@ -335,7 +345,7 @@ class GlassSegmented<T> extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (icons != null) ...[
+                  if (withIcons) ...[
                     Icon(icons![i], size: 16, color: color),
                     const SizedBox(width: 5),
                   ],

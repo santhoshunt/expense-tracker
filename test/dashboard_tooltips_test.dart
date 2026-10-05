@@ -376,7 +376,7 @@ void main() {
       await pumpAccounts(tester, p);
 
       expect(
-        find.text('Net across 2 bank and card accounts · tap for breakdown'),
+        find.text('Net across 2 bank and card accounts'),
         findsOneWidget,
         reason: 'the savings account is not part of the net figure',
       );
@@ -404,7 +404,7 @@ void main() {
 
       await tester.tap(tips.last);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Set the balance →'));
+      await tester.tap(find.text('Set the balance'));
       await tester.pumpAndSettle();
       expect(find.text('Set balance'), findsOneWidget);
     });

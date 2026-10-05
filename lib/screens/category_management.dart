@@ -78,7 +78,7 @@ class _CategoriesTabState extends State<CategoriesTab> {
     );
 
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
       children: [
         InfoLabel(
           label: Text('Groups', style: Theme.of(context).textTheme.titleMedium),

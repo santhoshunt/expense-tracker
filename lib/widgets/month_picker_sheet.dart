@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../utils/contrast.dart';
 import 'glossy.dart';
 
 /// Fixed-height frosted sheet listing [months] (as given, normally newest
@@ -62,6 +63,8 @@ Future<DateTime?> showMonthPickerSheet(
                     return ListTile(
                       dense: true,
                       selected: isSelected,
+                      // The raw accent fails as text on the light theme.
+                      selectedColor: accentTextColor(ctx),
                       title: Text(
                         DateFormat('MMMM yyyy').format(m),
                         textAlign: TextAlign.center,

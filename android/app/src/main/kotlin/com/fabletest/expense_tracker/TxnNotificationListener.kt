@@ -292,7 +292,7 @@ class TxnNotificationListener : NotificationListenerService() {
         val sample = if (MONEY.containsMatchIn(text)) {
             "$sender: ${text.take(80)}"
         } else {
-            "$sender: (message received — no ₹ amount, content not stored)"
+            "$sender: (message received, no ₹ amount, content not stored)"
         }
         putDiag(applicationContext, KEY_LAST_SAMPLE, sample)
     }

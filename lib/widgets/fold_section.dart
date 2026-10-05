@@ -34,8 +34,9 @@ class FoldSection extends StatelessWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(12),
               onTap: onToggle,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
+              // 48dp: the 6 + 20 + 6 header was a 32dp target.
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 48),
                 child: Row(
                   children: [
                     Text(title, style: Theme.of(context).textTheme.titleSmall),

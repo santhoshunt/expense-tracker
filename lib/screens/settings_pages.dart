@@ -370,7 +370,7 @@ class _CategoriesRulesPage extends StatelessWidget {
             leading: const Icon(Icons.tune),
             title: const Text('Open Cockpit'),
             subtitle: const Text(
-              'Rules, import filters, categories, budgets and reminders',
+              'Rules, import rules, categories, budgets and reminders',
             ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.push(

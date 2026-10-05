@@ -103,7 +103,7 @@ void main() {
 
     await tester.tap(find.bySemanticsLabel('About Reminders'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Check Payment reminders →'));
+    await tester.tap(find.text('Check Payment reminders'));
     await tester.pumpAndSettle();
 
     expect(groupPages(), findsOneWidget, reason: 'no stack');

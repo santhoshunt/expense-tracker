@@ -256,6 +256,28 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
   }
 
   Future<void> _disconnect() async {
+    // A whole row now, not a small button: ask before stopping backups.
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Disconnect Google Drive?'),
+        content: const Text(
+          'Backups from this phone stop. Backups already in your Drive '
+          'stay there.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Disconnect'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
     await context.read<DriveBackupService>().disconnect();
     // disconnect cleared the account-scoped prefs; re-read everything so a
     // stale "backup failed" banner can't sit above "Connect Google Drive".
@@ -320,11 +342,15 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
           if (_lastError != null)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              // The red outline and icon carry the warning; the text stays
+              // plain so it never sits on a colour.
               child: Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: scheme.errorContainer.withValues(alpha: 0.6),
                   borderRadius: BorderRadius.circular(AppRadius.control),
+                  border: Border.all(
+                    color: scheme.error.withValues(alpha: 0.6),
+                  ),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -332,7 +358,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                     Icon(
                       Icons.cloud_off_outlined,
                       size: 18,
-                      color: scheme.onErrorContainer,
+                      color: scheme.error,
                     ),
                     const SizedBox(width: 8),
                     Expanded(
@@ -342,17 +368,12 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                             : 'The last Drive backup failed: $_lastError',
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onErrorContainer,
-                        ),
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),
                     if (_lastError == kDriveReconnectMessage)
                       TextButton(
                         onPressed: _connect,
-                        style: TextButton.styleFrom(
-                          foregroundColor: scheme.onErrorContainer,
-                        ),
                         child: const Text('Reconnect'),
                       ),
                   ],
@@ -363,9 +384,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
             ListTile(
               leading: const Icon(Icons.cloud_off_outlined),
               title: const Text('Connect Google Drive'),
-              subtitle: const Text(
-                'Off until connected — nothing is uploaded.',
-              ),
+              subtitle: const Text('Off until connected. Nothing is uploaded.'),
               trailing: const Icon(Icons.chevron_right),
               onTap: _connect,
             )
@@ -381,12 +400,14 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                 'Last backup: '
                 '${DriveBackupService.formatLastBackup(_lastBackup)}',
               ),
-              trailing: InfoLabel(
-                label: TextButton(
-                  onPressed: _disconnect,
-                  child: const Text('Disconnect'),
-                ),
-                tip: const InfoTip(
+            ),
+            // Its own row: beside the email it left the address about
+            // eleven characters.
+            ListTile(
+              leading: const Icon(Icons.link_off),
+              title: const InfoLabel(
+                label: Text('Disconnect'),
+                tip: InfoTip(
                   title: 'Disconnect',
                   message:
                       'Stops backups from this phone. Backups already in your '
@@ -395,6 +416,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                       'Third-party access.',
                 ),
               ),
+              onTap: _disconnect,
             ),
             ListTile(
               leading: const Icon(Icons.schedule_outlined),
@@ -773,7 +795,7 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
     final disconnectedAt = (d['disconnectedAt'] as num?)?.toInt() ?? 0;
     final String connected;
     if (connectedAt <= 0) {
-      connected = 'never connected — capture is not running';
+      connected = 'never connected, capture is not running';
     } else if (disconnectedAt > connectedAt) {
       connected = 'disconnected ${_fmtMillis(disconnectedAt)}';
     } else {
@@ -783,11 +805,11 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
       ('Listener', connected),
       ('Notifications seen', '${d['eventsTotal'] ?? 0}'),
       ('From messaging apps', '${d['eventsWatched'] ?? 0}'),
-      ('With an amount (₹/Rs)', '${d['eventsMoney'] ?? 0}'),
+      ('With an amount in ₹ or Rs', '${d['eventsMoney'] ?? 0}'),
       ('Captured', '${d['storedTotal'] ?? 0}'),
       ('Waiting for import', '${d['bufferSize'] ?? 0}'),
       ('Last capture', _fmtMillis(d['lastCapture'])),
-      ('Last message seen', (d['lastSample'] as String?) ?? '—'),
+      ('Last message seen', (d['lastSample'] as String?) ?? 'None yet'),
     ];
     await showDialog<void>(
       context: context,
@@ -811,7 +833,7 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
                 ),
               Text(
                 'Counts reset only when app data is cleared. If "last message '
-                'seen" shows hidden/redacted text instead of the bank alert, '
+                'seen" shows hidden or redacted text instead of the bank alert, '
                 'Android is withholding sensitive notification content from '
                 'the listener.',
                 style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
@@ -868,8 +890,8 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
         ),
         subtitle: Text(
           granted
-              ? 'On — new bank alerts are captured as they arrive and added '
-                    'on the next import; older messages cannot be backfilled '
+              ? 'On. New bank alerts are captured as they arrive and added '
+                    'on the next import. Older messages cannot be backfilled '
                     '(${_lastCaptureLabel()}). Tap for diagnostics.'
               : 'RCS chats (verified senders like "Yes Bank") are not '
                     'readable as SMS. Grant notification access to capture '
@@ -1169,7 +1191,8 @@ class _DataSectionState extends State<_DataSection> {
               Text(
                 'This permanently deletes $count transaction${count == 1 ? '' : 's'} '
                 'and all accounts. '
-                'This cannot be undone — consider exporting a JSON backup first.',
+                'This cannot be undone. Export a JSON backup first if you may '
+                'need it.',
               ),
               const SizedBox(height: 8),
               CheckboxListTile(
@@ -1193,6 +1216,7 @@ class _DataSectionState extends State<_DataSection> {
             FilledButton(
               style: FilledButton.styleFrom(
                 backgroundColor: Theme.of(ctx).colorScheme.error,
+                foregroundColor: Theme.of(ctx).colorScheme.onError,
               ),
               onPressed: () => Navigator.pop(ctx, includeConfig),
               child: const Text('Delete everything'),

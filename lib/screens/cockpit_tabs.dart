@@ -41,8 +41,8 @@ class BudgetsTab extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           'Set a monthly spending cap and get notified as you approach it. '
-          'Checks run while the app is open (after imports or edits) — '
-          'there is no always-on background monitoring.',
+          'Checks run while the app is open, after imports or edits. '
+          'There is no always-on background monitoring.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 12),
@@ -51,7 +51,7 @@ class BudgetsTab extends StatelessWidget {
         Text('Custom budgets', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 4),
         Text(
-          'Extra monthly limits beside the overall cap — e.g. "Personal '
+          'Extra monthly limits beside the overall cap, e.g. "Personal '
           'spending" that leaves out family categories. Progress shows '
           'on the dashboard.',
           style: Theme.of(context).textTheme.bodySmall,

@@ -95,7 +95,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Transactions not classified right?'), findsOneWidget);
 
-    await tester.tap(find.text('Set up transaction rules →'));
+    await tester.tap(find.text('Set up transaction rules'));
     await tester.pumpAndSettle();
     expect(find.text('Share of the month.'), findsNothing, reason: 'closed');
     expect(got, isNotNull);

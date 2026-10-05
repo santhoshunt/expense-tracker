@@ -610,7 +610,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (mounted) {
         showAppToastOn(
           messenger,
-          'Auto-import failed — will retry on next launch.',
+          'Auto-import failed. It will retry on the next launch.',
           tone: AppToastTone.error,
         );
       }
@@ -642,8 +642,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Bank and UPI alert messages are scanned on-device only — '
-                'nothing is uploaded. Choose how far back to scan:',
+                'Bank and UPI alert messages are scanned on-device only. '
+                'Nothing is uploaded. Choose how far back to scan:',
               ),
               const SizedBox(height: 8),
               RadioGroup<Duration>(
@@ -718,7 +718,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         } else {
           showAppToastOn(
             messenger,
-            'SMS permission denied — nothing imported.',
+            'SMS permission denied. Nothing imported.',
             tone: AppToastTone.error,
           );
         }
@@ -751,7 +751,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       if (mounted) {
         showAppToastOn(
           messenger,
-          'Import failed — could not read the SMS inbox.',
+          'Import failed. The app could not read the SMS inbox.',
           tone: AppToastTone.error,
         );
       }
@@ -984,12 +984,13 @@ class _StorageWarningBannersState extends State<_StorageWarningBanners> {
       (f) => f.persistFailed,
     );
     final scheme = Theme.of(context).colorScheme;
+    // Plain text on the surface; the red icon carries the warning.
     return Column(
       children: [
         if (loadWarnings.isNotEmpty && !_loadWarningDismissed)
           MaterialBanner(
-            backgroundColor: scheme.errorContainer,
-            contentTextStyle: TextStyle(color: scheme.onErrorContainer),
+            backgroundColor: scheme.surfaceContainerHigh,
+            leading: Icon(Icons.error_outline, color: scheme.error),
             content: Text(
               'Some stored data could not be read and was skipped '
               '($loadWarnings). Restore from a backup if needed.',
@@ -1003,10 +1004,10 @@ class _StorageWarningBannersState extends State<_StorageWarningBanners> {
           ),
         if (persistFailed)
           MaterialBanner(
-            backgroundColor: scheme.errorContainer,
-            contentTextStyle: TextStyle(color: scheme.onErrorContainer),
+            backgroundColor: scheme.surfaceContainerHigh,
+            leading: Icon(Icons.error_outline, color: scheme.error),
             content: const Text(
-              'Changes are not being saved — storage writes are failing.',
+              'Changes are not being saved. Storage writes are failing.',
             ),
             actions: [
               TextButton(
