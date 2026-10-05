@@ -1,14 +1,13 @@
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
-import 'package:expense_tracker/screens/accounts_screen.dart';
+
+import 'accounts_test_utils.dart';
 
 /// Closing accounts (savings leave the open lists but keep their history),
 /// merging classifier rules (conditions OR-chained into the survivor), and
@@ -168,14 +167,7 @@ void main() {
       for (var i = 0; i < 3; i++) {
         await p.addAccount(name: 'Bank $i', type: AccountType.bank);
       }
-      await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: p,
-          child: MaterialApp(
-            home: Scaffold(body: AccountsScreen(onViewAccount: (_) {})),
-          ),
-        ),
-      );
+      await tester.pumpWidget(accountsApp(p));
       await tester.pumpAndSettle();
 
       await tester.tap(find.byTooltip('Account options').last);
@@ -196,14 +188,7 @@ void main() {
       final rd = await p.addAccount(name: 'RD', type: AccountType.savings);
       await p.closeAccount(rd);
 
-      await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: p,
-          child: MaterialApp(
-            home: Scaffold(body: AccountsScreen(onViewAccount: (_) {})),
-          ),
-        ),
-      );
+      await tester.pumpWidget(accountsApp(p));
       await tester.pumpAndSettle();
 
       expect(find.text('CLOSED ACCOUNTS'), findsOneWidget);

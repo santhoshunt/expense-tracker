@@ -8,7 +8,6 @@ import 'package:expense_tracker/models/spend_budget.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
-import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/services/monthly_recap.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
@@ -16,6 +15,8 @@ import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/budget_detail_sheet.dart';
 import 'package:expense_tracker/widgets/monthly_bar_chart.dart';
 import 'package:expense_tracker/widgets/spend_comparison_cards.dart';
+
+import 'accounts_test_utils.dart';
 
 import 'dashboard_test_utils.dart';
 
@@ -355,14 +356,7 @@ void main() {
 
   group('accounts', () {
     Future<void> pumpAccounts(WidgetTester tester, FinanceProvider p) async {
-      await tester.pumpWidget(
-        ChangeNotifierProvider.value(
-          value: p,
-          child: MaterialApp(
-            home: Scaffold(body: AccountsScreen(onViewAccount: (_) {})),
-          ),
-        ),
-      );
+      await tester.pumpWidget(accountsApp(p));
       await tester.pumpAndSettle();
     }
 

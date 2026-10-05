@@ -68,6 +68,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kUpcomingReminders = 'upcoming_reminders_v1';
   static const _kUpcomingHidden = 'upcoming_hidden_v1';
   static const _kCollapsedSections = 'collapsed_sections_v1';
+  static const _kExpandedAccounts = 'accounts_expanded_v1';
   static const _kDashboardLayout = 'dashboard_layout_v1';
 
   /// Pre-1.1.1 key: a single bool for the dashboard Upcoming card, folded
@@ -112,6 +113,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _upcomingReminders = true;
   Set<String> _upcomingHidden = {};
   Set<String> _collapsedSections = {};
+  Set<String> _expandedAccounts = {};
 
   /// Per page, when changed from the defaults; open state per section,
   /// when toggled.
@@ -153,6 +155,10 @@ class SettingsProvider extends ChangeNotifier {
   /// 'pending_review', 'spam_review'). Per-device UI state — deliberately
   /// not in the backup block.
   bool isSectionCollapsed(String id) => _collapsedSections.contains(id);
+
+  /// Account cards opened to their full details; every other card shows
+  /// its name and one figure. Per-device UI state, not backed up.
+  bool isAccountExpanded(String id) => _expandedAccounts.contains(id);
 
   /// Biometric/device-credential gate on the whole app.
   bool get appLock => _appLock;
@@ -238,6 +244,10 @@ class SettingsProvider extends ChangeNotifier {
     );
     _collapsedSections = tryRead(
       () => (prefs.getStringList(_kCollapsedSections) ?? const []).toSet(),
+      <String>{},
+    );
+    _expandedAccounts = tryRead(
+      () => (prefs.getStringList(_kExpandedAccounts) ?? const []).toSet(),
       <String>{},
     );
     tryRead(() {
@@ -486,6 +496,20 @@ class SettingsProvider extends ChangeNotifier {
     await _persistPref(
       _kCollapsedSections,
       (p) => p.setStringList(_kCollapsedSections, _collapsedSections.toList()),
+    );
+  }
+
+  /// Opens or closes account [id]'s card. A deleted account's id stays
+  /// behind harmlessly: no card asks for it.
+  Future<void> setAccountExpanded(String id, bool expanded) async {
+    final changed = expanded
+        ? _expandedAccounts.add(id)
+        : _expandedAccounts.remove(id);
+    if (!changed) return;
+    notifyListeners();
+    await _persistPref(
+      _kExpandedAccounts,
+      (p) => p.setStringList(_kExpandedAccounts, _expandedAccounts.toList()),
     );
   }
 

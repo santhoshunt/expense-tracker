@@ -9,6 +9,8 @@
     <string name="home_widget_upcoming_description">The next three bills due, nearest first.</string>
     <string name="home_widget_today_label">Today and Add</string>
     <string name="home_widget_today_description">What you spent today, with a button to add an expense.</string>
+    <string name="home_widget_split_label">Spending split</string>
+    <string name="home_widget_split_description">This month\'s spending by category, as a donut with the top three.</string>
     <string name="home_widget_empty">Open Expense Tracker to set up this widget.</string>
     <!-- Launcher long-press shortcuts and the Quick Settings tile. -->
     <string name="shortcut_add_expense">Add expense</string>

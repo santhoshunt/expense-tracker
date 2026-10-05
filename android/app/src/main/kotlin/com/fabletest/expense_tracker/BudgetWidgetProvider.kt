@@ -34,6 +34,10 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
         private const val DATA_KEY = "flutter.budget_widget_data_v1"
         private const val THEME_KEY = "flutter.budget_widget_theme_v1"
 
+        /** The overall monthly cap's snapshot id (kOverallBudgetWidgetId). */
+        private const val OVERALL_ID = "_overall"
+
+
         /** The app theme's colours for the widget, written by the Dart side
          * next to the snapshot (buildWidgetTheme). Defaults are the dark kit,
          * for a widget rendered before the app has synced a theme. */
@@ -134,17 +138,26 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
             // alternate-icon feature disables .MainActivity and enables an
             // activity-alias instead, and starting a disabled component
             // silently does nothing.
-            val open = PendingIntent.getActivity(
-                context,
-                0,
-                launchIntent(context),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            views.setOnClickPendingIntent(R.id.widget_root, open)
             val theme = readTheme(context)
             applyTheme(views, theme, detailed)
 
-            val entry = findEntry(context, selectionOf(context, appWidgetId))
+            val selected = selectionOf(context, appWidgetId)
+            val entry = findEntry(context, selected)
+            // Opens the budget it shows: the overall cap's card, or the
+            // Budgets list for one of the user's own. One request code per
+            // widget, so two widgets never share an intent.
+            val action = if (selected == null || selected == OVERALL_ID) {
+                QuickActions.OPEN_BUDGET
+            } else {
+                QuickActions.OPEN_BUDGETS
+            }
+            val open = PendingIntent.getActivity(
+                context,
+                HomeWidgets.requestCode(appWidgetId, HomeWidgets.PURPOSE_BUDGET),
+                QuickActions.intent(context, action) ?: launchIntent(context),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            views.setOnClickPendingIntent(R.id.widget_root, open)
             if (entry == null) {
                 // Never configured, budget deleted, or the app hasn't written
                 // a snapshot yet.

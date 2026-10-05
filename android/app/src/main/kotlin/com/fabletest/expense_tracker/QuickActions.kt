@@ -15,6 +15,14 @@ object QuickActions {
     const val ADD_EXPENSE = "add_expense"
     const val IMPORT_SMS = "import_sms"
 
+    /** Home-screen widget taps: each opens its own part of the app. */
+    const val OPEN_BUDGET = "open_budget"
+    const val OPEN_BUDGETS = "open_budgets"
+    const val OPEN_PACE = "open_pace"
+    const val OPEN_UPCOMING = "open_upcoming"
+    const val OPEN_TODAY = "open_today"
+    const val OPEN_BREAKDOWN = "open_breakdown"
+
     /** Opens the enabled launcher entry with [action].
      *
      * The component comes from getLaunchIntentForPackage, never from
@@ -42,7 +50,8 @@ object QuickActions {
         if (intent == null) return null
         if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return null
         return when (val action = intent.getStringExtra(EXTRA)) {
-            ADD_EXPENSE, IMPORT_SMS -> action
+            ADD_EXPENSE, IMPORT_SMS, OPEN_BUDGET, OPEN_BUDGETS, OPEN_PACE,
+            OPEN_UPCOMING, OPEN_TODAY, OPEN_BREAKDOWN -> action
             else -> null
         }
     }

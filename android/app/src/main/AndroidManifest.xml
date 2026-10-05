@@ -246,6 +246,17 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/home_widget_today_info"/>
         </receiver>
+        <receiver
+            android:name=".SpendingSplitWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_split_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_split_info"/>
+        </receiver>
         <!-- Background SMS import (BackgroundImport.kt). Off in the manifest;
              switched on only while Auto-import is Every SMS. Only the system
              SMS broadcaster (BROADCAST_SMS) can reach it. -->

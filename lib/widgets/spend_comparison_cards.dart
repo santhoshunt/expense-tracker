@@ -35,11 +35,11 @@ Color _toneFor(BuildContext context, double delta) {
 const _previousTitle = 'This month vs last month';
 const _previousTip =
     'While the month is running, compares spending up to the same day '
-    "of last month. The projection scales this month's spending by how "
-    'last month grew from this day to its end, and appears from day '
-    '$kMinDaysForProjection. When last month is not fully on record, it '
-    "uses this month's daily pace instead, once $kMinDaysOfData days are "
-    'on record.';
+    'of last month. On track for is the Month-end forecast: spent so far, '
+    'plus the bills still due, plus your usual everyday spending for the '
+    'days left. Before there is enough history to estimate everyday '
+    "spending, it is this month's spending scaled by how last month went "
+    'on. Tap the card for the chart.';
 
 const _usualTitle = 'This month vs usual';
 const _usualTip =
@@ -59,10 +59,13 @@ const _categoryTip =
 /// The cards' tips, for a dashboard fold heading: inside a fold the cards
 /// leave theirs out, so each section carries its tip on the heading,
 /// folded or open.
-InfoTip previousMonthTip(MonthComparison comparison) => InfoTip(
+InfoTip previousMonthTip(
+  MonthComparison comparison, {
+  String? Function()? forecastExample,
+}) => InfoTip(
   title: _previousTitle,
   message: _previousTip,
-  example: () => projectionExample(comparison),
+  example: forecastExample ?? () => projectionExample(comparison),
 );
 
 InfoTip usualTip(MonthComparison comparison) => InfoTip(
@@ -128,7 +131,23 @@ List<CategoryCompare> sortCategoryCompares(
 class PreviousMonthCard extends StatelessWidget {
   final MonthComparison comparison;
 
-  const PreviousMonthCard({super.key, required this.comparison});
+  /// The Month-end forecast's total while the month runs: what On track
+  /// for shows. Null falls back to the comparison's own projection.
+  final double? forecastTotal;
+
+  /// The forecast's sum, for the tip; null shows the projection's.
+  final String? Function()? forecastExample;
+
+  /// Opens the comparison chart.
+  final VoidCallback? onTap;
+
+  const PreviousMonthCard({
+    super.key,
+    required this.comparison,
+    this.forecastTotal,
+    this.forecastExample,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -138,13 +157,15 @@ class PreviousMonthCard extends StatelessWidget {
 
     // Records that start part-way through last month (or later) leave no
     // fair "same day" figure; say so rather than compare a few days.
+    final example = forecastExample ?? () => projectionExample(comparison);
     if (c.state == CompareState.notEnoughHistory) {
-      final projected = c.actualFull;
+      final projected = forecastTotal ?? c.actualFull;
       final muted = Theme.of(context).textTheme.bodySmall;
       return _Section(
         title: 'This month vs last month',
         tip: tip,
-        example: () => projectionExample(comparison),
+        example: example,
+        onTap: onTap,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -156,7 +177,7 @@ class PreviousMonthCard extends StatelessWidget {
             if (comparison.partial && projected != null) ...[
               const SizedBox(height: 4),
               Text(
-                'At its current pace this month is on track for '
+                'This month is on track for '
                 '${fmtMoney(projected)}.',
                 style: muted,
               ),
@@ -169,10 +190,12 @@ class PreviousMonthCard extends StatelessWidget {
     return _Section(
       title: 'This month vs last month',
       tip: tip,
-      example: () => projectionExample(comparison),
+      example: example,
+      onTap: onTap,
       child: _CompareBody(
         comparison: comparison,
         compare: c,
+        forecastTotal: forecastTotal,
         referenceLine: comparison.partial
             ? '$name reached ${fmtMoney(c.reference)} by the same day'
             : '$name: ${fmtMoney(c.reference)}',
@@ -218,7 +241,18 @@ String usualShortfallNote(int months) =>
 class UsualSpendCard extends StatelessWidget {
   final MonthComparison comparison;
 
-  const UsualSpendCard({super.key, required this.comparison});
+  /// As [PreviousMonthCard.forecastTotal].
+  final double? forecastTotal;
+
+  /// Opens the comparison chart.
+  final VoidCallback? onTap;
+
+  const UsualSpendCard({
+    super.key,
+    required this.comparison,
+    this.forecastTotal,
+    this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -244,6 +278,7 @@ class UsualSpendCard extends StatelessWidget {
       title: 'This month vs usual',
       tip: tip,
       example: example,
+      onTap: onTap,
       subtitle:
           'The middle of your last $months complete '
           '${months == 1 ? 'month' : 'months'}, so one unusual bill does not '
@@ -251,6 +286,7 @@ class UsualSpendCard extends StatelessWidget {
       child: _CompareBody(
         comparison: comparison,
         compare: c,
+        forecastTotal: forecastTotal,
         referenceLine: comparison.partial
             ? 'Usually ${fmtMoney(c.reference)} by this day'
             : 'Usually ${fmtMoney(c.reference)} in a month',
@@ -285,9 +321,13 @@ class _CompareBody extends StatelessWidget {
   final String newLine;
   final String noneLine;
 
+  /// Stands in for the comparison's own projection while the month runs.
+  final double? forecastTotal;
+
   const _CompareBody({
     required this.comparison,
     required this.compare,
+    this.forecastTotal,
     required this.referenceLine,
     required this.projectionLine,
     required this.fullReferenceLine,
@@ -307,7 +347,7 @@ class _CompareBody extends StatelessWidget {
     }
 
     final tone = _toneFor(context, compare.delta);
-    final projected = compare.actualFull;
+    final projected = forecastTotal ?? compare.actualFull;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -341,30 +381,34 @@ class _CompareBody extends StatelessWidget {
             const SizedBox(width: 12),
             if (compare.state == CompareState.ok)
               // Colour on the card surface, never on a filled background.
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    compare.negligible
-                        ? Icons.drag_handle
-                        : compare.delta > 0
-                        ? Icons.trending_up
-                        : Icons.trending_down,
-                    size: 18,
-                    color: tone,
-                  ),
-                  const SizedBox(width: 4),
-                  Flexible(
-                    child: Text(
-                      deltaPhrase(compare),
-                      textAlign: TextAlign.end,
-                      style: text.bodyMedium?.copyWith(
-                        color: tone,
-                        fontWeight: FontWeight.w600,
+              // Flexible: at large text on a narrow phone the phrase wraps
+              // instead of pushing past the card.
+              Flexible(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      compare.negligible
+                          ? Icons.drag_handle
+                          : compare.delta > 0
+                          ? Icons.trending_up
+                          : Icons.trending_down,
+                      size: 18,
+                      color: tone,
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        deltaPhrase(compare),
+                        textAlign: TextAlign.end,
+                        style: text.bodyMedium?.copyWith(
+                          color: tone,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
           ],
         ),
@@ -710,6 +754,9 @@ class _Section extends StatelessWidget {
   final InfoLink? link;
   final Widget child;
 
+  /// Makes the card a button, with a See chart row under its body.
+  final VoidCallback? onTap;
+
   const _Section({
     required this.title,
     this.subtitle,
@@ -717,8 +764,48 @@ class _Section extends StatelessWidget {
     this.tip,
     this.example,
     this.link,
+    this.onTap,
     required this.child,
   });
+
+  Widget _card(BuildContext context) {
+    final tap = onTap;
+    if (tap == null) {
+      return Card(
+        child: Padding(padding: const EdgeInsets.all(16), child: child),
+      );
+    }
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: tap,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              child,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Flexible(
+                    child: Text(
+                      'See chart',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: scheme.primary, fontSize: 13),
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, size: 18, color: scheme.primary),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -741,9 +828,7 @@ class _Section extends StatelessWidget {
           else
             ?line,
           if (trailing != null || line != null) const SizedBox(height: 8),
-          Card(
-            child: Padding(padding: const EdgeInsets.all(16), child: child),
-          ),
+          _card(context),
         ],
       );
     }
@@ -775,9 +860,7 @@ class _Section extends StatelessWidget {
           Text(subtitle!, style: small),
         ],
         const SizedBox(height: 8),
-        Card(
-          child: Padding(padding: const EdgeInsets.all(16), child: child),
-        ),
+        _card(context),
       ],
     );
   }

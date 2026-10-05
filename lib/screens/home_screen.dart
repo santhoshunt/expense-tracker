@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 
+import '../models/dashboard_layout.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
@@ -94,6 +95,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       );
     }
     return _transactionsTab!;
+  }
+
+  /// A home-screen widget's tap: the Dashboard, on [section].
+  void _showSection(DashboardSection section) {
+    setState(() => _showTab(kHomeTabDashboard));
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => AppNav.instance.showDashboardSection(section),
+    );
   }
 
   void _openTransactions(TxFilterRequest req) => setState(() {
@@ -353,6 +362,29 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       case LaunchAction.openReview:
         setState(() => _showTab(1));
+      case LaunchAction.openBudget:
+        _showSection(DashboardSection.monthlyBudget);
+      case LaunchAction.openBudgets:
+        _showSection(DashboardSection.budgets);
+      // This month so far, or last month's recap in its place during the
+      // recap week: where the recap notification lands too.
+      case LaunchAction.openPace:
+        setState(() => _showTab(kHomeTabDashboard));
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => AppNav.instance.showRecap(),
+        );
+      case LaunchAction.openUpcoming:
+        _showSection(DashboardSection.upcoming);
+      case LaunchAction.openBreakdown:
+        _showSection(DashboardSection.donut);
+      case LaunchAction.openToday:
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        _openTransactions(
+          TxFilterRequest(
+            range: DateTimeRange(start: today, end: today),
+          ),
+        );
     }
   }
 

@@ -149,6 +149,35 @@ void main() {
     expect(up.first['amountLabel'], '₹649');
   });
 
+  test('split lists the top three and Other, with their colours', () async {
+    final p = await ledger();
+    final s = SettingsProvider();
+    await s.load();
+    for (final (cat, amount) in [
+      ('food', 800.0),
+      ('transport', 500.0),
+      ('shopping', 300.0),
+      ('entertainment', 200.0),
+      ('health', 100.0),
+      ('education', 50.0),
+    ]) {
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: cat,
+        amount: amount,
+        note: '',
+        date: DateTime(2026, 7, 10, 10),
+      );
+    }
+    final split = buildHomeWidgetSnapshot(p, s, now, const [])['split'] as Map;
+    final rows = split['rows'] as List;
+    expect(rows, hasLength(4));
+    expect(rows.last['label'], 'Other');
+    expect(rows.last['amount'], 350);
+    expect(rows.first['color'], isA<int>());
+    expect(split['total'], greaterThanOrEqualTo(1950));
+  });
+
   test('epochDay counts local calendar days from 1970', () {
     expect(epochDay(DateTime(1970, 1, 2, 23, 59)), 1);
     expect(epochDay(DateTime(2026, 7, 18, 0, 1)), epochDay(now));

@@ -156,6 +156,7 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
           'amountLabel': u.amount == null ? null : fmtMoneyTidy(u.amount!),
         },
     ],
+    'split': _split(finance, month),
     'today': {
       'day': epochDay(now),
       'spent': today.spent,
@@ -174,6 +175,42 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
             _safeLabel(safe, safe.allowanceOn(d) ?? 0),
         ],
       },
+  };
+}
+
+/// Categories the Spending split widget names; the rest are one "Other".
+/// Three plus Other: four rows fit the widget's two-cell height.
+const int kSplitWidgetRows = 3;
+
+/// [month]'s spend by category for the Spending split widget: the largest
+/// [kSplitWidgetRows], then the rest as Other, each with its colour (ARGB)
+/// for the donut. Empty rows and a zero total when nothing is spent.
+Map<String, dynamic> _split(FinanceProvider finance, DateTime month) {
+  final all = [
+    for (final e in finance.expenseByCategory(month))
+      if (e.value > 0) e,
+  ];
+  final total = all.fold(0.0, (s, e) => s + e.value);
+  final rest = all.skip(kSplitWidgetRows).fold(0.0, (s, e) => s + e.value);
+  return {
+    'total': total,
+    'totalLabel': fmtMoneyCompact(total),
+    'rows': [
+      for (final e in all.take(kSplitWidgetRows))
+        {
+          'label': e.key.label,
+          'amount': e.value,
+          'amountLabel': fmtMoneyTidy(e.value),
+          'color': e.key.color.toARGB32(),
+        },
+      if (rest > 0)
+        {
+          'label': 'Other',
+          'amount': rest,
+          'amountLabel': fmtMoneyTidy(rest),
+          'color': 0xFF888780,
+        },
+    ],
   };
 }
 

@@ -211,6 +211,10 @@ void main() {
       await settings(),
       AccountsScreen(onViewAccount: (_) {}),
     );
+    // Collapsed, a mark on the numbered account only, not Cash.
+    expect(find.byTooltip('No transactions use this account'), findsOneWidget);
+    await tester.tap(find.text('Old HDFC'));
+    await tester.pumpAndSettle();
     expect(
       find.textContaining('No transactions use this account'),
       findsOneWidget,

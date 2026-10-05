@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:provider/provider.dart';
@@ -12,6 +14,7 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
 import '../services/card_bill.dart';
+import '../services/comparison_series.dart';
 import '../services/merchant_stats.dart';
 import '../services/month_forecast.dart';
 import '../services/monthly_recap.dart';
@@ -39,6 +42,7 @@ import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
 import '../widgets/category_donut_chart.dart';
+import '../widgets/comparison_chart_sheet.dart';
 import '../widgets/monthly_bar_chart.dart';
 import '../widgets/monthly_recap_card.dart';
 import '../widgets/rename_merchant_dialog.dart';
@@ -169,25 +173,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (layout.hidden.contains(id)) continue;
       final s = sections[id];
       if (s == null || !s.visible) continue;
+      // A slot a home-screen widget can scroll to ([_showSection]).
+      final slot = _sectionKeys[id];
       if (!fold) {
-        out.addAll(s.body());
+        if (slot == null) {
+          out.addAll(s.body());
+        } else {
+          out.add(
+            KeyedSubtree(
+              key: slot,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: s.body(),
+              ),
+            ),
+          );
+        }
         continue;
       }
-      out.add(
-        DashboardFold(
-          key: ValueKey('fold-${id.name}'),
-          title: s.title ?? id.label,
-          summary: s.summary,
-          tip: s.tip,
-          open: _openedForVisit.contains(id) || settings.sectionOpen(id),
-          onChanged: (v) {
-            // A tap is the user's choice again, and sticks.
-            if (_openedForVisit.remove(id)) setState(() {});
-            settings.setSectionOpen(id, v);
-          },
-          children: s.body(),
-        ),
+      final folded = DashboardFold(
+        key: ValueKey('fold-${id.name}'),
+        title: s.title ?? id.label,
+        summary: s.summary,
+        tip: s.tip,
+        open: _openedForVisit.contains(id) || settings.sectionOpen(id),
+        onChanged: (v) {
+          // A tap is the user's choice again, and sticks.
+          if (_openedForVisit.remove(id)) setState(() {});
+          settings.setSectionOpen(id, v);
+        },
+        children: s.body(),
       );
+      out.add(slot == null ? folded : KeyedSubtree(key: slot, child: folded));
     }
     out.add(_CustomiseRow(page: page, hidden: layout.hidden.length));
     out.add(const SizedBox(height: 120));
@@ -223,6 +241,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     AppNav.instance.detachDashboard(this);
+    _jumpReset?.cancel();
     _pageCtrl.dispose();
     super.dispose();
   }
@@ -288,6 +307,99 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!opening) return reveal(retry: true);
       Future.delayed(
         AnimatedFold.duration + const Duration(milliseconds: 50),
+        () => reveal(retry: true),
+      );
+    });
+  }
+
+  /// The page a [_showSection] jump is sliding to: the pages it passes
+  /// on the way must not end the visit it opened a section for.
+  DashboardPage? _jumpingTo;
+  Timer? _jumpReset;
+
+  /// Sections a home-screen widget can open ([_showSection]): each wraps
+  /// its slot in the page so it can be scrolled into view.
+  final Map<DashboardSection, GlobalKey> _sectionKeys = {
+    for (final s in const [
+      DashboardSection.monthlyBudget,
+      DashboardSection.budgets,
+      DashboardSection.upcoming,
+      DashboardSection.pace,
+      DashboardSection.donut,
+    ])
+      s: GlobalKey(),
+  };
+
+  /// Where a home-screen widget lands: [section]'s page on this month,
+  /// its fold opened for this visit (Trends and Breakdown), scrolled into
+  /// view. A section hidden in Cockpit leaves the page as it is.
+  void _showSection(DashboardSection section) {
+    if (!mounted) return;
+    final now = DateTime.now();
+    setState(() {
+      _month = DateTime(now.year, now.month);
+      _yearMode = false;
+    });
+    _setView(switch (section.page) {
+      DashboardPage.overview => DashboardView.overview,
+      DashboardPage.trends => DashboardView.trends,
+      DashboardPage.breakdown => DashboardView.breakdown,
+    });
+    final settings = context.read<SettingsProvider>();
+    final opening =
+        section.page != DashboardPage.overview &&
+        !settings.sectionOpen(section) &&
+        !_openedForVisit.contains(section);
+    if (opening) {
+      setState(() {
+        _openedForVisit.add(section);
+        _openedAtLayout = settings.dashboardLayoutKey;
+        // Already on its page: no slide, so nothing to wait for.
+        final onPage = switch (_view) {
+          DashboardView.overview => DashboardPage.overview,
+          DashboardView.trends => DashboardPage.trends,
+          DashboardView.breakdown => DashboardPage.breakdown,
+        };
+        _jumpingTo = onPage == section.page ? null : section.page;
+      });
+      // A drag that stops the slide short must not leave it set; a second
+      // jump starts its own wait.
+      _jumpReset?.cancel();
+      _jumpReset = Timer(
+        const Duration(milliseconds: 700),
+        () => _jumpingTo = null,
+      );
+    }
+    final key = _sectionKeys[section];
+    if (key == null) return;
+    void reveal({required bool retry}) {
+      final slot = key.currentContext;
+      if (!mounted) return;
+      if (slot == null) {
+        if (retry) {
+          Future.delayed(
+            const Duration(milliseconds: 350),
+            () => reveal(retry: false),
+          );
+        }
+        return;
+      }
+      final list = Scrollable.maybeOf(slot);
+      final box = slot.findRenderObject();
+      if (list == null || box == null) return;
+      list.position.ensureVisible(
+        box,
+        duration: motionDuration(context, const Duration(milliseconds: 300)),
+        curve: Curves.easeOutCubic,
+        alignment: 0.1,
+      );
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(
+        opening
+            ? AnimatedFold.duration + const Duration(milliseconds: 50)
+            : Duration.zero,
         () => reveal(retry: true),
       );
     });
@@ -472,7 +584,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     final now = DateTime.now();
     _month = DateTime(now.year, now.month);
-    AppNav.instance.attachDashboard(this, showRecap: _showMonthCard);
+    AppNav.instance.attachDashboard(
+      this,
+      showRecap: _showMonthCard,
+      showSection: _showSection,
+    );
   }
 
   /// Steps one month, or one year in Year view (the month is kept so
@@ -1074,6 +1190,57 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ).pace;
       final today = recapClock();
       final comparison = _yearMode ? null : _comparison(finance);
+      // The Month-end forecast, for the running month only: the cards' On
+      // track for and the chart's dashed line both use it.
+      final forecastNow = DateTime.now();
+      final settingsNow = context.read<SettingsProvider>();
+      final trendsForecast =
+          comparison == null ||
+              _month != DateTime(forecastNow.year, forecastNow.month)
+          ? null
+          : computeMonthForecast(
+              finance,
+              patterns: _patterns(finance, forecastNow),
+              hidden: settingsNow.hiddenUpcoming,
+              now: forecastNow,
+              cap: settingsNow.monthlyBudget,
+            );
+      // Without an everyday estimate (the month's first days, little
+      // history) the forecast is a floor: the cards keep their own pace,
+      // which waits for enough days.
+      final cardForecast = trendsForecast?.basis == EverydayBasis.none
+          ? null
+          : trendsForecast?.total;
+      String? forecastExample() {
+        final f = trendsForecast;
+        if (f == null) return null;
+        final parts = [
+          '${fmtMoney(f.spentSoFar)} spent',
+          if (f.billsDue > 0) '${fmtMoney(f.billsDue)} bills due',
+          if (f.everyday > 0) '${fmtMoney(f.everyday)} everyday',
+        ];
+        return '${parts.join(' + ')} = ${fmtMoney(f.total)}';
+      }
+
+      void openChart({required bool usual}) {
+        final c = comparison;
+        if (c == null) return;
+        showComparisonChartSheet(
+          context,
+          series: buildComparisonSeries(
+            finance,
+            _month,
+            // The forecast's own clock, so the chart and the card agree;
+            // the dashed line only when the card shows the forecast too.
+            now: forecastNow,
+            forecast: cardForecast == null ? null : trendsForecast,
+            lastMonthOnRecord:
+                c.vsPrevious.state != CompareState.notEnoughHistory,
+          ),
+          startOnUsual: usual,
+        );
+      }
+
       String? against(SpendCompare? c, String what) {
         // Nothing either side is the card's "Nothing recorded", not a match.
         if (c == null || c.state != CompareState.ok || c.empty) return null;
@@ -1164,15 +1331,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
           visible: comparison != null,
           title: null,
           summary: against(comparison?.vsPrevious, 'last month'),
-          tip: comparison == null ? null : previousMonthTip(comparison),
-          body: () => [PreviousMonthCard(comparison: comparison!)],
+          tip: comparison == null
+              ? null
+              : previousMonthTip(
+                  comparison,
+                  forecastExample: cardForecast == null
+                      ? null
+                      : forecastExample,
+                ),
+          body: () => [
+            PreviousMonthCard(
+              comparison: comparison!,
+              forecastTotal: cardForecast,
+              forecastExample: cardForecast == null ? null : forecastExample,
+              onTap: () => openChart(usual: false),
+            ),
+          ],
         ),
         DashboardSection.usual: (
           visible: comparison != null,
           title: null,
           summary: against(comparison?.vsUsual, 'a usual month'),
           tip: comparison == null ? null : usualTip(comparison),
-          body: () => [UsualSpendCard(comparison: comparison!)],
+          body: () => [
+            UsualSpendCard(
+              comparison: comparison!,
+              forecastTotal: cardForecast,
+              onTap: () => openChart(usual: true),
+            ),
+          ],
         ),
         DashboardSection.categoryComparison: (
           visible: comparison != null,
@@ -1222,13 +1409,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       showIncome: !hideIncome,
                     ),
                     const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    // Wraps at large text on a narrow phone.
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 16,
                       children: [
-                        if (!hideIncome) ...[
+                        if (!hideIncome)
                           _LegendDot(color: colors.green, label: 'Income'),
-                          const SizedBox(width: 16),
-                        ],
                         _LegendDot(color: scheme.error, label: 'Expense'),
                       ],
                     ),
@@ -1767,7 +1954,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
             controller: _pageCtrl,
             onPageChanged: (i) => setState(() {
               _view = DashboardView.values[i];
-              if (_view != DashboardView.trends) _openedForVisit.clear();
+              // A visit ends on leaving its page: a section opened on
+              // Breakdown stays open while Breakdown shows.
+              final page = switch (_view) {
+                DashboardView.overview => DashboardPage.overview,
+                DashboardView.trends => DashboardPage.trends,
+                DashboardView.breakdown => DashboardPage.breakdown,
+              };
+              // Pages a jump passes through on its way are not left.
+              final heading = _jumpingTo;
+              if (heading == null || heading == page) {
+                _jumpingTo = null;
+                _openedForVisit.removeWhere((s) => s.page != page);
+              }
             }),
             // No PageStorageKey anywhere: off-screen pages dispose (no
             // keepAlive, zero cache extent), so every view change still
@@ -1776,7 +1975,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               for (final (page, ahead) in [
                 (overviewChildren, 5000.0),
                 (trendsChildren, 2500.0),
-                (breakdownChildren, null),
+                (breakdownChildren, 2500.0),
               ])
                 // Transparent ColoredBox: a PageView only receives drags
                 // that hit its subtree, and blank regions need an opaque
@@ -1789,11 +1988,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       padding: const EdgeInsets.all(16),
                       // Sections can be moved down the page, and the recap
                       // notification scrolls to the recap (Overview) or the
-                      // pace (Trends): build ahead so the card exists to
-                      // scroll to. Breakdown has nothing to reveal.
-                      scrollCacheExtent: ahead == null
-                          ? null
-                          : ScrollCacheExtent.pixels(ahead),
+                      // pace (Trends), a home-screen widget to its section:
+                      // build ahead so the card exists to scroll to.
+                      scrollCacheExtent: ScrollCacheExtent.pixels(ahead),
                       children: page(),
                     ),
                   ),

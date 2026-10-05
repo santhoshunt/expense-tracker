@@ -33,15 +33,23 @@ object HomeWidgets {
     private const val DATA_KEY = "flutter.home_widget_data_v1"
     private const val THEME_KEY = "flutter.budget_widget_theme_v1"
 
-    /** PendingIntent request codes: one per purpose and instance, so two
-     * widgets' taps never overwrite each other's intent. */
-    private const val REQUEST_OPEN = 4000
-    private const val REQUEST_ADD = 3000
+    /** What a widget's PendingIntent is for; see [requestCode]. */
+    const val PURPOSE_OPEN = 1
+    const val PURPOSE_ADD = 2
+    const val PURPOSE_BUDGET = 3
+
+    /** One request code per widget and purpose. Every tap is an ACTION_RUN
+     * intent on the same activity, and intents differing only in extras are
+     * the same PendingIntent: a shared code would let one widget's tap
+     * overwrite another's. Widget ids are unique, so id and purpose never
+     * collide. */
+    fun requestCode(id: Int, purpose: Int): Int = id * 8 + purpose
 
     private val providers = listOf(
         MonthPaceWidgetProvider::class.java,
         UpcomingWidgetProvider::class.java,
         TodayAddWidgetProvider::class.java,
+        SpendingSplitWidgetProvider::class.java,
     )
 
     /** The app's colours, as buildWidgetTheme writes them; dark-kit
@@ -95,8 +103,10 @@ object HomeWidgets {
             val views = when (provider) {
                 MonthPaceWidgetProvider::class.java.name ->
                     pace(context, manager, id, data, theme)
-                UpcomingWidgetProvider::class.java.name -> upcoming(context, data, theme)
+                UpcomingWidgetProvider::class.java.name -> upcoming(context, id, data, theme)
                 TodayAddWidgetProvider::class.java.name -> todayAdd(context, id, data, theme)
+                SpendingSplitWidgetProvider::class.java.name ->
+                    split(context, manager, id, data, theme)
                 else -> return
             }
             manager.updateAppWidget(id, views)
@@ -105,18 +115,27 @@ object HomeWidgets {
         }
     }
 
-    private fun openApp(context: Context, id: Int): PendingIntent =
+    /** Opens the app on [action]: the part of it this widget shows. Widget
+     * ids are unique, so one request code per widget never collides. */
+    private fun openApp(context: Context, id: Int, action: String): PendingIntent =
         PendingIntent.getActivity(
             context,
-            REQUEST_OPEN + id,
-            BudgetWidgetProvider.launchIntent(context),
+            requestCode(id, PURPOSE_OPEN),
+            QuickActions.intent(context, action)
+                ?: BudgetWidgetProvider.launchIntent(context),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-    private fun base(context: Context, layout: Int, theme: Theme, id: Int): RemoteViews =
+    private fun base(
+        context: Context,
+        layout: Int,
+        theme: Theme,
+        id: Int,
+        action: String,
+    ): RemoteViews =
         RemoteViews(context.packageName, layout).apply {
             setInt(R.id.hw_bg, "setColorFilter", theme.surface)
-            setOnClickPendingIntent(R.id.hw_root, openApp(context, id))
+            setOnClickPendingIntent(R.id.hw_root, openApp(context, id, action))
         }
 
     // --- Month pace ---------------------------------------------------------
@@ -128,7 +147,7 @@ object HomeWidgets {
         data: JSONObject?,
         theme: Theme,
     ): RemoteViews {
-        val views = base(context, R.layout.home_widget_pace, theme, id)
+        val views = base(context, R.layout.home_widget_pace, theme, id, QuickActions.OPEN_PACE)
         views.setTextColor(R.id.hw_title, theme.textSecondary)
         views.setTextColor(R.id.hw_amount, theme.text)
         views.setTextColor(R.id.hw_sub, theme.text)
@@ -243,9 +262,17 @@ object HomeWidgets {
         Triple(R.id.hw_row3, R.id.hw_name3, R.id.hw_meta3),
     )
 
-    private fun upcoming(context: Context, data: JSONObject?, theme: Theme): RemoteViews {
-        // Every row opens the app, so the whole card shares one intent.
-        val views = base(context, R.layout.home_widget_upcoming, theme, 0)
+    private fun upcoming(
+        context: Context,
+        id: Int,
+        data: JSONObject?,
+        theme: Theme,
+    ): RemoteViews {
+        // Every row opens the Upcoming card, so the whole widget shares one
+        // intent.
+        val views = base(
+            context, R.layout.home_widget_upcoming, theme, id, QuickActions.OPEN_UPCOMING
+        )
         views.setTextColor(R.id.hw_title, theme.textSecondary)
         views.setTextColor(R.id.hw_empty, theme.textSecondary)
         val today = today()
@@ -290,10 +317,10 @@ object HomeWidgets {
     // --- Today and Add ------------------------------------------------------
 
     private fun todayAdd(context: Context, id: Int, data: JSONObject?, theme: Theme): RemoteViews {
-        val views = base(context, R.layout.home_widget_today, theme, id)
+        val views = base(context, R.layout.home_widget_today, theme, id, QuickActions.OPEN_TODAY)
         views.setTextColor(R.id.hw_title, theme.textSecondary)
         views.setTextColor(R.id.hw_amount, theme.text)
-        views.setOnClickPendingIntent(R.id.hw_open, openApp(context, id))
+        views.setOnClickPendingIntent(R.id.hw_open, openApp(context, id, QuickActions.OPEN_TODAY))
 
         val t = data?.optJSONObject("today")
         val count = t?.optInt("count", 0) ?: 0
@@ -344,13 +371,129 @@ object HomeWidgets {
                 R.id.hw_add,
                 PendingIntent.getActivity(
                     context,
-                    REQUEST_ADD + id,
+                    requestCode(id, PURPOSE_ADD),
                     add,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
             )
         }
         return views
+    }
+
+    // --- Spending split -----------------------------------------------------
+
+    private val splitRows = listOf(
+        Triple(R.id.hw_split_row1, R.id.hw_split_name1, R.id.hw_split_amt1),
+        Triple(R.id.hw_split_row2, R.id.hw_split_name2, R.id.hw_split_amt2),
+        Triple(R.id.hw_split_row3, R.id.hw_split_name3, R.id.hw_split_amt3),
+        Triple(R.id.hw_split_row4, R.id.hw_split_name4, R.id.hw_split_amt4),
+    )
+    private val splitDots = listOf(
+        R.id.hw_split_dot1, R.id.hw_split_dot2, R.id.hw_split_dot3,
+        R.id.hw_split_dot4,
+    )
+
+    /** This month's spend as a donut, beside the largest categories. */
+    private fun split(
+        context: Context,
+        manager: AppWidgetManager,
+        id: Int,
+        data: JSONObject?,
+        theme: Theme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_split, theme, id, QuickActions.OPEN_BREAKDOWN
+        )
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val now = LocalDate.now()
+        // Last month's snapshot is not this month's split.
+        val sameMonth = data?.optInt("monthKey", -1) == now.year * 12 + now.monthValue
+        val split = if (sameMonth) data?.optJSONObject("split") else null
+        val rows = split?.optJSONArray("rows")
+        val total = split?.optDouble("total", 0.0) ?: 0.0
+        val monthName = if (sameMonth) data?.optString("monthLabel")
+        else now.month.getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH)
+        views.setTextViewText(R.id.hw_title, "$monthName spending")
+        if (rows == null || rows.length() == 0 || total <= 0) {
+            views.setViewVisibility(R.id.hw_body, View.GONE)
+            views.setViewVisibility(R.id.hw_empty, View.VISIBLE)
+            views.setTextViewText(
+                R.id.hw_empty,
+                if (data == null) context.getString(R.string.home_widget_empty)
+                else "Nothing spent yet this month."
+            )
+            return views
+        }
+        views.setViewVisibility(R.id.hw_body, View.VISIBLE)
+        views.setViewVisibility(R.id.hw_empty, View.GONE)
+        val slices = mutableListOf<Pair<Double, Int>>()
+        splitRows.forEachIndexed { i, (row, name, amount) ->
+            val o = rows.optJSONObject(i)
+            views.setViewVisibility(row, if (o == null) View.GONE else View.VISIBLE)
+            if (o == null) return@forEachIndexed
+            val color = o.optLong("color", 0xFF888780).toInt()
+            slices += o.optDouble("amount", 0.0) to color
+            views.setTextViewText(name, o.optString("label"))
+            views.setTextViewText(amount, o.optString("amountLabel"))
+            views.setTextColor(name, theme.text)
+            views.setTextColor(amount, theme.textSecondary)
+            // The colour is on the dot only; the text stays on the surface.
+            views.setInt(splitDots[i], "setColorFilter", color)
+        }
+        views.setImageViewBitmap(
+            R.id.hw_donut,
+            donut(context, slices, total, split.optString("totalLabel"), theme)
+        )
+        return views
+    }
+
+    /** A ring of [slices] (amount, colour) on the track, the total inside. */
+    private fun donut(
+        context: Context,
+        slices: List<Pair<Double, Int>>,
+        total: Double,
+        label: String,
+        theme: Theme,
+    ): Bitmap {
+        val density = context.resources.displayMetrics.density
+        val size = (68 * density).toInt().coerceAtLeast(32)
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val stroke = 10 * density
+        val inset = stroke / 2 + density
+        val oval = RectF(inset, inset, size - inset, size - inset)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = stroke
+        }
+        paint.color = theme.track
+        canvas.drawArc(oval, 0f, 360f, false, paint)
+        var start = -90f
+        for ((amount, color) in slices) {
+            val sweep = (amount / total * 360).toFloat()
+            if (sweep <= 0f) continue
+            paint.color = color
+            // A hairline gap between slices, so neighbours read apart; one
+            // category alone is the whole ring.
+            val gap = if (slices.size > 1) 1.5f else 0f
+            canvas.drawArc(oval, start, (sweep - gap).coerceAtLeast(0.5f), false, paint)
+            start += sweep
+        }
+        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = theme.text
+            textAlign = Paint.Align.CENTER
+            isFakeBoldText = true
+            textSize = 13 * density
+        }
+        // Shrinks a long total to fit inside the ring.
+        val room = size - 2 * (stroke + 4 * density)
+        while (text.measureText(label) > room && text.textSize > 8 * density) {
+            text.textSize -= density
+        }
+        val y = size / 2f - (text.descent() + text.ascent()) / 2
+        canvas.drawText(label, size / 2f, y, text)
+        return bmp
     }
 
     private fun luminance(c: Int): Double {
@@ -378,6 +521,9 @@ class UpcomingWidgetProvider : HomeWidgetProviderBase()
 
 /** Today and Add (4×1): today's spend and an Add expense button. */
 class TodayAddWidgetProvider : HomeWidgetProviderBase()
+
+/** Spending split (4×2): this month's spend by category, as a donut. */
+class SpendingSplitWidgetProvider : HomeWidgetProviderBase()
 
 /** One picker entry per subclass; [HomeWidgets.render] picks the layout. */
 abstract class HomeWidgetProviderBase : AppWidgetProvider() {

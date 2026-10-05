@@ -12,6 +12,7 @@ import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/services/launch_actions.dart';
 import 'package:expense_tracker/services/monthly_recap.dart';
+import 'package:expense_tracker/widgets/category_donut_chart.dart';
 import 'package:expense_tracker/widgets/lock_gate.dart';
 import 'package:expense_tracker/widgets/monthly_recap_card.dart';
 
@@ -200,6 +201,79 @@ void main() {
       expect(find.byType(MonthPaceCard).hitTestable(), findsNothing);
       expect(find.text('This month vs last month'), findsOneWidget);
     });
+  });
+
+  group('a home-screen widget tap', () {
+    final now = DateTime.now();
+
+    Future<void> seed(FinanceProvider p) async {
+      // Last month too: This month so far needs a month to compare.
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'transport',
+        amount: 400,
+        note: 'last month',
+        date: DateTime(now.year, now.month - 1, 2),
+      );
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 250,
+        note: 'lunch today',
+        // Midnight today: never in the future, whatever time it runs.
+        date: DateTime(now.year, now.month, now.day),
+      );
+    }
+
+    testWidgets('Spending split opens its section on Breakdown', (
+      tester,
+    ) async {
+      // Folded by the user: the tap opens it for this visit only.
+      SharedPreferences.setMockInitialValues({
+        'dashboard_layout_v1': '{"pages":{},"open":{"donut":false}}',
+      });
+      await pumpHome(tester, seed: seed);
+      await tester.tap(find.text('Transactions').last);
+      await settle(tester);
+      LaunchActions.instance.pending.value = LaunchAction.openBreakdown;
+      await settle(tester);
+      await settle(tester);
+      final settings = tester
+          .element(find.byType(HomeScreen))
+          .read<SettingsProvider>();
+      expect(settings.sectionOpen(DashboardSection.donut), isFalse);
+      expect(find.byType(CategoryDonutChart).hitTestable(), findsOneWidget);
+    });
+
+    testWidgets('Month pace opens This month so far on Trends', (tester) async {
+      // Past the recap week, when the pace card takes the recap's place.
+      recapClock = () => DateTime(now.year, now.month, 20, 10);
+      addTearDown(() => recapClock = DateTime.now);
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.openPace;
+      await settle(tester);
+      await settle(tester);
+      expect(find.byType(MonthPaceCard).hitTestable(), findsOneWidget);
+    });
+
+    testWidgets("Today and Add opens today's transactions", (tester) async {
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.openToday;
+      await settle(tester);
+      expect(find.text('lunch today'), findsOneWidget);
+    });
+  });
+
+  test('each home-screen widget names its own place', () {
+    expect(LaunchActions.fromName('open_budget'), LaunchAction.openBudget);
+    expect(LaunchActions.fromName('open_budgets'), LaunchAction.openBudgets);
+    expect(LaunchActions.fromName('open_pace'), LaunchAction.openPace);
+    expect(LaunchActions.fromName('open_upcoming'), LaunchAction.openUpcoming);
+    expect(LaunchActions.fromName('open_today'), LaunchAction.openToday);
+    expect(
+      LaunchActions.fromName('open_breakdown'),
+      LaunchAction.openBreakdown,
+    );
   });
 
   test('unknown native names and payloads are ignored', () {

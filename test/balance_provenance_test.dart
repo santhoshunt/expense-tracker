@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
+import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 
@@ -182,12 +183,22 @@ void main() {
   });
 
   group('accounts screen line', () {
-    Widget app(FinanceProvider p) => ChangeNotifierProvider.value(
-      value: p,
-      child: MaterialApp(
-        home: Scaffold(body: AccountsScreen(onViewAccount: (_) {})),
-      ),
-    );
+    /// Every card open: these tests read the full details.
+    Widget app(FinanceProvider p) {
+      final s = SettingsProvider();
+      for (final a in p.accounts) {
+        s.setAccountExpanded(a.id, true);
+      }
+      return MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: p),
+          ChangeNotifierProvider.value(value: s),
+        ],
+        child: MaterialApp(
+          home: Scaffold(body: AccountsScreen(onViewAccount: (_) {})),
+        ),
+      );
+    }
 
     testWidgets('bank tile says alert + N txns since', (tester) async {
       final p = await load(

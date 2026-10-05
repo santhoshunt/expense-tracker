@@ -2,8 +2,20 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 /// Something outside the app asked it to open a particular place: a
-/// launcher shortcut, the Quick Settings tile, or a notification tap.
-enum LaunchAction { addExpense, importSms, openRecap, openReview }
+/// launcher shortcut, the Quick Settings tile, a notification tap, or a
+/// home-screen widget (each widget opens its own part of the app).
+enum LaunchAction {
+  addExpense,
+  importSms,
+  openRecap,
+  openReview,
+  openBudget,
+  openBudgets,
+  openPace,
+  openUpcoming,
+  openToday,
+  openBreakdown,
+}
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
 /// [pending] until Home can act on it (loaded, unlocked, mounted).
@@ -26,6 +38,12 @@ class LaunchActions {
   static LaunchAction? fromName(String? name) => switch (name) {
     'add_expense' => LaunchAction.addExpense,
     'import_sms' => LaunchAction.importSms,
+    'open_budget' => LaunchAction.openBudget,
+    'open_budgets' => LaunchAction.openBudgets,
+    'open_pace' => LaunchAction.openPace,
+    'open_upcoming' => LaunchAction.openUpcoming,
+    'open_today' => LaunchAction.openToday,
+    'open_breakdown' => LaunchAction.openBreakdown,
     _ => null,
   };
 

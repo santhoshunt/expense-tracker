@@ -34,6 +34,7 @@ class AppNav {
 
   Object? _dashboardOwner;
   VoidCallback? _showRecap;
+  void Function(DashboardSection section)? _showSection;
 
   void attachHome(
     Object owner, {
@@ -71,21 +72,33 @@ class AppNav {
     _showAccountType = null;
   }
 
-  void attachDashboard(Object owner, {required VoidCallback showRecap}) {
+  void attachDashboard(
+    Object owner, {
+    required VoidCallback showRecap,
+    required void Function(DashboardSection section) showSection,
+  }) {
     _dashboardOwner = owner;
     _showRecap = showRecap;
+    _showSection = showSection;
   }
 
   void detachDashboard(Object owner) {
     if (_dashboardOwner != owner) return;
     _dashboardOwner = null;
     _showRecap = null;
+    _showSection = null;
   }
 
   /// The Dashboard's recap on the Overview, or after the recap week this
   /// month so far on Trends, scrolled into view. Leaves open routes alone:
   /// callers switch the home tab themselves.
   void showRecap() => _showRecap?.call();
+
+  /// [section]'s Dashboard page on this month, its fold opened and scrolled
+  /// into view (where each home-screen widget lands). Leaves open routes
+  /// alone: callers switch the home tab themselves.
+  void showDashboardSection(DashboardSection section) =>
+      _showSection?.call(section);
 
   void _toRoot(BuildContext context) =>
       Navigator.of(context).popUntil((r) => r.isFirst);

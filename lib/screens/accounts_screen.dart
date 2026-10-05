@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/account.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../providers/settings_provider.dart';
 import '../services/card_bill.dart';
 import '../services/savings_goal.dart';
 import '../services/sms_parser.dart';
@@ -11,6 +12,7 @@ import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
 import '../widgets/picker_sheet.dart';
+import '../widgets/animated_fold.dart';
 import '../widgets/balance_breakdown.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/empty_state.dart';
@@ -340,6 +342,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 }
 
+/// One account: collapsed to its name and one figure (the balance, or what
+/// a card owes) until tapped; open, today's full details and a way into its
+/// transactions. Which cards are open is remembered ([SettingsProvider]).
 class _AccountCard extends StatelessWidget {
   final Account account;
   final void Function(String accountId) onView;
@@ -349,106 +354,177 @@ class _AccountCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
+    final settings = context.read<SettingsProvider>();
+    final expanded = context.select<SettingsProvider, bool>(
+      (s) => s.isAccountExpanded(account.id),
+    );
     final scheme = Theme.of(context).colorScheme;
     final isCard = account.isCard;
     final txCount = finance.transactionCountForAccount(account.id);
+    final orphaned = finance.isOrphanedAccount(account);
+    final String figure;
+    if (isCard) {
+      final owed = finance.accountOutstanding(account);
+      figure = owed == null ? 'Limit needed' : '${fmtMoney(owed)} due';
+    } else {
+      figure = fmtMoney(finance.accountBalance(account));
+    }
+    final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
       child: FrostedPanel(
         radius: BorderRadius.circular(20),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: () => onView(account.id),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: scheme.primary.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(AppRadius.control),
-                      ),
-                      child: Icon(
-                        account.icon,
-                        color: categoryGlyphColor(context, scheme.primary),
-                        size: 21,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            // Under its service header a wallet is its
-                            // login; closed, it has no header to lean on.
-                            account.isWallet && account.isClosed
-                                ? account.displayName
-                                : account.name,
-                            style: Theme.of(context).textTheme.titleMedium,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+        // TalkBack says whether the card is open.
+        child: Semantics(
+          expanded: expanded,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: () => settings.setAccountExpanded(account.id, !expanded),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: scheme.primary.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(
+                            AppRadius.control,
                           ),
-                          Text(
-                            '${account.typeLabel} · $txCount '
-                            'txn${txCount == 1 ? '' : 's'}',
-                            style: TextStyle(
-                              color: scheme.onSurfaceVariant,
-                              fontSize: 12,
+                        ),
+                        child: Icon(
+                          account.icon,
+                          color: categoryGlyphColor(context, scheme.primary),
+                          size: 21,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // The name gets the larger share of the row: a long
+                      // card name beside a short figure.
+                      Expanded(
+                        flex: 3,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              // Under its service header a wallet is its
+                              // login; closed, it has no header to lean on.
+                              account.isWallet && account.isClosed
+                                  ? account.displayName
+                                  : account.name,
+                              style: Theme.of(context).textTheme.titleMedium,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (expanded)
+                              Text(
+                                '${account.typeLabel} · $txCount '
+                                'txn${txCount == 1 ? '' : 's'}',
+                                style: muted,
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (!expanded) ...[
+                        // The hint lives in the open card; closed, a mark
+                        // says there is one.
+                        if (orphaned)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Tooltip(
+                              message: 'No transactions use this account',
+                              child: Icon(
+                                Icons.info_outline,
+                                size: 16,
+                                color: scheme.onSurfaceVariant,
+                              ),
                             ),
                           ),
-                        ],
+                        // Shares the row with the name and shrinks to fit:
+                        // a fixed width overflowed at large text.
+                        Flexible(
+                          flex: 2,
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              figure,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                      Icon(
+                        expanded ? Icons.expand_less : Icons.expand_more,
+                        // No label: the card's Semantics(expanded:) says it.
+                        color: scheme.onSurfaceVariant,
                       ),
-                    ),
-                    _AccountMenu(account: account),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                if (isCard)
-                  _CardFigures(account: account, onView: onView)
-                else
-                  _BankBalance(account: account),
-                // An account the 1.28 re-key emptied keeps its set balance
-                // in net balance: say so, and offer the two ways out.
-                if (finance.isOrphanedAccount(account)) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    [
-                      'No transactions use this account.',
-                      // Only what a figure set by hand still adds to net
-                      // balance; savings sit outside it.
-                      if (account.manualBalance != null)
-                        if (account.isCard)
-                          'Its set outstanding still counts in net balance.'
-                        else if (account.type == AccountType.bank)
-                          'Its set balance still counts in net balance.',
-                    ].join(' '),
-                    style: TextStyle(
-                      color: scheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
-                  ),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      TextButton(
-                        onPressed: () => mergeAccountFlow(context, account),
-                        child: const Text('Merge into…'),
-                      ),
-                      TextButton(
-                        onPressed: () => deleteAccountFlow(context, account),
-                        child: const Text('Delete'),
-                      ),
+                      _AccountMenu(account: account),
                     ],
                   ),
+                  AnimatedFold(
+                    collapsed: !expanded,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const SizedBox(height: 14),
+                        if (isCard)
+                          _CardFigures(account: account, onView: onView)
+                        else
+                          _BankBalance(account: account),
+                        // An account the 1.28 re-key emptied keeps its set
+                        // balance in net balance: say so, and offer the two
+                        // ways out.
+                        if (orphaned) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            [
+                              'No transactions use this account.',
+                              // Only what a figure set by hand still adds to
+                              // net balance; savings sit outside it.
+                              if (account.manualBalance != null)
+                                if (account.isCard)
+                                  'Its set outstanding still counts in net '
+                                      'balance.'
+                                else if (account.type == AccountType.bank)
+                                  'Its set balance still counts in net balance.',
+                            ].join(' '),
+                            style: muted,
+                          ),
+                          Wrap(
+                            spacing: 8,
+                            children: [
+                              TextButton(
+                                onPressed: () =>
+                                    mergeAccountFlow(context, account),
+                                child: const Text('Merge into…'),
+                              ),
+                              TextButton(
+                                onPressed: () =>
+                                    deleteAccountFlow(context, account),
+                                child: const Text('Delete'),
+                              ),
+                            ],
+                          ),
+                        ],
+                        const SizedBox(height: 6),
+                        TextButton.icon(
+                          onPressed: () => onView(account.id),
+                          icon: const Icon(Icons.list_alt, size: 18),
+                          label: const Text('View transactions'),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -1035,9 +1111,13 @@ class _CardFigures extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              'Outstanding',
-              style: TextStyle(color: scheme.onSurfaceVariant),
+            Flexible(
+              child: Text(
+                'Outstanding',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
             ),
             const SizedBox(width: 8),
             Flexible(
