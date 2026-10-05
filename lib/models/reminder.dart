@@ -42,6 +42,10 @@ class Reminder {
   /// on, so turning it on never back-fills earlier months.
   final String? autoSince;
 
+  /// `yyyy-MM-dd` the reminder was made; null for one made before 1.32.
+  /// Its occurrences in earlier months never count as due or overdue.
+  final String? createdOn;
+
   const Reminder({
     required this.id,
     required this.name,
@@ -54,6 +58,7 @@ class Reminder {
     this.autoAdd = false,
     this.accountId,
     this.autoSince,
+    this.createdOn,
   });
 
   Reminder copyWith({
@@ -70,6 +75,7 @@ class Reminder {
     String? accountId,
     bool clearAccountId = false,
     String? autoSince,
+    String? createdOn,
   }) => Reminder(
     id: id,
     name: name ?? this.name,
@@ -86,6 +92,7 @@ class Reminder {
     autoAdd: autoAdd ?? this.autoAdd,
     accountId: clearAccountId ? null : (accountId ?? this.accountId),
     autoSince: autoSince ?? this.autoSince,
+    createdOn: createdOn ?? this.createdOn,
   );
 
   Map<String, dynamic> toJson() => {
@@ -100,6 +107,7 @@ class Reminder {
     if (autoAdd) 'autoAdd': true,
     if (accountId != null) 'accountId': accountId,
     if (autoSince != null) 'autoSince': autoSince,
+    if (createdOn != null) 'createdOn': createdOn,
   };
 
   /// Tolerant: a hand-edited or older file must not break loading. The day
@@ -127,6 +135,7 @@ class Reminder {
       autoAdd: json['autoAdd'] == true,
       accountId: json['accountId'] as String?,
       autoSince: json['autoSince'] as String?,
+      createdOn: json['createdOn'] as String?,
     );
   }
 }

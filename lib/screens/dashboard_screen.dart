@@ -16,6 +16,7 @@ import '../services/merchant_stats.dart';
 import '../services/month_forecast.dart';
 import '../services/monthly_recap.dart';
 import '../services/recurring_detector.dart';
+import '../services/reminder_schedule.dart';
 import '../services/spend_comparison.dart';
 import '../services/safe_to_spend.dart';
 import '../services/subscriptions.dart';
@@ -2927,119 +2928,264 @@ class _ForecastCard extends StatelessWidget {
 }
 
 /// The forecast's bills, one row each: what it is, when it is due, what it
-/// costs, and whether it is a reminder or a payment the app detected.
+/// costs, whether it is a reminder or a payment the app detected, and a
+/// Paid button for one that was paid but still shows (a reminder not
+/// marked, an alert that never came). Whether a row is paid is read from
+/// the provider, so a reminder's two rows (last month's and this month's)
+/// and a reminder's payment alert arriving meanwhile stay right. A row
+/// marked here keeps an Undo while its mark is still the current one; the
+/// total below is the unpaid rows'.
 Future<void> _showForecastBills(BuildContext context, MonthForecast f) {
+  final finance = context.read<FinanceProvider>();
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
+  // Row index → the Paid tapped on it: whether its mark still stands (a
+  // later mark or an alert can move it on), and how to undo it.
+  final undo =
+      <int, ({bool Function() current, Future<void> Function() run})>{};
+
+  Reminder? reminderOf(DueBill b) {
+    for (final r in finance.reminders) {
+      if (r.id == b.reminderId) return r;
+    }
+    return null;
+  }
+
+  bool isPaid(DueBill b) {
+    final key = b.patternKey;
+    if (key != null) {
+      final through = DateTime.tryParse(finance.patternPaidThrough(key) ?? '');
+      return through != null && !b.due.isAfter(through);
+    }
+    final r = reminderOf(b);
+    return r != null && reminderOccurrenceDone(r, b.due);
+  }
+
+  /// Marks [b] paid; returns its undo when the tap changed anything.
+  ({bool Function() current, Future<void> Function() run})? markPaid(
+    DueBill b,
+  ) {
+    final key = b.patternKey;
+    if (key != null) {
+      final before = finance.patternPaidThrough(key);
+      finance.markPatternPaid(key, b.due);
+      final marked = finance.patternPaidThrough(key);
+      if (marked == before) return null;
+      return (
+        current: () => finance.patternPaidThrough(key) == marked,
+        run: () => finance.restorePatternPaid(key, before, marked: marked),
+      );
+    }
+    final r = reminderOf(b);
+    if (r == null) return null;
+    final before = r.lastPaidMonth;
+    finance.markReminderPaid(r.id, b.due);
+    final marked = reminderOf(b)?.lastPaidMonth;
+    if (marked == null || marked == before) return null;
+    return (
+      current: () => reminderOf(b)?.lastPaidMonth == marked,
+      run: () =>
+          finance.undoReminderPaid(r.id, marked: marked, previous: before),
+    );
+  }
+
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.5),
     isScrollControlled: true,
     useSafeArea: true,
-    builder: (ctx) {
-      final scheme = Theme.of(ctx).colorScheme;
-      final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          child: FrostedPanel(
-            radius: BorderRadius.circular(28),
+    builder: (ctx) => ListenableBuilder(
+      listenable: finance,
+      builder: (ctx, _) => StatefulBuilder(
+        builder: (ctx, setState) {
+          final scheme = Theme.of(ctx).colorScheme;
+          final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
+          var total = 0.0;
+          for (final b in f.bills) {
+            if (!isPaid(b)) total += b.amount;
+          }
+          return SafeArea(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Bills still due',
-                      style: Theme.of(ctx).textTheme.titleLarge,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Reminders not yet paid, and regular payments the '
-                      'app has spotted in your history, due by ${fmtDateCompact(f.lastDay)} or up '
-                      'to a week overdue. Paying one takes it off.',
-                      style: muted,
-                    ),
-                    const SizedBox(height: 12),
-                    for (final b in f.bills)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6),
-                        child: Row(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: FrostedPanel(
+                radius: BorderRadius.circular(28),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Bills still due',
+                          style: Theme.of(ctx).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Reminders not yet paid, and regular payments the '
+                          'app has spotted in your history, due by '
+                          '${fmtDateCompact(f.lastDay)} or up to a week '
+                          'overdue. Paid one already? Tap Paid: it leaves '
+                          'the forecast.',
+                          style: muted,
+                        ),
+                        const SizedBox(height: 8),
+                        for (final (i, b) in f.bills.indexed)
+                          _ForecastBillRow(
+                            bill: b,
+                            today: today,
+                            paid: isPaid(b),
+                            // Add it for me records its own expense on the
+                            // due day: marking it paid would skip that.
+                            autoAdd: reminderOf(b)?.autoAdd ?? false,
+                            onPaid: () {
+                              final back = markPaid(b);
+                              if (back != null) {
+                                setState(() => undo[i] = back);
+                              }
+                            },
+                            onUndo: undo[i]?.current() ?? false
+                                ? () {
+                                    final back = undo.remove(i);
+                                    setState(() {});
+                                    back?.run();
+                                  }
+                                : null,
+                          ),
+                        const Divider(height: 24),
+                        Row(
                           children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    b.label,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  Text(
-                                    [
-                                      // A detected payment's date is the
-                                      // app's guess: expected, not due.
-                                      switch ((
-                                        b.patternKey == null,
-                                        b.due.isBefore(today),
-                                      )) {
-                                        (true, true) =>
-                                          'Overdue since ${fmtDateCompact(b.due)}',
-                                        (true, false) =>
-                                          'Due ${fmtDateCompact(b.due)}',
-                                        (false, true) =>
-                                          'Expected ${fmtDateCompact(b.due)}, '
-                                              'not seen yet',
-                                        (false, false) =>
-                                          'Expected ${fmtDateCompact(b.due)}',
-                                      },
-                                      b.patternKey == null
-                                          ? 'reminder'
-                                          : 'regular payment',
-                                    ].join(' · '),
-                                    style: muted,
-                                  ),
-                                ],
+                            const Expanded(
+                              child: Text(
+                                'Total',
+                                style: TextStyle(fontWeight: FontWeight.w700),
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 140),
-                              child: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(fmtMoney(b.amount)),
+                            Text(
+                              fmtMoney(total),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
                           ],
                         ),
-                      ),
-                    const Divider(height: 24),
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Total',
-                            style: TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                        ),
-                        Text(
-                          fmtMoney(f.billsDue),
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
-      );
-    },
+          );
+        },
+      ),
+    ),
   );
+}
+
+/// One bill in [_showForecastBills]: name and amount, then when it is due
+/// and what kind it is beside its Paid (or, once paid, Undo) button.
+class _ForecastBillRow extends StatelessWidget {
+  final DueBill bill;
+  final DateTime today;
+  final bool paid;
+  final bool autoAdd;
+  final VoidCallback onPaid;
+
+  /// Null once paid by other means (a later mark, an alert): nothing of
+  /// this sheet's to undo.
+  final VoidCallback? onUndo;
+
+  const _ForecastBillRow({
+    required this.bill,
+    required this.today,
+    required this.paid,
+    required this.autoAdd,
+    required this.onPaid,
+    required this.onUndo,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
+    final b = bill;
+    final reminder = b.patternKey == null;
+    final when = paid
+        ? 'Marked paid'
+        : [
+            // A detected payment's date is the app's guess: expected, not
+            // due.
+            switch ((reminder, b.due.isBefore(today))) {
+              (true, true) => 'Overdue since ${fmtDateCompact(b.due)}',
+              (true, false) => 'Due ${fmtDateCompact(b.due)}',
+              (false, true) =>
+                'Expected ${fmtDateCompact(b.due)}, not seen yet',
+              (false, false) => 'Expected ${fmtDateCompact(b.due)}',
+            },
+            reminder ? 'reminder' : 'regular payment',
+          ].join(' · ');
+    final nameStyle = paid ? TextStyle(color: scheme.onSurfaceVariant) : null;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  b.label,
+                  style: nameStyle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 140),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    fmtMoney(b.amount),
+                    style: paid
+                        ? TextStyle(
+                            color: scheme.onSurfaceVariant,
+                            decoration: TextDecoration.lineThrough,
+                          )
+                        : null,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              Expanded(child: Text(when, style: muted)),
+              const SizedBox(width: 8),
+              if (autoAdd && !paid)
+                Text('Added for you on the day', style: muted)
+              else if (!paid || onUndo != null)
+                Semantics(
+                  button: true,
+                  label: paid
+                      ? 'Undo marking ${b.label} paid'
+                      : 'Mark ${b.label} paid',
+                  excludeSemantics: true,
+                  // The tap on the node itself: excludeSemantics drops the
+                  // button's own, which Switch Access needs.
+                  onTap: paid ? onUndo : onPaid,
+                  child: TextButton(
+                    onPressed: paid ? onUndo : onPaid,
+                    child: Text(paid ? 'Undo' : 'Paid'),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _StatCard extends StatelessWidget {

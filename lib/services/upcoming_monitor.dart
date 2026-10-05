@@ -118,6 +118,8 @@ class UpcomingMonitor {
       );
       for (final h in hits) {
         if (settings.hiddenUpcoming.contains(h.key)) continue;
+        // Marked paid by hand: its alert never came, so nothing to remind.
+        if (hitMarkedPaid(finance, h)) continue;
         // Its reminder notifies (or, adding itself, needs no reminding).
         if (finance.reminders.any((r) => reminderCoversHit(r, h, now))) {
           continue;

@@ -110,6 +110,42 @@ void main() {
     expect(find.text('Bills still due'), findsOneWidget);
     expect(find.text('Broadband'), findsOneWidget);
     expect(find.textContaining('· reminder'), findsOneWidget);
+
+    // Paid marks it, greys the row and takes it out of the total; Undo
+    // puts it back.
+    await tester.tap(find.widgetWithText(TextButton, 'Paid'));
+    await tester.pumpAndSettle();
+    expect(find.text('Marked paid'), findsOneWidget);
+    expect(p.reminders.single.lastPaidMonth, isNotNull);
+    await tester.tap(find.widgetWithText(TextButton, 'Undo'));
+    await tester.pumpAndSettle();
+    expect(find.text('Marked paid'), findsNothing);
+    expect(
+      p.reminders.single.lastPaidMonth,
+      _monthKey(DateTime(now.year, now.month - 1)),
+    );
+  });
+
+  testWidgets('an Add it for me reminder has no Paid button', (tester) async {
+    final p = await ledger(1200);
+    final now = DateTime.now();
+    await p.restoreReminder(
+      Reminder(
+        id: 'sip',
+        name: 'Monthly SIP',
+        dayOfMonth: DateTime(now.year, now.month + 1, 0).day,
+        categoryId: 'other_expense',
+        expectedAmount: 2000,
+        autoAdd: true,
+        autoSince: '2020-01-01',
+        lastPaidMonth: _monthKey(DateTime(now.year, now.month - 1)),
+      ),
+    );
+    await pump(tester, p, await settings(), const DashboardScreen());
+    await tester.tap(find.text('Bills due (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Added for you on the day'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Paid'), findsNothing);
   });
 
   testWidgets('says how far under or over the cap', (tester) async {
@@ -185,3 +221,6 @@ void main() {
     expect(find.text('Delete "Old HDFC"?'), findsOneWidget);
   });
 }
+
+String _monthKey(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}';

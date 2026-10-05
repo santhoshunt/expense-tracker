@@ -615,7 +615,7 @@ void main() {
       final bill = await dinner(p);
       await repaid(p, 'Priya', 500);
       final data = p.exportData();
-      expect(data['version'], 19);
+      expect(data['version'], 20);
 
       final fresh = await loaded();
       await fresh.importData(

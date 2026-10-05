@@ -55,8 +55,18 @@ class UpcomingItem {
   });
 }
 
+/// Whether [h]'s next occurrence was marked paid by hand (its alert never
+/// came): then it is not due, here or in the bills safe to spend counts.
+bool hitMarkedPaid(FinanceProvider finance, RecurringHit h) {
+  final through = DateTime.tryParse(finance.patternPaidThrough(h.key) ?? '');
+  if (through == null) return false;
+  final due = DateTime(h.nextDue.year, h.nextDue.month, h.nextDue.day);
+  return !due.isAfter(through);
+}
+
 /// Card bills with something outstanding, detected repeats the user has not
-/// hidden, and reminders from a week before their due day, soonest first.
+/// hidden or marked paid, and reminders from a week before their due day,
+/// soonest first.
 List<UpcomingItem> buildUpcomingItems(
   FinanceProvider finance, {
   required List<RecurringHit> hits,
@@ -90,7 +100,7 @@ List<UpcomingItem> buildUpcomingItems(
     );
   }
   for (final h in hits) {
-    if (hidden.contains(h.key)) continue;
+    if (hidden.contains(h.key) || hitMarkedPaid(finance, h)) continue;
     // A reminder for the same payment is its row already.
     if (finance.reminders.any((r) => reminderCoversHit(r, h, now))) continue;
     final days = h.daysUntil(now);

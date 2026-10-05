@@ -77,11 +77,15 @@ class DueBill {
   /// The detected payment's identity ([RecurringHit.key]); null for a
   /// reminder.
   final String? patternKey;
+
+  /// The reminder's id; null for a detected payment.
+  final String? reminderId;
   const DueBill({
     required this.due,
     required this.label,
     required this.amount,
     this.patternKey,
+    this.reminderId,
   });
 }
 
@@ -107,7 +111,9 @@ List<DueBill> billsDue(
     if (amount == null || isTransferCategory(r.categoryId)) continue;
     for (final due in reminderDueDatesBetween(r, start, end)) {
       if (!reminderOccurrenceDone(r, due)) {
-        out.add(DueBill(due: due, label: r.name, amount: amount));
+        out.add(
+          DueBill(due: due, label: r.name, amount: amount, reminderId: r.id),
+        );
       }
     }
   }
@@ -123,6 +129,7 @@ List<DueBill> billsDue(
   }
   for (final h in patterns) {
     if (h.type != TxType.expense || hidden.contains(h.key)) continue;
+    if (hitMarkedPaid(finance, h)) continue;
     if (isTransferCategory(h.categoryId)) continue;
     final due = DateTime(h.nextDue.year, h.nextDue.month, h.nextDue.day);
     if (due.isBefore(start) || due.isAfter(end)) continue;

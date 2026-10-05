@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/transaction.dart';
+import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/home_widgets_service.dart';
@@ -119,20 +120,28 @@ void main() {
     final p = await ledger();
     final s = SettingsProvider();
     await s.load();
-    await p.addReminder(
-      name: 'Rent',
-      dayOfMonth: 25,
-      expectedAmount: 18000,
-      categoryId: 'food',
-    );
-    await p.addReminder(
-      name: 'Netflix',
-      dayOfMonth: 21,
-      expectedAmount: 649,
-      categoryId: 'food',
-    );
-    // 12 days out: past the reminders' week.
-    await p.addReminder(name: 'Gym', dayOfMonth: 30, categoryId: 'food');
+    // Restored, not added: addReminder stamps the real date as created,
+    // which is after this test's July "now".
+    for (final r in const [
+      Reminder(
+        id: 'rent',
+        name: 'Rent',
+        dayOfMonth: 25,
+        expectedAmount: 18000,
+        categoryId: 'food',
+      ),
+      Reminder(
+        id: 'netflix',
+        name: 'Netflix',
+        dayOfMonth: 21,
+        expectedAmount: 649,
+        categoryId: 'food',
+      ),
+      // 12 days out: past the reminders' week.
+      Reminder(id: 'gym', name: 'Gym', dayOfMonth: 30, categoryId: 'food'),
+    ]) {
+      await p.restoreReminder(r);
+    }
     final up = buildHomeWidgetSnapshot(p, s, now, const [])['upcoming'] as List;
     expect([for (final u in up) u['label']], ['Netflix', 'Rent']);
     expect(up.first['dueDay'], epochDay(DateTime(2026, 7, 21)));

@@ -87,11 +87,21 @@ DateTime reminderNextDue(Reminder r, DateTime now) {
   return nextDue;
 }
 
+/// A month before the one the reminder was made in: a reminder made on 4
+/// October for a bill due on the 30th never lists 30 September as overdue.
+/// An earlier day of its own month still counts: that bill may be unpaid.
+bool _beforeCreated(Reminder r, DateTime due) {
+  final made = DateTime.tryParse(r.createdOn ?? '');
+  return made != null && due.isBefore(DateTime(made.year, made.month));
+}
+
 /// Whether the occurrence due on [due] needs nothing more: marked paid (or
-/// a later one is), or, for Add it for me, due before it was switched on.
+/// a later one is), due in a month before the reminder was made, or, for
+/// Add it for me, due before it was switched on.
 bool reminderOccurrenceDone(Reminder r, DateTime due) {
   final paid = r.lastPaidMonth;
   return (paid != null && paid.compareTo(monthKey(due)) >= 0) ||
+      _beforeCreated(r, due) ||
       _beforeAutoSince(r, due);
 }
 
@@ -101,6 +111,8 @@ bool reminderPaidThisPeriod(Reminder r, DateTime now) {
   final current = _alignedAtOrBefore(r, _index(now.year, now.month));
   final due = _occurrence(r, current);
   final paid = r.lastPaidMonth;
+  // Not [_beforeCreated]: a quarterly reminder made after its quarter's
+  // month was not paid, it just was not due.
   return (paid != null && paid.compareTo(monthKey(due)) >= 0) ||
       _beforeAutoSince(r, due);
 }

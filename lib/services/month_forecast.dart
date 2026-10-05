@@ -7,6 +7,7 @@ import '../utils/dates.dart';
 import 'recurring_detector.dart';
 import 'reminder_schedule.dart';
 import 'safe_to_spend.dart';
+import 'upcoming_items.dart';
 import 'spend_comparison.dart';
 
 /// "Where will this month end?": what is already spent, the bills still
@@ -143,8 +144,8 @@ MonthForecast? computeMonthForecast(
     for (final h in patterns)
       if (h.type == TxType.expense &&
           !hidden.contains(h.key) &&
-          h.lastDate.year == now.year &&
-          h.lastDate.month == now.month)
+          ((h.lastDate.year == now.year && h.lastDate.month == now.month) ||
+              hitMarkedPaid(finance, h)))
         h.key,
   };
   final reminders = finance.reminders;

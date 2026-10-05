@@ -258,6 +258,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _merchantAliasesKey = 'merchant_aliases_v1';
   static const _tagColorsKey = 'tag_colors_v1';
   static const _subscriptionPinsKey = 'subscription_pins_v1';
+  static const _patternPaidKey = 'pattern_paid_v1';
   static const _remindersKey = 'reminders_v1';
 
   final List<Tx> _transactions = [];
@@ -281,6 +282,11 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Merchants the user marked as subscriptions, by [recurringKeyOf] key.
   final Map<String, SubscriptionCycle> _subscriptionPins = {};
+
+  /// A detected payment's key → `yyyy-MM-dd` of the due date marked paid
+  /// by hand (its alert never came): that occurrence and earlier ones are
+  /// not due.
+  final Map<String, String> _patternPaid = {};
   final List<Reminder> _reminders = [];
   bool _loaded = false;
 
@@ -993,6 +999,14 @@ class FinanceProvider extends ChangeNotifier {
           ..addAll(_decodePins(jsonDecode(pinsRaw)));
       }, _subscriptionPins.clear);
     }
+    final patternPaidRaw = prefs.getString(_patternPaidKey);
+    if (patternPaidRaw != null) {
+      await _guardedLoad('payment marks', () async {
+        _patternPaid
+          ..clear()
+          ..addAll(_decodePatternPaid(jsonDecode(patternPaidRaw)));
+      }, _patternPaid.clear);
+    }
     final remindersRaw = prefs.getString(_remindersKey);
     if (remindersRaw != null) {
       await _guardedLoad('reminders', () async {
@@ -1384,6 +1398,15 @@ class FinanceProvider extends ChangeNotifier {
       _subscriptionPins.removeWhere((k, _) => !seen.contains(k));
       if (_subscriptionPins.length != before) await _persist(marks: true);
     }
+    // A payment mark only matters until the payment's next date passes it.
+    if (_patternPaid.isNotEmpty) {
+      final cutoff = DateTime.now().subtract(const Duration(days: 70));
+      final before = _patternPaid.length;
+      _patternPaid.removeWhere(
+        (_, v) => DateTime.tryParse(v)?.isBefore(cutoff) ?? true,
+      );
+      if (_patternPaid.length != before) await _persist(marks: true);
+    }
     _loaded = true;
     notifyListeners();
   }
@@ -1603,6 +1626,21 @@ class FinanceProvider extends ChangeNotifier {
         }),
       );
     }
+    if (marks && !_loadWarnings.contains('payment marks')) {
+      await prefs.setString(_patternPaidKey, jsonEncode(_patternPaid));
+    }
+  }
+
+  /// Tolerant decode for payment marks: only `yyyy-MM-dd` dates are kept.
+  static Map<String, String> _decodePatternPaid(Object? raw) {
+    if (raw is! Map) return const {};
+    return {
+      for (final e in raw.entries)
+        if (e.key is String &&
+            e.value is String &&
+            DateTime.tryParse(e.value as String) != null)
+          e.key as String: e.value as String,
+    };
   }
 
   /// Tolerant decode for tag colours: non-int values are dropped.
@@ -2505,6 +2543,7 @@ class FinanceProvider extends ChangeNotifier {
         autoAdd: autoAdd,
         accountId: accountId,
         autoSince: autoAdd ? _dayKey(now) : null,
+        createdOn: _dayKey(now),
       ),
     );
     _sanitizeReminders();
@@ -2548,13 +2587,68 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// Records the occurrence due on [due] as paid, so the reminder skips to
-  /// the following month (see reminderNextDue).
+  /// the following month (see reminderNextDue). Only ever forward: marking
+  /// an earlier occurrence after a later one changes nothing.
   Future<void> markReminderPaid(String id, DateTime due) async {
     final i = _reminders.indexWhere((r) => r.id == id);
     if (i == -1) return;
-    _reminders[i] = _reminders[i].copyWith(lastPaidMonth: monthKey(due));
+    final key = monthKey(due);
+    final was = _reminders[i].lastPaidMonth;
+    if (was != null && was.compareTo(key) >= 0) return;
+    _reminders[i] = _reminders[i].copyWith(lastPaidMonth: key);
     notifyListeners();
     await _persist(reminders: true);
+  }
+
+  /// Undo of a [markReminderPaid] that set [marked]: back to [previous],
+  /// but only while [marked] is still the mark. A payment alert that moved
+  /// it on since is kept.
+  Future<void> undoReminderPaid(
+    String id, {
+    required String marked,
+    required String? previous,
+  }) async {
+    final i = _reminders.indexWhere((r) => r.id == id);
+    if (i == -1 || _reminders[i].lastPaidMonth != marked) return;
+    _reminders[i] = previous == null
+        ? _reminders[i].copyWith(clearLastPaidMonth: true)
+        : _reminders[i].copyWith(lastPaidMonth: previous);
+    notifyListeners();
+    await _persist(reminders: true);
+  }
+
+  /// The due date ([_dayKey] form) a detected payment was marked paid
+  /// through, or null.
+  String? patternPaidThrough(String key) => _patternPaid[key];
+
+  /// Marks a detected payment's occurrence due on [due] paid by hand: its
+  /// alert never came. That occurrence stops being due; the next payment
+  /// moves the pattern past it.
+  /// Only ever forward, like [markReminderPaid].
+  Future<void> markPatternPaid(String key, DateTime due) async {
+    final day = _dayKey(due);
+    final was = _patternPaid[key];
+    if (was != null && was.compareTo(day) >= 0) return;
+    _patternPaid[key] = day;
+    notifyListeners();
+    await _persist(marks: true);
+  }
+
+  /// Undo of [markPatternPaid]: puts back [previous] (null: no mark), but
+  /// only while [marked] (the date it set) is still the mark.
+  Future<void> restorePatternPaid(
+    String key,
+    String? previous, {
+    String? marked,
+  }) async {
+    if (marked != null && _patternPaid[key] != marked) return;
+    if (previous == null) {
+      _patternPaid.remove(key);
+    } else {
+      _patternPaid[key] = previous;
+    }
+    notifyListeners();
+    await _persist(marks: true);
   }
 
   /// An Add it for me occurrence paid early: records its expense dated
@@ -4763,6 +4857,7 @@ class FinanceProvider extends ChangeNotifier {
       _reminders.clear();
       _tagColors.clear();
       _subscriptionPins.clear();
+      _patternPaid.clear();
       setCustomCategories(const []);
       setBuiltinOverrides(const {});
       // Reseed immediately (flags stay set) so the app keeps working
@@ -4811,7 +4906,9 @@ class FinanceProvider extends ChangeNotifier {
     // v18: transactions may carry `countIn`.
     // v19: accounts may be type `wallet` and carry `service`, `holdsPoints`
     // and `pointValue`; transactions may carry `walletCounted`.
-    'version': 19,
+    // v20: reminders may carry `createdOn`; `patternPaid` (detected
+    // payment key → due date marked paid).
+    'version': 20,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
@@ -4842,6 +4939,7 @@ class FinanceProvider extends ChangeNotifier {
     'subscriptionPins': {
       for (final e in _subscriptionPins.entries) e.key: e.value.name,
     },
+    'patternPaid': Map<String, String>.from(_patternPaid),
   };
 
   /// Card/bank kind for every SMS-derived account key in the ledger.
@@ -4961,6 +5059,10 @@ class FinanceProvider extends ChangeNotifier {
         : null;
     final rawPins = data['subscriptionPins'];
     final importedPins = rawPins is Map ? _decodePins(rawPins) : null;
+    final rawPatternPaid = data['patternPaid'];
+    final importedPatternPaid = rawPatternPaid is Map
+        ? _decodePatternPaid(rawPatternPaid)
+        : null;
     // v13 addition, same absent-means-keep rule.
     final rawReminders = data['reminders'];
     final importedReminders = rawReminders is List
@@ -5093,6 +5195,11 @@ class FinanceProvider extends ChangeNotifier {
           ..clear()
           ..addAll(importedPins);
       }
+      if (importedPatternPaid != null) {
+        _patternPaid
+          ..clear()
+          ..addAll(importedPatternPaid);
+      }
       if (importedRules != null) {
         _rules
           ..clear()
@@ -5221,6 +5328,13 @@ class FinanceProvider extends ChangeNotifier {
         for (final e in importedPins.entries)
           if (!_subscriptionPins.containsKey(e.key)) e.key: e.value,
     };
+    // The later date per payment: either side may have marked it.
+    final newPatternPaid = <String, String>{
+      if (importedPatternPaid != null)
+        for (final e in importedPatternPaid.entries)
+          if ((_patternPaid[e.key] ?? '').compareTo(e.value) < 0)
+            e.key: e.value,
+    };
     final reminderIds = _reminders.map((r) => r.id).toSet();
     final newReminders = [
       for (final r in importedReminders ?? const <Reminder>[])
@@ -5294,6 +5408,7 @@ class FinanceProvider extends ChangeNotifier {
     _merchantAliases.addAll(newAliases);
     _tagColors.addAll(newTagColors);
     _subscriptionPins.addAll(newPins);
+    _patternPaid.addAll(newPatternPaid);
     _reminders.addAll(newReminders);
     if (newRules.isNotEmpty) {
       final firstBuiltin = _rules.indexWhere((r) => r.isBuiltIn);
@@ -5313,6 +5428,7 @@ class FinanceProvider extends ChangeNotifier {
         newAliases.isNotEmpty ||
         newTagColors.isNotEmpty ||
         newPins.isNotEmpty ||
+        newPatternPaid.isNotEmpty ||
         newReminders.isNotEmpty ||
         remindersAdvanced ||
         newRules.isNotEmpty ||
@@ -5338,7 +5454,10 @@ class FinanceProvider extends ChangeNotifier {
         reminders: newReminders.isNotEmpty || remindersAdvanced,
         rules: newRules.isNotEmpty,
         importRules: newImportRules.isNotEmpty,
-        marks: newTagColors.isNotEmpty || newPins.isNotEmpty,
+        marks:
+            newTagColors.isNotEmpty ||
+            newPins.isNotEmpty ||
+            newPatternPaid.isNotEmpty,
       );
     }
     return newTxs.length;
