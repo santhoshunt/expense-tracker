@@ -299,51 +299,72 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
           ),
         ),
         const SizedBox(height: 12),
-        // No run spacing: each entry is 40dp tall itself, a target a finger
-        // can hit rather than a 16dp line of text.
-        Wrap(
-          spacing: 12,
-          alignment: WrapAlignment.center,
-          children: [
-            for (final (i, e) in data.indexed)
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: widget.onCategoryTap == null
-                    ? null
-                    : () => widget.onCategoryTap!(e.key.id),
-                child: Container(
-                  constraints: const BoxConstraints(minHeight: 40),
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: colors[i],
-                          shape: BoxShape.circle,
+        // Two columns, largest first, read across: the shares line up on the
+        // right of each column, so they compare at a glance. A long label
+        // wraps onto a second line rather than being cut, and a narrow card
+        // (large text) drops to one column. Rows are 28dp, a target a finger
+        // can hit without spreading eleven categories down the card.
+        LayoutBuilder(
+          builder: (context, constraints) {
+            const gap = 16.0;
+            final columns = constraints.maxWidth >= 280 ? 2 : 1;
+            final width = columns == 1
+                ? constraints.maxWidth
+                : (constraints.maxWidth - gap) / 2;
+            return Wrap(
+              spacing: gap,
+              children: [
+                for (final (i, e) in data.indexed)
+                  SizedBox(
+                    width: width,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: widget.onCategoryTap == null
+                          ? null
+                          : () => widget.onCategoryTap!(e.key.id),
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 28),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 4,
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Centred on the first line of a wrapped label.
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Container(
+                                width: 10,
+                                height: 10,
+                                decoration: BoxDecoration(
+                                  color: colors[i],
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                e.key.label,
+                                style: theme.textTheme.bodySmall,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${(e.value / total * 100).toStringAsFixed(0)}%',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurface,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 5),
-                      // Flexible: Wrap bounds the row's width, and a single
-                      // legend entry wider than the card is otherwise a
-                      // guaranteed RenderFlex overflow (long custom labels at
-                      // large font scale).
-                      Flexible(
-                        child: Text(
-                          '${e.key.label} '
-                          '${(e.value / total * 100).toStringAsFixed(0)}%',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
-          ],
+              ],
+            );
+          },
         ),
       ],
     );

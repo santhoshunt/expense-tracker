@@ -808,15 +808,14 @@ void main() {
           ),
         )
         .first;
-    // The single category owns 100% of the month — that share label exists
-    // only on the row, so scrolling to it mounts the row.
-    // By hand, not scrollUntilVisible: the By group row below can mount in
-    // the same scroll step, and that helper needs exactly one match.
-    for (var i = 0; i < 20 && find.text('100%').evaluate().isEmpty; i++) {
+    // Scroll until the row itself is built. By hand, not
+    // scrollUntilVisible: the By group row below can mount in the same
+    // scroll step, and that helper needs exactly one match.
+    for (var i = 0; i < 20 && row.evaluate().isEmpty; i++) {
       await tester.drag(verticalScrollable(), const Offset(0, -300));
       await tester.pumpAndSettle();
     }
-    await tester.ensureVisible(find.text('100%').first);
+    await tester.ensureVisible(row);
     await tester.pumpAndSettle();
     await tester.longPress(row);
     await tester.pumpAndSettle();
@@ -866,6 +865,7 @@ void main() {
       fmtMonth(DateTime(year, DateTime.now().month)),
     );
     expect(monthLabel, findsOneWidget);
+    expect(find.byTooltip('Export month report (PDF)'), findsOneWidget);
     expect(find.byTooltip('Export year report (PDF)'), findsNothing);
 
     // The scope switch sits near the top, so it is built and tappable

@@ -288,13 +288,14 @@ void main() {
     expect(month, lastMonth);
   });
 
-  testWidgets('the Overview leads with the balance; the recap sits under '
-      'the selector', (tester) async {
+  testWidgets('the selector sits above the tabs; the Overview leads with the '
+      'balance, the recap under it', (tester) async {
     await pump(tester, day: 3);
     double top(Finder f) => tester.getTopLeft(f).dy;
     final balance = find.byKey(const ValueKey('balance'));
     final selector = find.byTooltip('Previous month');
-    expect(top(balance), lessThan(top(selector)));
-    expect(top(selector), lessThan(top(find.byType(MonthlyRecapCard))));
+    expect(top(selector), lessThan(top(find.text('Overview'))));
+    expect(top(find.text('Overview')), lessThan(top(balance)));
+    expect(top(balance), lessThan(top(find.byType(MonthlyRecapCard))));
   });
 }

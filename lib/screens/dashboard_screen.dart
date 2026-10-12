@@ -734,23 +734,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (picked != null && mounted) setState(() => _month = picked);
   }
 
-  Future<void> _exportYearPdf(
-    BuildContext context,
-    FinanceProvider finance,
-  ) async {
+  /// The report for what the selector shows: the month, or the year.
+  Future<void> _exportPdf(BuildContext context, FinanceProvider finance) async {
     final messenger = ScaffoldMessenger.of(context);
     final sm = _yearStartMonth;
     final year = yearStartOf(_month, sm);
+    final yearView = _yearMode;
     try {
       final path = await BackupService.exportPdf(
         finance,
-        year: year,
+        year: yearView ? year : null,
+        month: yearView ? null : _month,
         startMonth: sm,
       );
       if (path == null) return;
       showAppToastOn(
         messenger,
-        'Saved report ${yearLabel(year, sm)}',
+        'Saved report ${yearView ? yearLabel(year, sm) : fmtMonth(_month)}',
         tone: AppToastTone.success,
         icon: Icons.picture_as_pdf_outlined,
       );
@@ -774,6 +774,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       children: [
         IconButton(
           tooltip: _yearMode ? 'Previous year' : 'Previous month',
+          visualDensity: VisualDensity.compact,
           onPressed: () => _shiftMonth(-1),
           icon: const Icon(Icons.chevron_left),
         ),
@@ -808,6 +809,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         IconButton(
           tooltip: _yearMode ? 'Next year' : 'Next month',
+          visualDensity: VisualDensity.compact,
           onPressed:
               (_yearMode
                   ? year < yearStartOf(latestMonth, sm)
@@ -819,17 +821,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
         // Scope switch as a quiet text button: a full-width segmented
         // control here read as a primary action and drew the eye away
         // from the figures. Month is the default; nothing is persisted.
-        if (_yearMode)
-          IconButton(
-            tooltip: 'Export year report (PDF)',
-            visualDensity: VisualDensity.compact,
-            icon: Icon(
-              Icons.picture_as_pdf_outlined,
-              size: 20,
-              color: scheme.onSurfaceVariant,
-            ),
-            onPressed: () => _exportYearPdf(context, finance),
+        IconButton(
+          tooltip: _yearMode
+              ? 'Export year report (PDF)'
+              : 'Export month report (PDF)',
+          visualDensity: VisualDensity.compact,
+          icon: Icon(
+            Icons.picture_as_pdf_outlined,
+            size: 20,
+            color: scheme.onSurfaceVariant,
           ),
+          onPressed: () => _exportPdf(context, finance),
+        ),
         TextButton(
           style: TextButton.styleFrom(
             visualDensity: VisualDensity.compact,
@@ -978,11 +981,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           key: const ValueKey('balance'),
           child: _BalanceCard(finance: finance),
         ),
-        // The picked month (or year) below the balance: the selector, its
-        // totals, the monthly budget bar and last month's recap.
+        // The picked month's (or year's) totals below the balance; the
+        // selector itself sits above the page tabs.
         const SizedBox(height: 16),
-        _monthSelector(context, finance, latestMonth),
-        const SizedBox(height: 4),
         // Horizontally scrollable so each card is wide enough to show its
         // amount on one line, however large the number. The height follows
         // the system font scale — fixed 88dp clips at "Large" text size.
@@ -1563,15 +1564,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       };
-      return _page(
-        DashboardPage.trends,
-        [
-          _monthSelector(context, finance, latestMonth),
-          const SizedBox(height: 4),
-        ],
-        sections,
-        fold: true,
-      );
+      return _page(DashboardPage.trends, const [], sections, fold: true);
     }
 
     List<Widget> breakdownChildren() {
@@ -2079,21 +2072,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       };
-      return _page(
-        DashboardPage.breakdown,
-        [
-          _monthSelector(context, finance, latestMonth),
-          const SizedBox(height: 4),
-        ],
-        sections,
-        fold: true,
-      );
+      return _page(DashboardPage.breakdown, const [], sections, fold: true);
     }
 
     return Column(
       children: [
+        // One selector for all three pages, above their tabs: it scopes
+        // every page, so it stays put while the pages slide under it.
+        // 12dp sides, not the pages' 16: with the PDF button in both views
+        // the row needs the room at 320dp and double text size.
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: _monthSelector(context, finance, latestMonth),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
           child: GlassSegmented<DashboardView>(
             options: [for (final v in DashboardView.values) (v, v.label)],
             icons: const [

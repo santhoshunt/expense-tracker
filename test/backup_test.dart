@@ -207,6 +207,47 @@ void main() {
       countIn: countIn,
     );
 
+    test('rowsInMonth keeps the rows that count in the month', () {
+      final rows = [
+        row('lastDay', DateTime(2026, 9, 30, 23, 59)),
+        row('first', DateTime(2026, 10, 1)),
+        row('countedIn', DateTime(2026, 9, 29), countIn: DateTime(2026, 10, 1)),
+        row(
+          'countedOut',
+          DateTime(2026, 10, 31),
+          countIn: DateTime(2026, 11, 1),
+        ),
+        row('next', DateTime(2026, 11, 1)),
+      ];
+      expect(
+        BackupService.rowsInMonth(rows, DateTime(2026, 10)).map((t) => t.id),
+        ['first', 'countedIn'],
+      );
+    });
+
+    test('month report renders and differs from its year report', () async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 240,
+        note: 'Dosa breakfast',
+        date: DateTime(2025, 10, 4),
+      );
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'shopping',
+        amount: 990,
+        note: 'Desk lamp',
+        date: DateTime(2025, 6, 18),
+      );
+      final month = await BackupService.buildPdf(p, month: DateTime(2025, 10));
+      final year = await BackupService.buildPdf(p, year: 2025);
+      expect(month.sublist(0, 4), [0x25, 0x50, 0x44, 0x46]);
+      expect(month.length, isNot(year.length));
+    });
+
     test('rowsInYear keeps April to March by the day a row counts in', () {
       final rows = [
         row('beforeFy', DateTime(2025, 3, 10)),

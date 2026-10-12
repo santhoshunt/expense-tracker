@@ -12,6 +12,7 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/budget_detail_sheet.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
+import 'package:expense_tracker/widgets/chart_popup.dart';
 import 'package:expense_tracker/widgets/monthly_bar_chart.dart';
 
 /// Tapping a chart part highlights it and opens its figures in a popup.
@@ -23,6 +24,11 @@ void main() {
     setCustomCategories(const []);
     setBuiltinOverrides(const {});
   });
+
+  // The legend also shows each category's name on its own, so popup text
+  // is looked up inside the popup.
+  Finder inPopup(String text) =>
+      find.descendant(of: find.byType(ChartPopup), matching: find.text(text));
 
   const food = TxCategory(
     id: 'food',
@@ -84,7 +90,7 @@ void main() {
       await tester.tapAt(onRing(box, 0.2));
       await tester.pumpAndSettle();
 
-      expect(find.text('Food'), findsOneWidget, reason: 'popup title');
+      expect(inPopup('Food'), findsOneWidget, reason: 'popup title');
       expect(find.text(fmtMoney(600)), findsOneWidget);
       expect(find.text('60% of spending'), findsOneWidget);
 
@@ -98,7 +104,7 @@ void main() {
       final box = await pumpDonut(tester);
       await tester.tapAt(onRing(box, 0.8));
       await tester.pumpAndSettle();
-      expect(find.text('Rent'), findsOneWidget);
+      expect(inPopup('Rent'), findsOneWidget);
       expect(find.text('40% of spending'), findsOneWidget);
     });
 
@@ -133,7 +139,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tapAt(onRing(box, 0.2));
       await tester.pumpAndSettle();
-      expect(find.text('Rent'), findsOneWidget);
+      expect(inPopup('Rent'), findsOneWidget);
       expect(find.text('70% of spending'), findsOneWidget);
     });
 

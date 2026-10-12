@@ -148,9 +148,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      // The month selector sits above the page tabs, so it leads.
       final order = [
-        find.byKey(const ValueKey('balance')),
         find.byTooltip('Previous month'),
+        find.byKey(const ValueKey('balance')),
         find.text('Spent'),
         find.text('Upcoming'),
         find.text('Budgets'),
@@ -166,15 +167,10 @@ void main() {
       await pump(tester);
       expect(find.text('Spent'), findsOneWidget);
 
-      // Fling on page content — the month selector row, present on every
-      // view. The tab labels sit on the pinned bar outside the pager, and
-      // its buttons claim only taps, so the drag reaches the PageView.
+      // Fling on the pager itself: the month selector and the tab labels
+      // sit above it, outside the pages.
       Future<void> swipe(double dx) async {
-        await tester.fling(
-          find.byTooltip('Previous month'),
-          Offset(dx, 0),
-          1000,
-        );
+        await tester.fling(find.byType(PageView), Offset(dx, 0), 1000);
         await tester.pumpAndSettle();
       }
 

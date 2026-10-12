@@ -12,6 +12,7 @@ import 'package:pdf/widgets.dart' as pw;
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/dates.dart' show monthKey;
 import '../utils/fiscal_year.dart';
 
 /// Export (JSON backup / CSV / PDF report) and import (JSON / CSV) of the
@@ -290,6 +291,16 @@ class BackupService {
           t,
     ];
   }
+
+  /// Rows that count in [month] (their [Tx.effectiveDate]), so the table
+  /// matches incomeInMonth and the dashboard's month figures.
+  @visibleForTesting
+  static List<Tx> rowsInMonth(List<Tx> rows, DateTime month) => [
+    for (final t in rows)
+      if (t.effectiveDate.year == month.year &&
+          t.effectiveDate.month == month.month)
+        t,
+  ];
 
   static DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
 
@@ -611,28 +622,35 @@ class BackupService {
   static const PdfColor _red = PdfColor.fromInt(0xFFC62828);
   static const PdfColor _greenText = PdfColor.fromInt(0xFF1B5E20);
 
-  /// Saves a PDF statement — the whole ledger, one [year] of it, or the
-  /// rows inside [range]. [startMonth] is the year's first month (1 for a
-  /// calendar year). Returns the saved path, or null if cancelled.
+  /// Saves a PDF statement — the whole ledger, one [month] or [year] of it,
+  /// or the rows inside [range]. [startMonth] is the year's first month (1
+  /// for a calendar year). Returns the saved path, or null if cancelled.
   static Future<String?> exportPdf(
     FinanceProvider finance, {
     int? year,
+    DateTime? month,
     DateTimeRange? range,
     int startMonth = 1,
   }) async {
     final bytes = await buildPdf(
       finance,
       year: year,
+      month: month,
       range: range,
       startMonth: startMonth,
     );
-    // "2026" or "FY2026-27": no spaces in the file name.
-    final yearStamp = year == null
+    // "2026-10", "2026" or "FY2026-27": no spaces in the file name. A range
+    // wins over both, as in buildPdf.
+    final periodStamp = range != null
+        ? null
+        : month != null
+        ? monthKey(month)
+        : year == null
         ? null
         : yearLabel(year, startMonth).replaceAll(' ', '');
     return _save(
-      yearStamp != null
-          ? 'expense_tracker_report_${yearStamp}_${_stamp()}'
+      periodStamp != null
+          ? 'expense_tracker_report_${periodStamp}_${_stamp()}'
           : range != null
           ? 'expense_tracker_report_${_rangeStamp(range)}_${_stamp()}'
           : 'expense_tracker_report_${_stamp()}',
@@ -695,16 +713,21 @@ class BackupService {
   }
 
   /// Builds the report bytes. Exposed separately so tests can render it
-  /// without touching the platform save dialog. [year] and [range] are
-  /// alternatives; when both are given the range wins. [year] names the
-  /// year starting [startMonth] (1 for a calendar year).
+  /// without touching the platform save dialog. [range], [month] and [year]
+  /// are alternatives, taken in that order when more than one is given.
+  /// [year] names the year starting [startMonth] (1 for a calendar year).
   static Future<Uint8List> buildPdf(
     FinanceProvider finance, {
     int? year,
+    DateTime? month,
     DateTimeRange? range,
     int startMonth = 1,
   }) async {
-    if (range != null) year = null;
+    if (range != null) {
+      year = null;
+      month = null;
+    }
+    if (month != null) year = null;
     final baseFont = pw.Font.ttf(
       await rootBundle.load('assets/fonts/NotoSans-Regular.ttf'),
     );
@@ -715,10 +738,17 @@ class BackupService {
     final doc = pw.Document(
       theme: pw.ThemeData.withFont(base: baseFont, bold: boldFont),
     );
-    final txs = year != null
+    final txs = month != null
+        ? rowsInMonth(finance.transactions, month)
+        : year != null
         ? rowsInYear(finance.transactions, year, startMonth: startMonth)
         : rowsInRange(finance.transactions, range);
-    final yearName = year == null ? null : yearLabel(year, startMonth);
+    // "October 2026", "2026" or "FY 2026-27"; null for the ledger or a range.
+    final periodName = month != null
+        ? DateFormat('MMMM yyyy').format(month)
+        : year == null
+        ? null
+        : yearLabel(year, startMonth);
     // Summary figures follow the same population as the table: whole-ledger
     // provider totals, the year's own sums, or (for a range) sums folded
     // from the filtered rows with the provider's rules — transfers excluded,
@@ -752,6 +782,10 @@ class BackupService {
                 finance.countsInTotals(t),
           )
           .fold(0.0, (s, t) => s + t.amount);
+    } else if (month != null) {
+      sumIncome = finance.incomeInMonth(month);
+      sumExpense = finance.expenseInMonth(month);
+      sumSavings = finance.savingsOutflowInMonth(month);
     } else if (year != null) {
       sumIncome = finance.incomeInYear(year, startMonth: startMonth);
       sumExpense = finance.expenseInYear(year, startMonth: startMonth);
@@ -833,9 +867,9 @@ class BackupService {
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
                     pw.Text(
-                      yearName == null
+                      periodName == null
                           ? 'Expense Tracker: Statement'
-                          : 'Expense Tracker: Report $yearName',
+                          : 'Expense Tracker: Report $periodName',
                       style: pw.TextStyle(
                         fontSize: 16,
                         fontWeight: pw.FontWeight.bold,
@@ -870,15 +904,15 @@ class BackupService {
               _summaryBox('TOTAL INCOME', sumIncome, _greenText),
               _summaryBox('TOTAL EXPENSES', sumExpense, _red),
               _summaryBox('TO SAVINGS', sumSavings, _green),
-              // Balance is a running figure; a bounded slice (year or
+              // Balance is a running figure; a bounded slice (month, year or
               // range) has a net instead.
-              if (year == null && range == null)
+              if (periodName == null && range == null)
                 _summaryBox('AVAILABLE BALANCE', finance.balance, _green)
               else
                 _summaryBox(
-                  yearName == null
+                  periodName == null
                       ? 'NET FOR PERIOD'
-                      : 'NET FOR ${yearName.toUpperCase()}',
+                      : 'NET FOR ${periodName.toUpperCase()}',
                   sumIncome - sumExpense - sumSavings,
                   _green,
                 ),
