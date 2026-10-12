@@ -39,7 +39,8 @@ class SettingsGroupPage extends StatelessWidget {
   }
 }
 
-/// Theme, dark theme, accent colour, the tilt glow and the app icon.
+/// Theme, dark theme, accent colour, the tilt glow, the app icon and the
+/// month the year starts in.
 class _AppearancePage extends StatelessWidget {
   const _AppearancePage();
 
@@ -162,6 +163,30 @@ class _AppearancePage extends StatelessWidget {
           const SizedBox(height: 12),
           const _AppIconSection(),
         ],
+        const SizedBox(height: 24),
+        InfoLabel(
+          label: Text(
+            'Year starts in',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          tip: const InfoTip(
+            title: 'Year starts in',
+            message:
+                "Where the dashboard's Year view and the year report start. "
+                'April gives the Indian financial year, April to March, '
+                'shown as FY 2026-27.',
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'The first month of the year the dashboard adds up.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        _RadioSetting<YearStart>(
+          options: [for (final y in YearStart.values) (y, y.label)],
+          selected: settings.yearStart,
+          onChanged: (y) => context.read<SettingsProvider>().setYearStart(y),
+        ),
       ],
     );
   }

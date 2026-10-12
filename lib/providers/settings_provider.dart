@@ -54,6 +54,17 @@ enum CategorySort {
   const CategorySort(this.label, this.subtitle);
 }
 
+/// Where the dashboard's Year view and the year report start: January for
+/// the calendar year, April for the Indian financial year.
+enum YearStart {
+  january('January', 1),
+  april('April', 4);
+
+  const YearStart(this.label, this.month);
+  final String label;
+  final int month;
+}
+
 /// App preferences: theme mode, dark palette + accent colour, SMS
 /// auto-import cadence and monthly budget alerts.
 class SettingsProvider extends ChangeNotifier {
@@ -80,6 +91,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kDismissedPairs = 'pair_dismissed_v1';
   static const _kCategoryOrder = 'category_order_v1';
   static const _kCategorySort = 'category_sort_v1';
+  static const _kYearStart = 'year_start_v1';
   static const _kPalette = 'palette_v1';
   static const _kUpdateOnLaunch = 'update_check_on_launch_v1';
   static const _kUpdateLastCheck = 'update_last_check_v1';
@@ -125,6 +137,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _tiltGlow = true;
   CategoryOrder _categoryOrder = CategoryOrder.mostUsed;
   CategorySort _categorySort = CategorySort.biggestChange;
+  YearStart _yearStart = YearStart.january;
   bool _updateOnLaunch = true;
   DateTime? _updateLastCheck;
   String? _updateDismissedTag;
@@ -182,6 +195,9 @@ class SettingsProvider extends ChangeNotifier {
 
   /// Ordering of the "Categories vs usual" card's rows.
   CategorySort get categorySort => _categorySort;
+
+  /// First month of the dashboard's Year view and the year report.
+  YearStart get yearStart => _yearStart;
 
   /// Look for a newer release once a day on launch. Per device, like the
   /// rest of the update state: backups leave it out.
@@ -280,6 +296,12 @@ class SettingsProvider extends ChangeNotifier {
           CategorySort.values.asNameMap()[prefs.getString(_kCategorySort)] ??
           CategorySort.biggestChange,
       CategorySort.biggestChange,
+    );
+    _yearStart = tryRead(
+      () =>
+          YearStart.values.asNameMap()[prefs.getString(_kYearStart)] ??
+          YearStart.january,
+      YearStart.january,
     );
     _palette = tryRead(
       () =>
@@ -684,6 +706,16 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  Future<void> setYearStart(YearStart start) async {
+    if (start == _yearStart) return;
+    _yearStart = start;
+    notifyListeners();
+    await _persistPref(
+      _kYearStart,
+      (p) => p.setString(_kYearStart, start.name),
+    );
+  }
+
   /// The preference block carried inside JSON backups (the 'settings' key)
   /// — the backup doc used to claim "full snapshot" while every value here
   /// was silently absent, so a fresh-device restore lost the monthly cap,
@@ -704,6 +736,7 @@ class SettingsProvider extends ChangeNotifier {
     'dismissedPairs': _dismissedPairs.toList(),
     'categoryOrder': _categoryOrder.name,
     'categorySort': _categorySort.name,
+    'yearStart': _yearStart.name,
     'palette': _palette.name,
     'dashboardLayout': _dashboardLayoutJson(),
     // appLock is intentionally absent — see setAppLock.
@@ -753,6 +786,7 @@ class SettingsProvider extends ChangeNotifier {
         _categoryOrder;
     _categorySort =
         CategorySort.values.asNameMap()[map['categorySort']] ?? _categorySort;
+    _yearStart = YearStart.values.asNameMap()[map['yearStart']] ?? _yearStart;
     _palette = AppPalette.values.asNameMap()[map['palette']] ?? _palette;
     if (map['dashboardLayout'] is Map) {
       _readDashboardLayout(map['dashboardLayout']);
@@ -777,6 +811,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());
       await p.setString(_kCategoryOrder, _categoryOrder.name);
       await p.setString(_kCategorySort, _categorySort.name);
+      await p.setString(_kYearStart, _yearStart.name);
       await p.setString(_kPalette, _palette.name);
       await p.setString(_kDashboardLayout, jsonEncode(_dashboardLayoutJson()));
     });

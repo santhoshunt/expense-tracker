@@ -83,6 +83,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     onViewBudget: _viewBudget,
     onViewMerchant: _viewMerchant,
     onViewTag: _viewTag,
+    onOpenTransactions: _openTransactions,
   );
   late final Widget _accountsTab = AccountsScreen(onViewAccount: _viewAccount);
   TransactionsScreen? _transactionsTab;

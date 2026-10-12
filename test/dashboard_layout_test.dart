@@ -20,6 +20,7 @@ void main() {
         DashboardSection.previousMonth,
         DashboardSection.usual,
         DashboardSection.categoryComparison,
+        DashboardSection.yearVsLast,
         DashboardSection.sixMonths,
       ]);
       expect(l.hidden, isEmpty);
@@ -74,7 +75,9 @@ void main() {
     });
 
     test('a section missing from a stored order returns at its place', () {
-      // As if a later release added "usual" between these two.
+      // As if a later release added "usual" between these two. A 1.33
+      // order also lacks "yearVsLast", which returns after its default
+      // neighbour, the category comparison.
       final l = DashboardPageLayout.fromJson(DashboardPage.trends, {
         'order': ['sixMonths', 'pace', 'previousMonth', 'categoryComparison'],
       });
@@ -84,6 +87,7 @@ void main() {
         DashboardSection.previousMonth,
         DashboardSection.usual,
         DashboardSection.categoryComparison,
+        DashboardSection.yearVsLast,
       ]);
     });
 

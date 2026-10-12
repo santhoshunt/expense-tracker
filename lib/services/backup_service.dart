@@ -12,6 +12,7 @@ import 'package:pdf/widgets.dart' as pw;
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/fiscal_year.dart';
 
 /// Export (JSON backup / CSV / PDF report) and import (JSON / CSV) of the
 /// stored data. Files are saved via the platform's save dialog (browser
@@ -275,6 +276,22 @@ class BackupService {
         if (!t.date.isBefore(start) && t.date.isBefore(end)) t,
     ];
   }
+
+  /// Rows that count in the year starting [startMonth] of [year]: their
+  /// [Tx.effectiveDate], as a calendar day, falls within [yearBounds], so
+  /// the table matches incomeInYear.
+  @visibleForTesting
+  static List<Tx> rowsInYear(List<Tx> rows, int year, {int startMonth = 1}) {
+    final b = yearBounds(year, startMonth);
+    return [
+      for (final t in rows)
+        if (!_day(t.effectiveDate).isBefore(b.first) &&
+            !_day(t.effectiveDate).isAfter(b.last))
+          t,
+    ];
+  }
+
+  static DateTime _day(DateTime d) => DateTime(d.year, d.month, d.day);
 
   /// Filesystem-safe range suffix for export filenames.
   static String _rangeStamp(DateTimeRange r) {
@@ -595,16 +612,27 @@ class BackupService {
   static const PdfColor _greenText = PdfColor.fromInt(0xFF1B5E20);
 
   /// Saves a PDF statement — the whole ledger, one [year] of it, or the
-  /// rows inside [range]. Returns the saved path, or null if cancelled.
+  /// rows inside [range]. [startMonth] is the year's first month (1 for a
+  /// calendar year). Returns the saved path, or null if cancelled.
   static Future<String?> exportPdf(
     FinanceProvider finance, {
     int? year,
     DateTimeRange? range,
+    int startMonth = 1,
   }) async {
-    final bytes = await buildPdf(finance, year: year, range: range);
+    final bytes = await buildPdf(
+      finance,
+      year: year,
+      range: range,
+      startMonth: startMonth,
+    );
+    // "2026" or "FY2026-27": no spaces in the file name.
+    final yearStamp = year == null
+        ? null
+        : yearLabel(year, startMonth).replaceAll(' ', '');
     return _save(
-      year != null
-          ? 'expense_tracker_report_${year}_${_stamp()}'
+      yearStamp != null
+          ? 'expense_tracker_report_${yearStamp}_${_stamp()}'
           : range != null
           ? 'expense_tracker_report_${_rangeStamp(range)}_${_stamp()}'
           : 'expense_tracker_report_${_stamp()}',
@@ -668,11 +696,13 @@ class BackupService {
 
   /// Builds the report bytes. Exposed separately so tests can render it
   /// without touching the platform save dialog. [year] and [range] are
-  /// alternatives; when both are given the range wins.
+  /// alternatives; when both are given the range wins. [year] names the
+  /// year starting [startMonth] (1 for a calendar year).
   static Future<Uint8List> buildPdf(
     FinanceProvider finance, {
     int? year,
     DateTimeRange? range,
+    int startMonth = 1,
   }) async {
     if (range != null) year = null;
     final baseFont = pw.Font.ttf(
@@ -686,12 +716,9 @@ class BackupService {
       theme: pw.ThemeData.withFont(base: baseFont, bold: boldFont),
     );
     final txs = year != null
-        ? [
-            // The year a row counts in, so the table matches incomeInYear.
-            for (final t in finance.transactions)
-              if (t.effectiveDate.year == year) t,
-          ]
+        ? rowsInYear(finance.transactions, year, startMonth: startMonth)
         : rowsInRange(finance.transactions, range);
+    final yearName = year == null ? null : yearLabel(year, startMonth);
     // Summary figures follow the same population as the table: whole-ledger
     // provider totals, the year's own sums, or (for a range) sums folded
     // from the filtered rows with the provider's rules — transfers excluded,
@@ -726,9 +753,9 @@ class BackupService {
           )
           .fold(0.0, (s, t) => s + t.amount);
     } else if (year != null) {
-      sumIncome = finance.incomeInYear(year);
-      sumExpense = finance.expenseInYear(year);
-      sumSavings = finance.savingsOutflowInYear(year);
+      sumIncome = finance.incomeInYear(year, startMonth: startMonth);
+      sumExpense = finance.expenseInYear(year, startMonth: startMonth);
+      sumSavings = finance.savingsOutflowInYear(year, startMonth: startMonth);
     } else {
       sumIncome = finance.totalIncome;
       sumExpense = finance.totalExpense;
@@ -806,9 +833,9 @@ class BackupService {
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
                     pw.Text(
-                      year == null
-                          ? 'Expense Tracker — Statement'
-                          : 'Expense Tracker — Report $year',
+                      yearName == null
+                          ? 'Expense Tracker: Statement'
+                          : 'Expense Tracker: Report $yearName',
                       style: pw.TextStyle(
                         fontSize: 16,
                         fontWeight: pw.FontWeight.bold,
@@ -849,7 +876,9 @@ class BackupService {
                 _summaryBox('AVAILABLE BALANCE', finance.balance, _green)
               else
                 _summaryBox(
-                  year == null ? 'NET FOR PERIOD' : 'NET FOR $year',
+                  yearName == null
+                      ? 'NET FOR PERIOD'
+                      : 'NET FOR ${yearName.toUpperCase()}',
                   sumIncome - sumExpense - sumSavings,
                   _green,
                 ),
@@ -862,7 +891,7 @@ class BackupService {
               style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
             ),
             pw.Text(
-              'Live balances at export time — not scoped to the report '
+              'Live balances at export time, not scoped to the report '
               'period.',
               style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey700),
             ),
@@ -1052,7 +1081,7 @@ class BackupService {
                     [
                       t.isSplit
                           ? '${t.category.label} '
-                                '(split — own share ${_money.format(t.spendAmount)})'
+                                '(split, own share ${_money.format(t.spendAmount)})'
                           : t.category.label,
                       // Why a Sep 30 row sits under October.
                       if (t.countIn != null)

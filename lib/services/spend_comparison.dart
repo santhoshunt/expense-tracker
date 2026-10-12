@@ -257,7 +257,7 @@ MonthComparison buildMonthComparison(
       ),
       referenceFull: prevFull,
       state: previousCovered
-          ? _stateFor(actual, prevRef)
+          ? compareStateFor(actual, prevRef)
           : CompareState.notEnoughHistory,
     ),
     vsUsual: SpendCompare(
@@ -274,7 +274,7 @@ MonthComparison buildMonthComparison(
       referenceFull: usualFull,
       state: window.length < kMinUsualMonths
           ? CompareState.notEnoughHistory
-          : _stateFor(actual, usualRef),
+          : compareStateFor(actual, usualRef),
     ),
     categories: _categories(
       finance,
@@ -344,7 +344,9 @@ double? _project({
   return actual * referenceFull / reference;
 }
 
-CompareState _stateFor(double actual, double reference) {
+/// The shape of [actual] against [reference]: a zero baseline has no
+/// percentage, only a shape. Shared with the year comparison.
+CompareState compareStateFor(double actual, double reference) {
   if (reference <= 0 && actual > 0) return CompareState.newThisMonth;
   if (actual <= 0 && reference > 0) return CompareState.noneThisMonth;
   return CompareState.ok;
@@ -404,7 +406,7 @@ List<CategoryCompare> _categories(
           category: labels[id]!,
           actual: a,
           usual: usual,
-          state: _stateFor(a, usual),
+          state: compareStateFor(a, usual),
         );
       }(),
   ]..removeWhere((c) => c.actual <= 0 && c.usual <= 0);

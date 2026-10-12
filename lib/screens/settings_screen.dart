@@ -55,8 +55,8 @@ class SettingsScreen extends StatelessWidget {
         Icons.palette_outlined,
         'Appearance',
         AppIconService().isSupported
-            ? 'Theme, accent colour, glow, app icon'
-            : 'Theme, accent colour, glow',
+            ? 'Theme, accent colour, glow, app icon, year start'
+            : 'Theme, accent colour, glow, year start',
         (_) => const _AppearancePage(),
       ),
       if (SmsSource().isSupported)

@@ -24,9 +24,11 @@ import '../services/spend_comparison.dart';
 import '../services/safe_to_spend.dart';
 import '../services/subscriptions.dart';
 import '../services/upcoming_items.dart';
+import '../services/year_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/dates.dart';
+import '../utils/fiscal_year.dart';
 import '../utils/format.dart';
 import '../widgets/animated_fold.dart';
 import '../widgets/balance_breakdown.dart';
@@ -53,6 +55,7 @@ import '../widgets/tag_editor_dialog.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
 import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
+import 'transactions_screen.dart' show TxFilterRequest;
 
 /// Which slice of the dashboard is on screen. The page grew to fifteen
 /// sections in one scroll; splitting it into sub-tabs (rather than a second
@@ -90,6 +93,10 @@ class DashboardScreen extends StatefulWidget {
   /// Called when a By tags row is tapped: Transactions filtered to [tag].
   final void Function(String tag, DateTime month)? onViewTag;
 
+  /// Opens Transactions on exactly [request]: the Year view's taps, which
+  /// cover a whole year rather than a month.
+  final void Function(TxFilterRequest request)? onOpenTransactions;
+
   const DashboardScreen({
     super.key,
     this.onViewTransactions,
@@ -98,6 +105,7 @@ class DashboardScreen extends StatefulWidget {
     this.onViewBudget,
     this.onViewMerchant,
     this.onViewTag,
+    this.onOpenTransactions,
   });
 
   @override
@@ -221,10 +229,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final Set<DashboardSection> _openedForVisit = {};
   String? _openedAtLayout;
 
-  /// Year view: the stat cards, category breakdown and bar chart cover
-  /// `_month.year`; the month-only sections (budgets, merchants, heatmap,
+  /// Year view: the stat cards, category breakdown and bar chart cover the
+  /// year holding `_month`, which starts in Settings' "Year starts in"
+  /// month; the month-only sections (budgets, merchants, heatmap,
   /// transfers) step aside.
   bool _yearMode = false;
+
+  /// The year's first month (1 or 4), for the picker, the PDF export and the
+  /// selector. Build selects the same value, which rebuilds them on a change.
+  int get _yearStartMonth => context.read<SettingsProvider>().yearStart.month;
+
+  /// A Year-view tap: Transactions on the rows the year's figure counted,
+  /// by the date each counts in, under the year's name. Null without a
+  /// handler, which leaves the tap off.
+  VoidCallback? _openYear(
+    int startYear,
+    int startMonth, {
+    TxType? type,
+    String? categoryId,
+    String? tag,
+  }) {
+    final open = widget.onOpenTransactions;
+    if (open == null) return null;
+    final b = yearBounds(startYear, startMonth);
+    return () => open(
+      TxFilterRequest(
+        type: type,
+        categoryId: categoryId,
+        tag: tag,
+        range: DateTimeRange(start: b.first, end: b.last),
+        rangeCounted: true,
+        rangeLabel: yearLabel(startYear, startMonth),
+      ),
+    );
+  }
+
+  /// [_openYear] for a category row: that category's expense rows.
+  void Function(String categoryId)? _openYearCategory(
+    int startYear,
+    int startMonth,
+  ) => widget.onOpenTransactions == null
+      ? null
+      : (id) => _openYear(
+          startYear,
+          startMonth,
+          type: TxType.expense,
+          categoryId: id,
+        )?.call();
 
   /// Not persisted, matching `_month` and `_yearMode`.
   DashboardView _view = DashboardView.overview;
@@ -521,6 +572,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return _compare!;
   }
 
+  /// This year against the same months of last year, for the Year view:
+  /// memoized on (revision, year, start month, day) like the month
+  /// comparison, and for the same reason the day is in the key.
+  Object? _yearCompareRev;
+  (int, int, DateTime)? _yearCompareKey;
+  YearComparison? _yearCompare;
+
+  YearComparison? _yearComparison(
+    FinanceProvider finance,
+    int startYear,
+    int startMonth,
+  ) {
+    final now = DateTime.now();
+    final key = (startYear, startMonth, DateTime(now.year, now.month, now.day));
+    if (!identical(_yearCompareRev, finance.revision) ||
+        _yearCompareKey != key) {
+      _yearCompareRev = finance.revision;
+      _yearCompareKey = key;
+      _yearCompare = buildYearComparison(
+        finance,
+        startYear: startYear,
+        startMonth: startMonth,
+        now: now,
+      );
+    }
+    return _yearCompare;
+  }
+
   /// The month cards: last month's recap for the first [kRecapDays] days
   /// (the Overview), this month's pace after (Trends). Memoized on (revision,
   /// day, cap) — the recap walks every row's SMS body for merchants, and
@@ -606,16 +685,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final now = DateTime.now();
     final current = DateTime(now.year, now.month);
     final months = finance.monthsWithData;
+    final sm = _yearStartMonth;
     final List<DateTime> options;
     if (_yearMode) {
-      final years = <int>{now.year, for (final m in months) m.year}.toList()
-        ..sort((a, b) => b.compareTo(a));
-      options = [for (final y in years) DateTime(y, _month.month)];
+      final years = <int>{
+        yearStartOf(now, sm),
+        for (final m in months) yearStartOf(m, sm),
+      }.toList()..sort((a, b) => b.compareTo(a));
+      // The shown month's place in each year, so switching back to Month
+      // view lands on the same month of the picked year.
+      final offset = (_month.month - sm) % 12;
+      options = [for (final y in years) DateTime(y, sm + offset)];
     } else {
       options = [if (!months.contains(current)) current, ...months];
     }
+    // An option can sit in the next calendar year (February of FY
+    // 2026-27 is 2027), so years compare by their first calendar year.
     bool isCurrent(DateTime m) =>
-        _yearMode ? m.year == _month.year : m == _month;
+        _yearMode ? yearStartOf(m, sm) == yearStartOf(_month, sm) : m == _month;
     final picked = await showModalBottomSheet<DateTime>(
       context: context,
       useSafeArea: true,
@@ -634,7 +721,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ? Theme.of(ctx).colorScheme.primary
                     : Theme.of(ctx).colorScheme.onSurfaceVariant,
               ),
-              title: Text(_yearMode ? '${m.year}' : fmtMonth(m)),
+              title: Text(
+                _yearMode ? yearLabel(yearStartOf(m, sm), sm) : fmtMonth(m),
+              ),
               selected: isCurrent(m),
               selectedColor: accentTextColor(ctx),
               onTap: () => Navigator.pop(ctx, m),
@@ -650,13 +739,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     FinanceProvider finance,
   ) async {
     final messenger = ScaffoldMessenger.of(context);
-    final year = _month.year;
+    final sm = _yearStartMonth;
+    final year = yearStartOf(_month, sm);
     try {
-      final path = await BackupService.exportPdf(finance, year: year);
+      final path = await BackupService.exportPdf(
+        finance,
+        year: year,
+        startMonth: sm,
+      );
       if (path == null) return;
       showAppToastOn(
         messenger,
-        'Saved report $year',
+        'Saved report ${yearLabel(year, sm)}',
         tone: AppToastTone.success,
         icon: Icons.picture_as_pdf_outlined,
       );
@@ -674,7 +768,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     DateTime latestMonth,
   ) {
     final scheme = Theme.of(context).colorScheme;
-    final year = _month.year;
+    final sm = _yearStartMonth;
+    final year = yearStartOf(_month, sm);
     return Row(
       children: [
         IconButton(
@@ -695,7 +790,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 children: [
                   Flexible(
                     child: Text(
-                      _yearMode ? '$year' : fmtMonth(_month),
+                      _yearMode ? yearLabel(year, sm) : fmtMonth(_month),
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
@@ -715,7 +810,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           tooltip: _yearMode ? 'Next year' : 'Next month',
           onPressed:
               (_yearMode
-                  ? year < latestMonth.year
+                  ? year < yearStartOf(latestMonth, sm)
                   : _month.isBefore(latestMonth))
               ? () => _shiftMonth(1)
               : null,
@@ -748,10 +843,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         const InfoTip(
           title: 'Year view',
           message:
-              'Year view adds up the 12 months of the year. Budgets, the '
-              'monthly recap and pace, comparisons, the heatmap, merchants, '
-              'groups and transfers are hidden, and the totals and '
-              'categories do not open their transactions.',
+              'Year view adds up the 12 months of the year, from the month '
+              'set in Settings → Appearance → Year starts in. April gives the '
+              'financial year, April to March. Trends compares the year with '
+              'last year. Budgets, the monthly recap and pace, the month '
+              'comparisons, the heatmap, merchants, groups and transfers are '
+              'hidden.',
         ),
       ],
     );
@@ -785,24 +882,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
     for (final m in finance.monthsWithData) {
       if (m.isAfter(latestMonth)) latestMonth = m;
     }
-    final year = _month.year;
+    // The year holding `_month`, named by its first calendar year: a
+    // January start is the calendar year, April the financial year.
+    final sm = context.select<SettingsProvider, int>((s) => s.yearStart.month);
+    final year = yearStartOf(_month, sm);
     // In Year view the "month" figures below are the year's: same widgets,
     // wider window.
     final byCategory = _yearMode
-        ? finance.expenseByCategoryInYear(year)
+        ? finance.expenseByCategoryInYear(year, startMonth: sm)
         : finance.expenseByCategory(_month);
     final monthExpense = _yearMode
-        ? finance.expenseInYear(year)
+        ? finance.expenseInYear(year, startMonth: sm)
         : finance.expenseInMonth(_month);
     final groupSpend = finance.groupSpendInMonth(_month);
     final groupTotal = groupSpend.fold(0.0, (sum, e) => sum + e.$2);
     final transfersBy = finance.transfersByCategoryInMonth(_month);
     final topMerchantsList = _topMerchants(finance);
     final byTag = _yearMode
-        ? finance.expenseByTagInYear(year)
+        ? finance.expenseByTagInYear(year, startMonth: sm)
         : finance.expenseByTagInMonth(_month);
     // Keys the capped lists, so a new month or view starts folded.
-    final listKey = _yearMode ? 'y$year' : 'm${monthKey(_month)}';
+    final listKey = _yearMode ? 'y$year-$sm' : 'm${monthKey(_month)}';
     final colors = AppColors.of(context);
     final scheme = Theme.of(context).colorScheme;
     final hideIncome = context.select<SettingsProvider, bool>(
@@ -892,20 +992,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
             scrollDirection: Axis.horizontal,
             padding: EdgeInsets.zero,
             children: [
-              // Year-view taps stay month-scoped deep links (the Transactions
-              // filter has no year), so they are disabled there.
+              // Year-view taps open the whole year's rows (_openYear).
               if (!hideIncome) ...[
                 _StatCard(
                   label: 'Income',
                   value: _yearMode
-                      ? finance.incomeInYear(year)
+                      ? finance.incomeInYear(year, startMonth: sm)
                       : finance.incomeInMonth(_month),
                   icon: Icons.arrow_downward,
                   color: colors.green,
                   tip:
                       'Money in $period, not counting transfers between '
                       'your own accounts or pending imports.',
-                  onTap: widget.onViewTransactions == null || _yearMode
+                  onTap: _yearMode
+                      ? _openYear(year, sm, type: TxType.income)
+                      : widget.onViewTransactions == null
                       ? null
                       : () => widget.onViewTransactions!(TxType.income, _month),
                 ),
@@ -925,7 +1026,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   label: 'Set up transaction rules',
                   onTap: goCockpitRules,
                 ),
-                onTap: widget.onViewTransactions == null || _yearMode
+                onTap: _yearMode
+                    ? _openYear(year, sm, type: TxType.expense)
+                    : widget.onViewTransactions == null
                     ? null
                     : () => widget.onViewTransactions!(TxType.expense, _month),
               ),
@@ -937,12 +1040,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
               _StatCard(
                 label: 'Saved',
                 value: _yearMode
-                    ? finance.savingsOutflowInYear(year)
+                    ? finance.savingsOutflowInYear(year, startMonth: sm)
                     : finance.savingsOutflowInMonth(_month),
                 icon: Icons.savings_outlined,
                 color: colors.orange,
                 tip: 'Money moved to savings $period.',
-                onTap: widget.onViewCategory == null || _yearMode
+                // The savings category on the All tab: "To savings" is a
+                // transfer by default, and the Expense tab leaves transfers
+                // out, so it listed nothing.
+                onTap: _yearMode
+                    ? _openYear(
+                        year,
+                        sm,
+                        categoryId: kSavingsTransferCategoryId,
+                      )
+                    : widget.onOpenTransactions != null
+                    ? () => widget.onOpenTransactions!(
+                        TxFilterRequest(
+                          categoryId: kSavingsTransferCategoryId,
+                          month: _month,
+                        ),
+                      )
+                    : widget.onViewCategory == null
                     ? null
                     : () => widget.onViewCategory!(
                         kSavingsTransferCategoryId,
@@ -1192,6 +1311,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ).pace;
       final today = recapClock();
       final comparison = _yearMode ? null : _comparison(finance);
+      final yearCompare = _yearMode ? _yearComparison(finance, year, sm) : null;
       // The Month-end forecast, for the running month only: the cards' On
       // track for and the chart's dashed line both use it.
       final forecastNow = DateTime.now();
@@ -1268,7 +1388,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
       final thisMonth = DateTime(today.year, today.month);
       final sixMonthsTitle = _yearMode
-          ? 'Months of $year'
+          ? 'Months of ${yearLabel(year, sm)}'
           : _month == thisMonth
           ? 'Last 6 months'
           : '6 months to ${fmtMonth(_month)}';
@@ -1284,7 +1404,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final finished = [
         for (final m
             in _yearMode
-                ? [for (var m = 1; m <= 12; m++) DateTime(year, m)]
+                ? yearMonths(year, sm)
                 : [
                     for (var i = 5; i >= 0; i--)
                       DateTime(_month.year, _month.month - i),
@@ -1384,6 +1504,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ],
         ),
+        // The Year view's own comparison, where the month ones step aside.
+        // Hidden on a year with nothing either side and no history to say
+        // so about.
+        DashboardSection.yearVsLast: (
+          visible:
+              yearCompare != null &&
+              !(yearCompare.total.empty && yearCompare.categories.isEmpty),
+          title: null,
+          summary: against(yearCompare?.total, 'last year'),
+          tip: yearCompare == null ? null : yearComparisonTip(yearCompare),
+          body: () => [
+            YearComparisonCard(
+              comparison: yearCompare!,
+              onViewCategory: _openYearCategory(year, sm),
+            ),
+          ],
+        ),
         DashboardSection.sixMonths: (
           visible: true,
           title: sixMonthsTitle,
@@ -1404,9 +1541,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 child: Column(
                   children: [
                     MonthlyBarChart(
-                      months: _yearMode
-                          ? [for (var m = 1; m <= 12; m++) DateTime(year, m)]
-                          : null,
+                      months: _yearMode ? yearMonths(year, sm) : null,
                       end: _month,
                       showIncome: !hideIncome,
                     ),
@@ -1468,7 +1603,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             title: DashboardSection.donut.label,
             message:
                 "Each slice is a category's share of the "
-                "${_yearMode ? "year's spending. Tap a slice for its amount and share." : "month's spending. Tap a slice for its amount and share, or a name below for its transactions."}",
+                "${_yearMode ? "year's" : "month's"} spending. Tap a slice for "
+                'its amount and share, or a name below for its transactions.',
           ),
           body: () => [
             Card(
@@ -1479,7 +1615,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   emptyText: _yearMode
                       ? 'No spending this year'
                       : 'No spending this month',
-                  onCategoryTap: widget.onViewCategory == null || _yearMode
+                  onCategoryTap: _yearMode
+                      ? _openYearCategory(year, sm)
+                      : widget.onViewCategory == null
                       ? null
                       : (id) => widget.onViewCategory!(id, _month),
                 ),
@@ -1530,7 +1668,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 finance,
                                 entry.key.id,
                               )?.limit,
-                        onTap: widget.onViewCategory == null || _yearMode
+                        onTap: _yearMode
+                            ? _openYear(
+                                year,
+                                sm,
+                                type: TxType.expense,
+                                categoryId: entry.key.id,
+                              )
+                            : widget.onViewCategory == null
                             ? null
                             : () =>
                                   widget.onViewCategory!(entry.key.id, _month),
@@ -1589,7 +1734,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         fraction: monthExpense == 0
                             ? 0
                             : t.spent / monthExpense,
-                        onTap: widget.onViewTag == null || _yearMode
+                        onTap: _yearMode
+                            ? _openYear(
+                                year,
+                                sm,
+                                type: TxType.expense,
+                                tag: t.tag,
+                              )
+                            : widget.onViewTag == null
                             ? null
                             : () => widget.onViewTag!(t.tag, _month),
                         onLongPress: () => showTagEditor(context, t.tag),

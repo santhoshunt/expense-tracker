@@ -20,6 +20,9 @@ enum DashboardSection {
   previousMonth(DashboardPage.trends, 'This month vs last month', true),
   usual(DashboardPage.trends, 'This month vs usual', false),
   categoryComparison(DashboardPage.trends, 'Categories vs usual', false),
+  // Year view only, where the month comparisons above step aside: open,
+  // so the page leads with it.
+  yearVsLast(DashboardPage.trends, 'This year vs last year', true),
   sixMonths(DashboardPage.trends, 'Last 6 months', false),
   // Breakdown
   donut(DashboardPage.breakdown, 'Spending split', true),
@@ -37,7 +40,9 @@ enum DashboardSection {
   final String label;
 
   /// Trends and Breakdown open their first two sections, so each page fits
-  /// about one screen until more are opened. Overview never folds.
+  /// about one screen until more are opened. Trends' year comparison is open
+  /// too: it shows only in Year view, where the month sections above it
+  /// step aside. Overview never folds.
   final bool openByDefault;
 
   /// [p]'s sections in their default order.

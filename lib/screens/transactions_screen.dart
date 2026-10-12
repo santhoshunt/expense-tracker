@@ -73,6 +73,14 @@ class TxFilterRequest {
   /// both are set).
   final DateTimeRange? range;
 
+  /// [range] matches the date each row counts in (Tx.countIn), like the
+  /// dashboard's year totals, instead of the date it happened.
+  final bool rangeCounted;
+
+  /// The chip's text for [range], such as "FY 2026-27"; null shows the
+  /// dates.
+  final String? rangeLabel;
+
   /// Rows carrying this tag (matched ignoring case) — the Tags tab's rows.
   final String? tag;
 
@@ -85,8 +93,22 @@ class TxFilterRequest {
     this.groupId,
     this.query,
     this.range,
+    this.rangeCounted = false,
+    this.rangeLabel,
     this.tag,
   });
+}
+
+/// Whether [t] falls on a day of [range], both ends included. [counted]
+/// tests the date the row counts in (a dashboard year tap-through, so the
+/// list adds up to the figure tapped); otherwise the date it happened (the
+/// filter sheet's custom range).
+bool txInRange(Tx t, DateTimeRange range, {required bool counted}) {
+  // Whole days: the picker returns midnights, the rows carry times.
+  final start = DateTime(range.start.year, range.start.month, range.start.day);
+  final end = DateTime(range.end.year, range.end.month, range.end.day + 1);
+  final d = counted ? t.effectiveDate : t.date;
+  return !d.isBefore(start) && d.isBefore(end);
 }
 
 class TransactionsScreen extends StatefulWidget {
@@ -166,6 +188,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// Inclusive day range. Exclusive with [_monthFilter]: the filter sheet
   /// sets one and clears the other.
   DateTimeRange? _rangeFilter;
+
+  /// [_rangeFilter] came from a dashboard year and matches the date rows
+  /// count in, under [_rangeLabel]. Both reset with the range whenever it
+  /// changes or clears.
+  bool _rangeCounted = false;
+  String? _rangeLabel;
+
+  /// Sets the range and drops its year flavour: every path except a
+  /// deep-link and an unchanged sheet Apply goes through here.
+  void _setRange(DateTimeRange? r) {
+    _rangeFilter = r;
+    _rangeCounted = false;
+    _rangeLabel = null;
+  }
 
   /// Search text per row id (see [searchHaystack]); building one walks the
   /// SMS body with the merchant regex, so it is kept across pipeline runs
@@ -283,8 +319,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (_rangeFilter != null)
         chip(
           avatar: const Icon(Icons.date_range, size: 16),
-          label: fmtDateRange(_rangeFilter!),
-          onDeleted: () => setState(() => _rangeFilter = null),
+          label: _rangeLabel ?? fmtDateRange(_rangeFilter!),
+          onDeleted: () => setState(() => _setRange(null)),
         ),
       for (final b in finance.budgets)
         if (_budgetFilter.contains(b.id))
@@ -366,6 +402,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       _selected.clear();
       _accountId = req?.accountId;
       _rangeFilter = req?.range;
+      _rangeCounted = req?.range != null && req!.rangeCounted;
+      _rangeLabel = req?.range != null ? req!.rangeLabel : null;
       _monthFilter = _rangeFilter == null ? req?.month : null;
       if (req?.categoryId != null) _categoryFilter.add(req!.categoryId!);
       if (req?.groupId != null) _groupFilter.add(req!.groupId!);
@@ -408,14 +446,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final budgetFilterList = _budgetFilter.isEmpty
         ? const <SpendBudget>[]
         : finance.budgets.where((b) => _budgetFilter.contains(b.id)).toList();
-    // Whole days: the picker returns midnights, the rows carry times.
     final r = _rangeFilter;
-    final rangeStart = r == null
-        ? null
-        : DateTime(r.start.year, r.start.month, r.start.day);
-    final rangeEnd = r == null
-        ? null
-        : DateTime(r.end.year, r.end.month, r.end.day + 1);
     return all.where((t) {
       if (_accountId != null &&
           finance.accountForKey(t.acctKey)?.id != _accountId) {
@@ -428,8 +459,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (m != null && (counts.year != m.year || counts.month != m.month)) {
         return false;
       }
-      if (rangeStart != null &&
-          (t.date.isBefore(rangeStart) || !t.date.isBefore(rangeEnd!))) {
+      if (r != null && !txInRange(t, r, counted: _rangeCounted)) {
         return false;
       }
       // The Income, Expense and Transfers tabs list what the totals count,
@@ -510,6 +540,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _monthFilter,
     _rangeFilter?.start,
     _rangeFilter?.end,
+    _rangeCounted,
   ].join('|');
 
   /// Runs filter → group-by-month → sort → flatten for one filter tab,
@@ -565,8 +596,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     // Rows sit under the month they happened in, except in a month-filtered
     // view: an October tap-through would otherwise show a September header
     // holding only the salary that counts in October. Either way a header
-    // totals the rows under it, so every row is in exactly one total.
-    final byCounted = _monthFilter != null;
+    // totals the rows under it, so every row is in exactly one total. A
+    // dashboard year's range groups the same way, for the same reason.
+    final byCounted = _monthFilter != null || _rangeCounted;
     final groups = <DateTime, List<Tx>>{};
     for (final tx in filtered) {
       final d = byCounted ? tx.effectiveDate : tx.date;
@@ -990,7 +1022,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                 _maxAmount = null;
                                 _accountId = null;
                                 _monthFilter = null;
-                                _rangeFilter = null;
+                                _setRange(null);
                               });
                               // A reset is a jump, not a sideways step.
                               if (_pageCtrl.hasClients) {
@@ -1064,11 +1096,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   ),
                 ),
                 // With a month or range filter the list holds one
-                // month (or a few) — nothing worth jumping between.
+                // month (or a few) — nothing worth jumping between. A
+                // dashboard year's range holds twelve, so it keeps them.
                 // Painted after the sticky header and inside the 52dp gutter
                 // _MonthHeader keeps clear on its right, so both stay usable
                 // at the same top offset.
-                if (_monthFilter == null && _rangeFilter == null)
+                if (_monthFilter == null &&
+                    (_rangeFilter == null || _rangeCounted))
                   Positioned(
                     right: 4,
                     top: 8,
@@ -1751,7 +1785,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           _maxAmount = parseAmount(maxCtrl.text);
                           _accountId = accountId;
                           _monthFilter = month;
-                          _rangeFilter = range;
+                          // The range the sheet opened with keeps its year
+                          // flavour; any new pick (or none) is a plain range.
+                          if (!identical(range, _rangeFilter)) _setRange(range);
                         });
                         Navigator.pop(ctx);
                       },
@@ -1876,15 +1912,29 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                   selected: range != null,
                                   onSelected: (_) async {
                                     final now = DateTime.now();
+                                    final today = DateTime(
+                                      now.year,
+                                      now.month,
+                                      now.day,
+                                    );
+                                    // A dashboard year still running ends
+                                    // after today, which the picker rejects:
+                                    // start it at the part up to today.
+                                    final r = range;
+                                    final initial =
+                                        r == null || r.start.isAfter(today)
+                                        ? null
+                                        : r.end.isAfter(today)
+                                        ? DateTimeRange(
+                                            start: r.start,
+                                            end: today,
+                                          )
+                                        : r;
                                     final picked = await showDateRangePicker(
                                       context: ctx,
                                       firstDate: DateTime(2000),
-                                      lastDate: DateTime(
-                                        now.year,
-                                        now.month,
-                                        now.day,
-                                      ),
-                                      initialDateRange: range,
+                                      lastDate: today,
+                                      initialDateRange: initial,
                                     );
                                     if (picked == null) return;
                                     setSheetState(() {

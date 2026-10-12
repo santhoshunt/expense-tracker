@@ -14,6 +14,7 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
+import 'package:expense_tracker/utils/fiscal_year.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/animated_fold.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
@@ -924,6 +925,79 @@ void main() {
       scrollable: list,
     );
     expect(find.text('Last 6 months'), findsOneWidget);
+  });
+
+  testWidgets('an April start makes the Year view the financial year', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    final now = DateTime.now();
+    final fy = yearStartOf(now, 4);
+    Future<void> spend(double amount, DateTime date) => p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: amount,
+      note: 'groceries',
+      date: date,
+    );
+    // Records reach back to the start of last year, so the comparison has
+    // a fair baseline.
+    await spend(100, DateTime(fy - 1, 4, 1));
+    await spend(300, DateTime(now.year - 1, now.month, 1));
+    // Midnight today: inside this year so far, never in the future.
+    final today = DateTime(now.year, now.month, now.day);
+    await spend(800, today);
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: kSavingsTransferCategoryId,
+      amount: 2500,
+      note: 'Recurring deposit',
+      date: today,
+    );
+    final s = SettingsProvider();
+    await s.load();
+    await s.setYearStart(YearStart.april);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: p),
+          ChangeNotifierProvider.value(value: s),
+          Provider<DriveBackupService>(create: (_) => DriveBackupService()),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Year'));
+    await tester.pumpAndSettle();
+    final label = yearLabel(fy, 4);
+    expect(find.text(label), findsOneWidget, reason: 'selector names the FY');
+
+    await openDashboardView(tester, 'Trends');
+    final list = verticalScrollable();
+    await tester.scrollUntilVisible(
+      find.text('This year vs last year'),
+      300,
+      scrollable: list,
+    );
+    expect(find.text('This year vs last year'), findsWidgets);
+    await tester.scrollUntilVisible(
+      find.text('Months of $label'),
+      300,
+      scrollable: list,
+    );
+    expect(find.text('Months of $label'), findsOneWidget);
+
+    // Saved opens the year's savings rows under the year's chip. "To
+    // savings" is a transfer, so they list on All, not Expense.
+    await openDashboardView(tester, 'Overview');
+    final saved = find.text('Saved');
+    await tester.scrollUntilVisible(saved, -300, scrollable: list);
+    await tester.tap(saved);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(InputChip, label), findsOneWidget);
+    expect(find.text('Recurring deposit'), findsOneWidget);
   });
 
   testWidgets('long-pressing a Top merchant renames it everywhere', (

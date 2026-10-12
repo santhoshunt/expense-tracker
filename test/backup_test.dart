@@ -193,6 +193,78 @@ void main() {
     expect(y2024.length, lessThan(y2025.length));
   });
 
+  group('financial-year PDF', () {
+    Tx row(String id, DateTime date, {DateTime? countIn}) => Tx(
+      id: id,
+      type: TxType.expense,
+      categoryId: 'other_expense',
+      amount: 10,
+      note: '',
+      smsBody: '',
+      date: date,
+      source: TxSource.manual,
+      sender: '',
+      countIn: countIn,
+    );
+
+    test('rowsInYear keeps April to March by the day a row counts in', () {
+      final rows = [
+        row('beforeFy', DateTime(2025, 3, 10)),
+        row('firstDay', DateTime(2025, 4, 1)),
+        row('april', DateTime(2025, 4, 15)),
+        row('march', DateTime(2026, 3, 20)),
+        // A time of day on the last day stays inside the year.
+        row('lastDay', DateTime(2026, 3, 31, 23, 59)),
+        row('afterFy', DateTime(2026, 4, 1)),
+        // Dated before the year, counted in it: kept.
+        row('countedIn', DateTime(2025, 3, 28), countIn: DateTime(2025, 4, 2)),
+        // Dated inside the year, counted after it: dropped.
+        row('countedOut', DateTime(2026, 3, 30), countIn: DateTime(2026, 4, 3)),
+      ];
+      expect(
+        BackupService.rowsInYear(rows, 2025, startMonth: 4).map((t) => t.id),
+        ['firstDay', 'april', 'march', 'lastDay', 'countedIn'],
+      );
+      // January start is the calendar year.
+      expect(BackupService.rowsInYear(rows, 2025).map((t) => t.id), [
+        'beforeFy',
+        'firstDay',
+        'april',
+        'countedIn',
+      ]);
+    });
+
+    test('FY report renders and differs from the calendar report', () async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 320,
+        note: 'Lunch out',
+        date: DateTime(2025, 4, 15), // FY 2025-26
+      );
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'shopping',
+        amount: 1875,
+        note: 'New kettle',
+        date: DateTime(2026, 3, 20), // FY 2025-26
+      );
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'transport',
+        amount: 45,
+        note: 'Auto fare',
+        date: DateTime(2025, 3, 10), // FY 2024-25
+      );
+      final fy = await BackupService.buildPdf(p, year: 2025, startMonth: 4);
+      final calendar = await BackupService.buildPdf(p, year: 2025);
+      expect(fy.sublist(0, 4), [0x25, 0x50, 0x44, 0x46]);
+      expect(fy.length, isNot(calendar.length));
+    });
+  });
+
   group('date-range exports', () {
     test('rowsInRange keeps whole days, both ends inclusive', () {
       Tx row(String id, DateTime date) => Tx(

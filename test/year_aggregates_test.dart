@@ -69,4 +69,60 @@ void main() {
     expect(series.last.expense, 500);
     expect(series[7].income + series[7].expense, 0);
   });
+
+  group('financial year (April start)', () {
+    test('totals run April to March', () async {
+      final p = await seeded();
+      // FY 2024-25: January and March 2025.
+      expect(p.incomeInYear(2024, startMonth: 4), 50000);
+      expect(p.expenseInYear(2024, startMonth: 4), 1000);
+      expect(p.savingsOutflowInYear(2024, startMonth: 4), 4000);
+      // FY 2025-26: June and December 2025, January 2026.
+      expect(p.incomeInYear(2025, startMonth: 4), 60000);
+      expect(p.expenseInYear(2025, startMonth: 4), 3499);
+      expect(p.savingsOutflowInYear(2025, startMonth: 4), 0);
+      // The calendar figures are unchanged.
+      expect(p.expenseInYear(2025), 3500);
+    });
+
+    test(
+      'expenseByCategoryInYear merges across the calendar boundary',
+      () async {
+        final p = await seeded();
+        final by = p.expenseByCategoryInYear(2025, startMonth: 4);
+        expect(by.map((e) => e.key.id), ['food', 'transport']);
+        expect(by.first.value, 2999);
+      },
+    );
+
+    test('monthlySeries starts in April and ends in March', () async {
+      final p = await seeded();
+      final series = p.monthlySeries(2025, startMonth: 4);
+      expect(series, hasLength(12));
+      expect(series.first.month, DateTime(2025, 4));
+      expect(series[2].expense, 2000);
+      expect(series[9].month, DateTime(2026, 1));
+      expect(series[9].income, 60000);
+      expect(series.last.month, DateTime(2026, 3));
+    });
+
+    test('tag totals keep calendar and financial years apart', () async {
+      final p = FinanceProvider();
+      await p.load();
+      Future<void> add(double amount, DateTime date) => p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: amount,
+        note: 'Snacks',
+        date: date,
+        tags: ['Trip'],
+      );
+      await add(100, DateTime(2025, 2, 10));
+      await add(300, DateTime(2025, 5, 10));
+      // Calendar 2025 first, so a shared cache entry would leak into the FY.
+      expect(p.expenseByTagInYear(2025).single.spent, 400);
+      expect(p.expenseByTagInYear(2025, startMonth: 4).single.spent, 300);
+      expect(p.expenseByTagInYear(2024, startMonth: 4).single.spent, 100);
+    });
+  });
 }

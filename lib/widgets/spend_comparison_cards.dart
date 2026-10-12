@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../providers/settings_provider.dart' show CategorySort;
 import '../screens/app_nav.dart' show goCockpitRules;
 import '../services/spend_comparison.dart';
+import '../services/year_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/dates.dart';
@@ -680,6 +681,247 @@ class _CategoryCompareRow extends StatelessWidget {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Must match the `DashboardSection.yearVsLast` label word for word: inside
+/// a fold, [_Section] leaves its heading to the fold's.
+const _yearTitle = 'This year vs last year';
+const _yearTip =
+    'Compares this year with the same months of last year. While the year '
+    "is running, both sides count up to today's date in the same month. "
+    'Red means more than last year, green less.';
+
+/// The "This year vs last year" tip, for a dashboard fold heading (see
+/// [previousMonthTip]).
+InfoTip yearComparisonTip(YearComparison c) => InfoTip(
+  title: _yearTitle,
+  message: _yearTip,
+  example: () => _yearExample(c),
+);
+
+String? _yearExample(YearComparison c) {
+  final t = c.total;
+  if (t.state == CompareState.notEnoughHistory || t.reference <= 0) {
+    return null;
+  }
+  final d = t.delta;
+  return '${c.label} ${fmtMoney(t.actual)} vs ${c.previousLabel} '
+      '${fmtMoney(t.reference)} = ${d < 0 ? '−' : '+'}${fmtMoney(d.abs())}';
+}
+
+/// The trend glyph every comparison uses: flat for a negligible change.
+IconData _trendIcon(double delta) => negligibleDelta(delta)
+    ? Icons.drag_handle
+    : delta > 0
+    ? Icons.trending_up
+    : Icons.trending_down;
+
+/// This year's spending against the same span of last year, then the
+/// categories that moved most. Its own body rather than [_CompareBody],
+/// whose lines and bar labels are written for a month ("Through 15 Jun",
+/// "Full month").
+///
+/// The tone sits on the trend icons only, never on the text.
+class YearComparisonCard extends StatelessWidget {
+  final YearComparison comparison;
+
+  /// Opens the transaction list for a category. Rows with nothing this year
+  /// stay untappable, as in [CategoryComparisonCard]: they would open an
+  /// empty list.
+  final void Function(String categoryId)? onViewCategory;
+
+  const YearComparisonCard({
+    super.key,
+    required this.comparison,
+    this.onViewCategory,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final c = comparison.total;
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
+    String? example() => _yearExample(comparison);
+
+    // Records that start part-way through last year (or later) leave no
+    // fair "same span" figure; say so rather than compare a few months.
+    if (c.state == CompareState.notEnoughHistory) {
+      return _Section(
+        title: _yearTitle,
+        tip: _yearTip,
+        child: Text(
+          '${comparison.previousLabel} is not fully on record, so there is '
+          'no fair comparison yet.',
+          style: muted,
+        ),
+      );
+    }
+
+    if (c.empty) {
+      return _Section(
+        title: _yearTitle,
+        tip: _yearTip,
+        child: Text('Nothing recorded this year or last year.', style: muted),
+      );
+    }
+
+    final headline = c.negligible
+        ? 'About the same as last year'
+        : '${deltaPhrase(c)} than last year';
+    final figures =
+        'This year ${fmtMoney(c.actual)}, last year ${fmtMoney(c.reference)}'
+        '${comparison.partial ? ' by the same day' : ''}';
+
+    return _Section(
+      title: _yearTitle,
+      tip: _yearTip,
+      example: example,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                _trendIcon(c.delta),
+                size: 20,
+                color: _toneFor(context, c.delta),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  headline,
+                  style: text.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(figures, style: muted),
+          if (comparison.categories.isNotEmpty) ...[
+            const Divider(height: 24),
+            ShowAllList(
+              key: ValueKey(
+                'yvl-${comparison.startYear}-${comparison.startMonth}',
+              ),
+              noun: 'categories',
+              shown: kTopMoversShown,
+              rows: [
+                for (final row in comparison.categories)
+                  _YearCategoryRow(compare: row, onView: onViewCategory),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One category this year: label and amount, then last year's figure and
+/// the signed change. `usual` holds last year's figure (see
+/// [YearComparison.categories]).
+class _YearCategoryRow extends StatelessWidget {
+  final CategoryCompare compare;
+
+  /// The card's [YearComparisonCard.onViewCategory], passed through.
+  final void Function(String categoryId)? onView;
+
+  const _YearCategoryRow({required this.compare, required this.onView});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
+    final cat = compare.category;
+    final tappable =
+        onView != null && compare.state != CompareState.noneThisMonth;
+    final showDelta = compare.state == CompareState.ok && !compare.negligible;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.control),
+      onTap: tappable ? () => onView!(cat.id) : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: cat.color.withValues(alpha: 0.15),
+              child: Icon(
+                cat.icon,
+                size: 18,
+                color: categoryGlyphColor(context, cat.color),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          cat.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 120),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            fmtMoney(compare.actual),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(switch (compare.state) {
+                          CompareState.newThisMonth => 'Nothing last year',
+                          CompareState.noneThisMonth =>
+                            'Nothing this year, '
+                                '${fmtMoney(compare.usual)} last year',
+                          _ => 'Last year ${fmtMoney(compare.usual)}',
+                        }, style: muted),
+                      ),
+                      if (showDelta) ...[
+                        const SizedBox(width: 8),
+                        Icon(
+                          _trendIcon(compare.delta),
+                          size: 14,
+                          color: _toneFor(context, compare.delta),
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          '${compare.delta > 0 ? '+' : '−'}'
+                          '${fmtMoney(compare.delta.abs())}',
+                          style: text.bodySmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ],

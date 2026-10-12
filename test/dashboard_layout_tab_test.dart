@@ -136,6 +136,7 @@ void main() {
       DashboardSection.usual,
       DashboardSection.pace,
       DashboardSection.categoryComparison,
+      DashboardSection.yearVsLast,
       DashboardSection.sixMonths,
     ]);
   });

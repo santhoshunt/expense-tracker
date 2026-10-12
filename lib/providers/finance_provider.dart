@@ -21,6 +21,7 @@ import '../services/sms_parser.dart';
 import '../services/transfer_pairing.dart';
 import '../utils/dates.dart';
 import '../utils/figma_palette.dart';
+import '../utils/fiscal_year.dart';
 
 /// What [FinanceProvider.recordCardPayment] did, so a snackbar Undo can
 /// reverse all of it: delete [txId] (which unlinks the pair), restore
@@ -187,8 +188,8 @@ class _Derived {
   List<TagUse>? tagUses;
   List<TagSummary>? tagSummaries;
 
-  /// Spend per tag per month, keyed `year*12 + month`, and per year —
-  /// Breakdown's By tags.
+  /// Spend per tag per month, keyed `year*12 + month`, and per year, keyed
+  /// `year*100 + startMonth` — Breakdown's By tags.
   final Map<int, List<TagSpend>> tagSpendByMonth = {};
   final Map<int, List<TagSpend>> tagSpendByYear = {};
 
@@ -702,23 +703,31 @@ class FinanceProvider extends ChangeNotifier {
   // Built from the memoised month totals rather than a separate pass: the
   // twelve lookups are cached individually, so flipping between the month
   // and year views costs nothing after the first paint.
+  //
+  // A year is named by its first calendar year and starts in [startMonth]
+  // (1 is the calendar year, 4 the April to March financial year).
 
-  static Iterable<DateTime> _monthsOf(int year) =>
-      Iterable.generate(12, (i) => DateTime(year, i + 1));
+  static Iterable<DateTime> _monthsOf(int year, [int startMonth = 1]) =>
+      yearMonths(year, startMonth);
 
-  double incomeInYear(int year) =>
-      _monthsOf(year).fold(0.0, (s, m) => s + incomeInMonth(m));
+  double incomeInYear(int year, {int startMonth = 1}) =>
+      _monthsOf(year, startMonth).fold(0.0, (s, m) => s + incomeInMonth(m));
 
-  double expenseInYear(int year) =>
-      _monthsOf(year).fold(0.0, (s, m) => s + expenseInMonth(m));
+  double expenseInYear(int year, {int startMonth = 1}) =>
+      _monthsOf(year, startMonth).fold(0.0, (s, m) => s + expenseInMonth(m));
 
-  double savingsOutflowInYear(int year) =>
-      _monthsOf(year).fold(0.0, (s, m) => s + savingsOutflowInMonth(m));
+  double savingsOutflowInYear(int year, {int startMonth = 1}) => _monthsOf(
+    year,
+    startMonth,
+  ).fold(0.0, (s, m) => s + savingsOutflowInMonth(m));
 
   /// Expense totals per category across [year], largest first.
-  List<MapEntry<TxCategory, double>> expenseByCategoryInYear(int year) {
+  List<MapEntry<TxCategory, double>> expenseByCategoryInYear(
+    int year, {
+    int startMonth = 1,
+  }) {
     final totals = <String, (TxCategory, double)>{};
-    for (final m in _monthsOf(year)) {
+    for (final m in _monthsOf(year, startMonth)) {
       for (final e in _monthTotals(m).byCategory) {
         final prev = totals[e.key.id];
         totals[e.key.id] = (e.key, (prev?.$2 ?? 0) + e.value);
@@ -729,11 +738,12 @@ class FinanceProvider extends ChangeNotifier {
     return out;
   }
 
-  /// Income and expense per calendar month of [year], January first.
+  /// Income and expense per month of [year], its first month first.
   List<({DateTime month, double income, double expense})> monthlySeries(
-    int year,
-  ) => [
-    for (final m in _monthsOf(year))
+    int year, {
+    int startMonth = 1,
+  }) => [
+    for (final m in _monthsOf(year, startMonth))
       (month: m, income: incomeInMonth(m), expense: expenseInMonth(m)),
   ];
 
@@ -4101,9 +4111,10 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// [expenseByTagInMonth] across [year].
-  List<TagSpend> expenseByTagInYear(int year) =>
-      _d.tagSpendByYear[year] ??= _tagSpend([
-        for (final m in _monthsOf(year)) ...?_byMonth[m.year * 12 + m.month],
+  List<TagSpend> expenseByTagInYear(int year, {int startMonth = 1}) =>
+      _d.tagSpendByYear[year * 100 + startMonth] ??= _tagSpend([
+        for (final m in _monthsOf(year, startMonth))
+          ...?_byMonth[m.year * 12 + m.month],
       ]);
 
   List<TagSpend> _tagSpend(List<Tx> rows) {
