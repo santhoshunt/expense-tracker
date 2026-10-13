@@ -24,6 +24,11 @@ class CategoryDonutChart extends StatefulWidget {
   /// popup offers the same link.
   final void Function(String categoryId)? onCategoryTap;
 
+  /// When set, the legend and the slice popup open the category's history
+  /// instead (its sheet offers the transactions), and [onCategoryTap] is
+  /// left to the caller.
+  final void Function(String categoryId)? onCategoryHistory;
+
   /// Shown instead of the chart when nothing was spent.
   final String emptyText;
 
@@ -31,6 +36,7 @@ class CategoryDonutChart extends StatefulWidget {
     super.key,
     required this.data,
     this.onCategoryTap,
+    this.onCategoryHistory,
     this.emptyText = 'No spending this month',
   });
 
@@ -224,7 +230,10 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
       math.cos(midAngle - math.pi / 2),
       math.sin(midAngle - math.pi / 2),
     );
-    final onTap = widget.onCategoryTap;
+    // The link pops the popup's route before calling back, so a history
+    // sheet opens over a closed popup.
+    final history = widget.onCategoryHistory;
+    final onTap = history ?? widget.onCategoryTap;
     await showAnchoredBubble(
       context,
       anchor: chartAnchor(paintContext, center + dir * (mid + _stroke / 2)),
@@ -237,7 +246,7 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
         link: onTap == null
             ? null
             : InfoLink(
-                label: 'See transactions',
+                label: history != null ? 'See history' : 'See transactions',
                 onTap: (_) => onTap(entry.key.id),
               ),
         host: context,
@@ -319,9 +328,11 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
                     width: width,
                     child: InkWell(
                       borderRadius: BorderRadius.circular(8),
-                      onTap: widget.onCategoryTap == null
-                          ? null
-                          : () => widget.onCategoryTap!(e.key.id),
+                      onTap: switch (widget.onCategoryHistory ??
+                          widget.onCategoryTap) {
+                        final open? => () => open(e.key.id),
+                        null => null,
+                      },
                       child: Container(
                         constraints: const BoxConstraints(minHeight: 28),
                         padding: const EdgeInsets.symmetric(

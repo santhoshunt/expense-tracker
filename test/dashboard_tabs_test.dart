@@ -296,7 +296,7 @@ void main() {
       );
     });
 
-    testWidgets('a row with nothing spent this month is not tappable', (
+    testWidgets('a row with nothing spent this month still opens', (
       tester,
     ) async {
       final tapped = <String>[];
@@ -325,13 +325,15 @@ void main() {
 
       expect(find.textContaining('Nothing yet, usually'), findsOneWidget);
 
+      // Rows open the category's history, which has something to show even
+      // with nothing spent this month.
       await tester.tap(find.text(categoryById('transport').label));
       await tester.pump();
-      expect(tapped, isEmpty, reason: 'the deep link would open an empty list');
+      expect(tapped, ['transport']);
 
       await tester.tap(find.text(categoryById('food').label));
       await tester.pump();
-      expect(tapped, ['food']);
+      expect(tapped, ['transport', 'food']);
     });
 
     testWidgets('the sort menu reorders the rows', (tester) async {

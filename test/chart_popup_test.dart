@@ -100,6 +100,65 @@ void main() {
       expect(find.text('60% of spending'), findsNothing);
     });
 
+    testWidgets('with history, the popup and legend open it instead', (
+      tester,
+    ) async {
+      String? history;
+      String? transactions;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 300,
+                child: Builder(
+                  builder: (context) => CategoryDonutChart(
+                    data: const [MapEntry(food, 600), MapEntry(rent, 400)],
+                    onCategoryTap: (id) => transactions = id,
+                    // As the dashboard does: a modal sheet over the chart.
+                    onCategoryHistory: (id) {
+                      history = id;
+                      showModalBottomSheet<void>(
+                        context: context,
+                        builder: (_) => const Text('History sheet'),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      final box = tester.getRect(
+        find
+            .descendant(
+              of: find.byType(CategoryDonutChart),
+              matching: find.byType(CustomPaint),
+            )
+            .first,
+      );
+      await tester.tapAt(onRing(box, 0.2));
+      await tester.pumpAndSettle();
+      expect(find.text('See transactions'), findsNothing);
+      await tester.tap(find.text('See history'));
+      await tester.pumpAndSettle();
+      expect(history, 'food');
+      expect(transactions, isNull);
+      expect(find.text('History sheet'), findsOneWidget);
+      expect(find.byType(ChartPopup), findsNothing, reason: 'popup closed');
+
+      // Closing the sheet leaves the chart, not a popup behind it.
+      Navigator.of(tester.element(find.text('History sheet'))).pop();
+      await tester.pumpAndSettle();
+      expect(find.byType(ChartPopup), findsNothing);
+
+      history = null;
+      await tester.tap(find.text('Rent'));
+      await tester.pumpAndSettle();
+      expect(history, 'rent', reason: 'the legend opens history too');
+    });
+
     testWidgets('the second slice answers too', (tester) async {
       final box = await pumpDonut(tester);
       await tester.tapAt(onRing(box, 0.8));

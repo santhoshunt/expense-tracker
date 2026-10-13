@@ -390,6 +390,11 @@ void main() {
     await tester.tap(foodRow);
     await tester.pumpAndSettle();
 
+    // The tap opens the category's history; its button opens the rows.
+    expect(find.text('12 months to ${fmtMonth(month)}'), findsOneWidget);
+    await tester.tap(find.text('View transactions'));
+    await tester.pumpAndSettle();
+
     expect(find.text('lunch'), findsOneWidget);
     expect(find.text('cab'), findsNothing);
   });
@@ -434,6 +439,10 @@ void main() {
     await tester.ensureVisible(row);
     await tester.pumpAndSettle();
     await tester.tap(row);
+    await tester.pumpAndSettle();
+
+    // The tap opens the merchant's history; its button opens the search.
+    await tester.tap(find.text('View transactions'));
     await tester.pumpAndSettle();
 
     // Transactions tab: search pre-filled with the identity, list filtered.

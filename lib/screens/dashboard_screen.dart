@@ -21,6 +21,7 @@ import '../services/monthly_recap.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
 import '../services/spend_comparison.dart';
+import '../services/spend_history.dart';
 import '../services/safe_to_spend.dart';
 import '../services/subscriptions.dart';
 import '../services/upcoming_items.dart';
@@ -51,6 +52,7 @@ import '../widgets/monthly_recap_card.dart';
 import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/show_all_list.dart';
 import '../widgets/spend_comparison_cards.dart';
+import '../widgets/spend_history_sheet.dart';
 import '../widgets/tag_editor_dialog.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
 import 'add_transaction_sheet.dart';
@@ -264,18 +266,63 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  /// [_openYear] for a category row: that category's expense rows.
-  void Function(String categoryId)? _openYearCategory(
-    int startYear,
-    int startMonth,
-  ) => widget.onOpenTransactions == null
-      ? null
-      : (id) => _openYear(
-          startYear,
-          startMonth,
-          type: TxType.expense,
-          categoryId: id,
-        )?.call();
+  /// A category's or merchant's history over the window the selector shows:
+  /// the 12 months to the shown month, or the shown year. [onViewTransactions]
+  /// is what the row's tap did before, offered as the sheet's button.
+  void _showHistory(
+    HistorySubject subject, {
+    IconData? icon,
+    Color? color,
+    VoidCallback? onViewTransactions,
+  }) {
+    final sm = _yearStartMonth;
+    final year = yearStartOf(_month, sm);
+    showSpendHistorySheet(
+      context,
+      subject: subject,
+      months: _yearMode
+          ? yearMonths(year, sm)
+          : [
+              for (var i = 11; i >= 0; i--)
+                DateTime(_month.year, _month.month - i),
+            ],
+      windowLabel: _yearMode
+          ? yearLabel(year, sm)
+          : '12 months to ${fmtMonth(_month)}',
+      yearView: _yearMode,
+      icon: icon,
+      color: color,
+      onViewTransactions: onViewTransactions,
+    );
+  }
+
+  /// [_showHistory] for a category, by id; its button opens the category's
+  /// transactions for the shown month or year.
+  void _showCategoryHistory(String id) {
+    final cat = categoryById(id);
+    _showHistory(
+      HistorySubject.category(id, cat.label),
+      icon: cat.icon,
+      color: cat.color,
+      onViewTransactions: _categoryTransactions(id),
+    );
+  }
+
+  /// The transactions tap for a category in the shown month or year, as the
+  /// rows did before history: null without a handler.
+  VoidCallback? _categoryTransactions(String id) {
+    if (_yearMode) {
+      final sm = _yearStartMonth;
+      return _openYear(
+        yearStartOf(_month, sm),
+        sm,
+        type: TxType.expense,
+        categoryId: id,
+      );
+    }
+    final view = widget.onViewCategory;
+    return view == null ? null : () => view(id, _month);
+  }
 
   /// Not persisted, matching `_month` and `_yearMode`.
   DashboardView _view = DashboardView.overview;
@@ -1496,9 +1543,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             CategoryComparisonCard(
               comparison: comparison!,
-              onViewCategory: widget.onViewCategory == null
-                  ? null
-                  : (id) => widget.onViewCategory!(id, _month),
+              onViewCategory: _showCategoryHistory,
               sort: categorySort,
               onSortChanged: (s) =>
                   context.read<SettingsProvider>().setCategorySort(s),
@@ -1518,7 +1563,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             YearComparisonCard(
               comparison: yearCompare!,
-              onViewCategory: _openYearCategory(year, sm),
+              onViewCategory: _showCategoryHistory,
             ),
           ],
         ),
@@ -1597,7 +1642,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             message:
                 "Each slice is a category's share of the "
                 "${_yearMode ? "year's" : "month's"} spending. Tap a slice for "
-                'its amount and share, or a name below for its transactions.',
+                'its amount and share, or a name below for its history.',
           ),
           body: () => [
             Card(
@@ -1608,11 +1653,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   emptyText: _yearMode
                       ? 'No spending this year'
                       : 'No spending this month',
-                  onCategoryTap: _yearMode
-                      ? _openYearCategory(year, sm)
-                      : widget.onViewCategory == null
-                      ? null
-                      : (id) => widget.onViewCategory!(id, _month),
+                  // The legend and the slice popup open history; its sheet
+                  // offers the transactions this used to open.
+                  onCategoryHistory: _showCategoryHistory,
                 ),
               ),
             ),
@@ -1661,17 +1704,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 finance,
                                 entry.key.id,
                               )?.limit,
-                        onTap: _yearMode
-                            ? _openYear(
-                                year,
-                                sm,
-                                type: TxType.expense,
-                                categoryId: entry.key.id,
-                              )
-                            : widget.onViewCategory == null
-                            ? null
-                            : () =>
-                                  widget.onViewCategory!(entry.key.id, _month),
+                        onTap: () => _showCategoryHistory(entry.key.id),
                         // Shortcut to a per-category cap: opens the shared
                         // budget dialog pre-filled (or the existing one).
                         onLongPress: () => showBudgetDialog(
@@ -1746,8 +1779,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
         // Where the money actually went: per-payee totals for the month,
-        // re-derived from SMS bodies / manual notes. Display-only — the
-        // transactions filter can't express a free-text payee (yet).
+        // re-derived from SMS bodies / manual notes. A tap opens the
+        // merchant's history, whose button searches its transactions.
         // Shown whenever the month has spending: an empty month-start used
         // to make the whole section vanish, which read as a bug rather than
         // "nothing identifiable yet".
@@ -1791,14 +1824,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
                             borderRadius: BorderRadius.circular(
                               AppRadius.control,
                             ),
-                            onTap: widget.onViewMerchant == null
-                                ? null
-                                // The search matches notes/bodies, so the query is
-                                // the normalized identity, not the cased label.
-                                : () => widget.onViewMerchant!(
-                                    m.key.substring(m.key.indexOf('|') + 1),
-                                    _month,
-                                  ),
+                            onTap: () => _showHistory(
+                              HistorySubject.merchant(m.key, m.label),
+                              icon: Icons.storefront_outlined,
+                              onViewTransactions: widget.onViewMerchant == null
+                                  ? null
+                                  // The search matches notes/bodies, so the
+                                  // query is the normalized identity, not the
+                                  // cased label.
+                                  : () => widget.onViewMerchant!(
+                                      m.key.substring(m.key.indexOf('|') + 1),
+                                      _month,
+                                    ),
+                            ),
                             onLongPress: () => _renameMerchant(context, m),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(vertical: 6),

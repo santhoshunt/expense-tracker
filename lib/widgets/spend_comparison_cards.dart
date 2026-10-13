@@ -451,7 +451,8 @@ class _CompareBody extends StatelessWidget {
 class CategoryComparisonCard extends StatefulWidget {
   final MonthComparison comparison;
 
-  /// Opens the transaction list for a category, scoped to the shown month.
+  /// Called with a row's category id on tap: the dashboard opens its
+  /// history, whose button lists the shown month's transactions.
   final void Function(String categoryId)? onViewCategory;
 
   /// Externally owned sort (the dashboard passes the persisted setting);
@@ -598,10 +599,9 @@ class _CategoryCompareRow extends StatelessWidget {
     final tone = _toneFor(context, compare.delta);
     final cat = compare.category;
 
-    // A row with nothing spent this month would deep-link to an empty list,
-    // so it stays informative but untappable.
-    final tappable =
-        onView != null && compare.state != CompareState.noneThisMonth;
+    // A row opens the category's history, which says something even with
+    // nothing spent this month; the sheet leaves out its empty list.
+    final tappable = onView != null;
 
     return InkWell(
       borderRadius: BorderRadius.circular(AppRadius.control),
@@ -735,9 +735,9 @@ IconData _trendIcon(double delta) => negligibleDelta(delta)
 class YearComparisonCard extends StatelessWidget {
   final YearComparison comparison;
 
-  /// Opens the transaction list for a category. Rows with nothing this year
-  /// stay untappable, as in [CategoryComparisonCard]: they would open an
-  /// empty list.
+  /// Called with a row's category id on tap: the dashboard opens its
+  /// history. Every row is tappable, as in [CategoryComparisonCard]; the
+  /// sheet leaves out its transactions button when the year has none.
   final void Function(String categoryId)? onViewCategory;
 
   const YearComparisonCard({
@@ -846,8 +846,8 @@ class _YearCategoryRow extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
     final cat = compare.category;
-    final tappable =
-        onView != null && compare.state != CompareState.noneThisMonth;
+    // As in the month card: the row opens history, worth a look either way.
+    final tappable = onView != null;
     final showDelta = compare.state == CompareState.ok && !compare.negligible;
 
     return InkWell(

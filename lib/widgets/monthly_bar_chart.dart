@@ -22,6 +22,10 @@ import 'motion.dart';
 /// expense and net in a popup. When the figures change (another month
 /// chosen), the bars ease to their new heights; the first appearance does
 /// not animate. TalkBack reads each month's figures.
+///
+/// With [seriesOf] set the chart draws one series instead (a category's or
+/// a merchant's spend): one bar per month, a one-row popup and TalkBack
+/// reading [seriesLabel].
 class MonthlyBarChart extends StatefulWidget {
   final List<DateTime>? months;
 
@@ -35,11 +39,25 @@ class MonthlyBarChart extends StatefulWidget {
   /// The popup and TalkBack show the income mask instead of a figure.
   final bool showIncome;
 
+  /// One month's figure for the single-series mode. Set, the chart draws
+  /// it in place of expense, with no income, and does not read the
+  /// provider: the caller rebuilds the chart when the figures change.
+  final double Function(DateTime month)? seriesOf;
+
+  /// What the single series is called in the popup and in TalkBack.
+  final String seriesLabel;
+
+  /// The expense (or single-series) bar colour; null keeps the theme's.
+  final Color? barColor;
+
   const MonthlyBarChart({
     super.key,
     this.months,
     this.end,
     this.showIncome = true,
+    this.seriesOf,
+    this.seriesLabel = 'Expense',
+    this.barColor,
   });
 
   /// The months drawn, oldest first.
@@ -145,18 +163,20 @@ class _MonthlyBarChartState extends State<MonthlyBarChart>
       maxWidth: kChartPopupWidth,
       content: (_) => ChartPopup(
         title: DateFormat('MMMM yyyy').format(m.month),
-        rows: [
-          ('Income', hidden ? kMaskedAmount : fmtMoney(m.income)),
-          ('Expense', fmtMoney(m.expense)),
-          (
-            'Net',
-            hidden
-                ? kMaskedAmount
-                : net >= 0
-                ? '+${fmtMoney(net)}'
-                : '−${fmtMoney(-net)}',
-          ),
-        ],
+        rows: widget.seriesOf != null
+            ? [(widget.seriesLabel, fmtMoney(m.expense))]
+            : [
+                ('Income', hidden ? kMaskedAmount : fmtMoney(m.income)),
+                ('Expense', fmtMoney(m.expense)),
+                (
+                  'Net',
+                  hidden
+                      ? kMaskedAmount
+                      : net >= 0
+                      ? '+${fmtMoney(net)}'
+                      : '−${fmtMoney(-net)}',
+                ),
+              ],
         host: context,
       ),
     );
@@ -169,7 +189,11 @@ class _MonthlyBarChartState extends State<MonthlyBarChart>
 
   @override
   Widget build(BuildContext context) {
-    final finance = context.watch<FinanceProvider>();
+    final seriesOf = widget.seriesOf;
+    // One series goes down the hidden-income path (same bars, scale and
+    // peak labels); the popup and TalkBack then name only that series.
+    final showIncome = widget.showIncome && seriesOf == null;
+    final finance = seriesOf == null ? context.watch<FinanceProvider>() : null;
     // Full figures: the popup and TalkBack need real income even though the
     // bars drop it when hidden.
     final data = [
@@ -177,13 +201,13 @@ class _MonthlyBarChartState extends State<MonthlyBarChart>
         _MonthData(
           month: m,
           label: DateFormat('MMM').format(m),
-          income: finance.incomeInMonth(m),
-          expense: finance.expenseInMonth(m),
+          income: finance?.incomeInMonth(m) ?? 0,
+          expense: seriesOf?.call(m) ?? finance!.expenseInMonth(m),
         ),
     ];
     final drawn = [
       for (final d in data)
-        widget.showIncome
+        showIncome
             ? d
             : _MonthData(
                 month: d.month,
@@ -227,11 +251,12 @@ class _MonthlyBarChartState extends State<MonthlyBarChart>
                 painter: _BarChartPainter(
                   data: shown,
                   spoken: data,
-                  showIncome: widget.showIncome,
+                  showIncome: showIncome,
+                  seriesLabel: seriesOf == null ? null : widget.seriesLabel,
                   selected: _selected,
                   lift: Curves.easeOutCubic.transform(_select.value),
                   incomeColor: AppColors.of(context).green,
-                  expenseColor: theme.colorScheme.error,
+                  expenseColor: widget.barColor ?? theme.colorScheme.error,
                   labelStyle: labelStyle,
                   // Painted text bypasses widget-level scaling; honour it
                   // explicitly.
@@ -315,6 +340,9 @@ class _BarChartPainter extends CustomPainter {
   /// The real figures, for TalkBack (income included even when hidden).
   final List<_MonthData> spoken;
   final bool showIncome;
+
+  /// The single series' name; null for the income and expense chart.
+  final String? seriesLabel;
   final int? selected;
 
   /// 0 to 1: how far the [selected] month has lifted and the rest dimmed.
@@ -328,6 +356,7 @@ class _BarChartPainter extends CustomPainter {
     required this.data,
     required this.spoken,
     required this.showIncome,
+    this.seriesLabel,
     required this.selected,
     required this.lift,
     required this.incomeColor,
@@ -384,10 +413,23 @@ class _BarChartPainter extends CustomPainter {
         );
       }
 
-      bar(d.income, -barWidth - gap / 2, incomeColor);
-      bar(d.expense, gap / 2, expenseColor);
+      // A lone expense bar (income hidden, or one series) sits on the
+      // month's centre, under its label, instead of right of a gap.
+      if (showIncome) {
+        bar(d.income, -barWidth - gap / 2, incomeColor);
+        bar(d.expense, gap / 2, expenseColor);
+      } else {
+        bar(d.expense, -barWidth / 2, expenseColor);
+      }
 
-      _paintText(canvas, d.label, Offset(cx, chartHeight + 4), center: true);
+      _paintText(
+        canvas,
+        d.label,
+        Offset(cx, chartHeight + 4),
+        center: true,
+        fitWidth: groupWidth,
+        fallback: d.label.substring(0, 1),
+      );
 
       final peak = d.income > d.expense ? d.income : d.expense;
       if (peak > 0) {
@@ -398,6 +440,7 @@ class _BarChartPainter extends CustomPainter {
           Offset(cx, chartHeight - h - 14 - up),
           center: true,
           small: true,
+          fitWidth: groupWidth - 2,
         );
       }
     }
@@ -415,6 +458,10 @@ class _BarChartPainter extends CustomPainter {
   /// [center] centres horizontally on [at]; [vCenter] centres vertically
   /// too (TextPainter.paint treats the offset as the TOP-left otherwise —
   /// the bar labels rely on that, the empty-state message must not).
+  ///
+  /// [fitWidth] drops text wider than it, painting [fallback] instead (or
+  /// nothing): twelve months on a phone leave each label about 26dp, and
+  /// overlapping figures read worse than none. A tap still opens them.
   void _paintText(
     Canvas canvas,
     String text,
@@ -423,16 +470,23 @@ class _BarChartPainter extends CustomPainter {
     bool vCenter = false,
     bool small = false,
     double? maxWidth,
+    double? fitWidth,
+    String? fallback,
   }) {
-    final tp = TextPainter(
+    TextPainter painterFor(String s) => TextPainter(
       text: TextSpan(
-        text: text,
+        text: s,
         style: small ? labelStyle.copyWith(fontSize: 10) : labelStyle,
       ),
       textAlign: center ? TextAlign.center : TextAlign.left,
       textScaler: textScaler,
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: maxWidth ?? double.infinity);
+    var tp = painterFor(text);
+    if (fitWidth != null && tp.width > fitWidth) {
+      if (fallback == null) return;
+      tp = painterFor(fallback);
+    }
     tp.paint(
       canvas,
       at - Offset(center ? tp.width / 2 : 0, vCenter ? tp.height / 2 : 0),
@@ -449,10 +503,12 @@ class _BarChartPainter extends CustomPainter {
         CustomPainterSemantics(
           rect: Rect.fromLTWH(groupWidth * i, 0, groupWidth, size.height),
           properties: SemanticsProperties(
-            label:
-                '${DateFormat('MMMM yyyy').format(d.month)}: income '
-                '${showIncome ? fmtMoney(d.income) : 'hidden'}, expense '
-                '${fmtMoney(d.expense)}',
+            label: seriesLabel != null
+                ? '${DateFormat('MMMM yyyy').format(d.month)}: '
+                      '$seriesLabel ${fmtMoney(d.expense)}'
+                : '${DateFormat('MMMM yyyy').format(d.month)}: income '
+                      '${showIncome ? fmtMoney(d.income) : 'hidden'}, expense '
+                      '${fmtMoney(d.expense)}',
             textDirection: TextDirection.ltr,
           ),
         ),
@@ -461,7 +517,9 @@ class _BarChartPainter extends CustomPainter {
 
   @override
   bool shouldRebuildSemantics(covariant _BarChartPainter old) =>
-      !listEquals(old.spoken, spoken) || old.showIncome != showIncome;
+      !listEquals(old.spoken, spoken) ||
+      old.showIncome != showIncome ||
+      old.seriesLabel != seriesLabel;
 
   @override
   bool shouldRepaint(covariant _BarChartPainter old) =>
