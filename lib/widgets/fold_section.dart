@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../utils/app_theme.dart';
 import 'animated_fold.dart';
 import 'glossy.dart';
 import 'motion.dart';
@@ -64,7 +65,7 @@ class FoldSection extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.only(top: 8),
               child: FrostedPanel(
-                radius: BorderRadius.circular(20),
+                radius: BorderRadius.circular(AppRadius.card),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
                   child: Column(

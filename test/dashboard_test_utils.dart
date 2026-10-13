@@ -1,7 +1,49 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:expense_tracker/screens/home_app_bar.dart';
 import 'package:expense_tracker/widgets/dashboard_fold.dart';
+
+/// The Dashboard's month selector and menu live in Home's app bar, which
+/// the Dashboard feeds through AppNav. A DashboardScreen pumped without
+/// HomeScreen sits in this bar so its arrows, month label and ⋯ entries
+/// (Year view, PDF export, Customise) are reachable.
+Widget dashboardShell(Widget dashboard) => Scaffold(
+  appBar: AppBar(
+    title: const DashboardMonthTitle(),
+    actions: const [HomeMenu(onDashboard: true)],
+  ),
+  body: dashboard,
+);
+
+/// The figure under a balance-card stat label ('Income', 'Spent', 'Saved').
+/// The dotted label opens its tip; the figure opens the rows. Up from the
+/// label, the nearest InkWell is the tip's own, the next the stat column's.
+Finder statFigure(String label) => find.descendant(
+  of: find.ancestor(of: find.text(label), matching: find.byType(InkWell)).first,
+  matching: find.byType(FittedBox),
+);
+
+/// Opens the app bar's ⋯ menu and picks [label].
+Future<void> tapMenuItem(WidgetTester tester, String label) async {
+  await tester.tap(find.byTooltip('More'));
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(label).last);
+  await tester.pumpAndSettle();
+}
+
+/// Switches the Dashboard between Month and Year view through the ⋯ menu.
+Future<void> toggleYearView(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('More'));
+  await tester.pumpAndSettle();
+  final toYear = find.widgetWithText(ListTile, 'Year view');
+  await tester.tap(
+    toYear.evaluate().isNotEmpty
+        ? toYear.last
+        : find.widgetWithText(ListTile, 'Month view').last,
+  );
+  await tester.pumpAndSettle();
+}
 
 /// The dashboard is split into Overview / Trends / Breakdown sub-tabs, so a
 /// section assertion has to start on the right one. The tab bar is pinned

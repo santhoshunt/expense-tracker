@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/screens/home_app_bar.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/widgets/glossy.dart';
@@ -105,13 +106,27 @@ void main() {
       await settle(tester);
     }
 
-    String title() => tester
-        .widget<Text>(
-          find
-              .descendant(of: find.byType(AppBar), matching: find.byType(Text))
-              .first,
-        )
-        .data!;
+    // The Dashboard's title is its month selector; the other tabs show
+    // their name.
+    String title() =>
+        find
+            .descendant(
+              of: find.byType(AppBar),
+              matching: find.byType(DashboardMonthTitle),
+            )
+            .evaluate()
+            .isNotEmpty
+        ? 'Dashboard'
+        : tester
+              .widget<Text>(
+                find
+                    .descendant(
+                      of: find.byType(AppBar),
+                      matching: find.byType(Text),
+                    )
+                    .first,
+              )
+              .data!;
 
     expect(title(), 'Dashboard');
     await tester.tap(find.text('Transactions').last);

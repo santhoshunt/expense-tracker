@@ -7,6 +7,79 @@ import 'classifiers_screen.dart';
 import 'people_screen.dart';
 import 'transactions_screen.dart';
 
+/// What the Dashboard puts in Home's app bar: the shown month or year with
+/// its arrows, and the Dashboard's entries in the ⋯ menu. The Dashboard
+/// owns the month and Year view state and [update]s this after each change;
+/// Home's bar listens. Null callbacks leave their control disabled.
+class DashboardHeader extends ChangeNotifier {
+  String label = '';
+  bool yearMode = false;
+  VoidCallback? onPrev;
+  VoidCallback? onNext;
+  VoidCallback? onPick;
+  VoidCallback? onToggleYear;
+  VoidCallback? onExportPdf;
+
+  /// Opens the Year view tip, anchored to the context of the ⋯ button.
+  void Function(BuildContext anchor)? onAboutYear;
+  VoidCallback? onCustomise;
+
+  /// The Dashboard State whose callbacks the fields hold.
+  Object? _owner;
+
+  /// Sets every field; notifies only when the label, the view, which
+  /// controls work or the publishing [owner] changed (callbacks are fresh
+  /// closures on every build). A new owner always notifies: the bar would
+  /// otherwise keep calling a disposed Dashboard's closures.
+  void update({
+    required Object owner,
+    required String label,
+    required bool yearMode,
+    required VoidCallback? onPrev,
+    required VoidCallback? onNext,
+    required VoidCallback onPick,
+    required VoidCallback onToggleYear,
+    required VoidCallback onExportPdf,
+    required void Function(BuildContext anchor) onAboutYear,
+    required VoidCallback onCustomise,
+  }) {
+    final changed =
+        owner != _owner ||
+        label != this.label ||
+        yearMode != this.yearMode ||
+        (onPrev == null) != (this.onPrev == null) ||
+        (onNext == null) != (this.onNext == null) ||
+        this.onPick == null;
+    _owner = owner;
+    this.label = label;
+    this.yearMode = yearMode;
+    this.onPrev = onPrev;
+    this.onNext = onNext;
+    this.onPick = onPick;
+    this.onToggleYear = onToggleYear;
+    this.onExportPdf = onExportPdf;
+    this.onAboutYear = onAboutYear;
+    this.onCustomise = onCustomise;
+    if (changed) notifyListeners();
+  }
+
+  /// Drops [owner]'s callbacks when it goes, so the bar never calls a
+  /// disposed Dashboard; a newer owner's stay. The label stays for the
+  /// frame until the next Dashboard publishes. No notification: this runs
+  /// while the tree is torn down, and the controls read the fields on tap.
+  void detach(Object owner) {
+    if (_owner != owner) return;
+    _owner = null;
+    onPrev = null;
+    onNext = null;
+    onPick = null;
+    onToggleYear = null;
+    onExportPdf = null;
+    onAboutYear = null;
+    onCustomise = null;
+  }
+}
+
 /// Home tab indices (HomeScreen's bottom navigation).
 const int kHomeTabDashboard = 0;
 const int kHomeTabTransactions = 1;
@@ -23,6 +96,9 @@ const int kHomeTabAccounts = 2;
 class AppNav {
   AppNav._();
   static final AppNav instance = AppNav._();
+
+  /// The Dashboard's month selector and menu entries, shown in Home's bar.
+  final DashboardHeader dashboardHeader = DashboardHeader();
 
   Object? _homeOwner;
   void Function(int tab)? _setHomeTab;

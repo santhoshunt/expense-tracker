@@ -12,6 +12,7 @@ void main() {
     WidgetTester tester, {
     String? Function()? example,
     Alignment at = Alignment.topLeft,
+    bool icon = false,
   }) => tester.pumpWidget(
     MaterialApp(
       theme: buildAppTheme(
@@ -22,6 +23,7 @@ void main() {
         body: Align(
           alignment: at,
           child: InfoLabel(
+            icon: icon,
             label: const Text('Net balance'),
             tip: InfoTip(
               title: 'Net balance',
@@ -100,6 +102,44 @@ void main() {
     expect(find.text('Share of the month.'), findsNothing, reason: 'closed');
     expect(got, isNotNull);
     expect(got!.mounted, isTrue, reason: 'the host, not the dismissed bubble');
+  });
+
+  testWidgets('by default the label is the tip: dotted, no "i", opens the '
+      'bubble', (tester) async {
+    await pump(tester);
+    expect(find.byIcon(Icons.info_outline), findsNothing);
+    expect(find.byType(TipTitle), findsOneWidget);
+    expect(find.bySemanticsLabel('About Net balance'), findsOneWidget);
+    final rendered = tester.widget<RichText>(
+      find.descendant(
+        of: find.byType(TipTitle),
+        matching: find.byType(RichText),
+      ),
+    );
+    expect(rendered.text.style?.decoration, TextDecoration.underline);
+    expect(rendered.text.style?.decorationStyle, TextDecorationStyle.dotted);
+
+    // The label itself is the target.
+    await tester.tap(find.text('Net balance'));
+    await tester.pumpAndSettle();
+    expect(find.text('Bank balances minus card outstanding.'), findsOneWidget);
+  });
+
+  testWidgets('with icon the label stays plain and the "i" opens the bubble', (
+    tester,
+  ) async {
+    await pump(tester, icon: true);
+    expect(find.byType(TipTitle), findsNothing);
+    expect(find.byIcon(Icons.info_outline), findsOneWidget);
+
+    // A plain label: a tap on it opens nothing.
+    await tester.tap(find.text('Net balance'));
+    await tester.pumpAndSettle();
+    expect(find.text('Got it'), findsNothing);
+
+    await tester.tap(find.bySemanticsLabel('About Net balance'));
+    await tester.pumpAndSettle();
+    expect(find.text('Bank balances minus card outstanding.'), findsOneWidget);
   });
 
   testWidgets('the bubble stays on screen near an edge', (tester) async {

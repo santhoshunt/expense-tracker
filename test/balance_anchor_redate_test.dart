@@ -10,6 +10,8 @@ import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/services/sms_parser.dart';
 import 'package:expense_tracker/utils/format.dart';
 
+import 'dashboard_test_utils.dart';
+
 /// Balance-anchor precedence when SMS rows are re-dated (a salary moved to
 /// the 1st of next month), plus the dashboard's next-month arrow reaching
 /// months that only exist because of such rows.
@@ -170,8 +172,15 @@ void main() {
         ChangeNotifierProvider.value(value: p),
         ChangeNotifierProvider(create: (_) => SettingsProvider()),
       ],
-      child: const MaterialApp(home: Scaffold(body: DashboardScreen())),
+      child: MaterialApp(home: dashboardShell(const DashboardScreen())),
     );
+
+    // The arrows sit in the app bar, which the Dashboard feeds after its
+    // first frame.
+    Future<void> pumpApp(WidgetTester tester, FinanceProvider p) async {
+      await tester.pumpWidget(app(p));
+      await tester.pump();
+    }
 
     IconButton nextArrow(WidgetTester tester) => tester.widget<IconButton>(
       find.ancestor(
@@ -184,7 +193,7 @@ void main() {
       tester,
     ) async {
       final p = await loaded();
-      await tester.pumpWidget(app(p));
+      await pumpApp(tester, p);
       expect(nextArrow(tester).onPressed, isNull);
     });
 
@@ -199,7 +208,7 @@ void main() {
         note: 're-dated salary',
         date: nextMonth,
       );
-      await tester.pumpWidget(app(p));
+      await pumpApp(tester, p);
 
       expect(nextArrow(tester).onPressed, isNotNull);
       await tester.tap(find.byTooltip('Next month'));

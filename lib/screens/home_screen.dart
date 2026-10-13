@@ -35,9 +35,8 @@ import '../widgets/undo_snackbar.dart';
 import 'accounts_screen.dart';
 import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
-import 'classifiers_screen.dart';
 import 'dashboard_screen.dart';
-import 'settings_screen.dart';
+import 'home_app_bar.dart';
 import 'transactions_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -887,16 +886,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             // place on-device — the switcher sizes its box to the widest of the
             // outgoing/incoming titles for the whole transition. A static title
             // cannot shift; the tab body's own fade-through carries the motion.
-            title: Text(_titles[_index]),
+            // The Dashboard's title is its month selector instead.
+            title: _index == kHomeTabDashboard
+                ? const DashboardMonthTitle()
+                : Text(_titles[_index]),
+            titleSpacing: _index == kHomeTabDashboard ? 4 : null,
             actions: [
-              IconButton(
-                tooltip: 'Cockpit',
-                icon: const Icon(Icons.tune),
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
-                ),
-              ),
               // Same IconButton in both states (disabled + spinner icon while
               // importing) so the action row doesn't shift and the pending
               // badge doesn't blink out for the duration.
@@ -916,16 +911,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   onPressed: _importing ? null : _importFromSms,
                 ),
-              // Import/Export/Delete-all moved into Settings → Data — the old
-              // ⋮ menu's only remaining entry was Settings itself.
-              IconButton(
-                tooltip: 'Settings',
-                icon: const Icon(Icons.settings_outlined),
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                ),
-              ),
+              // Cockpit, Settings and, on the Dashboard, the month row's
+              // Year view, PDF export, Year view tip and Customise.
+              HomeMenu(onDashboard: _index == kHomeTabDashboard),
             ],
           ),
           body: Column(

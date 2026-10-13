@@ -48,6 +48,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
   }
 
+  /// Settings sits in the app bar's ⋯ menu (tooltip 'More').
+  Future<void> openSettings(WidgetTester tester) async {
+    await tester.tap(find.byTooltip('More'));
+    await pumpThrough(tester);
+    await tester.tap(find.text('Settings').last);
+    await pumpThrough(tester);
+  }
+
   testWidgets('data actions moved to Settings; export sheet lists formats', (
     tester,
   ) async {
@@ -55,12 +63,13 @@ void main() {
     await p.load();
     await tester.pumpWidget(app(p));
 
-    // The ⋮ menu is gone; a direct settings button replaced it.
+    // The old data menu is gone; Settings is an entry in the ⋯ menu, not a
+    // bar button of its own.
     expect(find.byTooltip('More options'), findsNothing);
-    expect(find.byTooltip('Settings'), findsOneWidget);
+    expect(find.byTooltip('Settings'), findsNothing);
+    expect(find.byTooltip('More'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Settings'));
-    await pumpThrough(tester);
+    await openSettings(tester);
     // Data sits on the Backup and data page, below Cloud backup: open the
     // page, then scroll the Data section into view.
     await tester.tap(find.text('Backup and data'));
@@ -96,8 +105,7 @@ void main() {
     );
     await tester.pumpWidget(app(p));
 
-    await tester.tap(find.byTooltip('Settings'));
-    await pumpThrough(tester);
+    await openSettings(tester);
     await tester.tap(find.text('Backup and data'));
     await pumpThrough(tester);
     await tester.scrollUntilVisible(
@@ -157,8 +165,7 @@ void main() {
     await p.load();
     await tester.pumpWidget(app(p));
 
-    await tester.tap(find.byTooltip('Settings'));
-    await pumpThrough(tester);
+    await openSettings(tester);
     await tester.tap(find.text('Backup and data'));
     await pumpThrough(tester);
     await tester.scrollUntilVisible(
@@ -634,7 +641,10 @@ void main() {
 
     await tester.tap(find.text('Transactions').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Filters'));
+    // Filters sit behind the search field's sort, filter and export button.
+    await tester.tap(find.byTooltip('Sort, filter and export'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, 'Filters'));
     await tester.pumpAndSettle();
 
     // Select Transport, then search for something it doesn't match.
@@ -670,8 +680,8 @@ void main() {
     await tester.pumpWidget(app(p));
 
     expect(find.byIcon(Icons.sms_outlined), findsNothing);
-    // The settings button is platform-independent and stays visible.
-    expect(find.byTooltip('Settings'), findsOneWidget);
+    // The ⋯ menu that holds Settings is platform-independent and stays.
+    expect(find.byTooltip('More'), findsOneWidget);
 
     debugDefaultTargetPlatformOverride = null;
   });
@@ -874,12 +884,13 @@ void main() {
       fmtMonth(DateTime(year, DateTime.now().month)),
     );
     expect(monthLabel, findsOneWidget);
-    expect(find.byTooltip('Export month report (PDF)'), findsOneWidget);
-    expect(find.byTooltip('Export year report (PDF)'), findsNothing);
 
-    // The scope switch sits near the top, so it is built and tappable
-    // without scrolling.
-    await tester.tap(find.text('Year'));
+    // The scope switch and the PDF export are in the app bar's ⋯ menu.
+    await tester.tap(find.byTooltip('More'));
+    await tester.pumpAndSettle();
+    expect(find.text('Export month report (PDF)'), findsOneWidget);
+    expect(find.text('Export year report (PDF)'), findsNothing);
+    await tester.tap(find.text('Year view'));
     await tester.pumpAndSettle();
     expect(
       find.text('$year'),
@@ -887,7 +898,6 @@ void main() {
       reason: 'selector shows the year',
     );
     expect(monthLabel, findsNothing);
-    expect(find.byTooltip('Export year report (PDF)'), findsOneWidget);
 
     // The chart lives on Trends; the dashboard list is lazy, so scroll the
     // section into view.
@@ -910,15 +920,14 @@ void main() {
     await openDashboardView(tester, 'Breakdown');
     expect(find.text('Spending heatmap'), findsNothing);
 
-    // Back to Month: the month-only sections return.
-    final toMonth = find.text('Month view');
-    await tester.scrollUntilVisible(toMonth, -300, scrollable: list);
+    // Back to Month: the menu now offers the year's PDF and Month view, and
+    // the month-only sections return.
+    await tester.tap(find.byTooltip('More'));
     await tester.pumpAndSettle();
-    await tester.tap(toMonth);
+    expect(find.text('Export year report (PDF)'), findsOneWidget);
+    await tester.tap(find.text('Month view'));
     await tester.pumpAndSettle();
-    // Rows above the viewport count as offstage for finders even when built,
-    // so bring the selector back on screen before asserting on it.
-    await tester.scrollUntilVisible(monthLabel, -300, scrollable: list);
+    // The selector is the app bar title, never scrolled away.
     expect(monthLabel, findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('Spending heatmap'),
@@ -978,8 +987,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Year'));
-    await tester.pumpAndSettle();
+    await toggleYearView(tester);
     final label = yearLabel(fy, 4);
     expect(find.text(label), findsOneWidget, reason: 'selector names the FY');
 
@@ -1003,7 +1011,8 @@ void main() {
     await openDashboardView(tester, 'Overview');
     final saved = find.text('Saved');
     await tester.scrollUntilVisible(saved, -300, scrollable: list);
-    await tester.tap(saved);
+    // The label is the tip; the figure under it opens the rows.
+    await tester.tap(statFigure('Saved'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(InputChip, label), findsOneWidget);
     expect(find.text('Recurring deposit'), findsOneWidget);

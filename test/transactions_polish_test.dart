@@ -90,8 +90,9 @@ void main() {
     expect(find.descendant(of: sticky, matching: july), findsOneWidget);
     expect(july, findsOneWidget, reason: "July's own header scrolled away");
 
-    // On into June, until June's own header has scrolled away too.
-    for (var i = 0; i < 10; i++) {
+    // On into June, until June's own header has scrolled away too. Each
+    // July row carries its day header, so the rows run taller.
+    for (var i = 0; i < 14; i++) {
       if (find.descendant(of: sticky, matching: june).evaluate().isNotEmpty) {
         break;
       }
@@ -194,10 +195,12 @@ void main() {
     expect(sticky, findsOneWidget);
 
     // A drag that starts on the strip still scrolls the list beneath it.
-    final before = tester.getTopLeft(find.text('jul 10'));
+    // A row near the middle of the screen, so it stays in view through the
+    // drag (each row carries its day header).
+    final before = tester.getTopLeft(find.text('jul 14'));
     await tester.dragFrom(tester.getCenter(sticky), const Offset(0, -120));
     await tester.pumpAndSettle();
-    expect(tester.getTopLeft(find.text('jul 10')).dy, lessThan(before.dy));
+    expect(tester.getTopLeft(find.text('jul 14')).dy, lessThan(before.dy));
 
     // The strip itself ignores pointers (so drags reach the list); the tap
     // is caught by the translucent detector wrapped round it.

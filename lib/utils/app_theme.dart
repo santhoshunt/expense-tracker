@@ -97,21 +97,36 @@ Color budgetColor(BuildContext context, double pct) {
 /// same-role-different-value (category avatars at 11 vs 12, icon-picker
 /// tiles at 10, floating panels at 22).
 ///
-///  * [control] — chips, inputs, icon tiles, small avatars
-///  * [button]  — FAB / GlassButton / nav indicator
-///  * [card]    — Cards, list tiles, inner panels
-///  * [section] — FrostedPanel page sections
-///  * [hero]    — hero balance panels, dialogs
-///  * [sheet]   — bottom-sheet top corners
+///  * [control]: chips, inputs, icon tiles, small avatars
+///  * [button]: FAB, GlassButton, nav indicator
+///  * [card]: Cards, list tiles, inner panels
+///  * [section]: FrostedPanel page sections; the same as [card] since 1.37,
+///    so every card on a page shares one corner
+///  * [hero]: dialogs
+///  * [sheet]: bottom-sheet top corners
 ///
 /// Tiny indicator radii (2–5, e.g. progress bars) stay literal.
 abstract final class AppRadius {
   static const double control = 12;
   static const double button = 14;
   static const double card = 16;
-  static const double section = 20;
+  static const double section = 16;
   static const double hero = 24;
   static const double sheet = 28;
+}
+
+/// Spacing shared by the page cards: [card] inside a card, [gap] between
+/// cards, so edges line up while scrolling.
+abstract final class AppSpace {
+  static const double card = 14;
+  static const double gap = 10;
+}
+
+/// Figure sizes: [hero] for the one headline figure on a page, [card] for a
+/// card's main figure. Figures in list rows keep the body size.
+abstract final class AppFigure {
+  static const double hero = 30;
+  static const double card = 20;
 }
 
 /// Memo for [buildAppTheme]: the `Consumer<SettingsProvider>` around

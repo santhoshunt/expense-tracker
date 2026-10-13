@@ -8,7 +8,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
-import 'package:expense_tracker/screens/home_screen.dart';
+import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 
@@ -173,10 +173,11 @@ void main() {
           ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
           Provider<DriveBackupService>(create: (_) => DriveBackupService()),
         ],
-        child: const MaterialApp(home: HomeScreen()),
+        // Settings on its own: how the app bar reaches it is the home
+        // screen's test, and this one reads only what Settings holds.
+        child: const MaterialApp(home: SettingsScreen()),
       ),
     );
-    await tester.tap(find.byTooltip('Settings'));
     await pumpThrough(tester);
 
     // Every group page, since the root list builds no sections itself.

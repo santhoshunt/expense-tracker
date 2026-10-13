@@ -60,7 +60,7 @@ void main() {
             ChangeNotifierProvider.value(value: p),
             ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
           ],
-          child: const MaterialApp(home: Scaffold(body: DashboardScreen())),
+          child: MaterialApp(home: dashboardShell(const DashboardScreen())),
         ),
       );
       await tester.pumpAndSettle();
@@ -143,7 +143,7 @@ void main() {
             ChangeNotifierProvider.value(value: p),
             ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
           ],
-          child: const MaterialApp(home: Scaffold(body: DashboardScreen())),
+          child: MaterialApp(home: dashboardShell(const DashboardScreen())),
         ),
       );
       await tester.pumpAndSettle();
@@ -210,8 +210,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('This month vs last month'), findsOneWidget);
 
-      await tester.tap(find.text('Year'));
-      await tester.pumpAndSettle();
+      await toggleYearView(tester);
       expect(
         find.text('This month vs last month'),
         findsNothing,

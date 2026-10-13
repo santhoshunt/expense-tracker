@@ -223,7 +223,7 @@ class _CockpitHub extends StatelessWidget {
             for (final (i, g) in CockpitGroup.values.indexed) ...[
               if (i > 0) const SizedBox(height: 12),
               FrostedPanel(
-                radius: BorderRadius.circular(20),
+                radius: BorderRadius.circular(AppRadius.card),
                 child: ListTile(
                   isThreeLine: true,
                   // Three-line tiles pin the icons to the top; the cards
@@ -733,11 +733,17 @@ class _TipHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    // The 32dp tip takes up most of the plain header's 20/6 vertical inset.
-    padding: const EdgeInsets.fromLTRB(20, 11, 20, 0),
-    child: InfoLabel(
-      label: UppercaseSectionHeader(label, padding: EdgeInsets.zero),
-      tip: tip,
+    // The plain header's 20/6 vertical inset, less the 4dp the tip label
+    // adds above and below the text.
+    padding: const EdgeInsets.fromLTRB(20, 16, 20, 2),
+    // Left-aligned: stretched across the row, the whole width would open
+    // the tip.
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: InfoLabel(
+        label: UppercaseSectionHeader(label, padding: EdgeInsets.zero),
+        tip: tip,
+      ),
     ),
   );
 }
@@ -968,6 +974,7 @@ class _ImportTab extends StatelessWidget {
           runSpacing: 4,
           children: [
             InfoLabel(
+              icon: true,
               label: TextButton.icon(
                 icon: const Icon(Icons.science_outlined),
                 label: const Text('Test a message'),
@@ -1049,9 +1056,9 @@ class _CoreChecksCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: FrostedPanel(
-        radius: BorderRadius.circular(16),
+        radius: BorderRadius.circular(AppRadius.card),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppSpace.card),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1221,7 +1228,10 @@ class _TransactionsTabState extends State<_TransactionsTab> {
         // otherwise unlabelled.
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          // The icon, not a dotted label: the label is a whole instruction
+          // sentence.
           child: InfoLabel(
+            icon: true,
             label: Text(
               'Tap to recategorise · long-press to make a rule from a message.',
               style: Theme.of(context).textTheme.bodySmall,

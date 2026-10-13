@@ -50,8 +50,8 @@ void main() {
           ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
         ],
         child: MaterialApp(
-          home: Scaffold(
-            body: DashboardScreen(onViewTransactions: onViewTransactions),
+          home: dashboardShell(
+            DashboardScreen(onViewTransactions: onViewTransactions),
           ),
         ),
       ),
@@ -154,7 +154,8 @@ void main() {
 
       await tester.tap(find.text('Got it'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Spent'));
+      // The dotted label is the tip; the figure under it opens the rows.
+      await tester.tap(statFigure('Spent'));
       await tester.pumpAndSettle();
       expect(opened, [TxType.expense], reason: 'the card itself still taps');
     });
@@ -181,11 +182,7 @@ void main() {
       await openDashboardSection(tester, 'sixMonths');
       expect(chart().shownMonths.last, DateTime(now.year, now.month));
 
-      await tester.scrollUntilVisible(
-        find.byTooltip('Previous month'),
-        -300,
-        scrollable: verticalScrollable(),
-      );
+      // The arrows sit in the app bar, above the scrolled page.
       await tester.tap(find.byTooltip('Previous month'));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(

@@ -69,7 +69,7 @@ void main() {
           ChangeNotifierProvider.value(value: p),
           ChangeNotifierProvider.value(value: s),
         ],
-        child: const MaterialApp(home: Scaffold(body: DashboardScreen())),
+        child: MaterialApp(home: dashboardShell(const DashboardScreen())),
       ),
     );
     await tester.pumpAndSettle();

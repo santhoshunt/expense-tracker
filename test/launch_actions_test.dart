@@ -121,7 +121,9 @@ void main() {
 
   testWidgets('the sheet opens over an open page, which stays', (tester) async {
     await pumpHome(tester);
-    await tester.tap(find.byTooltip('Settings'));
+    await tester.tap(find.byTooltip('More'));
+    await settle(tester);
+    await tester.tap(find.text('Settings').last);
     await settle(tester);
     expect(find.text('Appearance'), findsOneWidget);
 
@@ -283,9 +285,18 @@ void main() {
     );
     // In Year view and off the Dashboard: the alert brings back Month view
     // on the alert's month.
-    await tester.tap(find.text('Year'));
+    // Year view is in the app bar's ⋯ menu; the title turns to the year.
+    await tester.tap(find.byTooltip('More'));
     await settle(tester);
-    expect(find.text('Month view'), findsOneWidget);
+    await tester.tap(find.text('Year view').last);
+    await settle(tester);
+    expect(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.text('${now.year}'),
+      ),
+      findsOneWidget,
+    );
     await tester.tap(find.text('Transactions').last);
     await settle(tester);
 

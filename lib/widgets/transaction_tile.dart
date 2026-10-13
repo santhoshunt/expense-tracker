@@ -8,6 +8,7 @@ import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
 import 'glossy.dart';
+import 'grouped_surface.dart';
 import 'motion.dart';
 
 /// Width of [text] laid out on one line the way a `Text` with [style] would
@@ -37,12 +38,22 @@ class TransactionTile extends StatelessWidget {
   final bool selected;
   final VoidCallback? onToggleSelect;
 
+  /// Drawn as one row of a [GroupedSurface] (the rows of a day share one
+  /// card) instead of a card of its own. [groupedFirst] rounds the top
+  /// corners and [groupedLast] the bottom ones.
+  final bool grouped;
+  final bool groupedFirst;
+  final bool groupedLast;
+
   const TransactionTile({
     super.key,
     required this.tx,
     this.selectionMode = false,
     this.selected = false,
     this.onToggleSelect,
+    this.grouped = false,
+    this.groupedFirst = false,
+    this.groupedLast = false,
   });
 
   /// "₹2,200 to get back · Arun, Priya" (or "Settled · …") on a split that
@@ -81,11 +92,9 @@ class TransactionTile extends StatelessWidget {
     final counted = context.select<FinanceProvider, bool>(
       (f) => f.countsInTotals(tx),
     );
-    final amountColor = !counted
-        ? scheme.onSurfaceVariant
-        : isIncome
-        ? AppColors.of(context).green
-        : scheme.error;
+    // Plain text colour: the sign says income or spend, and the category
+    // tile beside it carries the colour.
+    final amountColor = counted ? scheme.onSurface : scheme.onSurfaceVariant;
 
     // The category leads — the SMS sender (bank shortcode) used to headline
     // every imported row and just repeated what the account view already
@@ -107,15 +116,278 @@ class TransactionTile extends StatelessWidget {
       const Duration(milliseconds: 160),
     );
 
+    // A grouped row rounds only the corners its place in the card has, so
+    // the selection border and the ink follow the card's outline.
+    const corner = Radius.circular(AppRadius.card);
+    final radius = grouped
+        ? BorderRadius.vertical(
+            top: groupedFirst ? corner : Radius.zero,
+            bottom: groupedLast ? corner : Radius.zero,
+          )
+        : BorderRadius.circular(16);
+    // A grouped row is a little tighter: the shared card already sets the
+    // rows apart.
+    final iconSize = grouped ? 40.0 : 44.0;
+    final glyphSize = grouped ? 20.0 : 22.0;
+
+    // Selection is otherwise only a border + icon swap, invisible to
+    // assistive tech. `selected` is exposed only in selection mode so
+    // ordinary browsing isn't narrated as "not selected" per row.
+    final row = Semantics(
+      selected: selectionMode ? selected : null,
+      onLongPressHint: 'select',
+      child: InkWell(
+        onTap: selectionMode
+            ? onToggleSelect
+            : () => showAddTransactionSheet(context, existing: tx),
+        onLongPress: onToggleSelect,
+        borderRadius: radius,
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: grouped ? 10 : 12,
+          ),
+          child: Row(
+            children: [
+              // Rounded-square category icon; flips to a check while
+              // selected, the fill easing over and the glyphs
+              // swapping with a small pop.
+              AnimatedContainer(
+                duration: selectMotion,
+                curve: Curves.easeOutCubic,
+                width: iconSize,
+                height: iconSize,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? scheme.primary
+                      : cat.color.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: AnimatedSwitcher(
+                  duration: selectMotion,
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: ScaleTransition(
+                      scale: Tween(begin: 0.6, end: 1.0).animate(animation),
+                      child: child,
+                    ),
+                  ),
+                  // categoryGlyphColor: the raw dark-kit hue washed
+                  // out to 1.6–2.4:1 over its own tint on light
+                  // surfaces.
+                  child: selected
+                      ? Icon(
+                          Icons.check,
+                          key: const ValueKey(true),
+                          color: scheme.onPrimary,
+                          size: glyphSize,
+                        )
+                      : Icon(
+                          cat.icon,
+                          key: const ValueKey(false),
+                          color: categoryGlyphColor(context, cat.color),
+                          size: glyphSize,
+                        ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Category title over "note · date". The note shrinks and
+              // ellipsizes first so the date is always visible, however
+              // long the note.
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        // One leg of a paired transfer.
+                        if (tx.pairId != null)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: Icon(
+                              Icons.link,
+                              size: 14,
+                              color: scheme.onSurfaceVariant,
+                              semanticLabel: 'paired transfer',
+                            ),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    // Both flexible so neither can push the other off
+                    // the line entirely: a rigid date used to leave a
+                    // squeezed note zero width (an orphan "·" before
+                    // the date) at large font scales. Unused flex space
+                    // just trails off, since the line is left-aligned.
+                    // The " · " is rigid and can alone be wider than
+                    // the line (73px of 52 at 320dp and 2x in tests).
+                    // So the note and it drop out, leaving the date the
+                    // whole line, once the date's 2/5 share of what is
+                    // left after the " · " can't hold even a "…".
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        String? shownNote;
+                        if (note != null) {
+                          final left =
+                              constraints.maxWidth -
+                              _textWidth(context, ' · ', lineStyle);
+                          final ellipsis = _textWidth(context, '…', lineStyle);
+                          if (left * 2 / 5 >= ellipsis) shownNote = note;
+                        }
+                        return Row(
+                          children: [
+                            if (shownNote != null) ...[
+                              Flexible(
+                                flex: 3,
+                                child: Text(
+                                  shownNote,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: lineStyle,
+                                ),
+                              ),
+                              Text(' · ', style: lineStyle),
+                            ],
+                            Flexible(
+                              flex: 2,
+                              child: Text(
+                                dateLabel,
+                                // TalkBack still reads a note left out.
+                                semanticsLabel:
+                                    note != null && shownNote == null
+                                    ? '$note · $dateLabel'
+                                    : null,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: lineStyle,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                    // Why a wallet purchase isn't in the totals; its
+                    // own line, like Counts in below.
+                    if (!counted)
+                      Text(
+                        'Not counted',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: lineStyle,
+                      ),
+                    // Why a row listed on the 30th shows up in next
+                    // month's totals. Its own line, so the note and
+                    // date above never get squeezed for it. Moot on
+                    // a row that counts nowhere.
+                    if (tx.countIn != null && counted)
+                      Text(
+                        'Counts in ${fmtDateCompact(tx.countIn!)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    // Rows with tags grow a line for them.
+                    if (tx.tags.isNotEmpty)
+                      Text(
+                        tx.tags.map((t) => '# $t').join('  '),
+                        // TalkBack would read each "#" as "number".
+                        semanticsLabel: 'tags ${tx.tags.join(', ')}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: accentTextColor(context),
+                        ),
+                      ),
+                    // Who owes what on a split, or who paid back on a
+                    // repayment.
+                    if (_peopleLine(context) case final line?)
+                      Text(
+                        line,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Amount: prominent, signed. Width-capped so a
+              // crore-range figure at a large text scale shrinks to fit
+              // instead of overflowing; below the cap it renders at its
+              // natural size, keeping the usual right alignment.
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 140),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
+                        style: TextStyle(
+                          color: amountColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                    // Group split: the full amount above mirrors the
+                    // bank debit; this line shows what actually counts
+                    // as the user's own spend.
+                    // Expense rows outside the transfers only, the
+                    // one place a share means anything.
+                    // Not on an uncounted wallet row: no share of it
+                    // counts.
+                    if (tx.isSplit &&
+                        counted &&
+                        tx.type == TxType.expense &&
+                        !isTransferCategory(tx.categoryId))
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          'your share ${fmtMoney(tx.myShare!)}',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
     // No swipe-to-delete: an accidental horizontal drag while scrolling
     // kept deleting rows. Deleting lives in the edit sheet (with Undo).
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      // Grouped rows touch: the card they share is the separation.
+      padding: grouped
+          ? const EdgeInsets.symmetric(horizontal: 16)
+          : const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       child: AnimatedContainer(
         duration: selectMotion,
         curve: Curves.easeOutCubic,
         // Selection is marked with a border rather than a fill so the
-        // amount/category colours stay legible. The border is always there,
+        // category colours stay legible. The border is always there,
         // transparent when unselected, so it fades rather than popping in.
         foregroundDecoration: BoxDecoration(
           border: Border.all(
@@ -124,263 +396,11 @@ class TransactionTile extends StatelessWidget {
                 : scheme.primary.withValues(alpha: 0),
             width: 1.5,
           ),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: radius,
         ),
-        child: FrostedPanel(
-          radius: BorderRadius.circular(16),
-          // Selection is otherwise only a border + icon swap — invisible to
-          // assistive tech. `selected` is exposed only in selection mode so
-          // ordinary browsing isn't narrated as "not selected" per row.
-          child: Semantics(
-            selected: selectionMode ? selected : null,
-            onLongPressHint: 'select',
-            child: InkWell(
-              onTap: selectionMode
-                  ? onToggleSelect
-                  : () => showAddTransactionSheet(context, existing: tx),
-              onLongPress: onToggleSelect,
-              borderRadius: BorderRadius.circular(16),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 12,
-                ),
-                child: Row(
-                  children: [
-                    // Rounded-square category icon; flips to a check while
-                    // selected, the fill easing over and the glyphs
-                    // swapping with a small pop.
-                    AnimatedContainer(
-                      duration: selectMotion,
-                      curve: Curves.easeOutCubic,
-                      width: 44,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? scheme.primary
-                            : cat.color.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: AnimatedSwitcher(
-                        duration: selectMotion,
-                        switchInCurve: Curves.easeOutCubic,
-                        switchOutCurve: Curves.easeInCubic,
-                        transitionBuilder: (child, animation) => FadeTransition(
-                          opacity: animation,
-                          child: ScaleTransition(
-                            scale: Tween(
-                              begin: 0.6,
-                              end: 1.0,
-                            ).animate(animation),
-                            child: child,
-                          ),
-                        ),
-                        // categoryGlyphColor: the raw dark-kit hue washed
-                        // out to 1.6–2.4:1 over its own tint on light
-                        // surfaces.
-                        child: selected
-                            ? Icon(
-                                Icons.check,
-                                key: const ValueKey(true),
-                                color: scheme.onPrimary,
-                                size: 22,
-                              )
-                            : Icon(
-                                cat.icon,
-                                key: const ValueKey(false),
-                                color: categoryGlyphColor(context, cat.color),
-                                size: 22,
-                              ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    // Category title over "note · date". The note shrinks and
-                    // ellipsizes first so the date is always visible, however
-                    // long the note.
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: textTheme.bodyMedium?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                              // One leg of a paired transfer.
-                              if (tx.pairId != null)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 4),
-                                  child: Icon(
-                                    Icons.link,
-                                    size: 14,
-                                    color: scheme.onSurfaceVariant,
-                                    semanticLabel: 'paired transfer',
-                                  ),
-                                ),
-                            ],
-                          ),
-                          const SizedBox(height: 2),
-                          // Both flexible so neither can push the other off
-                          // the line entirely: a rigid date used to leave a
-                          // squeezed note zero width (an orphan "·" before
-                          // the date) at large font scales. Unused flex space
-                          // just trails off, since the line is left-aligned.
-                          // The " · " is rigid and can alone be wider than
-                          // the line (73px of 52 at 320dp and 2x in tests).
-                          // So the note and it drop out, leaving the date the
-                          // whole line, once the date's 2/5 share of what is
-                          // left after the " · " can't hold even a "…".
-                          LayoutBuilder(
-                            builder: (context, constraints) {
-                              String? shownNote;
-                              if (note != null) {
-                                final left =
-                                    constraints.maxWidth -
-                                    _textWidth(context, ' · ', lineStyle);
-                                final ellipsis = _textWidth(
-                                  context,
-                                  '…',
-                                  lineStyle,
-                                );
-                                if (left * 2 / 5 >= ellipsis) shownNote = note;
-                              }
-                              return Row(
-                                children: [
-                                  if (shownNote != null) ...[
-                                    Flexible(
-                                      flex: 3,
-                                      child: Text(
-                                        shownNote,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: lineStyle,
-                                      ),
-                                    ),
-                                    Text(' · ', style: lineStyle),
-                                  ],
-                                  Flexible(
-                                    flex: 2,
-                                    child: Text(
-                                      dateLabel,
-                                      // TalkBack still reads a note left out.
-                                      semanticsLabel:
-                                          note != null && shownNote == null
-                                          ? '$note · $dateLabel'
-                                          : null,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: lineStyle,
-                                    ),
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                          // Why a wallet purchase isn't in the totals; its
-                          // own line, like Counts in below.
-                          if (!counted)
-                            Text(
-                              'Not counted',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: lineStyle,
-                            ),
-                          // Why a row listed on the 30th shows up in next
-                          // month's totals. Its own line, so the note and
-                          // date above never get squeezed for it. Moot on
-                          // a row that counts nowhere.
-                          if (tx.countIn != null && counted)
-                            Text(
-                              'Counts in ${fmtDateCompact(tx.countIn!)}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                          // Rows with tags grow a line for them.
-                          if (tx.tags.isNotEmpty)
-                            Text(
-                              tx.tags.map((t) => '# $t').join('  '),
-                              // TalkBack would read each "#" as "number".
-                              semanticsLabel: 'tags ${tx.tags.join(', ')}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: textTheme.bodySmall?.copyWith(
-                                color: accentTextColor(context),
-                              ),
-                            ),
-                          // Who owes what on a split, or who paid back on a
-                          // repayment.
-                          if (_peopleLine(context) case final line?)
-                            Text(
-                              line,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    // Amount — prominent, color-coded. Width-capped so a
-                    // crore-range figure at a large text scale shrinks to fit
-                    // instead of overflowing; below the cap it renders at its
-                    // natural size, keeping the usual right alignment.
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 140),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
-                              style: TextStyle(
-                                color: amountColor,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 15,
-                              ),
-                            ),
-                          ),
-                          // Group split: the full amount above mirrors the
-                          // bank debit; this line shows what actually counts
-                          // as the user's own spend.
-                          // Expense rows outside the transfers only, the
-                          // one place a share means anything.
-                          // Not on an uncounted wallet row: no share of it
-                          // counts.
-                          if (tx.isSplit &&
-                              counted &&
-                              tx.type == TxType.expense &&
-                              !isTransferCategory(tx.categoryId))
-                            FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: Text(
-                                'your share ${fmtMoney(tx.myShare!)}',
-                                style: textTheme.bodySmall?.copyWith(
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
+        child: grouped
+            ? GroupedSurface(first: groupedFirst, last: groupedLast, child: row)
+            : FrostedPanel(radius: radius, child: row),
       ),
     );
   }

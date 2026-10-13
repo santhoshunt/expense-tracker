@@ -80,15 +80,23 @@ class _CategoriesTabState extends State<CategoriesTab> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
       children: [
-        InfoLabel(
-          label: Text('Groups', style: Theme.of(context).textTheme.titleMedium),
-          tip: const InfoTip(
-            title: 'Groups',
-            message:
-                "Groups add up their categories' spending on the "
-                "dashboard's By group card, including money-out transfers "
-                'in those categories. Only expense and transfer categories '
-                'can join a group. Budgets do not depend on groups.',
+        // Left-aligned: stretched across the list, the whole row would open
+        // the tip.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: InfoLabel(
+            label: Text(
+              'Groups',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            tip: const InfoTip(
+              title: 'Groups',
+              message:
+                  "Groups add up their categories' spending on the "
+                  "dashboard's By group card, including money-out transfers "
+                  'in those categories. Only expense and transfer categories '
+                  'can join a group. Budgets do not depend on groups.',
+            ),
           ),
         ),
         const SizedBox(height: 4),
@@ -100,7 +108,7 @@ class _CategoriesTabState extends State<CategoriesTab> {
         ),
         const SizedBox(height: 12),
         FrostedPanel(
-          radius: BorderRadius.circular(20),
+          radius: BorderRadius.circular(AppRadius.card),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
             child: Column(
@@ -187,7 +195,7 @@ class _CategoriesTabState extends State<CategoriesTab> {
         ),
         const SizedBox(height: 12),
         FrostedPanel(
-          radius: BorderRadius.circular(20),
+          radius: BorderRadius.circular(AppRadius.card),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
             child: Column(

@@ -1251,6 +1251,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                                 return ListTile(
                                   contentPadding: EdgeInsets.zero,
                                   title: InfoLabel(
+                                    icon: true,
                                     label: Text(label),
                                     tip: InfoTip(
                                       title: label,

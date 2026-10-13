@@ -201,7 +201,8 @@ class BreakdownRow extends StatelessWidget {
             constraints: const BoxConstraints(maxWidth: 140),
             child: FittedBox(
               fit: BoxFit.scaleDown,
-              child: Text(amount, style: style.copyWith(color: color)),
+              // The icon carries the colour; the figure is plain text.
+              child: Text(amount, style: style),
             ),
           ),
         ],

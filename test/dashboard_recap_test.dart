@@ -78,7 +78,7 @@ void main() {
           ChangeNotifierProvider.value(value: s),
         ],
         child: MaterialApp(
-          home: Scaffold(body: DashboardScreen(onViewCategory: onViewCategory)),
+          home: dashboardShell(DashboardScreen(onViewCategory: onViewCategory)),
         ),
       ),
     );
@@ -110,8 +110,7 @@ void main() {
     expect(find.byType(MonthlyRecapCard), findsOneWidget);
 
     // Year view drops it with the other monthly sections.
-    await tester.tap(find.text('Year'));
-    await tester.pumpAndSettle();
+    await toggleYearView(tester);
     expect(find.byType(MonthlyRecapCard), findsNothing);
   });
 
@@ -153,8 +152,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(MonthPaceCard), findsOneWidget);
 
-    await tester.tap(find.text('Year'));
-    await tester.pumpAndSettle();
+    await toggleYearView(tester);
     expect(find.byType(MonthPaceCard), findsNothing, reason: 'Year view');
   });
 

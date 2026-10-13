@@ -17,10 +17,12 @@ import '../widgets/balance_breakdown.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
+import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/link_pill.dart';
 import '../widgets/motion.dart';
 import '../widgets/section_header.dart';
+import '../widgets/status_dot.dart';
 import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
 
@@ -70,13 +72,23 @@ class _AccountsScreenState extends State<AccountsScreen> {
     super.dispose();
   }
 
+  /// A chip tap's slide in progress: the pages it passes must not select
+  /// their chips on the way.
+  bool _sliding = false;
+
   void _setTypeFilter(AccountType? t) {
     if (t == _typeFilter) return;
-    _pageCtrl.animateToPage(
-      _filterOrder.indexOf(t),
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOutCubic,
-    );
+    setState(() {
+      _typeFilter = t;
+      _sliding = true;
+    });
+    _pageCtrl
+        .animateToPage(
+          _filterOrder.indexOf(t),
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        )
+        .whenComplete(() => _sliding = false);
   }
 
   @override
@@ -97,12 +109,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
           // InkWell, not GestureDetector: ripple + button semantics.
           child: FrostedPanel(
-            radius: BorderRadius.circular(24),
+            radius: BorderRadius.circular(AppRadius.card),
             child: InkWell(
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.circular(AppRadius.card),
               onTap: () => showBalanceBreakdownSheet(context, finance),
               child: Padding(
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.all(AppSpace.card),
                 child: Row(
                   children: [
                     Icon(
@@ -115,14 +127,18 @@ class _AccountsScreenState extends State<AccountsScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // Plain text colour: amounts are never coloured;
+                          // the accent stays on the icon.
                           MorphingAmount(
                             value: net,
                             style: TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.w800,
-                              color: accentTextColor(context),
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                              color: scheme.onSurface,
                             ),
                           ),
+                          // The label opens its tip; the rest of the card
+                          // still opens the breakdown.
                           InfoLabel(
                             // The chevron says the card opens the breakdown.
                             label: Text(
@@ -158,35 +174,31 @@ class _AccountsScreenState extends State<AccountsScreen> {
           ),
         ),
         // Type filter: All / Bank / Cards / Savings / Wallets.
+        // Pills, not a boxed segmented bar: a swipe sets the selection
+        // through onPageChanged, a tap animates the pager there.
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: GlassSegmented<AccountType?>(
-            options: const [
-              (null, 'All'),
-              (AccountType.bank, 'Banks'),
-              (AccountType.creditCard, 'Cards'),
-              (AccountType.savings, 'Savings'),
-              (AccountType.wallet, 'Wallets'),
-            ],
-            // Five labels only fit a narrow phone without their icons.
-            icons: MediaQuery.sizeOf(context).width < 400
-                ? null
-                : const [
-                    Icons.apps,
-                    Icons.account_balance_outlined,
-                    Icons.credit_card,
-                    Icons.savings_outlined,
-                    Icons.account_balance_wallet_outlined,
-                  ],
-            selected: _typeFilter,
-            onChanged: _setTypeFilter,
-            pager: _pageCtrl,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: ChipTabs<AccountType?>(
+              options: const [
+                (null, 'All'),
+                (AccountType.bank, 'Banks'),
+                (AccountType.creditCard, 'Cards'),
+                (AccountType.savings, 'Savings'),
+                (AccountType.wallet, 'Wallets'),
+              ],
+              selected: _typeFilter,
+              onChanged: _setTypeFilter,
+            ),
           ),
         ),
         Expanded(
           child: PageView(
             controller: _pageCtrl,
-            onPageChanged: (i) => setState(() => _typeFilter = _filterOrder[i]),
+            onPageChanged: (i) {
+              if (!_sliding) setState(() => _typeFilter = _filterOrder[i]);
+            },
             children: [
               for (final t in _filterOrder) _buildPage(finance, scheme, t),
             ],
@@ -217,9 +229,23 @@ class _AccountsScreenState extends State<AccountsScreen> {
               : groups[k]!.first.service!.trim(),
           total: groups[k]!.fold(0.0, (s, a) => s + finance.accountBalance(a)),
         ),
-        for (final a in groups[k]!)
-          _AccountCard(account: a, onView: widget.onViewAccount),
+        ..._cardRun(groups[k]!),
       ],
+    ];
+  }
+
+  /// [accounts] drawn as one card, a row each: the first rounds the top
+  /// corners, the last the bottom. [closed] dims them, as closed accounts.
+  List<Widget> _cardRun(List<Account> accounts, {bool closed = false}) {
+    Widget card(int i, Account a) => _AccountCard(
+      account: a,
+      onView: widget.onViewAccount,
+      first: i == 0,
+      last: i == accounts.length - 1,
+    );
+    return [
+      for (final (i, a) in accounts.indexed)
+        if (closed) Opacity(opacity: 0.6, child: card(i, a)) else card(i, a),
     ];
   }
 
@@ -258,9 +284,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
               builder: (context) {
                 // Flat heterogeneous list (Rules-tab pattern): open
                 // cards, then a muted closed section. Closed cards keep
-                // full tap/menu behavior — only dimmed. The All view
+                // full tap/menu behavior, only dimmed. The All view
                 // groups open accounts by type under section headers;
-                // a filtered view IS one type, so it stays flat.
+                // a filtered view IS one type, so it stays flat. Each
+                // run of cards between two headers draws as one card.
                 final wallets = [
                   for (final a in accounts)
                     if (a.isWallet) a,
@@ -277,12 +304,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
                           header,
                           color: scheme.onSurfaceVariant,
                         ),
-                        for (final a in accounts)
-                          if (a.type == type)
-                            _AccountCard(
-                              account: a,
-                              onView: widget.onViewAccount,
-                            ),
+                        ..._cardRun([
+                          for (final a in accounts)
+                            if (a.type == type) a,
+                        ]),
                       ],
                     ],
                     if (wallets.isNotEmpty) ...[
@@ -295,13 +320,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   ] else if (t == AccountType.wallet)
                     ..._walletGroups(finance, wallets)
                   else
-                    for (final a in accounts)
-                      _AccountCard(account: a, onView: widget.onViewAccount),
+                    ..._cardRun(accounts),
                   if (closed.isNotEmpty) ...[
-                    // The header's own inset, less what the 32dp tip adds
-                    // above and below the 11px text.
+                    // The header's own inset, less the 4dp the tip label
+                    // adds above and below the 11px text.
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 2),
                       child: Align(
                         alignment: Alignment.centerLeft,
                         child: InfoLabel(
@@ -317,19 +341,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
                                 'pickers and Upcoming. They keep their '
                                 'history and linked numbers, so new alerts '
                                 'still land on them. Reopen one from its '
-                                'menu.',
+                                'More menu.',
                           ),
                         ),
                       ),
                     ),
-                    for (final a in closed)
-                      Opacity(
-                        opacity: 0.6,
-                        child: _AccountCard(
-                          account: a,
-                          onView: widget.onViewAccount,
-                        ),
-                      ),
+                    ..._cardRun(closed, closed: true),
                   ],
                 ];
                 return ListView.builder(
@@ -346,11 +363,20 @@ class _AccountsScreenState extends State<AccountsScreen> {
 /// One account: collapsed to its name and one figure (the balance, or what
 /// a card owes) until tapped; open, today's full details and a way into its
 /// transactions. Which cards are open is remembered ([SettingsProvider]).
+/// A row of its section's card: [first] and [last] say where it sits in the
+/// run, so only the ends round off.
 class _AccountCard extends StatelessWidget {
   final Account account;
   final void Function(String accountId) onView;
+  final bool first;
+  final bool last;
 
-  const _AccountCard({required this.account, required this.onView});
+  const _AccountCard({
+    required this.account,
+    required this.onView,
+    required this.first,
+    required this.last,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -379,17 +405,19 @@ class _AccountCard extends StatelessWidget {
     final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: FrostedPanel(
-        radius: BorderRadius.circular(20),
+      padding: EdgeInsets.fromLTRB(16, first ? 6 : 0, 16, last ? 6 : 0),
+      child: GroupedSurface(
+        first: first,
+        last: last,
         // TalkBack says whether the card is open.
         child: Semantics(
           expanded: expanded,
+          // No radius of its own: the surface clips the ripple to its
+          // corners.
           child: InkWell(
-            borderRadius: BorderRadius.circular(20),
             onTap: () => settings.setAccountExpanded(account.id, !expanded),
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpace.card),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -469,7 +497,6 @@ class _AccountCard extends StatelessWidget {
                         // No label: the card's Semantics(expanded:) says it.
                         color: scheme.onSurfaceVariant,
                       ),
-                      _AccountMenu(account: account),
                     ],
                   ),
                   AnimatedFold(
@@ -518,10 +545,19 @@ class _AccountCard extends StatelessWidget {
                           ),
                         ],
                         const SizedBox(height: 6),
-                        TextButton.icon(
-                          onPressed: () => onView(account.id),
-                          icon: const Icon(Icons.list_alt, size: 18),
-                          label: const Text('View transactions'),
+                        // The account's options live here, out of the
+                        // collapsed row, which keeps to name and figure.
+                        Wrap(
+                          spacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () => onView(account.id),
+                              icon: const Icon(Icons.list_alt, size: 18),
+                              label: const Text('View transactions'),
+                            ),
+                            _AccountMenu(account: account),
+                          ],
                         ),
                       ],
                     ),
@@ -607,30 +643,28 @@ class _BankBalance extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            // One group, so spaceBetween keeps the tip beside the label.
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Balance',
-                  style: TextStyle(color: scheme.onSurfaceVariant),
+            // The label is its own tip; a tap elsewhere still folds the
+            // card.
+            InfoLabel(
+              label: Text(
+                'Balance',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+              tip: InfoTip(
+                title: 'Balance',
+                message: account.isWallet
+                    ? 'The balance you set, plus transactions dated '
+                          'after it, counted as spending or not. '
+                          'Wallets stay out of net balance.'
+                    : 'The newest known balance wins, whether you set it '
+                          'or a bank alert stated it. Transactions after it '
+                          'are added on.',
+                link: InfoLink(
+                  prompt: 'Balance looks off?',
+                  label: 'Set the balance',
+                  onTap: (c) => showSetBalanceDialog(c, account),
                 ),
-                InfoTip(
-                  title: 'Balance',
-                  message: account.isWallet
-                      ? 'The balance you set, plus transactions dated '
-                            'after it, counted as spending or not. '
-                            'Wallets stay out of net balance.'
-                      : 'The newest known balance wins, whether you set it '
-                            'or a bank alert stated it. Transactions after it '
-                            'are added on.',
-                  link: InfoLink(
-                    prompt: 'Balance looks off?',
-                    label: 'Set the balance',
-                    onTap: (c) => showSetBalanceDialog(c, account),
-                  ),
-                ),
-              ],
+              ),
             ),
             const SizedBox(width: 8),
             // Shrink rather than overflow when the amount and label compete
@@ -644,7 +678,7 @@ class _BankBalance extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
-                    color: accentTextColor(context),
+                    color: scheme.onSurface,
                   ),
                 ),
               ),
@@ -1121,12 +1155,13 @@ class _CardFigures extends StatelessWidget {
             Flexible(
               child: FittedBox(
                 fit: BoxFit.scaleDown,
+                // Plain text colour: the usage bar below carries the red.
                 child: Text(
                   outstanding == null ? 'Unknown' : fmtMoney(outstanding),
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
-                    color: scheme.error,
+                    color: scheme.onSurface,
                   ),
                 ),
               ),
@@ -1194,8 +1229,8 @@ class _CardFigures extends StatelessWidget {
                   message:
                       '"Est." means the credit limit is estimated from the '
                       'highest available limit a bank alert ever reported. '
-                      "Set the real limit from the card's menu for an exact "
-                      'figure.',
+                      "Set the real limit from the card's More menu for an "
+                      'exact figure.',
                   link: InfoLink(
                     prompt: 'Know the real limit?',
                     label: 'Set the credit limit',
@@ -1241,15 +1276,24 @@ class _CardFigures extends StatelessWidget {
                 );
               }
               final s = cardBillStatus(account, DateTime.now())!;
-              return Text(
+              final line = Text(
                 cardBillSubtitle(s),
                 style: TextStyle(
-                  // Imminent dues stand out; a comfortable gap — and a paid
-                  // or not-yet-billed cycle — stays muted.
-                  color: s.urgent ? scheme.error : scheme.onSurfaceVariant,
+                  // Imminent dues stand out in weight, with a red dot
+                  // before them; a comfortable gap, and a paid or
+                  // not-yet-billed cycle, stays muted.
+                  color: s.urgent ? scheme.onSurface : scheme.onSurfaceVariant,
                   fontWeight: s.urgent ? FontWeight.w600 : null,
                   fontSize: 12,
                 ),
+              );
+              if (!s.urgent) return line;
+              return Row(
+                children: [
+                  StatusDot(color: scheme.error),
+                  const SizedBox(width: 6),
+                  Flexible(child: line),
+                ],
               );
             },
           ),
@@ -1265,8 +1309,18 @@ class _AccountMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // A "More" label in TextButton dress beside View transactions; one
+    // semantics node, so TalkBack reads "More" as a button.
+    return MergeSemantics(
+      child: Semantics(button: true, child: _menu(context, scheme)),
+    );
+  }
+
+  Widget _menu(BuildContext context, ColorScheme scheme) {
     return PopupMenuButton<String>(
       tooltip: 'Account options',
+      borderRadius: BorderRadius.circular(AppRadius.card * 2),
       // Instant, not animated: the stock grow animation re-clamps the menu's
       // position every frame, so a menu opened near the bottom edge visibly
       // slid upward as it outgrew the space below the button. Rendering it
@@ -1357,6 +1411,24 @@ class _AccountMenu extends StatelessWidget {
                 child: Text('Delete account'),
               ),
             ],
+      child: Container(
+        // TextButton's own height and insets, so the two sit level.
+        constraints: const BoxConstraints(minHeight: 40),
+        padding: const EdgeInsets.fromLTRB(12, 8, 16, 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.more_horiz, size: 18, color: scheme.primary),
+            const SizedBox(width: 8),
+            Text(
+              'More',
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(color: scheme.primary),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2193,7 +2265,7 @@ Future<void> showAddAccountDialog(
                       'Record deposits or purchases as "To savings" '
                       'transactions from your bank account. Keep the current '
                       'value with '
-                      '"Set balance…" in this account\'s ⋮ menu.',
+                      '"Set balance…" under More on this account.',
                       style: Theme.of(ctx).textTheme.bodySmall,
                     ),
                   ],

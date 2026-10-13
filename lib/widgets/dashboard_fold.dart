@@ -1,22 +1,31 @@
 import 'package:flutter/material.dart';
 
+import '../utils/app_theme.dart';
 import 'animated_fold.dart';
+import 'grouped_surface.dart';
 import 'motion.dart';
 
 /// One Trends or Breakdown section: a heading row that folds its cards
 /// away and, while folded, says in one line what they hold ("Swiggy
 /// ₹4.2K"), so a long page reads at a glance and opens where wanted.
+///
+/// Each section is a row of one card shared with its neighbours ([first]
+/// and [last] round its ends): the summary sits at the heading's right, and
+/// the open section's cards lie flat inside the row.
 class DashboardFold extends StatelessWidget {
   final String title;
 
-  /// Shown after the title while folded; null shows the title alone.
+  /// Shown at the heading's right while folded; null shows the title alone.
   final String? summary;
 
-  /// The section's info tip, beside the title.
+  /// The section's info tip, beside the title, only while open: the folded
+  /// rows stay quiet.
   final Widget? tip;
   final bool open;
   final ValueChanged<bool> onChanged;
   final List<Widget> children;
+  final bool first;
+  final bool last;
 
   const DashboardFold({
     super.key,
@@ -26,90 +35,140 @@ class DashboardFold extends StatelessWidget {
     required this.open,
     required this.onChanged,
     required this.children,
+    this.first = true,
+    this.last = true,
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => _grouped(context);
+
+  Widget _chevron(BuildContext context, double size) => AnimatedRotation(
+    turns: open ? 0 : 0.5,
+    duration: motionDuration(context, const Duration(milliseconds: 250)),
+    curve: Curves.easeOutCubic,
+    child: Icon(
+      Icons.expand_less,
+      size: size,
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    ),
+  );
+
+  Widget _grouped(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final line = summary;
+    final c = AppColors.of(context);
     return Padding(
-      padding: const EdgeInsets.only(top: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Semantics(
-            // Its own node: an open body's text must not merge into it.
-            container: true,
-            button: true,
-            expanded: open,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12),
-              onTap: () => onChanged(!open),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
+      // The group's first row keeps the page's gap above it.
+      padding: EdgeInsets.only(top: first ? AppSpace.gap + 6 : 0),
+      child: GroupedSurface(
+        first: first,
+        last: last,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Semantics(
+              // Its own node: an open body's text must not merge into it.
+              container: true,
+              button: true,
+              expanded: open,
+              child: InkWell(
+                onTap: () => onChanged(!open),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 52),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      AppSpace.card,
+                      6,
+                      AppSpace.card - 4,
+                      6,
+                    ),
+                    child: Row(
+                      children: [
+                        // Title left, summary right: each may take up to
+                        // half and the rest of the row falls between them,
+                        // so a short title leaves the summary its room.
+                        Expanded(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Flexible(
-                                child: Text(
-                                  title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: text.titleMedium,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: text.titleSmall?.copyWith(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                    if (open) ?tip,
+                                  ],
                                 ),
                               ),
-                              ?tip,
+                              if (!open && line != null) ...[
+                                const SizedBox(width: 12),
+                                Flexible(
+                                  child: Text(
+                                    line,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    textAlign: TextAlign.end,
+                                    style: text.bodySmall?.copyWith(
+                                      color: scheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
-                          if (!open && line != null)
-                            Text(
-                              line,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: text.bodyMedium?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                        ],
-                      ),
+                        ),
+                        const SizedBox(width: 4),
+                        _chevron(context, 20),
+                      ],
                     ),
-                    AnimatedRotation(
-                      turns: open ? 0 : 0.5,
-                      duration: motionDuration(
-                        context,
-                        const Duration(milliseconds: 250),
-                      ),
-                      curve: Curves.easeOutCubic,
-                      child: Icon(
-                        Icons.expand_less,
-                        size: 22,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
-          AnimatedFold(
-            collapsed: !open,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: DashboardFoldScope(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: children,
+            AnimatedFold(
+              collapsed: !open,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                // The row is the card: the section's own cards lie flat in
+                // it, with no second fill, outline or margin.
+                child: Theme(
+                  data: Theme.of(context).copyWith(
+                    cardTheme: Theme.of(context).cardTheme.copyWith(
+                      color: Colors.transparent,
+                      margin: EdgeInsets.zero,
+                      shape: const RoundedRectangleBorder(),
+                    ),
+                    extensions: [
+                      AppColors(
+                        green: c.green,
+                        orange: c.orange,
+                        blue: c.blue,
+                        purple: c.purple,
+                        cardFill: Colors.transparent,
+                      ),
+                    ],
+                  ),
+                  child: DashboardFoldScope(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: children,
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

@@ -39,8 +39,8 @@ import '../widgets/dashboard_fold.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/undo_snackbar.dart';
-import '../widgets/import_health_banner.dart';
-import '../widgets/update_banner.dart';
+import '../widgets/notice_stack.dart';
+import '../widgets/section_label.dart';
 import '../widgets/spending_heatmap.dart';
 import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
@@ -58,6 +58,7 @@ import 'accounts_screen.dart' show showCardCycleDialog;
 import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
 import 'transactions_screen.dart' show TxFilterRequest;
+import '../widgets/status_dot.dart';
 
 /// Which slice of the dashboard is on screen. The page grew to fifteen
 /// sections in one scroll; splitting it into sub-tabs (rather than a second
@@ -144,7 +145,8 @@ const _kWeekdayNames = [
 ];
 
 /// The last row of every dashboard page: the way to reorder or hide its
-/// sections, and how many are hidden now.
+/// sections, and how many are hidden now. Quiet, in the muted text colour:
+/// the app bar's ⋯ menu holds the same entry.
 class _CustomiseRow extends StatelessWidget {
   final DashboardPage page;
   final int hidden;
@@ -152,9 +154,13 @@ class _CustomiseRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 24),
+    padding: const EdgeInsets.only(top: 20),
     child: Center(
       child: TextButton.icon(
+        style: TextButton.styleFrom(
+          foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+          textStyle: Theme.of(context).textTheme.labelLarge,
+        ),
         icon: const Icon(Icons.dashboard_customize_outlined, size: 18),
         label: Text(
           hidden > 0
@@ -180,10 +186,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final settings = context.read<SettingsProvider>();
     final layout = settings.dashboardLayout(page);
     final out = <Widget>[...header];
-    for (final id in layout.order) {
-      if (layout.hidden.contains(id)) continue;
-      final s = sections[id];
-      if (s == null || !s.visible) continue;
+    // Folded pages draw their sections as the rows of one card.
+    final shown = [
+      for (final id in layout.order)
+        if (!layout.hidden.contains(id) && (sections[id]?.visible ?? false)) id,
+    ];
+    for (final id in shown) {
+      final s = sections[id]!;
       // A slot a home-screen widget can scroll to ([_showSection]).
       final slot = _sectionKeys[id];
       if (!fold) {
@@ -209,6 +218,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         summary: s.summary,
         tip: s.tip,
         open: _openedForVisit.contains(id) || settings.sectionOpen(id),
+        first: id == shown.first,
+        last: id == shown.last,
         onChanged: (v) {
           // A tap is the user's choice again, and sticks.
           if (_openedForVisit.remove(id)) setState(() {});
@@ -342,6 +353,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     AppNav.instance.detachDashboard(this);
+    AppNav.instance.dashboardHeader.detach(this);
     _jumpReset?.cancel();
     _pageCtrl.dispose();
     super.dispose();
@@ -826,102 +838,160 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  /// Chevrons, the tappable month label, the year PDF shortcut and the
-  /// Month/Year switch. Shared by the month-scoped views rather than duplicated:
-  /// `_month` and `_yearMode` live in this one State.
-  Widget _monthSelector(
+  /// What [_monthPlanSlot] last worked out, and for which inputs.
+  Object? _planKey;
+  SafeToSpend? _planSafe;
+  MonthForecast? _planForecast;
+
+  /// The Overview's Monthly budget and Month-end forecast sections. Both
+  /// showing (a cap, the running month, a forecast worth a card), neither
+  /// hidden and next to each other in Cockpit's order, they are one card in
+  /// the budget's slot, and the forecast's is empty; otherwise each slot
+  /// shows its own card.
+  ///
+  /// The budget uses the shown month's spend, so a past month shows its
+  /// usage too. Safe to spend and the forecast are about today, so only
+  /// under this month's figures; the forecast shows without a cap too.
+  Widget _monthPlanSlot(
     BuildContext context,
     FinanceProvider finance,
-    DateTime latestMonth,
+    DashboardSection slot,
   ) {
-    final scheme = Theme.of(context).colorScheme;
+    final settings = context.read<SettingsProvider>();
+    final budget = context.select<SettingsProvider, double>(
+      (s) => s.monthlyBudget,
+    );
+    // Hiding an Upcoming row changes the bills both set aside.
+    context.select<SettingsProvider, String>(
+      (s) => hiddenListKey(s.hiddenUpcoming),
+    );
+    final now = DateTime.now();
+    final thisMonth = !_yearMode && _month == DateTime(now.year, now.month);
+    final budgetShows = budget > 0 && !_yearMode;
+    // Both slots ask for the same figures in the same frame: worked out
+    // once per ledger, cap, hidden bills, month and day.
+    final key = (
+      finance.revision,
+      budget,
+      hiddenListKey(settings.hiddenUpcoming),
+      _month,
+      _yearMode,
+      DateTime(now.year, now.month, now.day),
+    );
+    if (_planKey != key) {
+      _planKey = key;
+      _planSafe = !budgetShows || !thisMonth
+          ? null
+          : computeSafeToSpend(
+              finance,
+              cap: budget,
+              patterns: _patterns(finance, now),
+              hidden: settings.hiddenUpcoming,
+              now: now,
+            );
+      _planForecast = !thisMonth
+          ? null
+          : computeMonthForecast(
+              finance,
+              patterns: _patterns(finance, now),
+              hidden: settings.hiddenUpcoming,
+              now: now,
+              cap: budget,
+            );
+    }
+    final safe = _planSafe;
+    final forecast = _planForecast;
+    // Nothing spent, due or usual: no forecast worth a card.
+    final forecastShows = forecast != null && forecast.total > 0;
+    final layout = settings.dashboardLayout(DashboardPage.overview);
+    final budgetAt = layout.order.indexOf(DashboardSection.monthlyBudget);
+    final forecastAt = layout.order.indexOf(DashboardSection.forecast);
+    // Next to each other in Cockpit's order: moved apart there, they stay
+    // two cards where the user put them.
+    final merged =
+        budgetShows &&
+        forecastShows &&
+        (budgetAt - forecastAt).abs() == 1 &&
+        !layout.hidden.contains(DashboardSection.monthlyBudget) &&
+        !layout.hidden.contains(DashboardSection.forecast);
+    final Widget? card;
+    if (merged) {
+      // Always the budget's slot: next to each other the two slots sit in
+      // the same place, and the Budget widget's jump scrolls to this one.
+      card = slot == DashboardSection.monthlyBudget
+          ? _BudgetCard(
+              spent: finance.budgetSpentInMonth(_month),
+              cap: budget,
+              safe: safe,
+              forecast: forecast,
+            )
+          : null;
+    } else if (slot == DashboardSection.monthlyBudget) {
+      card = budgetShows
+          ? _BudgetCard(
+              spent: finance.budgetSpentInMonth(_month),
+              cap: budget,
+              safe: safe,
+            )
+          : null;
+    } else {
+      card = forecastShows ? _ForecastCard(forecast: forecast) : null;
+    }
+    return AnimatedPresence(
+      visible: card != null,
+      child: card == null
+          ? const SizedBox.shrink()
+          : Padding(
+              padding: const EdgeInsets.only(top: AppSpace.gap),
+              child: card,
+            ),
+    );
+  }
+
+  /// The Year view tip, opened from Home's ⋯ menu ("About Year view").
+  static const _yearTip = InfoTip(
+    title: 'Year view',
+    message:
+        'Year view adds up the 12 months of the year, from the month set in '
+        'Settings → Appearance → Year starts in. April gives the financial '
+        'year, April to March. Trends compares the year with last year. '
+        'Budgets, the monthly recap and pace, the month comparisons, the '
+        'heatmap, merchants, groups and transfers are hidden.',
+  );
+
+  /// Hands the month selector and the Dashboard's menu entries to Home's
+  /// app bar ([DashboardHeader]): the arrows, the tappable month label, the
+  /// PDF export, the Month/Year switch, the Year view tip and Customise.
+  /// After the frame: the bar rebuilds on the change, and a listener must
+  /// not rebuild mid-build. `_month` and `_yearMode` stay in this State.
+  void _publishHeader(FinanceProvider finance, DateTime latestMonth) {
     final sm = _yearStartMonth;
     final year = yearStartOf(_month, sm);
-    return Row(
-      children: [
-        IconButton(
-          tooltip: _yearMode ? 'Previous year' : 'Previous month',
-          visualDensity: VisualDensity.compact,
-          onPressed: () => _shiftMonth(-1),
-          icon: const Icon(Icons.chevron_left),
-        ),
-        // Tappable: browsing back a year used to take 12 arrow taps.
-        Expanded(
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: () => _pickMonth(context, finance),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: Text(
-                      _yearMode ? yearLabel(year, sm) : fmtMonth(_month),
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(
-                    Icons.arrow_drop_down,
-                    size: 20,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        IconButton(
-          tooltip: _yearMode ? 'Next year' : 'Next month',
-          visualDensity: VisualDensity.compact,
-          onPressed:
-              (_yearMode
-                  ? year < yearStartOf(latestMonth, sm)
-                  : _month.isBefore(latestMonth))
-              ? () => _shiftMonth(1)
-              : null,
-          icon: const Icon(Icons.chevron_right),
-        ),
-        // Scope switch as a quiet text button: a full-width segmented
-        // control here read as a primary action and drew the eye away
-        // from the figures. Month is the default; nothing is persisted.
-        IconButton(
-          tooltip: _yearMode
-              ? 'Export year report (PDF)'
-              : 'Export month report (PDF)',
-          visualDensity: VisualDensity.compact,
-          icon: Icon(
-            Icons.picture_as_pdf_outlined,
-            size: 20,
-            color: scheme.onSurfaceVariant,
-          ),
-          onPressed: () => _exportPdf(context, finance),
-        ),
-        TextButton(
-          style: TextButton.styleFrom(
-            visualDensity: VisualDensity.compact,
-            foregroundColor: scheme.onSurfaceVariant,
-            textStyle: Theme.of(context).textTheme.labelMedium,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-          ),
-          onPressed: () => setState(() => _yearMode = !_yearMode),
-          child: Text(_yearMode ? 'Month view' : 'Year'),
-        ),
-        const InfoTip(
-          title: 'Year view',
-          message:
-              'Year view adds up the 12 months of the year, from the month '
-              'set in Settings → Appearance → Year starts in. April gives the '
-              'financial year, April to March. Trends compares the year with '
-              'last year. Budgets, the monthly recap and pace, the month '
-              'comparisons, the heatmap, merchants, groups and transfers are '
-              'hidden.',
-        ),
-      ],
-    );
+    final canNext = _yearMode
+        ? year < yearStartOf(latestMonth, sm)
+        : _month.isBefore(latestMonth);
+    final page = switch (_view) {
+      DashboardView.overview => DashboardPage.overview,
+      DashboardView.trends => DashboardPage.trends,
+      DashboardView.breakdown => DashboardPage.breakdown,
+    };
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppNav.instance.dashboardHeader.update(
+        owner: this,
+        label: _yearMode ? yearLabel(year, sm) : fmtMonth(_month),
+        yearMode: _yearMode,
+        onPrev: () => _shiftMonth(-1),
+        onNext: canNext ? () => _shiftMonth(1) : null,
+        // Browsing back a year used to take 12 arrow taps.
+        onPick: () => _pickMonth(context, finance),
+        // Month is the default; nothing is persisted.
+        onToggleYear: () => setState(() => _yearMode = !_yearMode),
+        onExportPdf: () => _exportPdf(context, finance),
+        onAboutYear: (anchor) => openInfoTip(anchor, _yearTip),
+        onCustomise: () => goCockpitDashboard(context, page),
+      );
+    });
   }
 
   @override
@@ -987,16 +1057,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // Builder so only mounted pages construct their widgets.
     List<Widget> overviewChildren() {
       final header = <Widget>[
-        // A newer release, offered by the launch check; empty otherwise.
-        const UpdateBanner(),
-        // A bank whose alerts stopped importing; empty otherwise.
-        const ImportHealthBanner(),
+        // A newer release, offered by the launch check, and a bank whose
+        // alerts stopped importing: one at a time; empty when neither.
+        const NoticeStack(),
         // First-run: the landing tab used to greet a new user with ₹0.00
         // everywhere and no hint of what to do next.
         if (!finance.hasTransactions) ...[
           Card(
             child: Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppSpace.card),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1044,25 +1113,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 16),
         ],
+        // The balance, with the picked month's (or year's) totals as
+        // columns inside it: three cards in a strip scrolled sideways and
+        // cut Saved off at phone width.
         KeyedSubtree(
           key: const ValueKey('balance'),
-          child: _BalanceCard(finance: finance),
-        ),
-        // The picked month's (or year's) totals below the balance; the
-        // selector itself sits above the page tabs.
-        const SizedBox(height: 16),
-        // Horizontally scrollable so each card is wide enough to show its
-        // amount on one line, however large the number. The height follows
-        // the system font scale — fixed 88dp clips at "Large" text size.
-        SizedBox(
-          height: MediaQuery.textScalerOf(context).scale(88),
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.zero,
-            children: [
+          child: _BalanceCard(
+            finance: finance,
+            stats: [
               // Year-view taps open the whole year's rows (_openYear).
-              if (!hideIncome) ...[
-                _StatCard(
+              if (!hideIncome)
+                _StatColumn(
                   label: 'Income',
                   value: _yearMode
                       ? finance.incomeInYear(year, startMonth: sm)
@@ -1078,9 +1139,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ? null
                       : () => widget.onViewTransactions!(TxType.income, _month),
                 ),
-                const SizedBox(width: 12),
-              ],
-              _StatCard(
+              _StatColumn(
                 label: 'Spent',
                 value: monthExpense,
                 icon: Icons.arrow_upward,
@@ -1100,12 +1159,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ? null
                     : () => widget.onViewTransactions!(TxType.expense, _month),
               ),
-              const SizedBox(width: 12),
               // Savings outflow — the DISPLAY figure, which keeps reporting
               // even when the user un-transferred the savings category (the
               // money then also sits inside Spent; the balance math uses the
               // gated figure separately).
-              _StatCard(
+              _StatColumn(
                 label: 'Saved',
                 value: _yearMode
                     ? finance.savingsOutflowInYear(year, startMonth: sm)
@@ -1149,43 +1207,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           summary: null,
           tip: null,
           body: () => [
-            // Monthly budget progress — only when a cap is set. Uses the selected
-            // month's spend so browsing past months shows their usage too.
             Builder(
               key: const ValueKey('presence-monthly-budget'),
-              builder: (context) {
-                final budget = context.select<SettingsProvider, double>(
-                  (s) => s.monthlyBudget,
-                );
-                // Hiding an Upcoming row changes the bills safe to spend sets
-                // aside.
-                context.select<SettingsProvider, String>(
-                  (s) => hiddenListKey(s.hiddenUpcoming),
-                );
-                final now = DateTime.now();
-                // About today, so only under this month's figures.
-                final safe =
-                    budget <= 0 || _month != DateTime(now.year, now.month)
-                    ? null
-                    : computeSafeToSpend(
-                        finance,
-                        cap: budget,
-                        patterns: _patterns(finance, now),
-                        hidden: context.read<SettingsProvider>().hiddenUpcoming,
-                        now: now,
-                      );
-                return AnimatedPresence(
-                  visible: budget > 0 && !_yearMode,
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 16),
-                    child: _BudgetCard(
-                      spent: finance.budgetSpentInMonth(_month),
-                      cap: budget,
-                      safe: safe,
-                    ),
-                  ),
-                );
-              },
+              builder: (context) => _monthPlanSlot(
+                context,
+                finance,
+                DashboardSection.monthlyBudget,
+              ),
             ),
           ],
         ),
@@ -1195,41 +1223,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
           summary: null,
           tip: null,
           body: () => [
-            // Where this month is heading, so only under this month's
-            // figures. Shows without a monthly cap too.
             Builder(
               key: const ValueKey('presence-month-forecast'),
-              builder: (context) {
-                final budget = context.select<SettingsProvider, double>(
-                  (s) => s.monthlyBudget,
-                );
-                // Hiding an Upcoming row changes the bills it counts.
-                context.select<SettingsProvider, String>(
-                  (s) => hiddenListKey(s.hiddenUpcoming),
-                );
-                final now = DateTime.now();
-                final forecast =
-                    _yearMode || _month != DateTime(now.year, now.month)
-                    ? null
-                    : computeMonthForecast(
-                        finance,
-                        patterns: _patterns(finance, now),
-                        hidden: context.read<SettingsProvider>().hiddenUpcoming,
-                        now: now,
-                        cap: budget,
-                      );
-                // Nothing spent, due or usual: no forecast worth a card.
-                final showing = forecast != null && forecast.total > 0;
-                return AnimatedPresence(
-                  visible: showing,
-                  child: !showing
-                      ? const SizedBox.shrink()
-                      : Padding(
-                          padding: const EdgeInsets.only(top: 16),
-                          child: _ForecastCard(forecast: forecast),
-                        ),
-                );
-              },
+              builder: (context) =>
+                  _monthPlanSlot(context, finance, DashboardSection.forecast),
             ),
           ],
         ),
@@ -1264,7 +1261,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   child: !showing
                       ? const SizedBox.shrink()
                       : Padding(
-                          padding: const EdgeInsets.only(top: 16),
+                          padding: const EdgeInsets.only(top: AppSpace.gap),
                           child: MonthlyRecapCard(
                             recap: recap,
                             onViewCategory: widget.onViewCategory,
@@ -1295,9 +1292,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           summary: null,
           tip: null,
           body: () => [
-            // Custom spend limits, one compact progress row each — full ring
-            // cards would dominate the page with several budgets. Budgets are
-            // monthly, so the Year view skips them.
+            // Custom spend limits, each a ring like the monthly budget's, two
+            // to a row in one card. Budgets are monthly, so the Year view
+            // skips them.
             // The sections the Year view drops fold away (and back) rather than
             // popping, so the switch reads as one change.
             AnimatedPresence(
@@ -1306,34 +1303,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SizedBox(height: 24),
-                  const _SectionHeading(
+                  const SectionLabel(
                     'Budgets',
-                    tip:
-                        '"Only these" budgets count the picked categories; "All '
-                        'except" budgets count everything else. Same colours as the '
-                        'monthly budget.',
-                    link: InfoLink(
-                      prompt: 'Need another limit?',
-                      label: 'Add or edit budgets',
-                      onTap: goCockpitBudgets,
+                    tip: InfoTip(
+                      title: 'Budgets',
+                      message:
+                          '"Only these" budgets count the picked categories; '
+                          '"All except" budgets count everything else. Same '
+                          'colours as the monthly budget. Tap a ring for its '
+                          'categories, trend and transactions.',
+                      link: InfoLink(
+                        prompt: 'Need another limit?',
+                        label: 'Add or edit budgets',
+                        onTap: goCockpitBudgets,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Card(
+                  FrostedPanel(
+                    radius: BorderRadius.circular(AppRadius.card),
                     child: Padding(
-                      // all(16): the dashboard's section cards had six different
-                      // inner paddings — edges never lined up while scrolling.
-                      padding: const EdgeInsets.all(16),
-                      child: Column(
-                        children: [
+                      padding: const EdgeInsets.all(AppSpace.card - 4),
+                      child: _BudgetRingGrid(
+                        budgets: [
                           for (final b in finance.budgets)
-                            _SpendBudgetRow(
+                            (
                               name: b.name,
                               spent: finance.budgetSpentFor(b, _month),
                               limit: b.limit,
-                              // Detail sheet (ring + pie + trend); the transactions
-                              // deep-link lives on a button inside it.
+                              // Detail sheet (ring + pie + trend); the
+                              // transactions deep-link lives on a button
+                              // inside it.
                               onTap: () => showBudgetDetailSheet(
                                 context,
                                 b,
@@ -1603,7 +1602,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppSpace.card),
                 child: Column(
                   children: [
                     MonthlyBarChart(
@@ -1667,7 +1666,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppSpace.card),
                 child: CategoryDonutChart(
                   data: byCategory,
                   emptyText: _yearMode
@@ -1704,7 +1703,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppSpace.card),
                 child: ShowAllList(
                   key: ValueKey('categories-$listKey'),
                   noun: 'categories',
@@ -1766,7 +1765,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppSpace.card),
                 child: ShowAllList(
                   key: ValueKey('tags-$listKey'),
                   noun: 'tags',
@@ -1821,7 +1820,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppSpace.card),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -1941,7 +1940,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   borderRadius: BorderRadius.circular(AppRadius.card),
                   onTap: () => goCockpitSubscriptions(context),
                   child: Padding(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.all(AppSpace.card),
                     child: Row(
                       children: [
                         Icon(
@@ -2019,7 +2018,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppSpace.card),
                 child: ShowAllList(
                   key: ValueKey('groups-$listKey'),
                   noun: 'groups',
@@ -2060,7 +2059,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             Card(
               child: Padding(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppSpace.card),
                 child: SpendingHeatmap(month: _month, bills: bills),
               ),
             ),
@@ -2091,7 +2090,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: Padding(
                 // all(16): the dashboard's section cards had six different
                 // inner paddings — edges never lined up while scrolling.
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(AppSpace.card),
                 child: Column(
                   children: [
                     BreakdownRow(
@@ -2133,25 +2132,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return _page(DashboardPage.breakdown, const [], sections, fold: true);
     }
 
+    // One selector for all three pages, in Home's app bar: it scopes every
+    // page, so it stays put while the pages slide under it.
+    _publishHeader(finance, latestMonth);
     return Column(
       children: [
-        // One selector for all three pages, above their tabs: it scopes
-        // every page, so it stays put while the pages slide under it.
-        // 12dp sides, not the pages' 16: with the PDF button in both views
-        // the row needs the room at 320dp and double text size.
         Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-          child: _monthSelector(context, finance, latestMonth),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-          child: GlassSegmented<DashboardView>(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+          child: UnderlineTabs<DashboardView>(
             options: [for (final v in DashboardView.values) (v, v.label)],
-            icons: const [
-              Icons.space_dashboard_outlined,
-              Icons.show_chart,
-              Icons.pie_chart_outline,
-            ],
             selected: _view,
             onChanged: _setView,
             pager: _pageCtrl,
@@ -2193,7 +2182,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   color: Colors.transparent,
                   child: Builder(
                     builder: (context) => ListView(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.all(AppSpace.card),
                       // Sections can be moved down the page, and the recap
                       // notification scrolls to the recap (Overview) or the
                       // pace (Trends), a home-screen widget to its section:
@@ -2230,13 +2219,13 @@ class _OwedCard extends StatelessWidget {
       if (owing.length > 2) '+${owing.length - 2} more',
     ].join(' · ');
     return Padding(
-      padding: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.only(top: AppSpace.gap),
       child: Card(
         child: InkWell(
           borderRadius: BorderRadius.circular(AppRadius.card),
           onTap: () => goPeople(context),
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(AppSpace.card),
             child: Row(
               children: [
                 Icon(Icons.group, size: 20, color: scheme.primary),
@@ -2381,24 +2370,22 @@ class _UpcomingCard extends StatelessWidget {
     // The gap lives here, not at the call site: an empty card renders
     // nothing, and must not leave its gap behind.
     return Padding(
-      padding: const EdgeInsets.only(top: 16),
+      padding: const EdgeInsets.only(top: 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Tappable header: the card can dominate the top of the dashboard,
-          // so it folds to this row (persisted per device).
+          // so it folds to this row (persisted per device). Styled like the
+          // other section labels.
           InkWell(
             borderRadius: BorderRadius.circular(AppRadius.control),
             onTap: () =>
                 context.read<SettingsProvider>().toggleSection('upcoming'),
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.fromLTRB(4, 4, 0, 4),
               child: Row(
                 children: [
-                  Text(
-                    'Upcoming',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
+                  Text('Upcoming', style: SectionLabel.style(context)),
                   const SizedBox(width: 8),
                   // Static in both states. Fading the count in step with the
                   // fold rendered its glyphs in two halves on Impeller, so the
@@ -2411,23 +2398,25 @@ class _UpcomingCard extends StatelessWidget {
                   ),
                   // A direct child of the header row, beside the count: the
                   // row's own tap folds the card, the tip's tap stays its own.
-                  const InfoTip(
-                    title: 'Upcoming',
-                    message:
-                        'Card bills, your reminders from a week before to a '
-                        'week after their due day, and payments the app '
-                        'spotted repeating (from SMS or your notes), '
-                        'including regular income. A repeat is spotted after 3 '
-                        'payments to the same merchant about a month apart. '
-                        'Card icons: green not billed or paid, orange billed, '
-                        'red due within 5 days or overdue. Long-press a '
-                        'spotted payment to hide it.',
-                    link: InfoLink(
-                      prompt: 'A bill the app cannot detect?',
-                      label: 'Add a reminder',
-                      onTap: goNewReminder,
+                  // Only while open: a folded header stays quiet.
+                  if (!collapsed)
+                    const InfoTip(
+                      title: 'Upcoming',
+                      message:
+                          'Card bills, your reminders from a week before to a '
+                          'week after their due day, and payments the app '
+                          'spotted repeating (from SMS or your notes), '
+                          'including regular income. A repeat is spotted after 3 '
+                          'payments to the same merchant about a month apart. '
+                          'Card icons: green not billed or paid, orange billed, '
+                          'red due within 5 days or overdue. Long-press a '
+                          'spotted payment to hide it.',
+                      link: InfoLink(
+                        prompt: 'A bill the app cannot detect?',
+                        label: 'Add a reminder',
+                        onTap: goNewReminder,
+                      ),
                     ),
-                  ),
                   const Spacer(),
                   IconButton(
                     tooltip: 'Add reminder',
@@ -2458,106 +2447,130 @@ class _UpcomingCard extends StatelessWidget {
           AnimatedFold(
             collapsed: collapsed,
             child: Column(
+              // Full width, like the cards around it, even holding one line.
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SizedBox(height: 8),
+                const SizedBox(height: 4),
                 Card(
+                  margin: EdgeInsets.zero,
                   child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      children: [
-                        if (entries.isEmpty)
-                          Text(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: AppSpace.card,
+                      // One quiet line when nothing is due.
+                      vertical: entries.isEmpty ? 12 : 8,
+                    ),
+                    child: entries.isEmpty
+                        ? Text(
                             'Nothing due soon.',
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(color: scheme.onSurfaceVariant),
-                          ),
-                        for (final e in entries.take(6))
-                          InkWell(
-                            borderRadius: BorderRadius.circular(
-                              AppRadius.control,
-                            ),
-                            // Manual reminders: tap for mark paid / edit /
-                            // delete. Card bills: mark paid / record payment.
-                            onTap: e.reminder != null
-                                ? () => _showReminderActions(
-                                    context,
-                                    e.reminder!,
-                                    e.due,
-                                  )
-                                : e.card != null
-                                ? () => _showCardBillActions(context, e.card!)
-                                : null,
-                            // Detected patterns can be wrong — long-press hides one.
-                            // Card bills aren't hideable; clear the card's due day
-                            // instead.
-                            onLongPress: e.hideKey == null
-                                ? null
-                                : () => _confirmHide(
-                                    context,
-                                    e.label,
-                                    e.hideKey!,
+                          )
+                        // Six, then Show all: the rest used to be cut off.
+                        : ShowAllList(
+                            noun: 'upcoming',
+                            shown: 6,
+                            rows: [
+                              for (final e in entries)
+                                InkWell(
+                                  borderRadius: BorderRadius.circular(
+                                    AppRadius.control,
                                   ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 6),
-                              child: Row(
-                                children: [
-                                  // The icon keeps its color even on muted
-                                  // rows — for card bills the color itself
-                                  // carries the state (green/orange/red).
-                                  Icon(e.icon, size: 20, color: e.color),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
+                                  // Manual reminders: tap for mark paid / edit /
+                                  // delete. Card bills: mark paid / record payment.
+                                  onTap: e.reminder != null
+                                      ? () => _showReminderActions(
+                                          context,
+                                          e.reminder!,
+                                          e.due,
+                                        )
+                                      : e.card != null
+                                      ? () => _showCardBillActions(
+                                          context,
+                                          e.card!,
+                                        )
+                                      : null,
+                                  // Detected patterns can be wrong — long-press hides one.
+                                  // Card bills aren't hideable; clear the card's due day
+                                  // instead.
+                                  onLongPress: e.hideKey == null
+                                      ? null
+                                      : () => _confirmHide(
+                                          context,
                                           e.label,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
+                                          e.hideKey!,
                                         ),
-                                        Text(
-                                          e.sub,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .bodySmall
-                                              ?.copyWith(
-                                                color: e.urgent
-                                                    ? scheme.error
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 6,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        // The icon keeps its color even on muted
+                                        // rows — for card bills the color itself
+                                        // carries the state (green/orange/red).
+                                        Icon(e.icon, size: 20, color: e.color),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                e.label,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              // Urgent: a red dot, the text plain.
+                                              Row(
+                                                children: [
+                                                  if (e.urgent) ...[
+                                                    StatusDot(
+                                                      color: scheme.error,
+                                                    ),
+                                                    const SizedBox(width: 6),
+                                                  ],
+                                                  Expanded(
+                                                    child: Text(
+                                                      e.sub,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: Theme.of(
+                                                        context,
+                                                      ).textTheme.bodySmall,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        ConstrainedBox(
+                                          constraints: const BoxConstraints(
+                                            maxWidth: 120,
+                                          ),
+                                          child: FittedBox(
+                                            fit: BoxFit.scaleDown,
+                                            child: Text(
+                                              e.amount == null
+                                                  ? ''
+                                                  : fmtMoney(e.amount!),
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                                color: e.muted
+                                                    ? scheme.onSurfaceVariant
                                                     : null,
                                               ),
+                                            ),
+                                          ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  ConstrainedBox(
-                                    constraints: const BoxConstraints(
-                                      maxWidth: 120,
-                                    ),
-                                    child: FittedBox(
-                                      fit: BoxFit.scaleDown,
-                                      child: Text(
-                                        e.amount == null
-                                            ? ''
-                                            : fmtMoney(e.amount!),
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          color: e.muted
-                                              ? scheme.onSurfaceVariant
-                                              : null,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                                ),
+                            ],
                           ),
-                      ],
-                    ),
                   ),
                 ),
               ],
@@ -2891,7 +2904,11 @@ class _UpcomingCard extends StatelessWidget {
 
 class _BalanceCard extends StatelessWidget {
   final FinanceProvider finance;
-  const _BalanceCard({required this.finance});
+
+  /// The month's (or year's) Income, Spent and Saved, as columns under the
+  /// balance; each opens its own rows.
+  final List<_StatColumn> stats;
+  const _BalanceCard({required this.finance, required this.stats});
 
   /// With accounts, the headline is the bank-stated net worth — ledger
   /// arithmetic (income − expense) is unreliable when the SMS history has no
@@ -2902,88 +2919,204 @@ class _BalanceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // Neutral frosted panel with the amount as the neon accent — same
-    // material as the segmented filter bar. InkWell, not GestureDetector:
-    // the card is a button and should ripple and read as one to a11y.
+    // The balance half is a button (ripple, one a11y node) opening the
+    // breakdown; each stat column below is its own button.
     return FrostedPanel(
-      radius: BorderRadius.circular(24),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(24),
-        onTap: () => showBalanceBreakdownSheet(context, finance),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: InfoLabel(
-                        label: Text(
-                          _useAccounts ? 'Net balance' : 'Available balance',
-                          style: TextStyle(color: scheme.onSurfaceVariant),
-                        ),
-                        tip: _useAccounts
-                            ? InfoTip(
-                                title: 'Net balance',
-                                message:
-                                    'Bank balances minus what you owe on '
-                                    'credit cards. Savings, wallet and '
-                                    'closed accounts are left out. A card '
-                                    'with no '
-                                    'known outstanding counts as zero.',
-                                // The balance breakdown sheet's own figures.
-                                example: () =>
-                                    'Now: ${fmtMoney(finance.bankBalanceTotal)} '
-                                    'in banks − '
-                                    '${fmtMoney(finance.cardOutstandingTotal)} '
-                                    'on cards = ${fmtMoney(finance.netWorth)}',
-                                link: const InfoLink(
-                                  prompt: 'A card missing its credit limit?',
-                                  label: 'Open accounts',
-                                  onTap: goAccounts,
-                                ),
-                              )
-                            : InfoTip(
-                                title: 'Available balance',
-                                message:
-                                    'All income minus all spending and money '
-                                    'moved to savings, since your first '
-                                    'transaction.',
-                                example: () {
-                                  if (!finance.hasTransactions) return null;
-                                  // Masked like the breakdown sheet's
-                                  // income row when income is hidden.
-                                  final hide = context
-                                      .read<SettingsProvider>()
-                                      .hideIncome;
-                                  final saved = finance.totalSavingsTransfers;
-                                  return '${hide ? kMaskedAmount : fmtMoney(finance.totalIncome)} in'
-                                      ' − ${fmtMoney(finance.totalExpense)} out'
-                                      '${saved > 0 ? ' − ${fmtMoney(saved)} to savings' : ''}'
-                                      ' = ${fmtMoney(finance.balance)}';
-                                },
-                              ),
-                      ),
-                    ),
-                  ),
-                  Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
-                ],
+      radius: BorderRadius.circular(AppRadius.card),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          InkWell(
+            onTap: () => showBalanceBreakdownSheet(context, finance),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpace.card,
+                AppSpace.card,
+                AppSpace.card,
+                AppSpace.card,
               ),
-              const SizedBox(height: 6),
-              // Morphs in place when the figure changes (edit, import, sync).
-              MorphingAmount(
-                value: _useAccounts ? finance.netWorth : finance.balance,
-                style: TextStyle(
-                  color: accentTextColor(context),
-                  fontSize: 34,
-                  fontWeight: FontWeight.w800,
+              child: _balance(context, scheme),
+            ),
+          ),
+          Divider(
+            height: 1,
+            indent: AppSpace.card,
+            endIndent: AppSpace.card,
+            color: scheme.outlineVariant,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: LayoutBuilder(
+              // Side by side, each a third (a half with Hide income), down to
+              // a 320dp phone; narrower or with large text they stack.
+              builder: (context, c) {
+                final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+                final across = c.maxWidth / stats.length >= 88 * scale;
+                return across
+                    ? Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [for (final s in stats) Expanded(child: s)],
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: stats,
+                      );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _balance(BuildContext context, ColorScheme scheme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: InfoLabel(
+                  label: Text(
+                    _useAccounts ? 'Net balance' : 'Available balance',
+                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  ),
+                  tip: _useAccounts
+                      ? InfoTip(
+                          title: 'Net balance',
+                          message:
+                              'Bank balances minus what you owe on '
+                              'credit cards. Savings, wallet and '
+                              'closed accounts are left out. A card '
+                              'with no '
+                              'known outstanding counts as zero.',
+                          // The balance breakdown sheet's own figures.
+                          example: () =>
+                              'Now: ${fmtMoney(finance.bankBalanceTotal)} '
+                              'in banks − '
+                              '${fmtMoney(finance.cardOutstandingTotal)} '
+                              'on cards = ${fmtMoney(finance.netWorth)}',
+                          link: const InfoLink(
+                            prompt: 'A card missing its credit limit?',
+                            label: 'Open accounts',
+                            onTap: goAccounts,
+                          ),
+                        )
+                      : InfoTip(
+                          title: 'Available balance',
+                          message:
+                              'All income minus all spending and money '
+                              'moved to savings, since your first '
+                              'transaction.',
+                          example: () {
+                            if (!finance.hasTransactions) return null;
+                            // Masked like the breakdown sheet's
+                            // income row when income is hidden.
+                            final hide = context
+                                .read<SettingsProvider>()
+                                .hideIncome;
+                            final saved = finance.totalSavingsTransfers;
+                            return '${hide ? kMaskedAmount : fmtMoney(finance.totalIncome)} in'
+                                ' − ${fmtMoney(finance.totalExpense)} out'
+                                '${saved > 0 ? ' − ${fmtMoney(saved)} to savings' : ''}'
+                                ' = ${fmtMoney(finance.balance)}';
+                          },
+                        ),
                 ),
               ),
-            ],
+            ),
+            Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+          ],
+        ),
+        const SizedBox(height: 2),
+        // Morphs in place when the figure changes (edit, import, sync).
+        // The text colour, not accent: colour sits on markers, not figures.
+        MorphingAmount(
+          value: _useAccounts ? finance.netWorth : finance.balance,
+          style: TextStyle(
+            color: scheme.onSurface,
+            fontSize: AppFigure.hero,
+            fontWeight: FontWeight.w700,
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One of the balance card's Income, Spent and Saved columns: a coloured
+/// marker icon, the label (its tip), and the figure in the text colour.
+/// The label opens the tip; the rest of the column opens the rows.
+class _StatColumn extends StatelessWidget {
+  final String label;
+  final double value;
+  final IconData icon;
+  final Color color;
+  final VoidCallback? onTap;
+
+  /// What the figure counts, behind the dotted label.
+  final String tip;
+  final InfoLink? link;
+
+  const _StatColumn({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.color,
+    required this.tip,
+    this.onTap,
+    this.link,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.control),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 8, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 14, color: color),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: TipTitle(
+                    label: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    tip: InfoTip(title: label, message: tip, link: link),
+                  ),
+                ),
+              ],
+            ),
+            // Plain text, no increment animation: animating on month change
+            // made the figures visibly "roll", which read as glitchy.
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                fmtMoney(value),
+                maxLines: 1,
+                // Shrinks to fit a third of the card rather than wrapping.
+                style: TextStyle(
+                  fontSize: AppFigure.card,
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurface,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -2998,145 +3131,198 @@ class _BudgetCard extends StatelessWidget {
 
   /// This month's safe to spend today; null under any other month.
   final SafeToSpend? safe;
-  const _BudgetCard({required this.spent, required this.cap, this.safe});
+
+  /// The month-end forecast, when it shares this card (see
+  /// [_DashboardScreenState._monthPlanSlot]): its rows follow a hairline.
+  final MonthForecast? forecast;
+
+  const _BudgetCard({
+    required this.spent,
+    required this.cap,
+    this.safe,
+    this.forecast,
+  });
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final f = forecast;
+    return FrostedPanel(
+      radius: BorderRadius.circular(AppRadius.card),
+      child: Padding(
+        padding: const EdgeInsets.all(AppSpace.card),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _budget(context, scheme),
+            if (f != null) ...[
+              const SizedBox(height: 12),
+              Divider(height: 1, color: scheme.outlineVariant),
+              const SizedBox(height: 8),
+              _ForecastBody(forecast: f),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _budget(BuildContext context, ColorScheme scheme) {
     final pct = cap <= 0 ? 0.0 : (spent / cap);
     final over = spent > cap;
     final color = budgetColor(context, pct);
     final remaining = cap - spent;
-
-    return FrostedPanel(
-      radius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Row(
-          children: [
-            // Ring sweeps to the usage fraction while the centre % counts up
-            // in sync. Passing the true fraction (may exceed 1) lets the
-            // label keep climbing past 100% while the arc stays full.
-            RingProgress(
-              value: pct,
-              color: color,
-              // 15% was invisible on the light surface — an empty ring read
-              // as "no track at all" at low spend.
-              trackColor: color.withValues(alpha: 0.3),
-              labelStyle: TextStyle(
-                color: color,
-                fontWeight: FontWeight.w800,
-                fontSize: 15,
-              ),
-            ),
-            const SizedBox(width: 18),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
+      children: [
+        // Ring sweeps to the usage fraction while the centre % counts up
+        // in sync. Passing the true fraction (may exceed 1) lets the
+        // label keep climbing past 100% while the arc stays full.
+        RingProgress(
+          value: pct,
+          color: color,
+          size: 64,
+          strokeWidth: 8,
+          // 15% was invisible on the light surface — an empty ring read
+          // as "no track at all" at low spend.
+          trackColor: color.withValues(alpha: 0.3),
+          // The ring carries the colour; its label is plain text.
+          labelStyle: TextStyle(
+            color: scheme.onSurface,
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.account_balance_wallet_outlined,
-                        size: 18,
-                        color: scheme.onSurfaceVariant,
+                  Icon(
+                    Icons.account_balance_wallet_outlined,
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: InfoLabel(
+                      label: Text(
+                        'Monthly budget',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: scheme.onSurfaceVariant),
                       ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: InfoLabel(
-                          label: Text(
-                            'Monthly budget',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: scheme.onSurfaceVariant),
-                          ),
-                          tip: InfoTip(
-                            title: 'Monthly budget',
-                            message:
-                                'Spending against the monthly cap set in '
-                                'Cockpit, Plan, Budgets. Green below 80%, orange '
-                                'from 80%, red above 95%. The ring stays full '
-                                'past 100% while the percentage keeps '
-                                'counting. Safe to spend today sets aside the '
-                                'bills still due this month (not card bills or '
-                                'transfers) and spreads the rest over the days '
-                                'left.',
-                            // Rounded the way the ring's centre label is.
-                            example: () {
-                              final line =
-                                  '${fmtMoney(spent)} of ${fmtMoney(cap)} = '
-                                  '${(pct * 100).round()}%';
-                              final s = safe;
-                              if (s == null || over || s.overCap) return line;
-                              final left =
-                                  cap - s.spentBeforeToday - s.billsDue;
-                              return '$line\n\nSafe to spend today: '
-                                  '${fmtMoney(cap)} − '
-                                  '${fmtMoney(s.spentBeforeToday)} spent − '
-                                  '${fmtMoney(s.billsDue)} bills due = '
-                                  '${fmtMoney(left)} over ${s.daysLeft} '
-                                  '${s.daysLeft == 1 ? 'day' : 'days'} = '
-                                  '${fmtMoney(s.dailyAllowance)} a day'
-                                  '${s.spentToday > 0 ? ', less ${fmtMoney(s.spentToday)} spent today' : ''}.';
-                            },
-                            link: const InfoLink(
-                              prompt: 'Want a different cap?',
-                              label: 'Change the monthly cap',
-                              onTap: goCockpitBudgets,
-                            ),
-                          ),
+                      tip: InfoTip(
+                        title: 'Monthly budget',
+                        message:
+                            'Spending against the monthly cap set in '
+                            'Cockpit, Plan, Budgets. Green below 80%, orange '
+                            'from 80%, red above 95%. The ring stays full '
+                            'past 100% while the percentage keeps '
+                            'counting. Safe to spend today sets aside the '
+                            'bills still due this month (not card bills or '
+                            'transfers) and spreads the rest over the days '
+                            'left.',
+                        // Rounded the way the ring's centre label is.
+                        example: () {
+                          final line =
+                              '${fmtMoney(spent)} of ${fmtMoney(cap)} = '
+                              '${(pct * 100).round()}%';
+                          final s = safe;
+                          if (s == null || over || s.overCap) return line;
+                          final left = cap - s.spentBeforeToday - s.billsDue;
+                          return '$line\n\nSafe to spend today: '
+                              '${fmtMoney(cap)} − '
+                              '${fmtMoney(s.spentBeforeToday)} spent − '
+                              '${fmtMoney(s.billsDue)} bills due = '
+                              '${fmtMoney(left)} over ${s.daysLeft} '
+                              '${s.daysLeft == 1 ? 'day' : 'days'} = '
+                              '${fmtMoney(s.dailyAllowance)} a day'
+                              '${s.spentToday > 0 ? ', less ${fmtMoney(s.spentToday)} spent today' : ''}.';
+                        },
+                        link: const InfoLink(
+                          prompt: 'Want a different cap?',
+                          label: 'Change the monthly cap',
+                          onTap: goCockpitBudgets,
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  // Compact figures keep this readable even at 1000%+ overshoot.
-                  Text(
-                    '${fmtMoneyCompact(spent)} spent of ${fmtMoneyCompact(cap)}',
-                    style: TextStyle(color: scheme.onSurfaceVariant),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    over
-                        ? '${fmtMoneyCompact(-remaining)} over'
-                        : '${fmtMoneyCompact(remaining)} left',
-                    style: TextStyle(color: color, fontWeight: FontWeight.w700),
-                  ),
-                  // Over the cap, the line above says it all; bills due
-                  // that eat the rest read as nothing left today.
-                  if (safe != null && !over) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      safe!.overCap
-                          // Confirmed spend is under the cap, but not with
-                          // the alerts still waiting for review.
-                          ? 'Over budget with rows to review'
-                          : safe!.leftToday >= 1
-                          ? '${fmtMoneyCompact(safe!.leftToday)} safe to '
-                                'spend today'
-                          : 'Nothing left to spend today',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
-                  ],
+                  ),
                 ],
               ),
-            ),
-          ],
+              const SizedBox(height: 4),
+              // Compact figures keep this readable even at 1000%+
+              // overshoot. Plain text; the ring says green, amber or red.
+              Text(
+                over
+                    ? '${fmtMoneyCompact(-remaining)} over '
+                          '${fmtMoneyCompact(cap)}'
+                    : '${fmtMoneyCompact(remaining)} left of '
+                          '${fmtMoneyCompact(cap)}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: scheme.onSurface,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                '${fmtMoneyCompact(spent)} spent of ${fmtMoneyCompact(cap)}',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+                overflow: TextOverflow.ellipsis,
+              ),
+              // Over the cap, the line above says it all; bills due
+              // that eat the rest read as nothing left today.
+              if (safe != null && !over) ...[
+                const SizedBox(height: 2),
+                Text(
+                  safe!.overCap
+                      // Confirmed spend is under the cap, but not with
+                      // the alerts still waiting for review.
+                      ? 'Over budget with rows to review'
+                      : safe!.leftToday >= 1
+                      ? '${fmtMoneyCompact(safe!.leftToday)} safe to '
+                            'spend today'
+                      : 'Nothing left to spend today',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                ),
+              ],
+            ],
+          ),
         ),
-      ),
+      ],
     );
   }
 }
 
 /// Where this month is heading: spent so far, the bills still due and
 /// everyday spending for the days left, against the monthly cap when one
-/// is set ([computeMonthForecast]).
+/// is set ([computeMonthForecast]). Its own card when the monthly budget
+/// card does not hold it.
 class _ForecastCard extends StatelessWidget {
   final MonthForecast forecast;
   const _ForecastCard({required this.forecast});
+
+  @override
+  Widget build(BuildContext context) => FrostedPanel(
+    radius: BorderRadius.circular(AppRadius.card),
+    child: Padding(
+      padding: const EdgeInsets.all(AppSpace.card),
+      child: _ForecastBody(forecast: forecast),
+    ),
+  );
+}
+
+/// The forecast's heading, headline and rows, for [_ForecastCard] or for
+/// the monthly budget card's lower half.
+class _ForecastBody extends StatelessWidget {
+  final MonthForecast forecast;
+  const _ForecastBody({required this.forecast});
 
   @override
   Widget build(BuildContext context) {
@@ -3229,107 +3415,106 @@ class _ForecastCard extends StatelessWidget {
       );
     }
 
-    return FrostedPanel(
-      radius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            Row(
-              children: [
-                Icon(
-                  Icons.trending_up,
-                  size: 18,
-                  color: scheme.onSurfaceVariant,
+            Icon(Icons.trending_up, size: 18, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Flexible(
+              child: InfoLabel(
+                label: Text(
+                  'Month-end forecast',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: muted,
                 ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: InfoLabel(
-                    label: Text(
-                      'Month-end forecast',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: muted,
-                    ),
-                    tip: InfoTip(
-                      title: 'Month-end forecast',
-                      message:
-                          'Spent so far, including alerts still to review, '
-                          'plus the bills still unpaid (due by the month '
-                          'end, or up to a week overdue; not card bills or '
-                          'transfers), plus what you usually spend on the '
-                          'days left, leaving bills out. Usual is the middle '
-                          'of your last complete months (the lower, with '
-                          'only two); with fewer than '
-                          'two, this month\'s own pace once $kMinDaysOfData '
-                          'of its days are on record.',
-                      example: () {
-                        final parts = [
-                          '${fmtMoney(f.spentSoFar)} spent',
-                          if (f.billsDue > 0)
-                            '${fmtMoney(f.billsDue)} bills due',
-                          if (showEveryday)
-                            '${fmtMoney(f.everyday)} everyday (about '
-                                '$perDay a day for $days)',
-                        ];
-                        return '${parts.join(' + ')} = ${fmtMoney(f.total)}';
-                      },
-                    ),
-                  ),
+                tip: InfoTip(
+                  title: 'Month-end forecast',
+                  message:
+                      'Spent so far, including alerts still to review, '
+                      'plus the bills still unpaid (due by the month '
+                      'end, or up to a week overdue; not card bills or '
+                      'transfers), plus what you usually spend on the '
+                      'days left, leaving bills out. Usual is the middle '
+                      'of your last complete months (the lower, with '
+                      'only two); with fewer than '
+                      'two, this month\'s own pace once $kMinDaysOfData '
+                      'of its days are on record.',
+                  example: () {
+                    final parts = [
+                      '${fmtMoney(f.spentSoFar)} spent',
+                      if (f.billsDue > 0) '${fmtMoney(f.billsDue)} bills due',
+                      if (showEveryday)
+                        '${fmtMoney(f.everyday)} everyday (about '
+                            '$perDay a day for $days)',
+                    ];
+                    return '${parts.join(' + ')} = ${fmtMoney(f.total)}';
+                  },
                 ),
-              ],
+              ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              f.basis == EverydayBasis.none
-                  ? 'At least ${fmtMoneyCompact(f.total)} by $by'
-                  : 'About ${fmtMoneyCompact(f.total)} by $by',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 4),
-            row('Spent so far', f.spentSoFar),
-            if (f.billsDue > 0)
-              row(
-                'Bills due (${f.bills.length})',
-                f.billsDue,
-                onTap: () => _showForecastBills(context, f),
-              ),
-            if (showEveryday)
-              row('Everyday spending', f.everyday, detail: everydayHow),
-            if (under != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                under >= 0
-                    ? '${fmtMoneyCompact(under)} under your '
-                          '${fmtMoneyCompact(f.cap!)} budget'
-                    : '${fmtMoneyCompact(-under)} over your '
-                          '${fmtMoneyCompact(f.cap!)} budget',
-                style: TextStyle(
-                  color: under >= 0
-                      ? AppColors.of(context).green
-                      : scheme.error,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-            if (f.basis == EverydayBasis.none && f.daysAfterToday > 0) ...[
-              const SizedBox(height: 6),
-              Text(
-                'Everyday spending joins once two complete months, or '
-                '$kMinDaysOfData days of this one, are on record.',
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-              ),
-            ],
           ],
         ),
-      ),
+        const SizedBox(height: 8),
+        Text(
+          f.basis == EverydayBasis.none
+              ? 'At least ${fmtMoneyCompact(f.total)} by $by'
+              : 'About ${fmtMoneyCompact(f.total)} by $by',
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 4),
+        row('Spent so far', f.spentSoFar),
+        if (f.billsDue > 0)
+          row(
+            'Bills due (${f.bills.length})',
+            f.billsDue,
+            onTap: () => _showForecastBills(context, f),
+          ),
+        if (showEveryday)
+          row('Everyday spending', f.everyday, detail: everydayHow),
+        if (under != null) ...[
+          const SizedBox(height: 8),
+          // Plain text after a coloured dot: green under, red over.
+          Row(
+            children: [
+              StatusDot(
+                color: under >= 0 ? AppColors.of(context).green : scheme.error,
+                size: 8,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  under >= 0
+                      ? '${fmtMoneyCompact(under)} under your '
+                            '${fmtMoneyCompact(f.cap!)} budget'
+                      : '${fmtMoneyCompact(-under)} over your '
+                            '${fmtMoneyCompact(f.cap!)} budget',
+                  style: TextStyle(
+                    color: scheme.onSurface,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+        if (f.basis == EverydayBasis.none && f.daysAfterToday > 0) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Everyday spending joins once two complete months, or '
+            '$kMinDaysOfData days of this one, are on record.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -3595,96 +3780,50 @@ class _ForecastBillRow extends StatelessWidget {
   }
 }
 
-class _StatCard extends StatelessWidget {
-  final String label;
-  final double value;
-  final IconData icon;
-  final Color color;
-  final VoidCallback? onTap;
+/// The custom budgets, each a ring like the monthly budget's (same green,
+/// amber and red thresholds), two to a row; one to a row on a narrow screen
+/// or with large text. Each opens its detail sheet.
+class _BudgetRingGrid extends StatelessWidget {
+  final List<({String name, double spent, double limit, VoidCallback? onTap})>
+  budgets;
 
-  /// What the figure counts, behind the card's "i".
-  final String tip;
-  final InfoLink? link;
-
-  const _StatCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-    required this.tip,
-    this.onTap,
-    this.link,
-  });
+  const _BudgetRingGrid({required this.budgets});
 
   @override
   Widget build(BuildContext context) {
-    // The "i" sits in the card's top-right corner, over the padding, rather
-    // than in the label row: its 32dp target would make the row taller than
-    // the strip's 88dp height allows.
-    return Card(
-      child: InkWell(
-        onTap: onTap,
-        child: Stack(
+    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+    return LayoutBuilder(
+      builder: (context, c) {
+        final columns = c.maxWidth >= 280 && scale <= 1.6 ? 2 : 1;
+        final width = c.maxWidth / columns;
+        return Wrap(
           children: [
-            _body(context),
-            Positioned(
-              top: 6,
-              right: 0,
-              child: InfoTip(title: label, message: tip, link: link),
-            ),
+            for (final b in budgets)
+              SizedBox(
+                width: width,
+                child: _BudgetRing(
+                  name: b.name,
+                  spent: b.spent,
+                  limit: b.limit,
+                  onTap: b.onTap,
+                ),
+              ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _body(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(minWidth: 132),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 16, color: color),
-              const SizedBox(width: 6),
-              Text(label, style: Theme.of(context).textTheme.bodySmall),
-              // Keeps the label clear of the corner "i".
-              const SizedBox(width: 20),
-            ],
-          ),
-          const SizedBox(height: 8),
-          // Plain text — no increment animation. Animating on month change
-          // made the figures visibly "roll", which read as glitchy.
-          Text(
-            fmtMoney(value),
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: color,
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
 
-/// One compact progress row per custom budget: name, spent/limit, and a bar
-/// using the same green/orange/error thresholds as the monthly budget card.
-class _SpendBudgetRow extends StatelessWidget {
+/// One custom budget in [_BudgetRingGrid]: the ring with its percentage,
+/// the name, and what is left (or over) in plain text.
+class _BudgetRing extends StatelessWidget {
   final String name;
   final double spent;
   final double limit;
-
-  /// Opens Transactions filtered to this budget (wired at the call site so
-  /// the budget id needn't be threaded through).
   final VoidCallback? onTap;
 
-  const _SpendBudgetRow({
+  const _BudgetRing({
     required this.name,
     required this.spent,
     required this.limit,
@@ -3693,6 +3832,7 @@ class _SpendBudgetRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final pct = limit == 0 ? 0.0 : spent / limit;
     final over = spent > limit;
     final color = budgetColor(context, pct);
@@ -3700,56 +3840,59 @@ class _SpendBudgetRow extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(AppRadius.control),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            RingProgress(
+              value: pct,
+              color: color,
+              size: 60,
+              strokeWidth: 7,
+              trackColor: color.withValues(alpha: 0.3),
+              labelStyle: TextStyle(
+                color: scheme.onSurface,
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 2),
+            // Plain text; over the limit a red dot leads it.
             Row(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Expanded(
+                if (over) ...[
+                  StatusDot(color: scheme.error),
+                  const SizedBox(width: 6),
+                ],
+                Flexible(
                   child: Text(
-                    name,
+                    over
+                        ? '${fmtMoneyCompact(spent - limit)} over'
+                        : '${fmtMoneyCompact(limit - spent)} left',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Width-capped + scale-down: prevents overflow at large font
-                // scale without the trailing gap a loose Flexible leaves
-                // (which drifted the figure off the right edge).
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 150),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      '${fmtMoneyCompact(spent)} / ${fmtMoneyCompact(limit)}',
-                      style: TextStyle(
-                        fontWeight: FontWeight.w600,
-                        color: color,
-                      ),
-                    ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodySmall?.copyWith(color: scheme.onSurface),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 4),
-            AnimatedProgress(
-              value: pct,
-              minHeight: 6,
-              color: color,
-              // Visible track: 12% vanished on light surfaces, so a bar at 5%
-              // looked like an empty region.
-              backgroundColor: color.withValues(alpha: 0.25),
-            ),
-            const SizedBox(height: 2),
             Text(
-              over
-                  ? '${fmtMoneyCompact(spent - limit)} over'
-                  : '${fmtMoneyCompact(limit - spent)} left',
+              'of ${fmtMoneyCompact(limit)}',
+              maxLines: 1,
+              textAlign: TextAlign.center,
               style: Theme.of(
                 context,
-              ).textTheme.bodySmall?.copyWith(color: color),
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -3827,21 +3970,28 @@ class _CategoryRow extends StatelessWidget {
                       // drifts off the right edge (transaction-tile pattern).
                       // 180 fits "₹X / ₹Y" at full size; only a huge font
                       // still shrinks it.
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 180),
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            budgetLimit == null
-                                ? fmtMoney(amount)
-                                : '${fmtMoney(amount)} / '
-                                      '${fmtMoneyCompact(budgetLimit!)}',
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              color:
-                                  budgetLimit != null && amount > budgetLimit!
-                                  ? Theme.of(context).colorScheme.error
-                                  : null,
+                      // Over its budget: a red dot before the figure, which
+                      // stays in the text colour.
+                      if (budgetLimit != null && amount > budgetLimit!) ...[
+                        StatusDot(color: Theme.of(context).colorScheme.error),
+                        const SizedBox(width: 6),
+                      ],
+                      // Flexible too: at 320dp with large text the label,
+                      // share and a 180dp figure no longer fit, and the
+                      // figure must shrink rather than overflow.
+                      Flexible(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 180),
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              budgetLimit == null
+                                  ? fmtMoney(amount)
+                                  : '${fmtMoney(amount)} / '
+                                        '${fmtMoneyCompact(budgetLimit!)}',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
                           ),
                         ),
@@ -3863,25 +4013,6 @@ class _CategoryRow extends StatelessWidget {
       ),
     );
   }
-}
-
-/// A dashboard section's titleMedium heading with its "i" explaining it.
-/// The heading keeps a plain [Text] so finders by text still land on it.
-class _SectionHeading extends StatelessWidget {
-  final String title;
-  final String tip;
-  final InfoLink? link;
-
-  const _SectionHeading(this.title, {required this.tip, this.link});
-
-  @override
-  Widget build(BuildContext context) => Align(
-    alignment: Alignment.centerLeft,
-    child: InfoLabel(
-      label: Text(title, style: Theme.of(context).textTheme.titleMedium),
-      tip: InfoTip(title: title, message: tip, link: link),
-    ),
-  );
 }
 
 class _LegendDot extends StatelessWidget {

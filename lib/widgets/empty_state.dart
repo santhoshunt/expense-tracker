@@ -44,8 +44,10 @@ class EmptyState extends StatelessWidget {
         ),
       );
     }
+    // Scrolls when taller than its space (a long message at large text on a
+    // short phone), and stays centred when it fits.
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,

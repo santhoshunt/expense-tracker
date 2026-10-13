@@ -12,6 +12,8 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
 
+import 'dashboard_test_utils.dart';
+
 /// The Overview's Month-end forecast card and the empty-account hint.
 /// Amounts are made up.
 void main() {
@@ -165,10 +167,15 @@ void main() {
 
   testWidgets('the Year view drops it', (tester) async {
     final p = await ledger(1200);
-    await pump(tester, p, await settings(), const DashboardScreen());
+    // Year view is in the app bar's menu.
+    await pump(
+      tester,
+      p,
+      await settings(),
+      dashboardShell(const DashboardScreen()),
+    );
     expect(find.text('Month-end forecast'), findsOneWidget);
-    await tester.tap(find.text('Year'));
-    await tester.pumpAndSettle();
+    await toggleYearView(tester);
     expect(find.text('Month-end forecast'), findsNothing);
   });
 

@@ -7,6 +7,7 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
+import 'package:expense_tracker/widgets/info_tip.dart';
 
 /// The "i" tips on the Settings screen open their explanation bubble.
 void main() {
@@ -71,6 +72,51 @@ void main() {
     await tester.tap(find.text('Got it'));
     await pumpThrough(tester);
     expect(find.textContaining('The newest 7 backups are kept'), findsNothing);
+  });
+
+  testWidgets('a heading is its own tip; an action row keeps its "i"', (
+    tester,
+  ) async {
+    await pumpSettings(tester);
+    await openGroup(tester, 'Backup and data');
+
+    // The heading has no "i": its own text opens the bubble.
+    expect(
+      find.descendant(
+        of: find.byType(TipTitle),
+        matching: find.text('Cloud backup'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Cloud backup'));
+    await pumpThrough(tester);
+    expect(
+      find.textContaining('The newest 7 backups are kept'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Got it'));
+    await pumpThrough(tester);
+
+    // Export… opens the export picker on a tap, so its label stays plain
+    // and the "i" beside it holds the tip.
+    await tester.scrollUntilVisible(
+      find.text('Export…'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pump();
+    final exportRow = find.ancestor(
+      of: find.text('Export…'),
+      matching: find.byType(ListTile),
+    );
+    expect(
+      find.descendant(of: exportRow, matching: find.byType(TipTitle)),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: exportRow, matching: find.byIcon(Icons.info_outline)),
+      findsOneWidget,
+    );
   });
 
   testWidgets('App lock tip opens without toggling the lock', (tester) async {

@@ -104,8 +104,8 @@ BoxDecoration _edgeLight(ColorScheme scheme, double radius) => BoxDecoration(
   ],
 );
 
-/// Primary-action pill — the app's FAB. Styled like [GlassSegmented]'s
-/// thumb (quiet fill, accent edge light) rather than a solid accent fill,
+/// Primary-action pill — the app's FAB. A quiet fill with an accent edge
+/// light rather than a solid accent fill,
 /// so it reads as the primary action without outshouting the page.
 ///
 /// [extended] false folds the label away, leaving the icon (the label is
@@ -178,15 +178,21 @@ class GlassButton extends StatelessWidget {
                       // Cross-fades when the label changes with the tab
                       // ("Add" / "New account"); AnimatedSize eases the
                       // width between them.
-                      AnimatedSwitcher(
-                        duration: motion,
-                        child: Text(
-                          label,
-                          key: ValueKey(label),
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 15,
-                            color: scheme.onSurface,
+                      // Flexible: on a narrow screen with large text the
+                      // label shortens rather than overflowing.
+                      Flexible(
+                        child: AnimatedSwitcher(
+                          duration: motion,
+                          child: Text(
+                            label,
+                            key: ValueKey(label),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
+                              color: scheme.onSurface,
+                            ),
                           ),
                         ),
                       ),
@@ -202,32 +208,26 @@ class GlassButton extends StatelessWidget {
   }
 }
 
-/// Segmented control with a glass thumb that slides under the selected tab.
-/// With a [pager] the thumb tracks `pager.page` continuously, so it follows
-/// the finger during a PageView drag (the Cockpit's TabBar feel); without
-/// one it animates between segments on selection. [icons] adds a leading
-/// icon per tab. Tests keep tapping labels by text.
-class GlassSegmented<T> extends StatelessWidget {
+/// Page tabs as plain labels with a short accent line under the selected
+/// one: quieter than the boxed segmented control it replaced, for the page
+/// switch at the top of a screen. With a [pager] the line follows `pager.page`
+/// during a drag. Tests keep tapping labels by text.
+class UnderlineTabs<T> extends StatelessWidget {
   final List<(T, String)> options;
-
-  /// One leading icon per option, in [options] order.
-  final List<IconData>? icons;
-
   final T selected;
   final ValueChanged<T> onChanged;
-
-  /// Continuous position source: the thumb rides `page * segmentWidth`
-  /// mid-drag instead of jumping per selection.
   final PageController? pager;
 
-  const GlassSegmented({
+  const UnderlineTabs({
     super.key,
     required this.options,
-    this.icons,
     required this.selected,
     required this.onChanged,
     this.pager,
-  }) : assert(icons == null || icons.length == options.length);
+  });
+
+  /// The line's share of a tab's width.
+  static const _lineShare = 0.36;
 
   @override
   Widget build(BuildContext context) {
@@ -235,35 +235,56 @@ class GlassSegmented<T> extends StatelessWidget {
     final index = options
         .indexWhere((o) => o.$1 == selected)
         .clamp(0, options.length - 1);
-    return Container(
-      // Follows the font scale: at a fixed 44dp the FittedBox merely
-      // shrinks large-font labels until they are unreadable.
-      height: MediaQuery.textScalerOf(context).scale(44),
-      decoration: BoxDecoration(
-        // A trace of the accent, like the cards around it: the palette's
-        // plain grey read as a warm, off-colour strip beside tinted cards.
-        color: _tint(scheme, scheme.surfaceContainerHigh, 0.06),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      // Side inset only: the tabs answer taps over the bar's full height,
-      // and the thumb keeps its 4dp inset top and bottom.
-      padding: const EdgeInsets.symmetric(horizontal: 4),
+    // A 48dp target at normal text, taller as the text grows.
+    final height = MediaQuery.textScalerOf(context).scale(48);
+    return SizedBox(
+      height: height,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final segmentWidth = constraints.maxWidth / options.length;
-          // Below 90dp a tab can't hold an icon and its label at full
-          // size: the longer labels shrank while "All" did not.
-          final withIcons = icons != null && segmentWidth >= 90;
+          final tabWidth = constraints.maxWidth / options.length;
+          final lineWidth = tabWidth * _lineShare;
+          Widget line(double page) => Positioned(
+            left:
+                page.clamp(0.0, (options.length - 1).toDouble()) * tabWidth +
+                (tabWidth - lineWidth) / 2,
+            bottom: 2,
+            width: lineWidth,
+            height: 2,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: scheme.primary,
+                borderRadius: BorderRadius.circular(1),
+              ),
+            ),
+          );
+          final p = pager;
           return Stack(
             children: [
-              _buildThumb(context, scheme, segmentWidth, index),
               Row(
                 children: [
                   for (var i = 0; i < options.length; i++)
-                    Expanded(child: _buildTab(context, scheme, i, withIcons)),
+                    Expanded(child: _tab(context, scheme, i)),
                 ],
               ),
+              if (p == null)
+                TweenAnimationBuilder<double>(
+                  tween: Tween(end: index.toDouble()),
+                  duration: motionDuration(
+                    context,
+                    const Duration(milliseconds: 260),
+                  ),
+                  curve: Curves.easeOutCubic,
+                  builder: (context, page, _) => line(page),
+                )
+              else
+                AnimatedBuilder(
+                  animation: p,
+                  builder: (context, _) => line(
+                    (p.hasClients && p.position.haveDimensions)
+                        ? (p.page ?? index.toDouble())
+                        : index.toDouble(),
+                  ),
+                ),
             ],
           );
         },
@@ -271,61 +292,9 @@ class GlassSegmented<T> extends StatelessWidget {
     );
   }
 
-  Widget _buildThumb(
-    BuildContext context,
-    ColorScheme scheme,
-    double segmentWidth,
-    int index,
-  ) {
-    final thumb = Container(
-      decoration: BoxDecoration(
-        color: _tint(scheme, scheme.outlineVariant, 0.12),
-        borderRadius: BorderRadius.circular(9),
-      ),
-      foregroundDecoration: _edgeLight(scheme, 9),
-    );
-    final p = pager;
-    if (p == null) {
-      return AnimatedPositioned(
-        duration: motionDuration(context, const Duration(milliseconds: 260)),
-        curve: Curves.easeOutCubic,
-        left: index * segmentWidth,
-        top: 4,
-        bottom: 4,
-        width: segmentWidth,
-        child: thumb,
-      );
-    }
-    // Positioned may be separated from the Stack by non-RenderObject
-    // widgets, so the AnimatedBuilder in between is legal.
-    return AnimatedBuilder(
-      animation: p,
-      builder: (context, _) {
-        final page = (p.hasClients && p.position.haveDimensions)
-            ? (p.page ?? index.toDouble())
-            : index.toDouble();
-        return Positioned(
-          left: page.clamp(0.0, (options.length - 1).toDouble()) * segmentWidth,
-          top: 4,
-          bottom: 4,
-          width: segmentWidth,
-          child: thumb,
-        );
-      },
-    );
-  }
-
-  Widget _buildTab(
-    BuildContext context,
-    ColorScheme scheme,
-    int i,
-    bool withIcons,
-  ) {
+  Widget _tab(BuildContext context, ColorScheme scheme, int i) {
     final (value, label) = options[i];
     final isSelected = value == selected;
-    final color = isSelected ? scheme.onSurface : scheme.onSurfaceVariant;
-    // Semantics: a bare GestureDetector reads as static text to TalkBack —
-    // no button role, no selected state.
     return Semantics(
       button: true,
       selected: isSelected,
@@ -339,39 +308,123 @@ class GlassSegmented<T> extends StatelessWidget {
         },
         child: Center(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 4),
             child: FittedBox(
               fit: BoxFit.scaleDown,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (withIcons) ...[
-                    Icon(icons![i], size: 16, color: color),
-                    const SizedBox(width: 5),
-                  ],
-                  AnimatedDefaultTextStyle(
-                    duration: motionDuration(
-                      context,
-                      const Duration(milliseconds: 260),
-                    ),
-                    style: TextStyle(
-                      // On the body scale (14) — 13.5 was the app's one
-                      // fractional odd-one-out.
-                      fontSize: 14,
-                      fontWeight: isSelected
-                          ? FontWeight.w600
-                          : FontWeight.w500,
-                      color: color,
-                    ),
-                    child: Text(label, maxLines: 1),
-                  ),
-                ],
+              child: AnimatedDefaultTextStyle(
+                duration: motionDuration(
+                  context,
+                  const Duration(milliseconds: 260),
+                ),
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                  color: isSelected
+                      ? scheme.onSurface
+                      : scheme.onSurfaceVariant,
+                ),
+                child: Text(label, maxLines: 1),
               ),
             ),
           ),
         ),
       ),
     );
+  }
+}
+
+/// A row of outline pills for a filter with a few values (transaction type,
+/// account type). The selected pill gets an accent outline; the text stays
+/// in the plain text colours, never coloured on a fill.
+class ChipTabs<T> extends StatelessWidget {
+  final List<(T, String)> options;
+  final T selected;
+  final ValueChanged<T> onChanged;
+
+  const ChipTabs({
+    super.key,
+    required this.options,
+    required this.selected,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // One row, scrolled sideways when it does not fit (large text on a
+    // narrow phone): wrapped to a second row it pushed the list down and
+    // off the screen. Five pills fit at 390dp.
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        spacing: 6,
+        children: [
+          for (final (value, label) in options)
+            Semantics(
+              button: true,
+              selected: value == selected,
+              label: label,
+              onTap: () => onChanged(value),
+              excludeSemantics: true,
+              // A 36dp pill in a 44dp target: the 4dp above and below it take
+              // the tap too. No taller: above the transaction list, with both
+              // review cards open, every row of height is the list's.
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _tap(value),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(
+                        AppRadius.control * 2,
+                      ),
+                      onTap: () => _tap(value),
+                      child: Container(
+                        constraints: const BoxConstraints(minHeight: 36),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(
+                            AppRadius.control * 2,
+                          ),
+                          border: Border.all(
+                            color: value == selected
+                                ? scheme.primary
+                                : scheme.outlineVariant,
+                            width: value == selected ? 1.5 : 1,
+                          ),
+                        ),
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: value == selected
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                            color: value == selected
+                                ? scheme.onSurface
+                                : scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void _tap(T value) {
+    if (value != selected) Haptics.tick();
+    onChanged(value);
   }
 }
 

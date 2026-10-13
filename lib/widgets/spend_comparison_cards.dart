@@ -381,7 +381,8 @@ class _CompareBody extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             if (compare.state == CompareState.ok)
-              // Colour on the card surface, never on a filled background.
+              // The trend icon carries the colour; the phrase stays in the
+              // plain text colour, like every amount.
               // Flexible: at large text on a narrow phone the phrase wraps
               // instead of pushing past the card.
               Flexible(
@@ -403,7 +404,7 @@ class _CompareBody extends StatelessWidget {
                         deltaPhrase(compare),
                         textAlign: TextAlign.end,
                         style: text.bodyMedium?.copyWith(
-                          color: tone,
+                          color: scheme.onSurface,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -673,11 +674,13 @@ class _CategoryCompareRow extends StatelessWidget {
                       ),
                       if (compare.state == CompareState.ok &&
                           !compare.negligible)
+                        // The sign says which way; the bar above carries
+                        // the colour.
                         Text(
                           '${compare.delta > 0 ? '+' : '−'}'
                           '${fmtMoney(compare.delta.abs())}',
                           style: text.bodySmall?.copyWith(
-                            color: tone,
+                            color: scheme.onSurface,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -982,7 +985,7 @@ const _rulesLink = InfoLink(
 );
 
 /// The dashboard's section recipe: spacing, a titleMedium heading, then the
-/// body in a Card with the shared all(16) inset.
+/// body in a Card with the shared [AppSpace.card] inset.
 class _Section extends StatelessWidget {
   final String title;
   final String? subtitle;
@@ -1014,7 +1017,10 @@ class _Section extends StatelessWidget {
     final tap = onTap;
     if (tap == null) {
       return Card(
-        child: Padding(padding: const EdgeInsets.all(16), child: child),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpace.card),
+          child: child,
+        ),
       );
     }
     return Card(
@@ -1022,7 +1028,12 @@ class _Section extends StatelessWidget {
       child: InkWell(
         onTap: tap,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpace.card,
+            AppSpace.card,
+            AppSpace.card,
+            8,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [

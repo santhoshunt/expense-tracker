@@ -11,6 +11,7 @@ import 'category_donut_chart.dart';
 import 'chart_popup.dart';
 import 'info_tip.dart';
 import 'motion.dart';
+import 'status_dot.dart';
 
 /// Visual detail for one custom budget, starting at [month]: progress ring,
 /// category pie, 6-month trend, and the jump into the budget-filtered
@@ -127,15 +128,32 @@ Future<void> showBudgetDetailSheet(
                               ),
                             ),
                             const SizedBox(height: 4),
-                            Text(
-                              over
-                                  ? '${fmtMoneyCompact(spent - limit)} over the '
-                                        'limit'
-                                  : '${fmtMoneyCompact(limit - spent)} left this '
-                                        'month',
-                              style: Theme.of(
-                                ctx,
-                              ).textTheme.bodySmall?.copyWith(color: color),
+                            // The ring carries the colour; over the limit a
+                            // red dot leads the plain-coloured line.
+                            Row(
+                              children: [
+                                if (over) ...[
+                                  StatusDot(
+                                    color: Theme.of(ctx).colorScheme.error,
+                                  ),
+                                  const SizedBox(width: 6),
+                                ],
+                                Flexible(
+                                  child: Text(
+                                    over
+                                        ? '${fmtMoneyCompact(spent - limit)} '
+                                              'over the limit'
+                                        : '${fmtMoneyCompact(limit - spent)} '
+                                              'left this month',
+                                    style: Theme.of(ctx).textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: Theme.of(
+                                            ctx,
+                                          ).colorScheme.onSurface,
+                                        ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),

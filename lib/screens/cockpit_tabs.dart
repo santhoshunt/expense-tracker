@@ -11,6 +11,7 @@ import '../services/notification_service.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
 import '../services/subscriptions.dart';
+import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
 import '../widgets/budget_dialog.dart';
@@ -63,6 +64,21 @@ class BudgetsTab extends StatelessWidget {
   }
 }
 
+/// A tab's title that is its own tip. Left-aligned: stretched across the
+/// list, the whole row would open the tip.
+class _TabHeading extends StatelessWidget {
+  final Widget label;
+  final InfoTip tip;
+
+  const _TabHeading({required this.label, required this.tip});
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.centerLeft,
+    child: InfoLabel(label: label, tip: tip),
+  );
+}
+
 class RemindersTab extends StatelessWidget {
   const RemindersTab({super.key});
 
@@ -71,7 +87,7 @@ class RemindersTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
       children: [
-        InfoLabel(
+        _TabHeading(
           label: Text(
             'Reminders',
             style: Theme.of(context).textTheme.titleMedium,
@@ -118,7 +134,7 @@ class TagsTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
       children: [
-        InfoLabel(
+        _TabHeading(
           label: Text('Tags', style: text.titleMedium),
           tip: const InfoTip(
             title: 'Tags',
@@ -140,7 +156,7 @@ class TagsTab extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         FrostedPanel(
-          radius: BorderRadius.circular(20),
+          radius: BorderRadius.circular(AppRadius.card),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
             child: Column(
@@ -226,7 +242,7 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
       children: [
-        InfoLabel(
+        _TabHeading(
           label: Text('Subscriptions', style: text.titleMedium),
           tip: const InfoTip(
             title: 'Subscriptions',
@@ -253,7 +269,7 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
         ),
         const SizedBox(height: 12),
         FrostedPanel(
-          radius: BorderRadius.circular(20),
+          radius: BorderRadius.circular(AppRadius.card),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
             child: Column(
@@ -640,7 +656,7 @@ class _BudgetSectionState extends State<_BudgetSection>
     final hasCap = settings.monthlyBudget > 0 || hasCustomBudgets;
 
     return FrostedPanel(
-      radius: BorderRadius.circular(20),
+      radius: BorderRadius.circular(AppRadius.card),
       child: Padding(
         // Generous top inset: the cap field's floating label must not touch
         // the panel's clipped edge.
@@ -920,7 +936,7 @@ class _CustomBudgetsSection extends StatelessWidget {
     }
 
     return FrostedPanel(
-      radius: BorderRadius.circular(20),
+      radius: BorderRadius.circular(AppRadius.card),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
         child: Column(
@@ -1003,7 +1019,7 @@ class _RemindersSection extends StatelessWidget {
     ].join(' · ');
 
     return FrostedPanel(
-      radius: BorderRadius.circular(20),
+      radius: BorderRadius.circular(AppRadius.card),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
         child: Column(

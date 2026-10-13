@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/fold_section.dart';
@@ -50,16 +51,22 @@ class _PeopleScreenState extends State<PeopleScreen> {
         body: ListView(
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
           children: [
-            InfoLabel(
-              label: Text('Owed to you', style: text.titleMedium),
-              tip: const InfoTip(
-                title: 'Owed to you',
-                message:
-                    'Each person on a split bill owes you their amount. Record '
-                    'what they pay back as Repaid to me (a transfer, never '
-                    'income); it pays off their oldest bills first, and part '
-                    'payments count. Splits without names are not counted. '
-                    'Mark a bill settled when it was paid outside the app.',
+            // Left-aligned: stretched across the list, the whole row would
+            // open the tip.
+            Align(
+              alignment: Alignment.centerLeft,
+              child: InfoLabel(
+                label: Text('Owed to you', style: text.titleMedium),
+                tip: const InfoTip(
+                  title: 'Owed to you',
+                  message:
+                      'Each person on a split bill owes you their amount. '
+                      'Record what they pay back as Repaid to me (a transfer, '
+                      'never income); it pays off their oldest bills first, '
+                      'and part payments count. Splits without names are not '
+                      'counted. Mark a bill settled when it was paid outside '
+                      'the app.',
+                ),
               ),
             ),
             const SizedBox(height: 4),
@@ -72,7 +79,7 @@ class _PeopleScreenState extends State<PeopleScreen> {
             ),
             const SizedBox(height: 12),
             FrostedPanel(
-              radius: BorderRadius.circular(20),
+              radius: BorderRadius.circular(AppRadius.card),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
                 child: Column(

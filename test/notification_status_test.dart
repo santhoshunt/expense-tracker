@@ -97,10 +97,12 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
   }
 
-  /// Home → Cockpit → Plan, which opens on its Budgets tab (the section
+  /// Home → ⋯ → Cockpit → Plan, which opens on its Budgets tab (the section
   /// moved out of Settings).
   Future<void> openBudgetsTab(WidgetTester tester) async {
-    await tester.tap(find.byTooltip('Cockpit'));
+    await tester.tap(find.byTooltip('More'));
+    await pumpThrough(tester);
+    await tester.tap(find.text('Cockpit').last);
     await pumpThrough(tester);
     await tester.tap(find.text('Plan'));
     await pumpThrough(tester);

@@ -102,7 +102,7 @@ class SettingsScreen extends StatelessWidget {
             for (final (i, (icon, title, gist, page)) in groups.indexed) ...[
               if (i > 0) const SizedBox(height: 12),
               FrostedPanel(
-                radius: BorderRadius.circular(20),
+                radius: BorderRadius.circular(AppRadius.card),
                 child: ListTile(
                   leading: Icon(icon),
                   title: Text(title),
@@ -120,9 +120,8 @@ class SettingsScreen extends StatelessWidget {
   }
 }
 
-/// Radio rows for a choice-type setting: one dense row per option. Replaced
-/// the line-tab GlassSegmented here — tabs read as navigation, not as
-/// picking a stored option.
+/// Radio rows for a choice-type setting: one dense row per option. Tabs
+/// read as navigation, not as picking a stored option.
 class _RadioSetting<T> extends StatelessWidget {
   final List<(T, String)> options;
   final T selected;
@@ -406,6 +405,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
             ListTile(
               leading: const Icon(Icons.link_off),
               title: const InfoLabel(
+                icon: true,
                 label: Text('Disconnect'),
                 tip: InfoTip(
                   title: 'Disconnect',
@@ -421,6 +421,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
             ListTile(
               leading: const Icon(Icons.schedule_outlined),
               title: const InfoLabel(
+                icon: true,
                 label: Text('Frequency'),
                 tip: InfoTip(
                   title: 'Frequency',
@@ -469,6 +470,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                     )
                   : const Icon(Icons.cloud_upload_outlined),
               title: const InfoLabel(
+                icon: true,
                 label: Text('Back up now'),
                 tip: InfoTip(
                   title: 'Back up now',
@@ -862,7 +864,7 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
     final scheme = Theme.of(context).colorScheme;
     final granted = _hasAccess == true;
     return FrostedPanel(
-      radius: BorderRadius.circular(20),
+      radius: BorderRadius.circular(AppRadius.card),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
         leading: Icon(
@@ -872,6 +874,7 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
           color: granted ? scheme.primary : scheme.onSurfaceVariant,
         ),
         title: InfoLabel(
+          icon: true,
           label: const Text('Capture RCS alerts'),
           tip: InfoTip(
             title: 'Capture RCS alerts',
@@ -1295,12 +1298,13 @@ class _DataSectionState extends State<_DataSection> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return FrostedPanel(
-      radius: BorderRadius.circular(20),
+      radius: BorderRadius.circular(AppRadius.card),
       child: Column(
         children: [
           ListTile(
             leading: const Icon(Icons.file_upload_outlined),
             title: const InfoLabel(
+              icon: true,
               label: Text('Export…'),
               tip: InfoTip(
                 title: 'Export…',
@@ -1322,6 +1326,7 @@ class _DataSectionState extends State<_DataSection> {
           ListTile(
             leading: const Icon(Icons.file_download_outlined),
             title: const InfoLabel(
+              icon: true,
               label: Text('Import…'),
               tip: InfoTip(
                 title: 'Import…',
@@ -1364,6 +1369,7 @@ class _DataSectionState extends State<_DataSection> {
           ListTile(
             leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
             title: InfoLabel(
+              icon: true,
               label: Text(
                 'Delete all data',
                 style: TextStyle(color: scheme.error),
@@ -1445,7 +1451,7 @@ class _PrivacySectionState extends State<_PrivacySection> {
       (s) => s.hideIncome,
     );
     return FrostedPanel(
-      radius: BorderRadius.circular(20),
+      radius: BorderRadius.circular(AppRadius.card),
       child: Column(
         children: [
           _TipSwitchTile(
@@ -1507,6 +1513,7 @@ class _TipSwitchTile extends StatelessWidget {
       enabled: onChanged != null,
       leading: Icon(icon),
       title: InfoLabel(
+        icon: true,
         label: Text(label),
         tip: InfoTip(title: label, message: tip),
       ),
@@ -1618,7 +1625,7 @@ class _AboutSectionState extends State<_AboutSection> {
   @override
   Widget build(BuildContext context) {
     return FrostedPanel(
-      radius: BorderRadius.circular(20),
+      radius: BorderRadius.circular(AppRadius.card),
       child: Column(
         children: [
           ListTile(
@@ -1629,6 +1636,7 @@ class _AboutSectionState extends State<_AboutSection> {
           ListTile(
             leading: const Icon(Icons.system_update_alt),
             title: InfoLabel(
+              icon: true,
               label: const Text('Check for updates'),
               tip: InfoTip(
                 title: 'Check for updates',

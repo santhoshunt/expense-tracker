@@ -11,19 +11,23 @@ import 'update_sheet.dart';
 class UpdateBanner extends StatelessWidget {
   const UpdateBanner({super.key});
 
-  @override
-  Widget build(BuildContext context) {
+  /// Whether the card has something to say: a NoticeStack counts it by
+  /// this. Call where the widget would build (it reads the settings).
+  static bool showing(BuildContext context, UpdateList? updates) {
+    if (updates == null || updates.newer.isEmpty) return false;
     final dismissed = context.select<SettingsProvider, String?>(
       (s) => s.updateDismissedTag,
     );
+    return updates.newer.first.tag != dismissed;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return ValueListenableBuilder<UpdateList?>(
       valueListenable: availableUpdate,
       builder: (context, updates, _) {
-        if (updates == null || updates.newer.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        final newest = updates.newer.first.tag;
-        if (newest == dismissed) return const SizedBox.shrink();
+        if (!showing(context, updates)) return const SizedBox.shrink();
+        final newest = updates!.newer.first.tag;
         final scheme = Theme.of(context).colorScheme;
         final n = updates.newer.length;
         return Padding(

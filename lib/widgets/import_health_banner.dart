@@ -16,6 +16,11 @@ import '../utils/format.dart';
 class ImportHealthBanner extends StatefulWidget {
   const ImportHealthBanner({super.key});
 
+  /// Whether the mounted card shows a warning, for a NoticeStack to count.
+  /// Its warnings load asynchronously, so the card reports them here after
+  /// each build rather than being asked.
+  static final ValueNotifier<bool> showing = ValueNotifier(false);
+
   @override
   State<ImportHealthBanner> createState() => _ImportHealthBannerState();
 }
@@ -39,10 +44,31 @@ class _ImportHealthBannerState extends State<ImportHealthBanner> {
   @override
   void dispose() {
     importHealthChanged.removeListener(_onChanged);
+    // Gone with the card: it no longer counts.
+    _report(false);
     super.dispose();
   }
 
   void _onChanged() => unawaited(_reload());
+
+  /// Mounted cards that currently show a warning: the notice is up while
+  /// any does, so a card going never clears one that is mounting.
+  static int _showingCards = 0;
+
+  /// Whether this card counts in [_showingCards].
+  bool _reported = false;
+
+  void _report(bool value) {
+    if (_reported == value) return;
+    _reported = value;
+    _showingCards += value ? 1 : -1;
+    _publish();
+  }
+
+  /// After the frame: a listener setting state mid-build would throw.
+  static void _publish() => WidgetsBinding.instance.addPostFrameCallback(
+    (_) => ImportHealthBanner.showing.value = _showingCards > 0,
+  );
 
   /// Read on a ledger change and on [importHealthChanged].
   Future<void> _reload() async {
@@ -98,6 +124,7 @@ class _ImportHealthBannerState extends State<ImportHealthBanner> {
       );
     }
     final warnings = buildImportWarnings(_health, _silent, now);
+    _report(warnings.isNotEmpty);
     if (warnings.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;

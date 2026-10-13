@@ -170,6 +170,10 @@ void main() {
       await tester.pumpWidget(accountsApp(p));
       await tester.pumpAndSettle();
 
+      // The options button sits inside the open card, under its figures:
+      // scrolled just into view, it lands at the bottom edge.
+      await tester.ensureVisible(find.byTooltip('Account options').last);
+      await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Account options').last);
       // One frame in: with the stock grow animation the menu used to render
       // below the button first, then get shoved upward as it grew. It must

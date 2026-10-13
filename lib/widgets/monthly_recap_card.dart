@@ -8,6 +8,7 @@ import '../utils/dates.dart';
 import '../utils/format.dart';
 import 'dashboard_fold.dart';
 import 'info_tip.dart';
+import 'status_dot.dart';
 
 /// "This month so far"'s tip; the Trends fold heading shows it too.
 const String kPaceTipMessage =
@@ -24,6 +25,50 @@ Color _deltaTone(BuildContext context, SpendCompare c) => c.negligible
     : c.delta > 0
     ? Theme.of(context).colorScheme.error
     : AppColors.of(context).green;
+
+/// A change against another month: a trend arrow in [_deltaTone], then
+/// [text] in the plain text colour. Amounts are never coloured; the arrow
+/// carries the colour, as on the comparison cards.
+class _DeltaNote extends StatelessWidget {
+  final String text;
+  final SpendCompare compare;
+  final TextStyle? style;
+
+  const _DeltaNote({
+    required this.text,
+    required this.compare,
+    required this.style,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          compare.negligible
+              ? Icons.drag_handle
+              : compare.delta > 0
+              ? Icons.trending_up
+              : Icons.trending_down,
+          size: 14,
+          color: _deltaTone(context, compare),
+        ),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(
+            text,
+            maxLines: 2,
+            style: style?.copyWith(
+              color: Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 /// Last month's recap, shown on the Overview for the first [kRecapDays]
 /// days: spent and saved, then the top categories, the biggest merchant
@@ -67,25 +112,27 @@ class MonthlyRecapCard extends StatelessWidget {
 
     return Card(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.card,
+          12,
+          AppSpace.card,
+          AppSpace.card,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Flexible(
-                  child: Text('$monthName recap', style: text.titleMedium),
-                ),
-                const InfoTip(
-                  title: 'Monthly recap',
-                  message:
-                      "Last month's totals, shown for the first $kRecapDays "
-                      "days of the month; after that, this month's pace takes "
-                      "its place. It updates if you edit last month's "
-                      'transactions. A notification on the 1st says when a '
-                      'new one is ready.',
-                ),
-              ],
+            // The title is its own tip.
+            InfoLabel(
+              label: Text('$monthName recap', style: text.titleMedium),
+              tip: const InfoTip(
+                title: 'Monthly recap',
+                message:
+                    "Last month's totals, shown for the first $kRecapDays "
+                    "days of the month; after that, this month's pace takes "
+                    "its place. It updates if you edit last month's "
+                    'transactions. A notification on the 1st says when a '
+                    'new one is ready.',
+              ),
             ),
             const SizedBox(height: 8),
             Row(
@@ -96,7 +143,7 @@ class MonthlyRecapCard extends StatelessWidget {
                     label: 'Spent',
                     value: fmtMoney(recap.spent),
                     note: showDelta ? deltaText : null,
-                    noteColor: _deltaTone(context, compare),
+                    noteCompare: compare,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -206,23 +253,27 @@ class MonthPaceCard extends StatelessWidget {
 
     return Card(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+        padding: const EdgeInsets.fromLTRB(
+          AppSpace.card,
+          12,
+          AppSpace.card,
+          AppSpace.card,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Flexible(
-                  child: Text('$monthName so far', style: text.titleMedium),
+            // A fold heading above carries the tip already; on its own the
+            // title is the tip.
+            if (DashboardFoldScope.of(context))
+              Text('$monthName so far', style: text.titleMedium)
+            else
+              InfoLabel(
+                label: Text('$monthName so far', style: text.titleMedium),
+                tip: const InfoTip(
+                  title: 'This month so far',
+                  message: kPaceTipMessage,
                 ),
-                // A fold heading above carries the tip already.
-                if (!DashboardFoldScope.of(context))
-                  const InfoTip(
-                    title: 'This month so far',
-                    message: kPaceTipMessage,
-                  ),
-              ],
-            ),
+              ),
             Text(
               compared
                   ? window
@@ -246,14 +297,12 @@ class MonthPaceCard extends StatelessWidget {
               ),
               if (prev.state == CompareState.ok) ...[
                 const SizedBox(height: 8),
-                Text(
-                  prev.negligible
+                _DeltaNote(
+                  text: prev.negligible
                       ? 'About the same as $prevShort by this day'
                       : '${deltaPhrase(prev)} than $prevShort by this day',
-                  style: text.bodySmall?.copyWith(
-                    color: _deltaTone(context, prev),
-                    fontWeight: FontWeight.w600,
-                  ),
+                  compare: prev,
+                  style: text.bodySmall?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ],
             ],
@@ -391,10 +440,20 @@ class _BudgetLine extends StatelessWidget {
       child: Text.rich(
         TextSpan(
           children: [
+            // Over the limit, a red dot leads the line; the text keeps the
+            // plain colours.
+            if (over)
+              WidgetSpan(
+                alignment: PlaceholderAlignment.middle,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: StatusDot(color: scheme.error),
+                ),
+              ),
             TextSpan(
               text: '${b.label}: ',
               style: TextStyle(
-                color: over ? scheme.error : scheme.onSurface,
+                color: scheme.onSurface,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -403,7 +462,7 @@ class _BudgetLine extends StatelessWidget {
                   '${fmtMoney(b.spent)} of ${fmtMoney(b.limit)} · '
                   '${over ? 'over by ${fmtMoney(b.spent - b.limit)}' : '${fmtMoney(b.limit - b.spent)} left'}',
               style: TextStyle(
-                color: over ? scheme.error : scheme.onSurfaceVariant,
+                color: over ? scheme.onSurface : scheme.onSurfaceVariant,
               ),
             ),
           ],
@@ -439,13 +498,15 @@ class _Stat extends StatelessWidget {
   final String label;
   final String value;
   final String? note;
-  final Color? noteColor;
+
+  /// The change [note] describes, for its arrow's direction and colour.
+  final SpendCompare? noteCompare;
 
   const _Stat({
     required this.label,
     required this.value,
     this.note,
-    this.noteColor,
+    this.noteCompare,
   });
 
   @override
@@ -469,12 +530,11 @@ class _Stat extends StatelessWidget {
             style: text.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
         ),
-        if (note != null)
-          Text(
-            note!,
-            style: text.labelSmall?.copyWith(color: noteColor),
-            maxLines: 2,
-          ),
+        if (note case final note?)
+          if (noteCompare case final compare?)
+            _DeltaNote(text: note, compare: compare, style: text.labelSmall)
+          else
+            Text(note, style: text.labelSmall, maxLines: 2),
       ],
     );
   }

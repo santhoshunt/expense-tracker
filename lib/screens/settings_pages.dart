@@ -39,6 +39,21 @@ class SettingsGroupPage extends StatelessWidget {
   }
 }
 
+/// A group page's heading that is its own tip. Left-aligned: stretched
+/// across the list, the whole row would open the tip.
+class _PageHeading extends StatelessWidget {
+  final Widget label;
+  final InfoTip tip;
+
+  const _PageHeading({required this.label, required this.tip});
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.centerLeft,
+    child: InfoLabel(label: label, tip: tip),
+  );
+}
+
 /// Theme, dark theme, accent colour, the tilt glow, the app icon and the
 /// month the year starts in.
 class _AppearancePage extends StatelessWidget {
@@ -53,7 +68,7 @@ class _AppearancePage extends StatelessWidget {
     return SettingsGroupPage(
       title: 'Appearance',
       children: [
-        InfoLabel(
+        _PageHeading(
           label: Text('Theme', style: Theme.of(context).textTheme.titleMedium),
           tip: const InfoTip(
             title: 'Theme',
@@ -72,7 +87,7 @@ class _AppearancePage extends StatelessWidget {
           onChanged: (m) => context.read<SettingsProvider>().setMode(m),
         ),
         const SizedBox(height: 24),
-        InfoLabel(
+        _PageHeading(
           label: Text(
             'Dark theme',
             style: Theme.of(context).textTheme.titleMedium,
@@ -104,7 +119,7 @@ class _AppearancePage extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 24),
-        InfoLabel(
+        _PageHeading(
           label: Text(
             'Accent colour',
             style: Theme.of(context).textTheme.titleMedium,
@@ -137,7 +152,7 @@ class _AppearancePage extends StatelessWidget {
         ),
         const SizedBox(height: 24),
         FrostedPanel(
-          radius: BorderRadius.circular(20),
+          radius: BorderRadius.circular(AppRadius.card),
           child: _TipSwitchTile(
             icon: Icons.blur_on,
             label: 'Move glow with tilt',
@@ -164,7 +179,7 @@ class _AppearancePage extends StatelessWidget {
           const _AppIconSection(),
         ],
         const SizedBox(height: 24),
-        InfoLabel(
+        _PageHeading(
           label: Text(
             'Year starts in',
             style: Theme.of(context).textTheme.titleMedium,
@@ -223,7 +238,7 @@ class _SmsImportPage extends StatelessWidget {
     return SettingsGroupPage(
       title: 'SMS import',
       children: [
-        InfoLabel(
+        _PageHeading(
           label: Text(
             'Automatic SMS import',
             style: Theme.of(context).textTheme.titleMedium,
@@ -280,7 +295,7 @@ class _BackupDataPage extends StatelessWidget {
     return SettingsGroupPage(
       title: 'Backup and data',
       children: [
-        InfoLabel(
+        _PageHeading(
           label: Text(
             'Cloud backup',
             style: Theme.of(context).textTheme.titleMedium,
@@ -355,7 +370,7 @@ class _CategoriesRulesPage extends StatelessWidget {
     return SettingsGroupPage(
       title: 'Categories and rules',
       children: [
-        InfoLabel(
+        _PageHeading(
           label: Text(
             'Category order',
             style: Theme.of(context).textTheme.titleMedium,
@@ -390,7 +405,7 @@ class _CategoriesRulesPage extends StatelessWidget {
         Text('Cockpit', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 12),
         FrostedPanel(
-          radius: BorderRadius.circular(20),
+          radius: BorderRadius.circular(AppRadius.card),
           child: ListTile(
             leading: const Icon(Icons.tune),
             title: const Text('Open Cockpit'),

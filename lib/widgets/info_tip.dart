@@ -64,21 +64,93 @@ class InfoTip extends StatelessWidget {
     );
   }
 
-  void _open(BuildContext context) {
-    final box = context.findRenderObject()! as RenderBox;
-    final anchor = box.localToGlobal(Offset.zero) & box.size;
-    final exampleText = example?.call();
-    showAnchoredBubble(
-      context,
-      anchor: anchor,
-      content: (ctx) => _TipContent(
-        title: title,
-        message: message,
-        example: exampleText,
-        link: link,
-        // The link runs from the screen that owns the tip, not from the
-        // bubble's own route, which is gone by then.
-        host: context,
+  void _open(BuildContext context) => openInfoTip(context, this);
+}
+
+/// Opens [tip]'s bubble pointing at the widget [anchorContext] belongs to:
+/// the "i" itself, a [TipTitle], or a menu button.
+void openInfoTip(BuildContext anchorContext, InfoTip tip) {
+  final box = anchorContext.findRenderObject()! as RenderBox;
+  final anchor = box.localToGlobal(Offset.zero) & box.size;
+  final exampleText = tip.example?.call();
+  showAnchoredBubble(
+    anchorContext,
+    anchor: anchor,
+    content: (ctx) => _TipContent(
+      title: tip.title,
+      message: tip.message,
+      example: exampleText,
+      link: tip.link,
+      // The link runs from the screen that owns the tip, not from the
+      // bubble's own route, which is gone by then.
+      host: anchorContext,
+    ),
+  );
+}
+
+/// A label that is its own tip: a dotted underline marks it, and a tap
+/// opens [tip]'s bubble. Takes the place of a label and an "i" side by side.
+/// On a tappable card the label takes its own tap, so the rest of the card
+/// keeps the card's.
+class TipTitle extends StatelessWidget {
+  final Widget label;
+  final InfoTip tip;
+
+  const TipTitle({super.key, required this.label, required this.tip});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Shrink-wrapped: placed straight in a list or column, the label would
+    // stretch across the row and a tap anywhere on it would open the tip.
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      widthFactor: 1,
+      heightFactor: 1,
+      child: _trigger(context, scheme),
+    );
+  }
+
+  Widget _trigger(BuildContext context, ColorScheme scheme) {
+    // Two nodes for TalkBack: the label reads as itself (its words and any
+    // figure in it), then a button with the name the "i" carried, so
+    // finders and TalkBack still find it. One node named after the tip hid
+    // labels such as "Spent this month ₹4,200".
+    return Semantics(
+      container: true,
+      child: Stack(
+        children: [
+          Padding(
+            // A taller target than the text alone, without moving it.
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: DefaultTextStyle.merge(
+              style: TextStyle(
+                decoration: TextDecoration.underline,
+                decorationStyle: TextDecorationStyle.dotted,
+                decorationColor: scheme.onSurfaceVariant,
+              ),
+              child: label,
+            ),
+          ),
+          // The tap target over the label, and the button node; its own
+          // node, as merged into the label's the names would run together.
+          Positioned.fill(
+            child: Semantics(
+              container: true,
+              button: true,
+              label: 'About ${tip.title}',
+              onTap: () => openInfoTip(context, tip),
+              child: Material(
+                type: MaterialType.transparency,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(6),
+                  excludeFromSemantics: true,
+                  onTap: () => openInfoTip(context, tip),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -95,22 +167,36 @@ class InfoLink {
   const InfoLink({this.prompt, required this.label, required this.onTap});
 }
 
-/// A label followed by its [InfoTip], for heading rows. The label may
-/// shrink (ellipsis) but the tip never wraps below it.
+/// A label and its [InfoTip], for heading rows. By default the label is a
+/// [TipTitle] and no "i" shows. With [icon] the label stays plain and the
+/// "i" follows it: for rows whose own tap runs an action or toggles a
+/// switch, where a tappable label would fire by surprise. The label may
+/// shrink (ellipsis) but the "i" never wraps below it.
 class InfoLabel extends StatelessWidget {
   final Widget label;
   final InfoTip tip;
+  final bool icon;
 
-  const InfoLabel({super.key, required this.label, required this.tip});
+  const InfoLabel({
+    super.key,
+    required this.label,
+    required this.tip,
+    this.icon = false,
+  });
 
   @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Flexible(child: label),
-      tip,
-    ],
-  );
+  Widget build(BuildContext context) {
+    if (!icon) {
+      return TipTitle(label: label, tip: tip);
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Flexible(child: label),
+        tip,
+      ],
+    );
+  }
 }
 
 /// Opens [content] in a card pointing at [anchor] (global coordinates),
