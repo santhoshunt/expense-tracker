@@ -299,7 +299,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// [_showHistory] for a category, by id; its button opens the category's
   /// transactions for the shown month or year.
   void _showCategoryHistory(String id) {
-    final cat = categoryById(id);
+    // Spending categories only: a dangling id reads as Other, not as
+    // Other income.
+    final cat = categoryById(id, fallbackType: TxType.expense);
     _showHistory(
       HistorySubject.category(id, cat.label),
       icon: cat.icon,
@@ -715,7 +717,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
       this,
       showRecap: _showMonthCard,
       showSection: _showSection,
+      showCategoryHistory: _showAlertedCategory,
     );
+  }
+
+  /// Where an unusual spending alert lands: [id]'s history sheet to the
+  /// alert's [month], in Month view, so its tiles are the alert's figures
+  /// even when the tap comes a month later. The selector moves there too;
+  /// the Overview, Trends or Breakdown page showing stays.
+  void _showAlertedCategory(String id, DateTime month) {
+    if (!mounted) return;
+    setState(() {
+      _month = DateTime(month.year, month.month);
+      _yearMode = false;
+    });
+    // After the frame: the sheet then opens over the rebuilt page rather
+    // than mid-rebuild.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _showCategoryHistory(id);
+    });
   }
 
   /// Steps one month, or one year in Year view (the month is kept so

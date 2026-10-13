@@ -52,6 +52,12 @@ class NotificationService {
   static const _channelId = 'budget_alerts';
   static const _channelName = 'Budget alerts';
 
+  /// Every alert on this channel, as Android Settings lists it: payment
+  /// reminders and unusual spending post here too. Android updates the
+  /// description of an existing channel when it is created again.
+  static const _channelDescription =
+      'Budget thresholds, unusual spending and payments coming due';
+
   static const _recapChannelId = 'monthly_recap';
   static const _recapChannelName = 'Monthly recap';
   static const _recapChannelDescription =
@@ -99,7 +105,7 @@ class NotificationService {
             const AndroidNotificationChannel(
               _channelId,
               _channelName,
-              description: 'Alerts when you approach or exceed your budget',
+              description: _channelDescription,
               importance: Importance.high,
             ),
           );
@@ -231,10 +237,13 @@ class NotificationService {
         false;
   }
 
+  /// An alert on the budget channel. [payload] is what a tap hands to
+  /// [LaunchActions], such as an unusual-spending alert's category.
   Future<void> show({
     required int id,
     required String title,
     required String body,
+    String? payload,
   }) async {
     if (!_supported) return;
     await init();
@@ -242,7 +251,7 @@ class NotificationService {
       android: AndroidNotificationDetails(
         _channelId,
         _channelName,
-        channelDescription: 'Alerts when you approach or exceed your budget',
+        channelDescription: _channelDescription,
         importance: Importance.high,
         priority: Priority.high,
       ),
@@ -253,6 +262,7 @@ class NotificationService {
       title: title,
       body: body,
       notificationDetails: details,
+      payload: payload,
     );
   }
 

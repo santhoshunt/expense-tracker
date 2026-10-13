@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -12,6 +13,7 @@ import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/services/launch_actions.dart';
 import 'package:expense_tracker/services/monthly_recap.dart';
+import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
 import 'package:expense_tracker/widgets/lock_gate.dart';
 import 'package:expense_tracker/widgets/monthly_recap_card.dart';
@@ -262,6 +264,51 @@ void main() {
       await settle(tester);
       expect(find.text('lunch today'), findsOneWidget);
     });
+  });
+
+  testWidgets("an unusual spending alert opens the category's history on "
+      'its own month', (tester) async {
+    final now = DateTime.now();
+    // Last month's alert, tapped this month.
+    final alerted = DateTime(now.year, now.month - 1);
+    await pumpHome(
+      tester,
+      seed: (p) => p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 250,
+        note: 'lunch',
+        date: DateTime(alerted.year, alerted.month, 3),
+      ),
+    );
+    // In Year view and off the Dashboard: the alert brings back Month view
+    // on the alert's month.
+    await tester.tap(find.text('Year'));
+    await settle(tester);
+    expect(find.text('Month view'), findsOneWidget);
+    await tester.tap(find.text('Transactions').last);
+    await settle(tester);
+
+    LaunchActions.instance.onNotificationPayload(
+      unusualPayload('food', alerted),
+    );
+    await settle(tester);
+    expect(find.text('Usual month'), findsOneWidget, reason: 'sheet open');
+    expect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text('Food & Dining'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('12 months to ${fmtMonth(alerted)}'), findsOneWidget);
+    expect(
+      find.text('In ${DateFormat('MMMM').format(alerted)}'),
+      findsOneWidget,
+    );
+    expect(find.text('Year total'), findsNothing, reason: 'Month view');
+    expect(LaunchActions.instance.pending.value, isNull);
+    expect(LaunchActions.instance.takeHistory(), isNull);
   });
 
   test('each home-screen widget names its own place', () {

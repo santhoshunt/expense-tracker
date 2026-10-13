@@ -21,6 +21,7 @@ import '../services/monthly_recap.dart';
 import '../services/notification_service.dart';
 import '../services/sms_import_service.dart';
 import '../services/sms_source.dart';
+import '../services/unusual_spend_monitor.dart';
 import '../services/upcoming_monitor.dart';
 import '../services/update_downloader.dart';
 import '../services/update_installer.dart';
@@ -56,6 +57,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _smsImport = SmsImportService();
   final _budgetMonitor = BudgetMonitor();
   final _upcomingMonitor = UpcomingMonitor();
+  final _unusualMonitor = UnusualSpendMonitor();
   final _budgetWidgets = BudgetWidgetService();
   final _homeWidgets = HomeWidgetsService();
   FinanceProvider? _finance;
@@ -234,6 +236,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _syncBudgetWidgets();
     // A process kept alive past a due day records it on the way back.
     _postDueReminders();
+    _checkUnusual();
     final last = _lastAutoImportAt;
     if (last != null &&
         DateTime.now().difference(last) < const Duration(seconds: 5)) {
@@ -318,11 +321,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Budget alerts are on by default, so the Settings toggle (the other
   /// place permission is requested) may never be touched — ask on launch
-  /// when a cap is active. No-op once granted or permanently denied.
+  /// when a cap is active, or when unusual spending alerts (on by default,
+  /// no budget needed) are. No-op once granted or permanently denied.
   Future<void> _ensureNotificationPermission() async {
     if (!mounted) return;
     final settings = context.read<SettingsProvider>();
-    if (!settings.budgetAlerts || settings.monthlyBudget <= 0) return;
+    final budgetAlerts = settings.budgetAlerts && settings.monthlyBudget > 0;
+    if (!budgetAlerts && !settings.unusualAlerts) return;
     await NotificationService.instance.requestPermission();
     // A pending alert may have been waiting on the permission.
     _checkBudget();
@@ -378,6 +383,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         _showSection(DashboardSection.upcoming);
       case LaunchAction.openBreakdown:
         _showSection(DashboardSection.donut);
+      case LaunchAction.openCategoryHistory:
+        final h = LaunchActions.instance.takeHistory();
+        if (h == null) break;
+        setState(() => _showTab(kHomeTabDashboard));
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => AppNav.instance.showCategoryHistory(h.categoryId, h.month),
+        );
       case LaunchAction.openToday:
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day);
@@ -446,6 +458,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           context.read<SettingsProvider>(),
         )
         .catchError((Object e) => debugPrint('Budget check failed: $e'));
+    _checkUnusual();
     // Imports can change what's due (a card payment clears the bill, a new
     // debit completes a recurring pattern) — re-evaluate alongside budgets.
     _checkUpcoming();
@@ -547,6 +560,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       onAction: () => finance.deleteTransactions(ids),
       duration: const Duration(seconds: 6),
     );
+  }
+
+  /// The unusual spending alert. Also on resume: a process kept alive into
+  /// a new month, or a switch turned on in Cockpit, has nothing else to
+  /// wake it until the ledger changes.
+  void _checkUnusual() {
+    if (!mounted) return;
+    _unusualMonitor
+        .check(
+          context.read<FinanceProvider>(),
+          context.read<SettingsProvider>(),
+        )
+        .catchError((Object e) => debugPrint('Unusual check failed: $e'));
   }
 
   void _checkUpcoming() {

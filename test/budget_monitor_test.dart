@@ -31,6 +31,7 @@ class FakeNotifications implements NotificationService {
     required int id,
     required String title,
     required String body,
+    String? payload,
   }) async {
     shown.add((id, title, body));
   }

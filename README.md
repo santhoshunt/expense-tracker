@@ -18,7 +18,7 @@ The repo still has `web/` and `ios/` folders from the Flutter template, and the 
 - **Splits and people.** Mark a bill as split, name who owes what, and record or settle repayments on the People page.
 - **Accounts and cards.** Accounts are created from the account numbers in alerts, or added by hand. Credit cards get a billing cycle, a due date and a paid state. Wallets hold money or points that can only be spent on one platform (Amazon Pay, Zomato Money, Swiggy coins), grouped by service with any number of logins each. They stay out of net balance, and a wallet transaction counts as spending only when you turn that on for it. A CSV restore brings wallet transactions back unassigned, so they count until you put them back on their wallet.
 - **Home screen.** Widgets: Budget (compact and detailed), Month pace, Upcoming bills, Today and Add, and Spending split. Each opens its own part of the app. There is a Quick Settings tile and launcher shortcuts for adding an expense or importing SMS.
-- **Notifications.** Budget thresholds, bills and reminders coming due, the monthly recap, and a count of rows waiting for review once more than 5 pile up. The recap and review notifications carry no amounts.
+- **Notifications.** Budget thresholds, bills and reminders coming due, the monthly recap, and a count of rows waiting for review once more than 5 pile up. A category whose month so far reaches 1.5 times its usual month, and at least ₹1,000 more, alerts once that month; the tap opens its history. The recap and review notifications carry no amounts.
 - **Backup.** Export as JSON (a full backup), CSV or a PDF statement, and import JSON or CSV. Google Drive can keep a daily, weekly or monthly backup.
 - **Everything else.** App lock (fingerprint, face or device PIN), light and dark themes with several dark palettes, an accent colour, alternate launcher icons, and in-app updates from this repo's GitHub releases.
 
@@ -37,7 +37,7 @@ The repo still has `web/` and `ios/` folders from the Flutter template, and the 
 | `READ_SMS` | Reads bank alerts from the inbox. Asked for when you first import. |
 | `RECEIVE_SMS` | Wakes the import when an SMS arrives. Asked for only when you pick Every SMS. |
 | Notification access | Captures bank alerts from messaging-app notifications. You grant it in system settings. |
-| `POST_NOTIFICATIONS` | Budget, bill, recap and review notifications. |
+| `POST_NOTIFICATIONS` | Budget, unusual spending, bill, recap and review notifications. |
 | `USE_BIOMETRIC` | App lock. |
 | `RECEIVE_BOOT_COMPLETED` | Books the recap notification and background checks again after a reboot. |
 | `REQUEST_INSTALL_PACKAGES`, `UPDATE_PACKAGES_WITHOUT_USER_ACTION` | In-app updates. The installer accepts only this app's package, signed with its own key, at a newer version. |

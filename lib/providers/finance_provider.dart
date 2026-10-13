@@ -4955,7 +4955,7 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// Deletes every transaction and account, plus the fired budget-alert
-  /// markers — a stale `budget_alert_fired_…` key would otherwise suppress
+  /// and unusual-spending markers. A stale marker would otherwise suppress
   /// this month's alerts after the data that earned them is gone.
   ///
   /// With [includeConfig] the wipe also covers rules, import rules, groups,
@@ -4969,7 +4969,11 @@ class FinanceProvider extends ChangeNotifier {
     for (final key
         in prefs
             .getKeys()
-            .where((k) => k.startsWith('budget_alert_fired_'))
+            .where(
+              (k) =>
+                  k.startsWith('budget_alert_fired_') ||
+                  k.startsWith('unusual_alert_fired_'),
+            )
             .toList()) {
       await prefs.remove(key);
     }

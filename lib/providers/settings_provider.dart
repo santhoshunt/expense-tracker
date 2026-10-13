@@ -77,6 +77,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kAlert90 = 'budget_alert_90_v1';
   static const _kAlertOver = 'budget_alert_over_v1';
   static const _kUpcomingReminders = 'upcoming_reminders_v1';
+  static const _kUnusualAlerts = 'unusual_alerts_enabled_v1';
   static const _kUpcomingHidden = 'upcoming_hidden_v1';
   static const _kCollapsedSections = 'collapsed_sections_v1';
   static const _kExpandedAccounts = 'accounts_expanded_v1';
@@ -123,6 +124,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _alert90 = true;
   bool _alertOver = true;
   bool _upcomingReminders = true;
+  bool _unusualAlerts = true;
   Set<String> _upcomingHidden = {};
   Set<String> _collapsedSections = {};
   Set<String> _expandedAccounts = {};
@@ -160,6 +162,10 @@ class SettingsProvider extends ChangeNotifier {
 
   /// Notify on open when a card bill or detected recurring payment is due.
   bool get upcomingReminders => _upcomingReminders;
+
+  /// Notify when a category's month so far runs well past its usual month
+  /// (services/unusual_spend.dart). Needs no budget.
+  bool get unusualAlerts => _unusualAlerts;
 
   /// Recurring-detection keys the user hid from the Upcoming card.
   Set<String> get hiddenUpcoming => Set.unmodifiable(_upcomingHidden);
@@ -252,6 +258,10 @@ class SettingsProvider extends ChangeNotifier {
     _alertOver = tryRead(() => prefs.getBool(_kAlertOver) ?? true, true);
     _upcomingReminders = tryRead(
       () => prefs.getBool(_kUpcomingReminders) ?? true,
+      true,
+    );
+    _unusualAlerts = tryRead(
+      () => prefs.getBool(_kUnusualAlerts) ?? true,
       true,
     );
     _upcomingHidden = tryRead(
@@ -487,6 +497,16 @@ class SettingsProvider extends ChangeNotifier {
     await _persistPref(
       _kUpcomingReminders,
       (p) => p.setBool(_kUpcomingReminders, enabled),
+    );
+  }
+
+  Future<void> setUnusualAlerts(bool enabled) async {
+    if (enabled == _unusualAlerts) return;
+    _unusualAlerts = enabled;
+    notifyListeners();
+    await _persistPref(
+      _kUnusualAlerts,
+      (p) => p.setBool(_kUnusualAlerts, enabled),
     );
   }
 
@@ -731,6 +751,7 @@ class SettingsProvider extends ChangeNotifier {
     'alert90': _alert90,
     'alertOver': _alertOver,
     'upcomingReminders': _upcomingReminders,
+    'unusualAlerts': _unusualAlerts,
     'upcomingHidden': _upcomingHidden.toList(),
     'hideIncome': _hideIncome,
     'dismissedPairs': _dismissedPairs.toList(),
@@ -765,6 +786,9 @@ class SettingsProvider extends ChangeNotifier {
     if (map['alertOver'] is bool) _alertOver = map['alertOver'] as bool;
     if (map['upcomingReminders'] is bool) {
       _upcomingReminders = map['upcomingReminders'] as bool;
+    }
+    if (map['unusualAlerts'] is bool) {
+      _unusualAlerts = map['unusualAlerts'] as bool;
     }
     if (map['upcomingHidden'] is List) {
       _upcomingHidden = {
@@ -806,6 +830,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setBool(_kAlert90, _alert90);
       await p.setBool(_kAlertOver, _alertOver);
       await p.setBool(_kUpcomingReminders, _upcomingReminders);
+      await p.setBool(_kUnusualAlerts, _unusualAlerts);
       await p.setStringList(_kUpcomingHidden, _upcomingHidden.toList());
       await p.setBool(_kHideIncome, _hideIncome);
       await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());

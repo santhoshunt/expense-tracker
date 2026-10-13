@@ -15,6 +15,10 @@ enum LaunchAction {
   openUpcoming,
   openToday,
   openBreakdown,
+
+  /// An unusual spending alert: the category's history sheet, for the
+  /// category and month [LaunchActions.takeHistory] hands over.
+  openCategoryHistory,
 }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
@@ -31,6 +35,18 @@ class LaunchActions {
   /// The action waiting to run. Home clears it before running it, so a
   /// rebuild or a second listener call can never run it twice.
   final ValueNotifier<LaunchAction?> pending = ValueNotifier(null);
+
+  /// The category and month an [LaunchAction.openCategoryHistory] is about.
+  /// Set before [pending], so a listener never sees the action without it.
+  ({String categoryId, DateTime month})? _history;
+
+  /// The category and month for a pending
+  /// [LaunchAction.openCategoryHistory], once.
+  ({String categoryId, DateTime month})? takeHistory() {
+    final h = _history;
+    _history = null;
+    return h;
+  }
 
   bool _initialised = false;
 
@@ -86,17 +102,52 @@ class LaunchActions {
     if (action != null) pending.value = action;
   }
 
-  static LaunchAction? _fromPayload(String? payload) => switch (payload) {
-    kRecapPayload => LaunchAction.openRecap,
-    kReviewPayload => LaunchAction.openReview,
-    _ => null,
-  };
+  /// Maps [payload] to its action. An unusual spending alert's category and
+  /// month are also held for [takeHistory].
+  LaunchAction? _fromPayload(String? payload) {
+    if (payload != null && payload.startsWith(kUnusualPayloadPrefix)) {
+      final h = parseUnusualPayload(payload);
+      if (h == null) return null;
+      _history = h;
+      return LaunchAction.openCategoryHistory;
+    }
+    return switch (payload) {
+      kRecapPayload => LaunchAction.openRecap,
+      kReviewPayload => LaunchAction.openReview,
+      _ => null,
+    };
+  }
 
   @visibleForTesting
   void resetForTest() {
     _initialised = false;
+    _history = null;
     pending.value = null;
   }
+}
+
+/// Payload prefix on an unusual spending alert, followed by the alert's
+/// month and the raw category id: `unusual:2025-12:food`. The month travels
+/// with it, so a tap the next month still opens the month it was about.
+const String kUnusualPayloadPrefix = 'unusual:';
+
+/// [kUnusualPayloadPrefix]'s payload for [categoryId] in [month].
+String unusualPayload(String categoryId, DateTime month) =>
+    '$kUnusualPayloadPrefix${month.year}-'
+    '${month.month.toString().padLeft(2, '0')}:$categoryId';
+
+/// The category and month in an [unusualPayload]; null when malformed.
+({String categoryId, DateTime month})? parseUnusualPayload(String payload) {
+  if (!payload.startsWith(kUnusualPayloadPrefix)) return null;
+  final rest = payload.substring(kUnusualPayloadPrefix.length);
+  final m = RegExp(r'^(\d{4})-(\d{2}):(.+)$').firstMatch(rest);
+  if (m == null) return null;
+  final month = int.parse(m.group(2)!);
+  if (month < 1 || month > 12) return null;
+  return (
+    categoryId: m.group(3)!,
+    month: DateTime(int.parse(m.group(1)!), month),
+  );
 }
 
 /// Payload on the monthly recap notification.

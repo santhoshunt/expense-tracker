@@ -35,6 +35,7 @@ class AppNav {
   Object? _dashboardOwner;
   VoidCallback? _showRecap;
   void Function(DashboardSection section)? _showSection;
+  void Function(String categoryId, DateTime month)? _showCategoryHistory;
 
   void attachHome(
     Object owner, {
@@ -76,10 +77,13 @@ class AppNav {
     Object owner, {
     required VoidCallback showRecap,
     required void Function(DashboardSection section) showSection,
+    required void Function(String categoryId, DateTime month)
+    showCategoryHistory,
   }) {
     _dashboardOwner = owner;
     _showRecap = showRecap;
     _showSection = showSection;
+    _showCategoryHistory = showCategoryHistory;
   }
 
   void detachDashboard(Object owner) {
@@ -87,6 +91,7 @@ class AppNav {
     _dashboardOwner = null;
     _showRecap = null;
     _showSection = null;
+    _showCategoryHistory = null;
   }
 
   /// The Dashboard's recap on the Overview, or after the recap week this
@@ -99,6 +104,12 @@ class AppNav {
   /// alone: callers switch the home tab themselves.
   void showDashboardSection(DashboardSection section) =>
       _showSection?.call(section);
+
+  /// [categoryId]'s history sheet over the Dashboard on [month], in Month
+  /// view (where an unusual spending alert lands). Leaves open routes
+  /// alone: callers switch the home tab themselves.
+  void showCategoryHistory(String categoryId, DateTime month) =>
+      _showCategoryHistory?.call(categoryId, month);
 
   void _toRoot(BuildContext context) =>
       Navigator.of(context).popUntil((r) => r.isFirst);

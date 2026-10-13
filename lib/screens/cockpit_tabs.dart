@@ -717,8 +717,7 @@ class _BudgetSectionState extends State<_BudgetSection>
             // Alerts silently go nowhere while notifications cannot be shown —
             // say WHICH problem it is, since each has a different remedy and
             // only a fresh runtime denial can be fixed from inside the app.
-            if (hasCap &&
-                settings.budgetAlerts &&
+            if (((hasCap && settings.budgetAlerts) || settings.unusualAlerts) &&
                 _notifStatus != null &&
                 _notifStatus != NotificationStatus.enabled)
               Padding(
@@ -783,6 +782,37 @@ class _BudgetSectionState extends State<_BudgetSection>
                   },
                 ),
             ],
+            // Independent of the cap too: it measures each category against
+            // its own usual month.
+            _SwitchWithTip(
+              tip: const InfoTip(
+                title: 'Unusual spending alerts',
+                message:
+                    'A category alerts once a month when its spending so far '
+                    'reaches 1.5 times its usual month and is at least '
+                    '₹1,000 more. The usual month is the middle of up to 6 '
+                    'whole months, so a category needs 2 whole months since '
+                    'its first spend. '
+                    'Checks run when the app opens and when transactions '
+                    "change. Tapping an alert opens the category's history.",
+              ),
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Unusual spending alerts'),
+                subtitle: Text(
+                  'Notify when a category runs well past its usual month',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                value: settings.unusualAlerts,
+                onChanged: (on) async {
+                  await context.read<SettingsProvider>().setUnusualAlerts(on);
+                  if (on) {
+                    await NotificationService.instance.requestPermission();
+                  }
+                  await _checkNotifications();
+                },
+              ),
+            ),
             // Independent of the cap: card due dates and detected recurring
             // payments exist without any budget.
             _SwitchWithTip(

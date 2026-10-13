@@ -135,7 +135,21 @@ void main() {
     await tester.tap(find.text('Budgets'));
     await pumpThrough(tester);
     expect(find.text('Monthly cap'), findsOneWidget);
+    // Below the alert switches on a 600dp-tall test screen.
+    final list = find
+        .byWidgetPredicate(
+          (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
+        )
+        .first;
+    await tester.scrollUntilVisible(
+      find.text('No custom budgets yet.'),
+      300,
+      scrollable: list,
+    );
     expect(find.text('No custom budgets yet.'), findsOneWidget);
+    // Back up: scrolling down folds the FAB to its icon.
+    await tester.drag(list, const Offset(0, 600));
+    await pumpThrough(tester);
     // The FAB is the only add flow; the inline button duplicated it.
     expect(find.text('Add budget'), findsNothing);
     expect(find.text('New budget'), findsOneWidget, reason: 'FAB follows tab');
