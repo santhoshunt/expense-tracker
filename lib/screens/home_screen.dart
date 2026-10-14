@@ -144,10 +144,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     TxFilterRequest(type: TxType.expense, month: month, query: query),
   );
 
-  // By tags rows: that tag's spending in the month, like a category row.
-  void _viewTag(String tag, DateTime month) => _openTransactions(
-    TxFilterRequest(type: TxType.expense, month: month, tag: tag),
-  );
+  // By tags rows: that tag's rows in the month. No type filter: the tag
+  // sums count money-out transfers too, like By group.
+  void _viewTag(String tag, DateTime month) =>
+      _openTransactions(TxFilterRequest(month: month, tag: tag));
 
   @override
   void initState() {
@@ -894,8 +894,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             actions: [
               // Same IconButton in both states (disabled + spinner icon while
               // importing) so the action row doesn't shift and the pending
-              // badge doesn't blink out for the duration.
-              if (_smsImport.isSupported)
+              // badge doesn't blink out for the duration. Transactions only:
+              // imported rows land there.
+              if (_smsImport.isSupported && _index == kHomeTabTransactions)
                 IconButton(
                   tooltip: _importing ? 'Importing…' : 'Import from SMS',
                   icon: Badge(
@@ -952,18 +953,28 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               if (i != _index) Haptics.tick();
               setState(() => _showTab(i));
             },
-            destinations: const [
-              NavigationDestination(
+            destinations: [
+              const NavigationDestination(
                 icon: Icon(Icons.dashboard_outlined),
                 selectedIcon: Icon(Icons.dashboard),
                 label: 'Dashboard',
               ),
+              // The pending-import count, as on the SMS button, so it shows
+              // from every tab: that button lives on Transactions only.
               NavigationDestination(
-                icon: Icon(Icons.receipt_long_outlined),
-                selectedIcon: Icon(Icons.receipt_long),
+                icon: Badge(
+                  isLabelVisible: pendingCount > 0,
+                  label: Text('$pendingCount'),
+                  child: const Icon(Icons.receipt_long_outlined),
+                ),
+                selectedIcon: Badge(
+                  isLabelVisible: pendingCount > 0,
+                  label: Text('$pendingCount'),
+                  child: const Icon(Icons.receipt_long),
+                ),
                 label: 'Transactions',
               ),
-              NavigationDestination(
+              const NavigationDestination(
                 icon: Icon(Icons.account_balance_wallet_outlined),
                 selectedIcon: Icon(Icons.account_balance_wallet),
                 label: 'Accounts',

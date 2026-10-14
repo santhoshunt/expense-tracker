@@ -20,6 +20,7 @@ import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../utils/contrast.dart';
 import '../utils/haptics.dart';
+import '../utils/money_colors.dart';
 import '../utils/search_text.dart';
 import '../widgets/category_chip_label.dart';
 import '../widgets/cycle_label.dart';
@@ -328,7 +329,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       required VoidCallback onDeleted,
     }) => InputChip(
       avatar: avatar,
-      label: Text(label),
+      // Ellipsized when the strip caps the chip's width.
+      label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
       visualDensity: VisualDensity.compact,
       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
       onDeleted: onDeleted,
@@ -391,7 +393,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             label: 'Tag · ${u.tag}',
             onDeleted: () => setState(() => _tagFilter.remove(tagKey(u.tag))),
           ),
+      // One chip for both bounds: its ✕ clears the range.
+      if (_minAmount != null || _maxAmount != null)
+        chip(
+          avatar: const Icon(Icons.currency_rupee, size: 16),
+          label: _amountChipLabel(_minAmount, _maxAmount),
+          onDeleted: () => setState(() {
+            _minAmount = null;
+            _maxAmount = null;
+          }),
+        ),
     ];
+  }
+
+  /// "Amount ₹500 to ₹2,000", "Amount from ₹500" or "Amount up to ₹2,000".
+  static String _amountChipLabel(double? min, double? max) {
+    if (min != null && max != null) {
+      return 'Amount ${fmtMoneyTidy(min)} to ${fmtMoneyTidy(max)}';
+    }
+    if (min != null) return 'Amount from ${fmtMoneyTidy(min)}';
+    return 'Amount up to ${fmtMoneyTidy(max ?? 0)}';
   }
 
   bool get _hasAdvancedFilters =>
@@ -923,7 +944,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         _categoryFilter.isNotEmpty ||
         _groupFilter.isNotEmpty ||
         _budgetFilter.isNotEmpty ||
-        _tagFilter.isNotEmpty;
+        _tagFilter.isNotEmpty ||
+        _minAmount != null ||
+        _maxAmount != null;
 
     // The cards and bars above the list fold in and out (AnimatedPresence)
     // so the list slides instead of jumping. Each child is built only while
@@ -954,11 +977,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           },
           filter: _filter,
           onFilter: _setFilter,
-          sort: _sort,
-          onSort: (s) => setState(() => _sort = s),
           hasAdvancedFilters: _hasAdvancedFilters,
           onOpenFilters: _openFilterSheet,
-          onExport: _exportCsv,
         ),
         AnimatedPresence(
           key: const ValueKey('filter-chips'),
@@ -968,22 +988,36 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               // Single-line, horizontally scrollable strip of COMPACT chips —
               // a wrapping layout grew a row per filter and buried the list
               // when several were active.
+              // Left-aligned under the type chips: a narrower strip would
+              // otherwise sit centred. Each chip is capped at the strip's
+              // width, its label ellipsized, so its ✕ never runs off screen
+              // at large text.
               : Padding(
                   padding: const EdgeInsets.only(bottom: 4),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        for (final chip in _activeFilterChips(
-                          finance,
-                          activeAccount,
-                        ))
-                          Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: chip,
-                          ),
-                      ],
+                  child: LayoutBuilder(
+                    builder: (context, box) => Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            for (final chip in _activeFilterChips(
+                              finance,
+                              activeAccount,
+                            ))
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: math.max(0.0, box.maxWidth - 32),
+                                  ),
+                                  child: chip,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -1033,6 +1067,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// controllers — during a drag the neighbor page is alive too.
   Widget _buildPage(_Filter f, FinanceProvider finance, List<Tx> allConfirmed) {
     final data = _pageDataFor(f, finance, allConfirmed);
+    // Date sorts put a day header over each day's rows.
+    final byDate = _sort == _Sort.dateDesc || _sort == _Sort.dateAsc;
     // Transparent ColoredBox: the empty state is shrink-wrapped, and a
     // PageView only receives drags that hit its subtree — blank regions
     // need an opaque hit-test surface or a swipe there would die.
@@ -1141,6 +1177,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                             grouped: true,
                             groupedFirst: shape.first,
                             groupedLast: shape.last,
+                            // A day header names the date of every row
+                            // under it; the row adds its time.
+                            showDate: !byDate,
                           ),
                         ],
                       );
@@ -1635,8 +1674,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   /// Exports exactly what the list is showing — same rows, same order.
+  /// Rebuilt from the current filters rather than read from the last
+  /// build: the Filters sheet applies its choices just before this runs.
   Future<void> _exportCsv() async {
-    final rows = [for (final (_, tx) in _activeData.rows) ?tx];
+    final finance = context.read<FinanceProvider>();
+    final data = _pageDataFor(_filter, finance, finance.transactions);
+    final rows = [for (final (_, tx) in data.rows) ?tx];
     final messenger = ScaffoldMessenger.of(context);
     if (rows.isEmpty) {
       showAppToastOn(messenger, 'Nothing to export.');
@@ -1777,8 +1820,39 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       text: _maxAmount == null ? '' : _maxAmount!.toStringAsFixed(0),
     );
     final filterSearchCtrl = TextEditingController();
+    // The sort is a view setting, not a filter: a pick applies at once (a
+    // sheet swiped away keeps it) and Clear all leaves it alone.
+    var sort = _sort;
 
-    await showModalBottomSheet(
+    // Apply and Export CSV both commit the sheet's choices.
+    void apply() {
+      setState(() {
+        _categoryFilter
+          ..clear()
+          ..addAll(selected);
+        _groupFilter
+          ..clear()
+          ..addAll(selectedGroups);
+        _budgetFilter
+          ..clear()
+          ..addAll(selectedBudgets);
+        _tagFilter
+          ..clear()
+          ..addAll(selectedTags);
+        // parseAmount: "1,000" must filter, not silently clear the bound
+        // the user just typed.
+        _minAmount = parseAmount(minCtrl.text);
+        _maxAmount = parseAmount(maxCtrl.text);
+        _accountId = accountId;
+        _monthFilter = month;
+        // The range the sheet opened with keeps its year flavour; any new
+        // pick (or none) is a plain range.
+        if (!identical(range, _rangeFilter)) _setRange(range);
+      });
+    }
+
+    // True when the sheet closed through Export CSV.
+    final exportAfter = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       // Keeps the sheet (and its drag handle) below the status bar / notch.
@@ -1801,72 +1875,64 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               children: [
                 // Pinned header: the actions stay reachable however long the
                 // filter content grows or when the keyboard is open — only the
-                // content below scrolls.
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
+                // content below scrolls. Wraps rather than overflowing: at
+                // 320dp and 2x text the title and both buttons outgrew the
+                // line, so the buttons drop under the title, and under each
+                // other when even that is too narrow. Full width, or the
+                // Column centres the Wrap and the title leaves the margin.
+                SizedBox(
+                  width: double.infinity,
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    runSpacing: 4,
+                    children: [
+                      Text(
                         'Filters',
+                        key: const ValueKey('filters-title'),
                         style: Theme.of(ctx).textTheme.titleLarge,
                         overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                    TextButton(
-                      // Resets the draft in place — everything else in the
-                      // sheet waits for Apply, so Clear-all applying and
-                      // closing immediately was the one inconsistent control.
-                      onPressed: () {
-                        minCtrl.clear();
-                        maxCtrl.clear();
-                        // Clearing the query too: mid-search, deselected
-                        // chips would just vanish (only visible via the
-                        // selected-chip escape hatch) and Clear-all read
-                        // as a no-op.
-                        filterSearchCtrl.clear();
-                        setSheetState(() {
-                          filterQuery = '';
-                          selected.clear();
-                          selectedGroups.clear();
-                          selectedBudgets.clear();
-                          selectedTags.clear();
-                          accountId = null;
-                          month = null;
-                          range = null;
-                        });
-                      },
-                      child: const Text('Clear all'),
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: () {
-                        setState(() {
-                          _categoryFilter
-                            ..clear()
-                            ..addAll(selected);
-                          _groupFilter
-                            ..clear()
-                            ..addAll(selectedGroups);
-                          _budgetFilter
-                            ..clear()
-                            ..addAll(selectedBudgets);
-                          _tagFilter
-                            ..clear()
-                            ..addAll(selectedTags);
-                          // parseAmount: "1,000" must filter, not silently
-                          // clear the bound the user just typed.
-                          _minAmount = parseAmount(minCtrl.text);
-                          _maxAmount = parseAmount(maxCtrl.text);
-                          _accountId = accountId;
-                          _monthFilter = month;
-                          // The range the sheet opened with keeps its year
-                          // flavour; any new pick (or none) is a plain range.
-                          if (!identical(range, _rangeFilter)) _setRange(range);
-                        });
-                        Navigator.pop(ctx);
-                      },
-                      child: const Text('Apply'),
-                    ),
-                  ],
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          TextButton(
+                            // Resets the draft in place — everything else in the
+                            // sheet waits for Apply, so Clear-all applying and
+                            // closing immediately was the one inconsistent control.
+                            onPressed: () {
+                              minCtrl.clear();
+                              maxCtrl.clear();
+                              // Clearing the query too: mid-search, deselected
+                              // chips would just vanish (only visible via the
+                              // selected-chip escape hatch) and Clear-all read
+                              // as a no-op.
+                              filterSearchCtrl.clear();
+                              setSheetState(() {
+                                filterQuery = '';
+                                selected.clear();
+                                selectedGroups.clear();
+                                selectedBudgets.clear();
+                                selectedTags.clear();
+                                accountId = null;
+                                month = null;
+                                range = null;
+                              });
+                            },
+                            child: const Text('Clear all'),
+                          ),
+                          FilledButton(
+                            onPressed: () {
+                              apply();
+                              Navigator.pop(ctx);
+                            },
+                            child: const Text('Apply'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 8),
                 // Pinned like the header: narrows every chip section below.
@@ -1928,6 +1994,28 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            // Not narrowed by the filter query, like Date.
+                            const SizedBox(height: 12),
+                            Text(
+                              'Sort by',
+                              style: Theme.of(ctx).textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: [
+                                for (final s in _Sort.values)
+                                  ChoiceChip(
+                                    label: Text(_sortLabels[s]!),
+                                    selected: sort == s,
+                                    onSelected: (_) {
+                                      setSheetState(() => sort = s);
+                                      setState(() => _sort = s);
+                                    },
+                                  ),
+                              ],
+                            ),
                             // Not narrowed by the filter query: three fixed
                             // choices, and the one that is active must stay
                             // reachable.
@@ -2223,7 +2311,21 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 8),
+                            const SizedBox(height: 16),
+                            const Divider(height: 1),
+                            ListTile(
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(Icons.ios_share),
+                              title: const Text('Export CSV'),
+                              subtitle: const Text(
+                                'Applies these filters, then saves the rows '
+                                'the list shows',
+                              ),
+                              onTap: () {
+                                apply();
+                                Navigator.pop(ctx, true);
+                              },
+                            ),
                           ],
                         ),
                       );
@@ -2236,6 +2338,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ),
       ),
     );
+    // Run from this screen once the sheet has gone, so a save dialog never
+    // opens over a route that is closing.
+    if (exportAfter == true && mounted) await _exportCsv();
   }
 }
 
@@ -2678,19 +2783,16 @@ class _BarAction extends StatelessWidget {
   }
 }
 
-enum _TuneAction { sort, filters, export }
-
 class _SearchAndFilterBar extends StatelessWidget {
   final TextEditingController searchCtrl;
   final ValueChanged<String> onSearch;
   final VoidCallback onClearSearch;
   final _Filter filter;
   final ValueChanged<_Filter> onFilter;
-  final _Sort sort;
-  final ValueChanged<_Sort> onSort;
   final bool hasAdvancedFilters;
+
+  /// The Filters sheet, which also holds the sort and Export CSV.
   final VoidCallback onOpenFilters;
-  final VoidCallback onExport;
 
   const _SearchAndFilterBar({
     required this.searchCtrl,
@@ -2698,79 +2800,9 @@ class _SearchAndFilterBar extends StatelessWidget {
     required this.onClearSearch,
     required this.filter,
     required this.onFilter,
-    required this.sort,
-    required this.onSort,
     required this.hasAdvancedFilters,
     required this.onOpenFilters,
-    required this.onExport,
   });
-
-  Future<void> _pickSort(BuildContext context) async {
-    final result = await showPickerSheet<_Sort>(
-      context: context,
-      title: 'Sort by',
-      items: [
-        for (final s in _Sort.values)
-          PickerItem(value: s, label: _sortLabels[s]!),
-      ],
-      selected: sort,
-    );
-    final v = result?.value;
-    if (v != null) onSort(v);
-  }
-
-  /// Sort, filters and export behind the one tune button. The sheet only
-  /// returns the choice; it runs from this bar's context once the sheet has
-  /// closed, so the next sheet never opens from a route that is going away.
-  Future<void> _openTune(BuildContext context) async {
-    final action = await showModalBottomSheet<_TuneAction>(
-      context: context,
-      showDragHandle: true,
-      useSafeArea: true,
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.sort),
-              title: const Text('Sort by'),
-              subtitle: Text(_sortLabels[sort]!),
-              onTap: () => Navigator.pop(ctx, _TuneAction.sort),
-            ),
-            ListTile(
-              leading: const Icon(Icons.filter_list),
-              title: const Text('Filters'),
-              subtitle: const Text('Dates, account, category, tag and amount'),
-              // The same dot the tune button carries while one is on.
-              trailing: hasAdvancedFilters
-                  ? Semantics(
-                      label: 'Filters on',
-                      child: const Badge(smallSize: 8),
-                    )
-                  : null,
-              onTap: () => Navigator.pop(ctx, _TuneAction.filters),
-            ),
-            ListTile(
-              leading: const Icon(Icons.ios_share),
-              title: const Text('Export CSV'),
-              subtitle: const Text('The rows this list shows'),
-              onTap: () => Navigator.pop(ctx, _TuneAction.export),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (action == null || !context.mounted) return;
-    switch (action) {
-      case _TuneAction.sort:
-        await _pickSort(context);
-      case _TuneAction.filters:
-        onOpenFilters();
-      case _TuneAction.export:
-        onExport();
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -2787,7 +2819,7 @@ class _SearchAndFilterBar extends StatelessWidget {
               controller: searchCtrl,
               onChanged: onSearch,
               decoration: InputDecoration(
-                hintText: 'Search notes, merchants, amounts…',
+                hintText: 'Search',
                 prefixIcon: const Icon(Icons.search),
                 // Sort, filters and export sit behind one button in the
                 // field, so the search gets the whole row.
@@ -2811,7 +2843,7 @@ class _SearchAndFilterBar extends StatelessWidget {
                         isLabelVisible: hasAdvancedFilters,
                         child: const Icon(Icons.tune),
                       ),
-                      onPressed: () => _openTune(context),
+                      onPressed: onOpenFilters,
                     ),
                   ],
                 ),
@@ -2841,6 +2873,28 @@ class _SearchAndFilterBar extends StatelessWidget {
 
 /// Space above a list month header's label.
 const double _kMonthHeaderTop = 24;
+
+/// Room a month header keeps beside its name for the Select month button:
+/// the 18dp icon, its padding and the compact tap target around it.
+const double _kSelectMonthWidth = 48;
+
+/// Width of [text] on one line as a `Text` with [style] lays it out here:
+/// same default style, bold-text setting and text scale.
+double _labelWidth(BuildContext context, String text, TextStyle style) {
+  var effective = DefaultTextStyle.of(context).style.merge(style);
+  if (MediaQuery.boldTextOf(context)) {
+    effective = effective.merge(const TextStyle(fontWeight: FontWeight.bold));
+  }
+  final painter = TextPainter(
+    text: TextSpan(text: text, style: effective),
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+    maxLines: 1,
+  )..layout();
+  final width = painter.width;
+  painter.dispose();
+  return width;
+}
 
 /// A month header's content height, list row and sticky band alike: the
 /// Select month button's compact tap target, or taller for large text.
@@ -2875,8 +2929,9 @@ double _monthHeaderRowHeight(BuildContext context) =>
 }
 
 /// The label above a day's rows under a date sort: "Today", "Yesterday" or
-/// the weekday and date, with the day's net on the right. The weekday also
-/// keeps it apart from the rows' own "12 Oct".
+/// the weekday and date, with the day's net on the right, green when money
+/// came in on balance and red when it went out. The rows under it show
+/// their times, not the date again.
 class _DayHeader extends StatelessWidget {
   final DateTime day;
 
@@ -2914,16 +2969,20 @@ class _DayHeader extends StatelessWidget {
     // Like the month header, a day with nothing counted shows no figure. A
     // net would give away a hidden income, so that day shows the mask.
     String? total;
+    Color? totalColor;
     if (income > 0 || expense > 0) {
       final net = income - expense;
       // Read only on a day with income, as the month header does.
-      total =
+      final masked =
           income > 0 &&
-              context.select<SettingsProvider, bool>((s) => s.hideIncome)
+          context.select<SettingsProvider, bool>((s) => s.hideIncome);
+      total = masked
           ? kMaskedAmount
           : net > 0
           ? '+${fmtMoneyTidy(net)}'
           : fmtMoneyTidy(net);
+      // A masked net keeps the plain colour: its sign would give it away.
+      if (!masked) totalColor = signedMoneyColor(context, net);
     }
 
     return Padding(
@@ -2944,7 +3003,11 @@ class _DayHeader extends StatelessWidget {
               constraints: const BoxConstraints(maxWidth: 160),
               child: FittedBox(
                 fit: BoxFit.scaleDown,
-                child: Text(total, maxLines: 1, style: style),
+                child: Text(
+                  total,
+                  maxLines: 1,
+                  style: style?.copyWith(color: totalColor),
+                ),
               ),
             ),
           ],
@@ -2984,9 +3047,12 @@ class _MonthHeader extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
 
     final now = DateTime.now();
+    // Large text takes the short name ("OCT"), so the name and the totals
+    // still share the line.
+    final name = isLargeTextScale(context) ? 'MMM' : 'MMMM';
     final label = (month.year == now.year)
-        ? DateFormat('MMMM').format(month).toUpperCase()
-        : DateFormat('MMMM yyyy').format(month).toUpperCase();
+        ? DateFormat(name).format(month).toUpperCase()
+        : DateFormat('$name yyyy').format(month).toUpperCase();
 
     return Padding(
       // Right padding matches the jump-controls column width so the label
@@ -3007,6 +3073,50 @@ class _MonthHeader extends StatelessWidget {
     String label,
     double income,
     double expense,
+  ) => LayoutBuilder(
+    builder: (context, box) {
+      // accentTextColor, not scheme.primary: same 4.5:1 fix as
+      // UppercaseSectionHeader: the raw accent read at ~2.5:1 on the light
+      // surface (the amounts beside it were already bumped for exactly
+      // this).
+      final labelStyle = TextStyle(
+        color: accentTextColor(context),
+        fontSize: 11,
+        fontWeight: FontWeight.w800,
+        letterSpacing: 1.4,
+      );
+      // Large text: the short name ("OCT") stays whole and the totals take
+      // what is left, up to their usual cap; capped at 160 alone they left
+      // the list copy "O…" beside its Select month button. Both copies
+      // reserve that button's width, so their totals match at the hand-off.
+      var totalsCap = 160.0;
+      if (isLargeTextScale(context)) {
+        final name = _labelWidth(context, label, labelStyle);
+        totalsCap = (box.maxWidth - name - _kSelectMonthWidth - 8 - 1).clamp(
+          40.0,
+          160.0,
+        );
+      }
+      return _rowWith(
+        context,
+        scheme,
+        label,
+        labelStyle,
+        totalsCap,
+        income,
+        expense,
+      );
+    },
+  );
+
+  Widget _rowWith(
+    BuildContext context,
+    ColorScheme scheme,
+    String label,
+    TextStyle labelStyle,
+    double totalsCap,
+    double income,
+    double expense,
   ) => Row(
     children: [
       // Expanded, so the totals always end at the right edge. With a
@@ -3021,16 +3131,7 @@ class _MonthHeader extends StatelessWidget {
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                // accentTextColor, not scheme.primary: same 4.5:1 fix as
-                // UppercaseSectionHeader — the raw accent read at ~2.5:1 on
-                // the light surface (the amounts beside it were already
-                // bumped for exactly this).
-                style: TextStyle(
-                  color: accentTextColor(context),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.4,
-                ),
+                style: labelStyle,
               ),
             ),
             // The pinned copy opens the month list: the arrow says so.
@@ -3063,21 +3164,20 @@ class _MonthHeader extends StatelessWidget {
       // to fit instead of overflowing past the jump controls.
       if (income > 0 || expense > 0)
         ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 160),
+          constraints: BoxConstraints(maxWidth: totalsCap),
           child: FittedBox(
             fit: BoxFit.scaleDown,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Plain text colour: the + and − carry the direction, as on
-                // the rows below.
+                // Money in green, money out red, as on the rows below.
                 if (income > 0)
                   Text(
                     context.select<SettingsProvider, bool>((s) => s.hideIncome)
                         ? '+$kMaskedAmount'
                         : '+${fmtMoneyCompact(income)}',
                     style: TextStyle(
-                      color: scheme.onSurface,
+                      color: moneyColor(context, type: TxType.income),
                       fontWeight: FontWeight.w700,
                       fontSize: 12,
                     ),
@@ -3087,7 +3187,7 @@ class _MonthHeader extends StatelessWidget {
                   Text(
                     '−${fmtMoneyCompact(expense)}',
                     style: TextStyle(
-                      color: scheme.onSurface,
+                      color: moneyColor(context, type: TxType.expense),
                       fontWeight: FontWeight.w700,
                       fontSize: 12,
                     ),
@@ -3603,9 +3703,23 @@ class _PendingRow extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      subtitle: Text(
-        '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)} · '
-        '${fmtDateMaybeTime(tx.date)}\n${tx.smsText}',
+      // The amount in its money colour, as on the ledger rows.
+      subtitle: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
+              style: TextStyle(
+                color: moneyColor(
+                  context,
+                  type: tx.type,
+                  transfer: isTransferCategory(tx.categoryId),
+                ),
+              ),
+            ),
+            TextSpan(text: ' · ${fmtDateMaybeTime(tx.date)}\n${tx.smsText}'),
+          ],
+        ),
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),

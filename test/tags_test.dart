@@ -128,18 +128,18 @@ void main() {
       return (p, a, b);
     }
 
-    test('totals count only your share and leave transfers out', () async {
+    test('totals count your share and money-out transfers', () async {
       final (p, _, _) = await seeded();
       final s = p.tagSummaries.single;
       expect(s.tag, 'Goa trip', reason: 'one tag, first spelling');
-      expect(s.spent, 400);
+      expect(s.spent, 5400, reason: 'your 400 share + the 5000 transfer');
       expect(s.count, 2);
       expect(s.first, DateTime(2026, 9, 12));
       expect(s.last, DateTime(2026, 9, 16));
       expect(p.allTags.single.count, 2);
     });
 
-    test('By tags: month spend, both tags counted, transfers out', () async {
+    test('By tags: month money out, both tags counted, transfers in', () async {
       final (p, _, _) = await seeded();
       await p.addTransaction(
         type: TxType.expense,
@@ -159,13 +159,17 @@ void main() {
       );
       final sep = p.expenseByTagInMonth(DateTime(2026, 9));
       expect([for (final t in sep) t.tag], ['Goa trip', 'Work']);
-      expect(sep.first.spent, 1000, reason: 'your 400 share + the 600 cab');
+      expect(
+        sep.first.spent,
+        6000,
+        reason: 'your 400 share + the 600 cab + the 5000 money-out transfer',
+      );
       expect(sep.last.spent, 600);
       expect(p.expenseByTagInMonth(DateTime(2026, 10)).single.spent, 90);
       final year = p.expenseByTagInYear(2026);
       expect(
         [for (final t in year) (t.tag, t.spent)],
-        [('Goa trip', 1000.0), ('Work', 690.0)],
+        [('Goa trip', 6000.0), ('Work', 690.0)],
       );
     });
 
@@ -305,7 +309,7 @@ void main() {
       final p = await tagged();
       await p.setTagColor('Work', pink);
       final data = p.exportData();
-      expect(data['version'], 21);
+      expect(data['version'], 22);
       final fresh = FinanceProvider();
       await fresh.load();
       await fresh.importData(data, replace: true);

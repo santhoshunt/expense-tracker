@@ -3,15 +3,15 @@ import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
 import '../models/spend_budget.dart';
+import '../models/transaction.dart' show TxType;
 import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
-import '../utils/haptics.dart';
+import '../utils/money_colors.dart';
+import 'budget_dialog.dart';
 import 'category_donut_chart.dart';
-import 'chart_popup.dart';
 import 'info_tip.dart';
 import 'motion.dart';
-import 'status_dot.dart';
 
 /// Visual detail for one custom budget, starting at [month]: progress ring,
 /// category pie, 6-month trend, and the jump into the budget-filtered
@@ -19,7 +19,7 @@ import 'status_dot.dart';
 /// Chevrons in the sheet step through months without leaving it.
 Future<void> showBudgetDetailSheet(
   BuildContext context,
-  SpendBudget budget,
+  SpendBudget initial,
   DateTime month, {
   void Function(String budgetId, DateTime month)? onViewTransactions,
   void Function(String categoryId, DateTime month)? onViewCategory,
@@ -36,13 +36,24 @@ Future<void> showBudgetDetailSheet(
       return StatefulBuilder(
         builder: (ctx, setSheetState) {
           final finance = ctx.watch<FinanceProvider>();
+          // The stored budget, so an edit from the title's pencil shows
+          // here at once; the one passed in if it was deleted meanwhile.
+          var budget = initial;
+          for (final b in finance.budgets) {
+            if (b.id == initial.id) budget = b;
+          }
           // Same bound as the dashboard's next-month arrow: the current
           // month, or a later one when rows dated ahead put data there.
           final now = DateTime.now();
-          var latest = DateTime(now.year, now.month);
+          final current = DateTime(now.year, now.month);
+          var latest = current;
           for (final m in finance.monthsWithData) {
             if (m.isAfter(latest)) latest = m;
           }
+          // "left this month" only while it is this month.
+          final when = shown == current
+              ? 'this month'
+              : 'in ${DateFormat('MMM').format(shown)}';
           final spent = finance.budgetSpentFor(budget, shown);
           final limit = budget.limit;
           final pct = limit == 0 ? 0.0 : spent / limit;
@@ -63,11 +74,23 @@ Future<void> showBudgetDetailSheet(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text(
-                    budget.name,
-                    style: Theme.of(ctx).textTheme.titleLarge,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          budget.name,
+                          style: Theme.of(ctx).textTheme.titleLarge,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Edit budget',
+                        icon: const Icon(Icons.edit_outlined, size: 20),
+                        onPressed: () =>
+                            showBudgetDialog(ctx, existing: budget),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Row(
@@ -128,32 +151,21 @@ Future<void> showBudgetDetailSheet(
                               ),
                             ),
                             const SizedBox(height: 4),
-                            // The ring carries the colour; over the limit a
-                            // red dot leads the plain-coloured line.
-                            Row(
-                              children: [
-                                if (over) ...[
-                                  StatusDot(
-                                    color: Theme.of(ctx).colorScheme.error,
+                            // Over the limit, the line is in the money-out
+                            // red.
+                            Text(
+                              over
+                                  ? '${fmtMoneyCompact(spent - limit)} '
+                                        'over the limit'
+                                        '${shown == current ? '' : ' $when'}'
+                                  : '${fmtMoneyCompact(limit - spent)} '
+                                        'left $when',
+                              style: Theme.of(ctx).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: over
+                                        ? moneyColor(ctx, type: TxType.expense)
+                                        : Theme.of(ctx).colorScheme.onSurface,
                                   ),
-                                  const SizedBox(width: 6),
-                                ],
-                                Flexible(
-                                  child: Text(
-                                    over
-                                        ? '${fmtMoneyCompact(spent - limit)} '
-                                              'over the limit'
-                                        : '${fmtMoneyCompact(limit - spent)} '
-                                              'left this month',
-                                    style: Theme.of(ctx).textTheme.bodySmall
-                                        ?.copyWith(
-                                          color: Theme.of(
-                                            ctx,
-                                          ).colorScheme.onSurface,
-                                        ),
-                                  ),
-                                ),
-                              ],
                             ),
                           ],
                         ),
@@ -199,12 +211,19 @@ Future<void> showBudgetDetailSheet(
                         message:
                             "Each bar is that month's spending in this "
                             'budget, coloured like the ring. The line marks '
-                            'the limit.',
+                            'the limit. Tap a bar to show that month.',
                       ),
                     ),
                   ),
                   const SizedBox(height: 8),
-                  _BudgetTrendBars(months: months, spent: trend, limit: limit),
+                  _BudgetTrendBars(
+                    months: months,
+                    spent: trend,
+                    limit: limit,
+                    // A bar shows its month: the sheet steps there, as
+                    // the chevrons do.
+                    onSelect: (m) => setSheetState(() => shown = m),
+                  ),
                   const SizedBox(height: 20),
                   if (onViewTransactions != null)
                     FilledButton.icon(
@@ -227,83 +246,24 @@ Future<void> showBudgetDetailSheet(
 
 /// Six vertical bars of budget spend, tinted by the same green/orange/error
 /// thresholds the budget rows use, with a subtle line where the limit sits.
-/// Stepping months eases the bars to their new heights. Tapping a bar lifts
-/// it, dims the rest and opens that month's spend against the limit.
-class _BudgetTrendBars extends StatefulWidget {
+/// Stepping months eases the bars to their new heights. Tapping a bar
+/// shows its month in the sheet ([onSelect]); the last bar is the month
+/// shown.
+class _BudgetTrendBars extends StatelessWidget {
   final List<DateTime> months;
   final List<double> spent;
   final double limit;
+  final ValueChanged<DateTime> onSelect;
 
   const _BudgetTrendBars({
     required this.months,
     required this.spent,
     required this.limit,
+    required this.onSelect,
   });
 
   @override
-  State<_BudgetTrendBars> createState() => _BudgetTrendBarsState();
-}
-
-class _BudgetTrendBarsState extends State<_BudgetTrendBars>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _select = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 180),
-  );
-  int? _selected;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _select.duration = motionDuration(
-      context,
-      const Duration(milliseconds: 180),
-    );
-  }
-
-  @override
-  void dispose() {
-    _select.dispose();
-    super.dispose();
-  }
-
-  Future<void> _open(BuildContext cell, int i, double heightFactor) async {
-    final spent = widget.spent[i];
-    final limit = widget.limit;
-    final pct = limit == 0 ? 0.0 : spent / limit;
-    final box = cell.findRenderObject()! as RenderBox;
-    Haptics.tick();
-    // A different bar starts from flat, not from the last one's lift.
-    if (_selected != i) _select.value = 0;
-    setState(() => _selected = i);
-    _select.forward();
-    await showAnchoredBubble(
-      context,
-      anchor: chartAnchor(
-        cell,
-        Offset(box.size.width / 2, box.size.height * (1 - heightFactor)),
-      ),
-      maxWidth: kChartPopupWidth,
-      content: (_) => ChartPopup(
-        title: DateFormat('MMMM yyyy').format(widget.months[i]),
-        rows: [('Spent', fmtMoney(spent)), ('Limit', fmtMoney(limit))],
-        footnote: limit == 0 ? null : '${(pct * 100).round()}% of limit',
-        footnoteColor: limit == 0 ? null : budgetColor(context, pct),
-        host: context,
-      ),
-    );
-    if (!mounted || _selected != i) return;
-    await _select.reverse();
-    if (mounted && _selected == i && _select.value == 0) {
-      setState(() => _selected = null);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final months = widget.months;
-    final spent = widget.spent;
-    final limit = widget.limit;
     final scheme = Theme.of(context).colorScheme;
     final maxVal = [...spent, limit].fold(0.0, (m, v) => v > m ? v : m);
     final mmm = DateFormat('MMM');
@@ -334,39 +294,29 @@ class _BudgetTrendBarsState extends State<_BudgetTrendBars>
       final heightFactor = maxVal == 0
           ? 0.0
           : (spent[i] / maxVal).clamp(0.02, 1.0);
-      return Builder(
-        // The whole column is the target: a short bar is too small to hit.
-        builder: (cell) => GestureDetector(
+      // The whole column is the target: a short bar is too small to hit.
+      return Semantics(
+        button: true,
+        label: 'Show ${DateFormat('MMMM yyyy').format(months[i])}',
+        excludeSemantics: true,
+        onTap: () => onSelect(months[i]),
+        child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () => _open(cell, i, heightFactor),
-          child: AnimatedBuilder(
-            animation: _select,
-            builder: (context, child) {
-              final t = Curves.easeOutCubic.transform(_select.value);
-              final isSelected = _selected == i;
-              return Opacity(
-                opacity: _selected == null || isSelected ? 1 : 1 - 0.7 * t,
-                child: Transform.translate(
-                  offset: Offset(0, isSelected ? -4 * t : 0),
-                  child: child,
-                ),
-              );
-            },
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: AnimatedFractionallySizedBox(
+          onTap: () => onSelect(months[i]),
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: AnimatedFractionallySizedBox(
+              duration: morph,
+              curve: Curves.easeOutCubic,
+              heightFactor: heightFactor,
+              child: AnimatedContainer(
                 duration: morph,
-                curve: Curves.easeOutCubic,
-                heightFactor: heightFactor,
-                child: AnimatedContainer(
-                  duration: morph,
-                  decoration: BoxDecoration(
-                    color: spent[i] == 0
-                        ? scheme.surfaceContainerHigh
-                        : barColor(spent[i]),
-                    borderRadius: const BorderRadius.vertical(
-                      top: Radius.circular(4),
-                    ),
+                decoration: BoxDecoration(
+                  color: spent[i] == 0
+                      ? scheme.surfaceContainerHigh
+                      : barColor(spent[i]),
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(4),
                   ),
                 ),
               ),

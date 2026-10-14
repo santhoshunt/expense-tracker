@@ -7,9 +7,15 @@ import '../screens/add_transaction_sheet.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
+import '../utils/money_colors.dart';
+import '../utils/text_scale.dart';
 import 'glossy.dart';
 import 'grouped_surface.dart';
 import 'motion.dart';
+
+// Kept importable from here: other screens take isLargeTextScale from this
+// file.
+export '../utils/text_scale.dart';
 
 /// Width of [text] laid out on one line the way a `Text` with [style] would
 /// render it here: same default style, bold-text setting and text scale.
@@ -45,6 +51,11 @@ class TransactionTile extends StatelessWidget {
   final bool groupedFirst;
   final bool groupedLast;
 
+  /// False under a day header, which already names the date: the second
+  /// line then shows the time ("4:12 PM"), or no time for a midnight row
+  /// (the app's "no time known").
+  final bool showDate;
+
   const TransactionTile({
     super.key,
     required this.tx,
@@ -54,6 +65,7 @@ class TransactionTile extends StatelessWidget {
     this.grouped = false,
     this.groupedFirst = false,
     this.groupedLast = false,
+    this.showDate = true,
   });
 
   /// "₹2,200 to get back · Arun, Priya" (or "Settled · …") on a split that
@@ -82,6 +94,58 @@ class TransactionTile extends StatelessWidget {
         : 'Settled · $names';
   }
 
+  /// The "note · date" line (or "note · time" under a day header).
+  ///
+  /// Both flexible so neither can push the other off the line entirely: a
+  /// rigid date used to leave a squeezed note zero width (an orphan "·"
+  /// before the date) at large font scales. Unused flex space just trails
+  /// off, since the line is left-aligned. The " · " is rigid and can alone
+  /// be wider than the line (73px of 52 at 320dp and 2x in tests). So the
+  /// note and it drop out, leaving the date the whole line, once the
+  /// date's 2/5 share of what is left after the " · " can't hold even a
+  /// "…".
+  Widget _noteAndDate(String? note, String date, TextStyle? lineStyle) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          String? shownNote;
+          if (note != null) {
+            final left =
+                constraints.maxWidth - _textWidth(context, ' · ', lineStyle);
+            final ellipsis = _textWidth(context, '…', lineStyle);
+            if (left * 2 / 5 >= ellipsis) shownNote = note;
+          }
+          return Row(
+            children: [
+              if (shownNote != null) ...[
+                Flexible(
+                  flex: 3,
+                  child: Text(
+                    shownNote,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: lineStyle,
+                  ),
+                ),
+                Text(' · ', style: lineStyle),
+              ],
+              Flexible(
+                flex: 2,
+                child: Text(
+                  date,
+                  // TalkBack still reads a note left out.
+                  semanticsLabel: note != null && shownNote == null
+                      ? '$note · $date'
+                      : null,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: lineStyle,
+                ),
+              ),
+            ],
+          );
+        },
+      );
+
   @override
   Widget build(BuildContext context) {
     final cat = tx.category;
@@ -92,9 +156,14 @@ class TransactionTile extends StatelessWidget {
     final counted = context.select<FinanceProvider, bool>(
       (f) => f.countsInTotals(tx),
     );
-    // Plain text colour: the sign says income or spend, and the category
-    // tile beside it carries the colour.
-    final amountColor = counted ? scheme.onSurface : scheme.onSurfaceVariant;
+    // Money in green, money out red; a transfer plain, as it is neither,
+    // and an uncounted row muted.
+    final amountColor = moneyColor(
+      context,
+      type: tx.type,
+      transfer: isTransferCategory(tx.categoryId),
+      counted: counted,
+    );
 
     // The category leads — the SMS sender (bank shortcode) used to headline
     // every imported row and just repeated what the account view already
@@ -104,9 +173,63 @@ class TransactionTile extends StatelessWidget {
     final note = tx.note.isEmpty ? null : tx.note.split('\n').first;
     // Compact (no year): the list already groups under month headers, and
     // the full form crowded the note off the line at large font scales.
-    final dateLabel = fmtDateCompact(tx.date);
+    // Under a day header only the time is new, and a midnight row has none.
+    final midnight = tx.date.hour == 0 && tx.date.minute == 0;
+    final String? dateLabel = showDate
+        ? fmtDateCompact(tx.date)
+        : midnight
+        ? null
+        : fmtTime(tx.date);
     final lineStyle = textTheme.bodySmall?.copyWith(
       color: scheme.onSurfaceVariant,
+    );
+    final Widget? noteLine = switch ((note, dateLabel)) {
+      (null, null) => null,
+      (final onlyNote?, null) => Text(
+        onlyNote,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: lineStyle,
+      ),
+      (_, final date?) => _noteAndDate(note, date, lineStyle),
+    };
+    // Large text stacks the amount under the category instead of beside
+    // it, so the category keeps the row's width.
+    final stacked = isLargeTextScale(context);
+
+    Widget amountBlock(CrossAxisAlignment align) => Column(
+      crossAxisAlignment: align,
+      children: [
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
+            style: TextStyle(
+              color: amountColor,
+              fontWeight: FontWeight.w700,
+              fontSize: 15,
+            ),
+          ),
+        ),
+        // Group split: the full amount above mirrors the bank debit; this
+        // line shows what actually counts as the user's own spend.
+        // Expense rows outside the transfers only, the one place a share
+        // means anything. Not on an uncounted wallet row: no share of it
+        // counts.
+        if (tx.isSplit &&
+            counted &&
+            tx.type == TxType.expense &&
+            !isTransferCategory(tx.categoryId))
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              'your share ${fmtMoney(tx.myShare!)}',
+              style: textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+      ],
     );
 
     // One timing for every selection change on the row, so the border, the
@@ -225,59 +348,16 @@ class TransactionTile extends StatelessWidget {
                           ),
                       ],
                     ),
-                    const SizedBox(height: 2),
-                    // Both flexible so neither can push the other off
-                    // the line entirely: a rigid date used to leave a
-                    // squeezed note zero width (an orphan "·" before
-                    // the date) at large font scales. Unused flex space
-                    // just trails off, since the line is left-aligned.
-                    // The " · " is rigid and can alone be wider than
-                    // the line (73px of 52 at 320dp and 2x in tests).
-                    // So the note and it drop out, leaving the date the
-                    // whole line, once the date's 2/5 share of what is
-                    // left after the " · " can't hold even a "…".
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        String? shownNote;
-                        if (note != null) {
-                          final left =
-                              constraints.maxWidth -
-                              _textWidth(context, ' · ', lineStyle);
-                          final ellipsis = _textWidth(context, '…', lineStyle);
-                          if (left * 2 / 5 >= ellipsis) shownNote = note;
-                        }
-                        return Row(
-                          children: [
-                            if (shownNote != null) ...[
-                              Flexible(
-                                flex: 3,
-                                child: Text(
-                                  shownNote,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: lineStyle,
-                                ),
-                              ),
-                              Text(' · ', style: lineStyle),
-                            ],
-                            Flexible(
-                              flex: 2,
-                              child: Text(
-                                dateLabel,
-                                // TalkBack still reads a note left out.
-                                semanticsLabel:
-                                    note != null && shownNote == null
-                                    ? '$note · $dateLabel'
-                                    : null,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: lineStyle,
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
+                    // Large text: the amount on its own line, right
+                    // under the category it belongs to.
+                    if (stacked) ...[
+                      const SizedBox(height: 2),
+                      amountBlock(CrossAxisAlignment.start),
+                    ],
+                    if (noteLine != null) ...[
+                      const SizedBox(height: 2),
+                      noteLine,
+                    ],
                     // Why a wallet purchase isn't in the totals; its
                     // own line, like Counts in below.
                     if (!counted)
@@ -326,50 +406,17 @@ class TransactionTile extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
-              // Amount: prominent, signed. Width-capped so a
-              // crore-range figure at a large text scale shrinks to fit
-              // instead of overflowing; below the cap it renders at its
-              // natural size, keeping the usual right alignment.
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 140),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(
-                        '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
-                        style: TextStyle(
-                          color: amountColor,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                    // Group split: the full amount above mirrors the
-                    // bank debit; this line shows what actually counts
-                    // as the user's own spend.
-                    // Expense rows outside the transfers only, the
-                    // one place a share means anything.
-                    // Not on an uncounted wallet row: no share of it
-                    // counts.
-                    if (tx.isSplit &&
-                        counted &&
-                        tx.type == TxType.expense &&
-                        !isTransferCategory(tx.categoryId))
-                      FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          'your share ${fmtMoney(tx.myShare!)}',
-                          style: textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                  ],
+              if (!stacked) ...[
+                const SizedBox(width: 12),
+                // Amount: prominent, signed. Width-capped so a
+                // crore-range figure at a large text scale shrinks to fit
+                // instead of overflowing; below the cap it renders at its
+                // natural size, keeping the usual right alignment.
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 140),
+                  child: amountBlock(CrossAxisAlignment.end),
                 ),
-              ),
+              ],
             ],
           ),
         ),

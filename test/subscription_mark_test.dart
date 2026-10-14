@@ -132,6 +132,12 @@ void main() {
     );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
+    // A new entry keeps the switch under More details.
+    final more = find.text('More details');
+    await tester.ensureVisible(more);
+    await tester.pumpAndSettle();
+    await tester.tap(more);
+    await tester.pumpAndSettle();
     final toggle = find.widgetWithText(SwitchListTile, 'Subscription');
     expect(toggle, findsNothing, reason: 'no merchant yet');
     await tester.enterText(

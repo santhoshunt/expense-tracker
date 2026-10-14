@@ -98,6 +98,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kUpdateLastCheck = 'update_last_check_v1';
   static const _kUpdateDismissed = 'update_dismissed_tag_v1';
   static const _kUpdateInstalling = 'update_installing_tag_v1';
+  static const _kRecapDismissed = 'recap_dismissed_v1';
 
   /// Set once the pre-1.23 coral default accent has been moved to azure.
   static const _kAccentAzureMigrated = 'accent_azure_migrated_v1';
@@ -144,6 +145,7 @@ class SettingsProvider extends ChangeNotifier {
   DateTime? _updateLastCheck;
   String? _updateDismissedTag;
   String? _updateInstallingTag;
+  String? _recapDismissed;
   bool _loaded = false;
 
   ThemeMode get mode => _mode;
@@ -217,6 +219,10 @@ class SettingsProvider extends ChangeNotifier {
   /// The release an install was started for, so the next launch on that
   /// version can say it worked.
   String? get updateInstallingTag => _updateInstallingTag;
+
+  /// `yyyy-MM` of the month whose recap card was put away with Done; that
+  /// month's recap stays hidden, the next month's shows as usual.
+  String? get recapDismissed => _recapDismissed;
 
   bool get loaded => _loaded;
   Future<void> load() async {
@@ -341,6 +347,7 @@ class SettingsProvider extends ChangeNotifier {
       () => prefs.getString(_kUpdateDismissed),
       null,
     );
+    _recapDismissed = tryRead(() => prefs.getString(_kRecapDismissed), null);
     _updateInstallingTag = tryRead(
       () => prefs.getString(_kUpdateInstalling),
       null,
@@ -386,6 +393,19 @@ class SettingsProvider extends ChangeNotifier {
       (p) => tag == null
           ? p.remove(_kUpdateInstalling)
           : p.setString(_kUpdateInstalling, tag),
+    );
+  }
+
+  /// Hides the recap for [month] (`yyyy-MM`); null shows it again (Undo).
+  Future<void> setRecapDismissed(String? month) async {
+    if (month == _recapDismissed) return;
+    _recapDismissed = month;
+    notifyListeners();
+    await _persistPref(
+      _kRecapDismissed,
+      (p) => month == null
+          ? p.remove(_kRecapDismissed)
+          : p.setString(_kRecapDismissed, month),
     );
   }
 

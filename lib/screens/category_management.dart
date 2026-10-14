@@ -6,6 +6,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
+import '../widgets/dialog_expander.dart';
 import '../widgets/hue_color_picker.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
@@ -484,6 +485,89 @@ class _CategoriesTabState extends State<CategoriesTab> {
   }
 }
 
+/// The category dialog's Icon and colour sheet: the icon grid, centred, and
+/// the colour picker at [cell]-sized swatches, centred as one block.
+Widget _lookSheetBody(
+  BuildContext context, {
+  required ColorScheme scheme,
+  required double cell,
+  required IconData icon,
+  required Color color,
+  required ValueChanged<IconData> onIcon,
+  required ValueChanged<Color> onColor,
+}) {
+  final text = Theme.of(context).textTheme;
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text('Icon and colour', style: text.titleLarge),
+      const SizedBox(height: 16),
+      Text('Icon', style: text.labelMedium),
+      const SizedBox(height: 8),
+      Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final entry in kCategoryIconChoices.entries)
+            Semantics(
+              button: true,
+              selected: entry.value == icon,
+              label: entry.key,
+              // The InkWell's tap, exposed past excludeSemantics.
+              onTap: () => onIcon(entry.value),
+              excludeSemantics: true,
+              child: _pickerTarget(
+                InkWell(
+                  borderRadius: BorderRadius.circular(AppRadius.control),
+                  onTap: () => onIcon(entry.value),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: entry.value == icon
+                          ? color.withValues(alpha: 0.25)
+                          : scheme.surfaceContainerHigh,
+                      borderRadius: BorderRadius.circular(AppRadius.control),
+                      border: entry.value == icon
+                          ? Border.all(color: color, width: 2)
+                          : null,
+                    ),
+                    child: Icon(
+                      entry.value,
+                      size: 20,
+                      color: entry.value == icon
+                          ? color
+                          : scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+      const SizedBox(height: 16),
+      // As wide as its swatch grid, so its label and None/Custom row line
+      // up with the grid's left edge.
+      Center(
+        child: SizedBox(
+          width: cell * kCategoryHueNames.length,
+          child: HueColorPicker(value: color, onChanged: onColor, cell: cell),
+        ),
+      ),
+      const SizedBox(height: 16),
+      Align(
+        alignment: Alignment.centerRight,
+        child: FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Done'),
+        ),
+      ),
+    ],
+  );
+}
+
 /// Add/edit dialog for categories, including the parent-group picker.
 /// Public so the Cockpit FAB can open it.
 ///
@@ -510,6 +594,52 @@ Future<void> showCategoryDialog(
   // double-tap (both presses see the pre-add state), and Create awaits the
   // writes before popping — a second tap minted a duplicate category.
   var saving = false;
+  // Transfer options start open when editing a transfer.
+  var transferOpen = isTransfer;
+
+  // The icon grid and the colours, in one sheet over the dialog. A pick
+  // sets both: the sheet shows it selected, and the dialog's circle,
+  // mounted underneath, follows.
+  Future<void> pickLook(BuildContext ctx, StateSetter setDialog) =>
+      showModalBottomSheet<void>(
+        context: ctx,
+        isScrollControlled: true,
+        useSafeArea: true,
+        showDragHandle: true,
+        builder: (_) => StatefulBuilder(
+          builder: (sheetCtx, setSheet) {
+            void pick(VoidCallback change) {
+              setDialog(change);
+              setSheet(() {});
+            }
+
+            final scheme = Theme.of(sheetCtx).colorScheme;
+            return SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              // A sheet is full width, unlike the dialog these grids came
+              // from: the colour cells grow to fill it (up to 48dp), and the
+              // icon rows centre, so neither leaves a wide gap on the right.
+              child: LayoutBuilder(
+                builder: (_, box) {
+                  final cell = (box.maxWidth / kCategoryHueNames.length).clamp(
+                    32.0,
+                    48.0,
+                  );
+                  return _lookSheetBody(
+                    sheetCtx,
+                    scheme: scheme,
+                    cell: cell,
+                    icon: icon,
+                    color: color,
+                    onIcon: (v) => pick(() => icon = v),
+                    onColor: (c) => pick(() => color = c),
+                  );
+                },
+              ),
+            );
+          },
+        ),
+      );
 
   await showDialog(
     context: context,
@@ -529,33 +659,88 @@ Future<void> showCategoryDialog(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Builder(
-                    builder: (ctx) {
-                      // Two categories named "Home" are indistinguishable in
-                      // every dropdown — reject the duplicate up front.
-                      final name = labelCtrl.text.trim().toLowerCase();
-                      final duplicate =
-                          name.isNotEmpty &&
-                          allCategories.any(
-                            (c) =>
-                                c.id != existing?.id &&
-                                c.label.trim().toLowerCase() == name,
-                          );
-                      return TextField(
-                        controller: labelCtrl,
-                        autofocus: existing == null,
-                        textCapitalization: TextCapitalization.sentences,
-                        onChanged: (_) => setState(() {}),
-                        decoration: InputDecoration(
-                          labelText: 'Name',
-                          hintText: 'e.g. Home',
-                          errorText: duplicate
-                              ? 'A category with this name already exists'
-                              : null,
+                  // Top-aligned: a duplicate-name error grows the field
+                  // downward, and the circle stays beside the name.
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // The category as it will look; the icon grid and the
+                      // colours open from it in one sheet.
+                      _pickerTarget(
+                        Semantics(
+                          button: true,
+                          label: 'Icon and colour',
+                          // excludeSemantics drops the InkWell's own tap
+                          // action too, so it is exposed here for screen
+                          // readers.
+                          onTap: () => pickLook(ctx, setState),
+                          excludeSemantics: true,
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: () => pickLook(ctx, setState),
+                            child: Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: color.withValues(alpha: 0.2),
+                                border: Border.all(color: color, width: 1.5),
+                              ),
+                              child: Icon(
+                                icon,
+                                size: 20,
+                                color: categoryGlyphColor(ctx, color),
+                              ),
+                            ),
+                          ),
                         ),
-                      );
-                    },
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Builder(
+                          builder: (ctx) {
+                            // Two categories named "Home" are
+                            // indistinguishable in every dropdown, so the
+                            // duplicate is rejected up front.
+                            final name = labelCtrl.text.trim().toLowerCase();
+                            final duplicate =
+                                name.isNotEmpty &&
+                                allCategories.any(
+                                  (c) =>
+                                      c.id != existing?.id &&
+                                      c.label.trim().toLowerCase() == name,
+                                );
+                            return TextField(
+                              controller: labelCtrl,
+                              autofocus: existing == null,
+                              textCapitalization: TextCapitalization.sentences,
+                              onChanged: (_) => setState(() {}),
+                              decoration: InputDecoration(
+                                labelText: 'Name',
+                                hintText: 'e.g. Home',
+                                errorText: duplicate
+                                    ? 'A category with this name already '
+                                          'exists'
+                                    : null,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   ),
+                  // Only while creating: an existing category's circle
+                  // already shows its own icon and colour.
+                  if (existing == null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Tap the circle to pick an icon and colour',
+                        style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
                   const SizedBox(height: 16),
                   // Direction and transfer-ness are editable for everything
                   // except the fallback "Other" categories — those are the
@@ -625,38 +810,9 @@ Future<void> showCategoryDialog(
                         ),
                       ],
                     ),
-                    // Tip beside the tile, not in it: SwitchListTile merges
-                    // its children's semantics and would swallow the tip.
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: const Text('Transfer'),
-                            subtitle: Text(
-                              'Affects account balance only, not counted as '
-                              'income or expense (like "To savings" or "Card '
-                              'bill").',
-                              style: Theme.of(ctx).textTheme.bodySmall,
-                            ),
-                            value: isTransfer,
-                            onChanged: (v) => setState(() => isTransfer = v),
-                          ),
-                        ),
-                        const InfoTip(
-                          title: 'Transfer',
-                          message:
-                              'Transfers are left out of income, spending, '
-                              'the monthly cap and "All except" budgets. '
-                              'Money-out transfers still count in a budget '
-                              'that picks them under "Only these", and in '
-                              "their group's total.",
-                        ),
-                      ],
-                    ),
                   ],
                   if (groupable && finance.groups.isNotEmpty) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 12),
                     AppDropdownField<String>(
                       label: 'Group',
                       value: groupId,
@@ -675,63 +831,46 @@ Future<void> showCategoryDialog(
                       ],
                       onChanged: (v) => setState(() => groupId = v),
                     ),
-                    const SizedBox(height: 12),
                   ],
-                  const SizedBox(height: 4),
-                  Text('Icon', style: Theme.of(ctx).textTheme.labelMedium),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final entry in kCategoryIconChoices.entries)
-                        Semantics(
-                          button: true,
-                          selected: entry.value == icon,
-                          label: entry.key,
-                          excludeSemantics: true,
-                          child: _pickerTarget(
-                            InkWell(
-                              borderRadius: BorderRadius.circular(
-                                AppRadius.control,
+                  // Most categories are plain spending or income; the switch
+                  // waits behind an expander, open on a transfer.
+                  if (!isFallback) ...[
+                    const SizedBox(height: 4),
+                    DialogExpander(
+                      title: 'Transfer options',
+                      open: transferOpen,
+                      onToggle: () =>
+                          setState(() => transferOpen = !transferOpen),
+                      // Tip beside the tile, not in it: SwitchListTile
+                      // merges its children's semantics and would swallow
+                      // the tip.
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Transfer'),
+                              subtitle: Text(
+                                'Moves money, not income or spending',
+                                style: Theme.of(ctx).textTheme.bodySmall,
                               ),
-                              onTap: () => setState(() => icon = entry.value),
-                              child: Container(
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  color: entry.value == icon
-                                      ? color.withValues(alpha: 0.25)
-                                      : Theme.of(
-                                          ctx,
-                                        ).colorScheme.surfaceContainerHigh,
-                                  borderRadius: BorderRadius.circular(
-                                    AppRadius.control,
-                                  ),
-                                  border: entry.value == icon
-                                      ? Border.all(color: color, width: 2)
-                                      : null,
-                                ),
-                                child: Icon(
-                                  entry.value,
-                                  size: 20,
-                                  color: entry.value == icon
-                                      ? color
-                                      : Theme.of(
-                                          ctx,
-                                        ).colorScheme.onSurfaceVariant,
-                                ),
-                              ),
+                              value: isTransfer,
+                              onChanged: (v) => setState(() => isTransfer = v),
                             ),
                           ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 16),
-                  HueColorPicker(
-                    value: color,
-                    onChanged: (c) => setState(() => color = c),
-                  ),
+                          const InfoTip(
+                            title: 'Transfer',
+                            message:
+                                'Transfers are left out of income, spending, '
+                                'the monthly cap and "All except" budgets. '
+                                'Money-out transfers still count in a budget '
+                                'that picks them under "Only these", and in '
+                                "their group's total.",
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

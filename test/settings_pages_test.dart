@@ -7,6 +7,8 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
+import 'package:expense_tracker/utils/app_palettes.dart';
+import 'package:expense_tracker/widgets/grouped_surface.dart';
 
 /// The Settings root lists its groups, and each group opens its own page.
 void main() {
@@ -68,6 +70,59 @@ void main() {
       await pumpThrough(tester);
       expect(find.widgetWithText(AppBar, 'Settings'), findsOneWidget);
     }
+  });
+
+  testWidgets('root rows show the current values and follow changes', (
+    tester,
+  ) async {
+    await pumpSettings(tester);
+    final settings = tester
+        .element(find.byType(SettingsScreen))
+        .read<SettingsProvider>();
+
+    // A new install: dark, the default theme's own accent, no automatic
+    // import, no lock, most used first.
+    expect(find.text('Dark · Default accent'), findsOneWidget);
+    expect(find.text('Automatic import off'), findsOneWidget);
+    expect(find.text('Lock off'), findsOneWidget);
+    expect(find.text('Most used first'), findsOneWidget);
+    // The rows are one grouped card.
+    expect(find.byType(GroupedSurface), findsNWidgets(6));
+
+    await settings.setMode(ThemeMode.light);
+    await settings.setPalette(AppPalette.ocean);
+    await settings.setAutoImport(AutoImportFrequency.daily);
+    await settings.setAppLock(true);
+    await settings.setHideIncome(true);
+    await settings.setCategoryOrder(CategoryOrder.alphabetical);
+    await pumpThrough(tester);
+    expect(find.text('Light · Ocean accent'), findsOneWidget);
+    expect(find.text('Daily'), findsOneWidget);
+    expect(find.text('Lock on · Income hidden'), findsOneWidget);
+    expect(find.text('A to Z'), findsOneWidget);
+  });
+
+  testWidgets('radio options carry a short line each, and the paragraphs '
+      'that repeated a tip are gone', (tester) async {
+    await pumpSettings(tester);
+    await tester.tap(find.text('SMS import'));
+    await pumpThrough(tester);
+    expect(find.text('First open each day'), findsOneWidget);
+    expect(find.textContaining('Scans new bank messages'), findsNothing);
+    await tester.pageBack();
+    await pumpThrough(tester);
+
+    await tester.tap(find.text('Appearance'));
+    await pumpThrough(tester);
+    expect(find.textContaining('Used in dark mode'), findsNothing);
+    expect(find.textContaining('Used for buttons, highlights'), findsNothing);
+    await tester.pageBack();
+    await pumpThrough(tester);
+
+    await tester.tap(find.text('Categories and rules'));
+    await pumpThrough(tester);
+    expect(find.text('By amount over the last three months'), findsOneWidget);
+    expect(find.textContaining('How the category list'), findsNothing);
   });
 
   testWidgets('Move glow with tilt switch toggles the setting', (tester) async {

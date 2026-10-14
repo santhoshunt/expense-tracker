@@ -85,6 +85,11 @@ class _AppearancePage extends StatelessWidget {
           ],
           selected: settings.mode,
           onChanged: (m) => context.read<SettingsProvider>().setMode(m),
+          subtitle: (m) => switch (m) {
+            ThemeMode.system => "Follows your phone's light or dark setting",
+            ThemeMode.light => 'Always light, whatever the phone uses',
+            ThemeMode.dark => 'Always dark, whatever the phone uses',
+          },
         ),
         const SizedBox(height: 24),
         _PageHeading(
@@ -99,11 +104,6 @@ class _AppearancePage extends StatelessWidget {
                 "Picking a theme also replaces your accent colour with the "
                 "theme's own, even a custom one.",
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Used in dark mode. Picking one also sets its accent colour.',
-          style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 12),
         Wrap(
@@ -132,12 +132,6 @@ class _AppearancePage extends StatelessWidget {
                 'accent. Picking another dark theme later resets the '
                 "accent to that theme's.",
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Used for buttons, highlights and selected states. Theme '
-          'follows the dark theme\'s own accent.',
-          style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 12),
         HueColorPicker(
@@ -201,6 +195,10 @@ class _AppearancePage extends StatelessWidget {
           options: [for (final y in YearStart.values) (y, y.label)],
           selected: settings.yearStart,
           onChanged: (y) => context.read<SettingsProvider>().setYearStart(y),
+          subtitle: (y) => switch (y) {
+            YearStart.january => 'Calendar year, January to December',
+            YearStart.april => 'Financial year, April to March',
+          },
         ),
       ],
     );
@@ -264,19 +262,22 @@ class _SmsImportPage extends StatelessWidget {
                 'waiting, a notification says how many.',
           ),
         ),
-        const SizedBox(height: 4),
-        Text(
-          'Scans new bank messages when you open the app. Daily runs '
-          'on the first launch of each day, weekly every 7 days, and '
-          'both also check every 6 hours in the background. Every SMS '
-          'imports each message as it arrives. Imports still land in the '
-          'review queue.',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
         _RadioSetting<AutoImportFrequency>(
           options: [for (final f in AutoImportFrequency.values) (f, f.label)],
           selected: autoImport,
           onChanged: (f) => _choose(context, f),
+          // The heading's tip has the detail: background checks, the
+          // permission, the review queue.
+          subtitle: (f) => switch (f) {
+            AutoImportFrequency.off => 'Never scans on its own',
+            AutoImportFrequency.everyOpen =>
+              'Each time you open or return to the app',
+            AutoImportFrequency.daily => 'First open each day',
+            AutoImportFrequency.weekly =>
+              '7 days after the last automatic scan',
+            AutoImportFrequency.everySms =>
+              'Each new SMS, about a minute after it arrives',
+          },
         ),
         const SizedBox(height: 12),
         const _NotificationCaptureTile(),
@@ -308,16 +309,8 @@ class _BackupDataPage extends StatelessWidget {
                 'accounts, rules, categories, budgets and most settings, '
                 'but not SMS text, app lock, the app icon, the tilt glow '
                 'or this schedule. The newest 7 backups are kept; older ones are '
-                'deleted.',
+                'deleted. To restore, use Data, Import, From Google Drive.',
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Backs up your data to an "Expense Tracker Backups" folder in '
-          'your Google Drive on the chosen schedule. Backups include '
-          'transactions, rules and settings, but not the original SMS '
-          'text. Restore from Data, Import, From Google Drive.',
-          style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 12),
         const _DriveBackupSection(),
@@ -357,7 +350,8 @@ class _PrivacyPage extends StatelessWidget {
   }
 }
 
-/// Category order for the add and edit sheets, and the way into Cockpit.
+/// Category order for the add and edit sheets. Cockpit opens from the
+/// home screen's ⋮ menu.
 class _CategoriesRulesPage extends StatelessWidget {
   const _CategoriesRulesPage();
 
@@ -385,39 +379,19 @@ class _CategoriesRulesPage extends StatelessWidget {
             message:
                 'Sets the order of the category list when you add or edit '
                 'a transaction. The first category in the list is picked '
-                'by default for a new transaction.',
+                'by default for a new transaction. "Most used" ranks by the '
+                'amounts of the last three months.',
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'How the category list is ordered when adding or editing a '
-          'transaction. "Most used" ranks by the amounts of the last '
-          'three months.',
-          style: Theme.of(context).textTheme.bodySmall,
         ),
         _RadioSetting<CategoryOrder>(
           options: [for (final o in CategoryOrder.values) (o, o.label)],
           selected: categoryOrder,
           onChanged: (o) =>
               context.read<SettingsProvider>().setCategoryOrder(o),
-        ),
-        const SizedBox(height: 24),
-        Text('Cockpit', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 12),
-        FrostedPanel(
-          radius: BorderRadius.circular(AppRadius.card),
-          child: ListTile(
-            leading: const Icon(Icons.tune),
-            title: const Text('Open Cockpit'),
-            subtitle: const Text(
-              'Rules, import rules, categories, budgets and reminders',
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
-            ),
-          ),
+          subtitle: (o) => switch (o) {
+            CategoryOrder.mostUsed => 'By amount over the last three months',
+            CategoryOrder.alphabetical => 'By name, however often each is used',
+          },
         ),
       ],
     );

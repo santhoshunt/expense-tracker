@@ -312,6 +312,43 @@ void main() {
       expect(p.transactions.firstWhere((t) => t.id == gift).categoryId, 'gift');
     });
 
+    testWidgets('Settle on a bill settles just that one, with Undo', (
+      tester,
+    ) async {
+      final p = await loaded();
+      final soon = DateTime.now().add(const Duration(milliseconds: 100));
+      for (final (note, ms) in [('Lunch', 0), ('Dinner', 100)]) {
+        await p.addTransaction(
+          type: TxType.expense,
+          categoryId: 'food',
+          amount: 2000,
+          note: note,
+          date: soon.add(Duration(milliseconds: ms)),
+          people: const [SplitShare(name: 'Arun', amount: 1000)],
+        );
+      }
+      await openPerson(tester, p, 'Arun');
+      expect(owed(p, 'arun'), 2000);
+      // The bills lead the sheet, above the ways to record a repayment,
+      // and each has its own button instead of a long-press hint.
+      expect(
+        tester.getTopLeft(find.text('Open bills')).dy,
+        lessThan(tester.getTopLeft(find.text('Record repayment')).dy),
+      );
+      expect(find.textContaining('Long-press a bill'), findsNothing);
+      final settle = find.widgetWithText(TextButton, 'Settle');
+      expect(settle, findsNWidgets(2));
+
+      await tester.tap(settle.first);
+      await tester.pumpAndSettle();
+      expect(owed(p, 'arun'), 1000);
+      expect(find.text("Marked Arun's share settled"), findsOneWidget);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(owed(p, 'arun'), 2000);
+    });
+
     testWidgets('Mark all settled folds the person away, with Undo', (
       tester,
     ) async {

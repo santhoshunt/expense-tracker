@@ -46,6 +46,11 @@ class Reminder {
   /// Its occurrences in earlier months never count as due or overdue.
   final String? createdOn;
 
+  /// `yyyy-MM-dd` of a one-time reminder; null for a repeating one. Saved
+  /// with a yearly [cycle] on the same day and month, so a build without
+  /// one-time reminders reads it as yearly on that date rather than monthly.
+  final String? onDate;
+
   const Reminder({
     required this.id,
     required this.name,
@@ -59,7 +64,11 @@ class Reminder {
     this.accountId,
     this.autoSince,
     this.createdOn,
+    this.onDate,
   });
+
+  /// Due once, on [onDate], instead of repeating.
+  bool get isOnce => onDate != null;
 
   Reminder copyWith({
     String? name,
@@ -76,6 +85,8 @@ class Reminder {
     bool clearAccountId = false,
     String? autoSince,
     String? createdOn,
+    String? onDate,
+    bool clearOnDate = false,
   }) => Reminder(
     id: id,
     name: name ?? this.name,
@@ -93,6 +104,7 @@ class Reminder {
     accountId: clearAccountId ? null : (accountId ?? this.accountId),
     autoSince: autoSince ?? this.autoSince,
     createdOn: createdOn ?? this.createdOn,
+    onDate: clearOnDate ? null : (onDate ?? this.onDate),
   );
 
   Map<String, dynamic> toJson() => {
@@ -108,6 +120,7 @@ class Reminder {
     if (accountId != null) 'accountId': accountId,
     if (autoSince != null) 'autoSince': autoSince,
     if (createdOn != null) 'createdOn': createdOn,
+    if (onDate != null) 'onDate': onDate,
   };
 
   /// Tolerant: a hand-edited or older file must not break loading. The day
@@ -136,6 +149,12 @@ class Reminder {
       accountId: json['accountId'] as String?,
       autoSince: json['autoSince'] as String?,
       createdOn: json['createdOn'] as String?,
+      onDate: _readOnDate(json['onDate']),
     );
   }
+
+  /// An unreadable or non-string date drops the field: the reminder then
+  /// repeats on its stored cycle instead of never coming due.
+  static String? _readOnDate(Object? raw) =>
+      raw is String && DateTime.tryParse(raw) != null ? raw : null;
 }

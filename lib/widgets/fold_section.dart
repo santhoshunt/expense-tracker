@@ -40,8 +40,14 @@ class FoldSection extends StatelessWidget {
                 constraints: const BoxConstraints(minHeight: 48),
                 child: Row(
                   children: [
-                    Text(title, style: Theme.of(context).textTheme.titleSmall),
-                    const Spacer(),
+                    // Expanded, not a Spacer: a long title at 2x text on
+                    // 320dp wraps instead of pushing the chevron off.
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                    ),
                     AnimatedRotation(
                       turns: open ? 0 : 0.5,
                       duration: motionDuration(

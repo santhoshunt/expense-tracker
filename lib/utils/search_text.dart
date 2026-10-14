@@ -1,3 +1,5 @@
+import 'package:intl/intl.dart';
+
 import '../models/transaction.dart';
 import '../services/recurring_detector.dart';
 import 'format.dart';
@@ -13,8 +15,9 @@ String normalizeSearchText(String s) =>
 /// Beyond the note, SMS body and sender this carries the category label, the
 /// account name, the merchant label (plus any user alias), the tags, the
 /// people on a split or the payer of a repayment, and the amount in
-/// three spellings — "1250", "1250.00" and the formatted "₹1,250.00" — so a
-/// typed "1250" or "1,250" both land.
+/// several spellings: "125000", "125000.00", the formatted "₹125,000.00"
+/// and the Indian grouping "1,25,000" and "1,25,000.00", so a typed
+/// "125000", "125,000" or "1,25,000" all land.
 String searchHaystack(Tx t, {String? accountName, String? merchantAlias}) {
   final parts = <String>[
     t.note,
@@ -30,6 +33,13 @@ String searchHaystack(Tx t, {String? accountName, String? merchantAlias}) {
     t.amount.toStringAsFixed(2),
     t.amount.round().toString(),
     fmtMoney(t.amount),
+    _indianWhole.format(t.amount),
+    _indianFixed.format(t.amount),
   ];
   return normalizeSearchText(parts.join(' '));
 }
+
+/// Lakh grouping as Indian banks write amounts: "1,25,000" (decimals only
+/// when the amount has them) and "1,25,000.00".
+final NumberFormat _indianWhole = NumberFormat.decimalPattern('en_IN');
+final NumberFormat _indianFixed = NumberFormat('#,##,##0.00', 'en_IN');

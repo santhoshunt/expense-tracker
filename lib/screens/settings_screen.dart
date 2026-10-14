@@ -26,9 +26,9 @@ import '../widgets/picker_sheet.dart';
 import '../widgets/undo_snackbar.dart';
 import '../widgets/hue_color_picker.dart';
 import '../widgets/glossy.dart';
+import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
 import 'app_nav.dart';
-import 'classifiers_screen.dart';
 
 part 'settings_pages.dart';
 
@@ -50,20 +50,46 @@ class SettingsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Rows show what is set now rather than what the page holds. Watched:
+    // the root stays mounted under a group page and follows its changes.
+    final settings = context.watch<SettingsProvider>();
+    final mode = switch (settings.mode) {
+      ThemeMode.system => 'System',
+      ThemeMode.light => 'Light',
+      ThemeMode.dark => 'Dark',
+    };
+    // The accent by the dark theme it came from, or by its colour once
+    // picked by hand.
+    final accent = settings.accent == settings.palette.colors.accent
+        ? settings.palette.label
+        : hueColorName(settings.accent);
+    final smsImport = switch (settings.autoImport) {
+      AutoImportFrequency.off => 'Automatic import off',
+      AutoImportFrequency.everyOpen => 'Every launch',
+      final f => f.label,
+    };
+    final privacy = [
+      settings.appLock ? 'Lock on' : 'Lock off',
+      if (settings.hideIncome) 'Income hidden',
+    ].join(' · ');
+    final categoryOrder = switch (settings.categoryOrder) {
+      CategoryOrder.mostUsed => 'Most used first',
+      CategoryOrder.alphabetical => 'A to Z',
+    };
+    // Backup and About have no stored value here to show: Drive state and
+    // the version load asynchronously on their own pages.
     final groups = <(IconData, String, String, WidgetBuilder)>[
       (
         Icons.palette_outlined,
         'Appearance',
-        AppIconService().isSupported
-            ? 'Theme, accent colour, glow, app icon, year start'
-            : 'Theme, accent colour, glow, year start',
+        '$mode · $accent accent',
         (_) => const _AppearancePage(),
       ),
       if (SmsSource().isSupported)
         (
           Icons.sms_outlined,
           'SMS import',
-          'Scan frequency, notification capture',
+          smsImport,
           (_) => const _SmsImportPage(),
         ),
       (
@@ -72,16 +98,11 @@ class SettingsScreen extends StatelessWidget {
         'Google Drive, export, import, delete',
         (_) => const _BackupDataPage(),
       ),
-      (
-        Icons.lock_outline,
-        'Privacy',
-        'App lock, hide income',
-        (_) => const _PrivacyPage(),
-      ),
+      (Icons.lock_outline, 'Privacy', privacy, (_) => const _PrivacyPage()),
       (
         Icons.category_outlined,
         'Categories and rules',
-        'Category order, Cockpit',
+        categoryOrder,
         (_) => const _CategoriesRulesPage(),
       ),
       (
@@ -98,21 +119,21 @@ class SettingsScreen extends StatelessWidget {
         appBar: AppBar(title: const Text('Settings')),
         body: ListView(
           padding: _settingsPadding(context),
+          // One grouped card: the rows touch, a hairline between them.
           children: [
-            for (final (i, (icon, title, gist, page)) in groups.indexed) ...[
-              if (i > 0) const SizedBox(height: 12),
-              FrostedPanel(
-                radius: BorderRadius.circular(AppRadius.card),
+            for (final (i, (icon, title, value, page)) in groups.indexed)
+              GroupedSurface(
+                first: i == 0,
+                last: i == groups.length - 1,
                 child: ListTile(
                   leading: Icon(icon),
                   title: Text(title),
-                  subtitle: Text(gist),
+                  subtitle: Text(value),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () =>
                       Navigator.push(context, MaterialPageRoute(builder: page)),
                 ),
               ),
-            ],
           ],
         ),
       ),
@@ -127,10 +148,14 @@ class _RadioSetting<T> extends StatelessWidget {
   final T selected;
   final ValueChanged<T> onChanged;
 
+  /// One short line under an option saying what it does; null for none.
+  final String? Function(T)? subtitle;
+
   const _RadioSetting({
     required this.options,
     required this.selected,
     required this.onChanged,
+    this.subtitle,
   });
 
   @override
@@ -152,6 +177,10 @@ class _RadioSetting<T> extends StatelessWidget {
               contentPadding: EdgeInsets.zero,
               visualDensity: VisualDensity.compact,
               title: Text(label),
+              subtitle: switch (subtitle?.call(value)) {
+                final s? => Text(s),
+                null => null,
+              },
               value: value,
             ),
         ],

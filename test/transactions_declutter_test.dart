@@ -73,72 +73,78 @@ void main() {
     return p;
   }
 
+  /// The sort chips head the Filters sheet; a pick applies at once, and
+  /// Apply closes the sheet.
   Future<void> sortBy(WidgetTester tester, String label) async {
     await tester.tap(tune);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Sort by'));
+    final chip = find.widgetWithText(ChoiceChip, label);
+    await tester.ensureVisible(chip);
     await tester.pumpAndSettle();
-    await tester.tap(find.text(label));
+    await tester.tap(chip);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
     await tester.pumpAndSettle();
   }
 
   final day1 = DateFormat('EEE d MMM').format(DateTime(2026, 7, 1));
   final day2 = DateFormat('EEE d MMM').format(DateTime(2026, 7, 2));
 
-  testWidgets('the tune sheet holds sort, filters and export, and the badge '
-      'marks an active filter', (tester) async {
+  testWidgets('the tune button opens Filters with the sort at the top and '
+      'Export CSV at the bottom; the badge marks an active filter', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     final p = await seeded();
     await tester.pumpWidget(screen(p));
     await tester.pumpAndSettle();
     expect(tuneBadge(tester).isLabelVisible, isFalse);
 
+    // One tap: straight into the Filters sheet.
     await tester.tap(tune);
     await tester.pumpAndSettle();
     final sheet = find.byType(BottomSheet);
-    expect(
-      find.descendant(of: sheet, matching: find.text('Sort by')),
-      findsOneWidget,
+    Finder inSheet(Finder f) => find.descendant(of: sheet, matching: f);
+    expect(inSheet(find.text('Filters')), findsOneWidget);
+    expect(inSheet(find.text('Clear all')), findsOneWidget);
+    expect(inSheet(find.text('Sort by')), findsOneWidget);
+    final current = tester.widget<ChoiceChip>(
+      find.widgetWithText(ChoiceChip, 'Date · newest first'),
     );
+    expect(current.selected, isTrue, reason: 'the current sort');
+    // Sort heads the sheet, above Date; Export CSV ends it.
+    double top(Finder f) => tester.getTopLeft(f).dy;
     expect(
-      find.descendant(of: sheet, matching: find.text('Date · newest first')),
-      findsOneWidget,
-      reason: 'the current sort',
+      top(inSheet(find.text('Sort by'))),
+      lessThan(top(find.text('Date'))),
     );
-    expect(
-      find.descendant(of: sheet, matching: find.text('Filters')),
-      findsOneWidget,
+    final export = inSheet(find.text('Export CSV'));
+    await tester.ensureVisible(export);
+    await tester.pumpAndSettle();
+    expect(export, findsOneWidget);
+    expect(top(export), greaterThan(top(find.text('Amount range'))));
+
+    // A sort pick applies at once: the day headers go with a date sort.
+    await tester.ensureVisible(
+      find.widgetWithText(ChoiceChip, 'Amount · high to low'),
     );
-    expect(
-      find.descendant(of: sheet, matching: find.text('Export CSV')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: sheet, matching: find.byType(Badge)),
-      findsNothing,
-    );
-    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Amount · high to low'));
+    await tester.pumpAndSettle();
+    expect(find.text(day1), findsNothing);
+    await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
     await tester.pumpAndSettle();
     expect(sheet, findsNothing);
+    expect(find.text(day1), findsNothing);
 
-    // A month deep-link is a filter: the button and the sheet both mark it.
+    // A month deep-link is a filter: the button marks it.
     await tester.pumpWidget(
       screen(p, req: TxFilterRequest(month: DateTime(2026, 7)), token: 1),
     );
     await tester.pumpAndSettle();
     expect(tuneBadge(tester).isLabelVisible, isTrue);
-
-    await tester.tap(tune);
-    await tester.pumpAndSettle();
-    expect(
-      find.descendant(of: sheet, matching: find.byType(Badge)),
-      findsOneWidget,
-    );
-
-    // Filters closes the tune sheet and opens the filter sheet.
-    await tester.tap(find.text('Filters'));
-    await tester.pumpAndSettle();
-    expect(find.text('Export CSV'), findsNothing);
-    expect(find.text('Clear all'), findsOneWidget);
   });
 
   testWidgets('day headers with the day total show under a date sort only', (

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/subscription_cycle.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -10,6 +11,7 @@ import 'package:expense_tracker/screens/app_nav.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
+import 'package:expense_tracker/services/subscriptions.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/animated_fold.dart';
 
@@ -123,6 +125,151 @@ void main() {
     await tester.pumpAndSettle();
     expect(s.hiddenUpcoming, isEmpty);
     expect(find.text('Netflix'), findsOneWidget);
+  });
+
+  testWidgets('the ⋮ button opens the long-press menu; rows leave the yearly '
+      'cost to the header; a marked one shows a pin', (tester) async {
+    final p = await seeded();
+    await p.setSubscriptionPins({'expense|netflix': SubscriptionCycle.monthly});
+    await tester.pumpWidget(
+      app(
+        p,
+        await settings(),
+        const ClassifiersScreen(initialTab: kCockpitTabSubscriptions),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The header line only; the stopped Gym row is built but folded.
+    expect(find.textContaining('a year'), findsOneWidget);
+    expect(find.textContaining('marked by you'), findsNothing);
+    expect(find.byTooltip('Marked by you'), findsOneWidget);
+
+    final more = find.descendant(
+      of: find.ancestor(
+        of: find.text('Netflix'),
+        matching: find.byType(ListTile),
+      ),
+      matching: find.byTooltip('More'),
+    );
+    expect(more, findsOneWidget);
+    await tester.tap(more);
+    await tester.pumpAndSettle();
+    expect(find.text('Rename'), findsOneWidget);
+    expect(find.text('Make a reminder'), findsOneWidget);
+    expect(find.text('Change cycle'), findsOneWidget);
+    expect(find.text('Hide'), findsOneWidget);
+    expect(find.text('Mark unpaid'), findsNothing, reason: 'not marked paid');
+  });
+
+  testWidgets('a payment marked paid by hand offers Mark unpaid; Undo puts '
+      'the mark back', (tester) async {
+    final p = await seeded();
+    final s = await settings();
+    final hit = cachedSubscriptions(p, s.hiddenUpcoming).active.single.hit;
+    await p.markPatternPaid(hit.key, hit.nextDue);
+    final marked = p.patternPaidThrough(hit.key);
+    expect(marked, isNotNull);
+    await tester.pumpWidget(
+      app(p, s, const ClassifiersScreen(initialTab: kCockpitTabSubscriptions)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('Netflix'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mark unpaid'));
+    await tester.pumpAndSettle();
+    expect(p.patternPaidThrough(hit.key), isNull);
+
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(p.patternPaidThrough(hit.key), marked);
+  });
+
+  testWidgets('a hidden income pattern is listed under Hidden with Unhide, '
+      'and nowhere else', (tester) async {
+    final p = await seeded();
+    final today = DateTime.now();
+    final day = DateTime(today.year, today.month, today.day);
+    for (final ago in [90, 60, 30]) {
+      await p.addTransaction(
+        type: TxType.income,
+        categoryId: 'salary',
+        amount: 50000,
+        note: 'Salary',
+        date: day.subtract(Duration(days: ago)),
+      );
+    }
+    final s = await settings();
+    await s.hideUpcoming('income|salary');
+    await tester.pumpWidget(
+      app(p, s, const ClassifiersScreen(initialTab: kCockpitTabSubscriptions)),
+    );
+    await tester.pumpAndSettle();
+
+    // Not a payment: the count and totals stay Netflix's alone.
+    expect(find.textContaining('1 regular payment · '), findsOneWidget);
+    expect(find.text('Hidden (1)'), findsOneWidget);
+    await tester.tap(find.text('Hidden (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Salary'), findsOneWidget);
+    final unhide = find.widgetWithText(TextButton, 'Unhide');
+    await tester.ensureVisible(unhide);
+    await tester.pumpAndSettle();
+    await tester.tap(unhide);
+    await tester.pumpAndSettle();
+
+    expect(s.hiddenUpcoming, isEmpty);
+    expect(find.text('Hidden (1)'), findsNothing);
+    expect(find.text('Salary'), findsNothing, reason: 'income is no payment');
+  });
+
+  testWidgets('rows with a rise or Unhide beside ⋮ fit 320dp at 2x text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final p = await seeded();
+    final s = await settings();
+    await s.hideUpcoming('expense|gym');
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: p),
+          ChangeNotifierProvider.value(value: s),
+        ],
+        child: MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: const ClassifiersScreen(initialTab: kCockpitTabSubscriptions),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Up ${fmtMoney(150)}'), findsOneWidget);
+    // The list builds lazily, and at 2x text the fold starts below it.
+    final fold = find.text('Hidden (1)');
+    await tester.scrollUntilVisible(
+      fold,
+      200,
+      scrollable: find
+          .ancestor(of: find.text('Netflix'), matching: find.byType(Scrollable))
+          .first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(fold);
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(TextButton, 'Unhide'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    // ListTile squeezes a title rather than throwing: the names must keep
+    // a readable width beside the badge, Unhide and ⋮.
+    expect(tester.getSize(find.text('Netflix')).width, greaterThan(60));
+    expect(tester.getSize(find.text('Gym')).width, greaterThan(40));
   });
 
   testWidgets('"Make a reminder" opens the editor prefilled', (tester) async {

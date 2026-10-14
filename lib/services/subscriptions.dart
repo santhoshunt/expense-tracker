@@ -43,7 +43,8 @@ class SubscriptionSummary {
   /// paid first.
   final List<SubscriptionItem> stopped;
 
-  /// Hidden by the user, whether active or stopped.
+  /// Hidden by the user, whether active or stopped; also any hidden income
+  /// pattern, which is listed nowhere else here.
   final List<SubscriptionItem> hidden;
 
   const SubscriptionSummary({
@@ -75,7 +76,10 @@ SubscriptionSummary buildSubscriptions(
     alias: alias,
     pinned: pinned,
   )) {
-    if (h.type != TxType.expense) continue;
+    final isHidden = hidden.contains(h.key);
+    // Income is never a subscription, but one hidden from Upcoming joins
+    // the Hidden list so it can be unhidden there.
+    if (h.type != TxType.expense && !isHidden) continue;
     final cycle = h.cycle;
     final item = SubscriptionItem(
       hit: h,
@@ -87,7 +91,7 @@ SubscriptionSummary buildSubscriptions(
           h.expectedAmount * 12 / (cycle ?? SubscriptionCycle.monthly).months,
       priceRise: _priceRise(h),
     );
-    if (hidden.contains(h.key)) {
+    if (isHidden) {
       hiddenItems.add(item);
     } else if (h.daysUntil(now) >= -kSubscriptionGraceDays) {
       active.add(item);

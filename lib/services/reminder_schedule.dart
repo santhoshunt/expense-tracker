@@ -33,6 +33,25 @@ const _monthNames = [
 /// Short English month name for [month] (1..12).
 String reminderMonthName(int month) => _monthNames[(month - 1) % 12];
 
+/// The date of a one-time reminder ([Reminder.onDate]) at midnight; null
+/// for a repeating one.
+DateTime? reminderOnceDate(Reminder r) {
+  final d = DateTime.tryParse(r.onDate ?? '');
+  return d == null ? null : DateTime(d.year, d.month, d.day);
+}
+
+/// A one-time reminder that needs nothing more: marked paid, or more than
+/// [kReminderGraceDays] past its date. Upcoming, the heatmap and the
+/// notifications skip it; Cockpit still lists it so it can be deleted.
+/// Always false for a repeating reminder.
+bool reminderFinished(Reminder r, DateTime now) {
+  final once = reminderOnceDate(r);
+  if (once == null) return false;
+  final today = DateTime(now.year, now.month, now.day);
+  return reminderOccurrenceDone(r, once) ||
+      today.difference(once).inDays > kReminderGraceDays;
+}
+
 /// Months counted from year 0, so cycles line up across year ends.
 int _index(int year, int month) => year * 12 + month - 1;
 
@@ -74,7 +93,11 @@ bool _beforeAutoSince(Reminder r, DateTime due) {
 /// - its occurrence when it passed 1..7 days ago (overdue);
 /// - otherwise the next period's occurrence.
 /// A period marked paid ([Reminder.lastPaidMonth]) is skipped entirely.
+/// A one-time reminder is always due on its own date; see
+/// [reminderFinished] for when it stops showing.
 DateTime reminderNextDue(Reminder r, DateTime now) {
+  final once = reminderOnceDate(r);
+  if (once != null) return once;
   final today = DateTime(now.year, now.month, now.day);
   final current = _alignedAtOrBefore(r, _index(today.year, today.month));
   final due = _occurrence(r, current);
@@ -112,8 +135,10 @@ bool reminderOccurrenceDone(Reminder r, DateTime due) {
 /// Whether the current period's occurrence (this month's for monthly, the
 /// latest quarter or year month otherwise) is marked paid.
 bool reminderPaidThisPeriod(Reminder r, DateTime now) {
-  final current = _alignedAtOrBefore(r, _index(now.year, now.month));
-  final due = _occurrence(r, current);
+  final once = reminderOnceDate(r);
+  final due =
+      once ??
+      _occurrence(r, _alignedAtOrBefore(r, _index(now.year, now.month)));
   final paid = r.lastPaidMonth;
   // Not [_beforeCreated]: a quarterly reminder made after its quarter's
   // month was not paid, it just was not due.
@@ -134,6 +159,11 @@ List<DateTime> reminderDueDatesBetween(Reminder r, DateTime from, DateTime to) {
   final end = DateTime(to.year, to.month, to.day);
   final out = <DateTime>[];
   if (end.isBefore(start)) return out;
+  final once = reminderOnceDate(r);
+  if (once != null) {
+    if (!once.isBefore(start) && !once.isAfter(end)) out.add(once);
+    return out;
+  }
   var i = _alignedAtOrBefore(r, _index(start.year, start.month));
   final last = _index(end.year, end.month);
   while (i <= last && out.length < kMaxReminderCatchUp) {
@@ -144,9 +174,17 @@ List<DateTime> reminderDueDatesBetween(Reminder r, DateTime from, DateTime to) {
   return out;
 }
 
-/// "Monthly, day 5", "Quarterly, day 5 of Jan, Apr, Jul, Oct" or
-/// "Yearly, 5 Mar".
-String reminderCycleLabel(Reminder r) => switch (r.cycle) {
+/// "Once, 23 Oct 2026", "Monthly, day 5", "Quarterly, day 5 of Jan, Apr,
+/// Jul, Oct" or "Yearly, 5 Mar".
+String reminderCycleLabel(Reminder r) {
+  final once = reminderOnceDate(r);
+  if (once != null) {
+    return 'Once, ${once.day} ${reminderMonthName(once.month)} ${once.year}';
+  }
+  return _repeatingLabel(r);
+}
+
+String _repeatingLabel(Reminder r) => switch (r.cycle) {
   SubscriptionCycle.monthly => 'Monthly, day ${r.dayOfMonth}',
   SubscriptionCycle.quarterly =>
     'Quarterly, day ${r.dayOfMonth} of ${quarterMonthsLabel(r.anchorMonth)}',

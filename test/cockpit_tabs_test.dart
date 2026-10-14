@@ -11,6 +11,7 @@ import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/services/notification_service.dart';
+import 'package:expense_tracker/widgets/grouped_surface.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -65,45 +66,50 @@ void main() {
     await pumpThrough(tester);
 
     expect(find.text('Cockpit'), findsOneWidget);
+    // Each count keeps its noun with a non-breaking space.
+    const nb = ' ';
     String n(int count, String one, String many) =>
-        '$count ${count == 1 ? one : many}';
-    final hub = <(String, String, String, String)>[
+        '$count$nb${count == 1 ? one : many}';
+    final hub = <(String, String, String)>[
       (
         'Classify',
-        'Rules, import rules, review',
         // Only the rule added above: built-ins are not the user's own.
-        '1 rule · '
+        '1${nb}rule · '
             '${n(p.importRules.length, 'import rule', 'import rules')}',
         'Rules',
       ),
       (
         'Organise',
-        'Categories, groups and tags',
-        '${customCategories.length + kCategories.length} categories · '
-            '0 tags',
+        '${n(customCategories.length + kCategories.length, 'category', 'categories')} · '
+            '0${nb}tags',
         'New category',
       ),
+      // A passed limit leads the line.
       (
         'Plan',
-        'Budgets, reminders and subscriptions',
-        '1 budget · 1 reminder · 0 subscriptions · 1 over',
+        '1${nb}over · 1${nb}budget · 1${nb}reminder · 0${nb}subscriptions',
         'Budgets',
       ),
-      (
-        'Dashboard',
-        'Order and show the dashboard sections',
-        'All sections shown',
-        'Overview',
-      ),
+      ('Dashboard', 'All sections shown', 'Overview'),
     ];
-    for (final (title, gist, count, _) in hub) {
-      // The fourth card can sit below a short screen's fold.
+    for (final (title, count, _) in hub) {
+      // The fourth row can sit below a short screen's fold.
       await tester.scrollUntilVisible(find.text(count), 200);
       expect(find.text(title), findsOneWidget);
-      expect(find.text(gist), findsOneWidget);
       expect(find.text(count), findsOneWidget, reason: '$title count');
     }
-    for (final (title, _, _, marker) in hub) {
+    // The gists said what the counts already say.
+    for (final gist in [
+      'Rules, import rules, review',
+      'Categories, groups and tags',
+      'Budgets, reminders and subscriptions',
+      'Order and show the dashboard sections',
+    ]) {
+      expect(find.text(gist), findsNothing, reason: gist);
+    }
+    // The four groups are the rows of one grouped card.
+    expect(find.byType(GroupedSurface), findsNWidgets(4));
+    for (final (title, _, marker) in hub) {
       await tester.ensureVisible(find.text(title));
       await pumpThrough(tester);
       await tester.tap(find.text(title));
@@ -161,7 +167,7 @@ void main() {
     expect(find.text('New reminder'), findsOneWidget);
   });
 
-  testWidgets('Settings lost the moved sections and points at Cockpit', (
+  testWidgets('Settings lost the moved sections and the Cockpit card', (
     tester,
   ) async {
     final p = FinanceProvider();
@@ -197,19 +203,11 @@ void main() {
       await tester.pageBack();
       await pumpThrough(tester);
     }
-    // The pointer row lives on the Categories and rules page.
+    // Cockpit opens from the home screen's ⋮ menu; the Categories and rules
+    // page no longer repeats it.
     await tester.tap(find.text('Categories and rules'));
     await pumpThrough(tester);
-    await tester.scrollUntilVisible(
-      find.text('Rules, import rules, categories, budgets and reminders'),
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
-    await tester.pump();
-    expect(find.text('Open Cockpit'), findsOneWidget);
-    expect(
-      find.text('Rules, import rules, categories, budgets and reminders'),
-      findsOneWidget,
-    );
+    expect(find.text('Open Cockpit', skipOffstage: false), findsNothing);
+    expect(find.text('Category order'), findsOneWidget);
   });
 }

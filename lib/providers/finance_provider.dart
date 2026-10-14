@@ -716,6 +716,11 @@ class FinanceProvider extends ChangeNotifier {
   double expenseInYear(int year, {int startMonth = 1}) =>
       _monthsOf(year, startMonth).fold(0.0, (s, m) => s + expenseInMonth(m));
 
+  double transferOutInYear(int year, {int startMonth = 1}) => _monthsOf(
+    year,
+    startMonth,
+  ).fold(0.0, (s, m) => s + transferOutInMonth(m));
+
   double savingsOutflowInYear(int year, {int startMonth = 1}) => _monthsOf(
     year,
     startMonth,
@@ -2552,6 +2557,7 @@ class FinanceProvider extends ChangeNotifier {
     int? anchorMonth,
     bool autoAdd = false,
     String? accountId,
+    String? onDate,
   }) async {
     final now = DateTime.now();
     final id = 'rem_${now.microsecondsSinceEpoch}_${_idSeq++}';
@@ -2573,6 +2579,7 @@ class FinanceProvider extends ChangeNotifier {
         accountId: accountId,
         autoSince: autoAdd ? _dayKey(now) : null,
         createdOn: _dayKey(now),
+        onDate: onDate,
       ),
     );
     _sanitizeReminders();
@@ -2718,6 +2725,26 @@ class FinanceProvider extends ChangeNotifier {
     notifyListeners();
     await _persist(tx: true, accounts: accounts, reminders: true);
     return txId;
+  }
+
+  /// The lasting way back from a paid mark, after its toast is gone: steps
+  /// [Reminder.lastPaidMonth] back one period, so the occurrence it last
+  /// covered is due again. A one-time reminder loses the mark entirely.
+  Future<void> unmarkLatestReminderPaid(String id) async {
+    final i = _reminders.indexWhere((r) => r.id == id);
+    if (i == -1) return;
+    final r = _reminders[i];
+    final paid = DateTime.tryParse('${r.lastPaidMonth ?? ''}-01');
+    if (paid == null) return;
+    _reminders[i] = r.isOnce
+        ? r.copyWith(clearLastPaidMonth: true)
+        : r.copyWith(
+            lastPaidMonth: monthKey(
+              DateTime(paid.year, paid.month - r.cycle.months),
+            ),
+          );
+    notifyListeners();
+    await _persist(reminders: true);
   }
 
   /// Undo half of [markReminderPaid].
@@ -4068,14 +4095,11 @@ class FinanceProvider extends ChangeNotifier {
     final spelling = {for (final u in allTags) tagKey(u.tag): u.tag};
     final byKey = <String, TagSummary>{};
     for (final t in transactions) {
-      // The totals engine's money-out rule: expense rows outside the
-      // transfer categories, and only the user's share of a split.
-      // An uncounted wallet row still carries the tag, at no spend.
-      final spend =
-          t.type == TxType.expense &&
-              !isTransferCategory(t.categoryId) &&
-              countsInTotals(t)
-          ? t.spendAmount
+      // By tags' money-out rule: expense rows (only the user's share of a
+      // split) plus money-out transfers in full. Income, money-in
+      // transfers and an uncounted wallet row carry the tag at no spend.
+      final spend = t.type == TxType.expense && countsInTotals(t)
+          ? (isTransferCategory(t.categoryId) ? t.amount : t.spendAmount)
           : 0.0;
       for (final tag in t.tags) {
         final k = tagKey(tag);
@@ -4102,9 +4126,10 @@ class FinanceProvider extends ChangeNotifier {
     );
   }();
 
-  /// Spend per tag in [month], largest first, by the [tagSummaries] rule. A
-  /// row with two tags counts under both. Tags on rows with no spend
-  /// (transfers, income) are left out.
+  /// Money out per tag in [month], largest first. A row with two tags
+  /// counts under both. Like By group, money-out transfers count too: a
+  /// tag used only on "To savings" rows still shows. Income, money-in
+  /// transfers and uncounted wallet rows are left out.
   List<TagSpend> expenseByTagInMonth(DateTime month) {
     final key = month.year * 12 + month.month;
     return _d.tagSpendByMonth[key] ??= _tagSpend(_byMonth[key] ?? const <Tx>[]);
@@ -4121,12 +4146,10 @@ class FinanceProvider extends ChangeNotifier {
     final spelling = {for (final u in allTags) tagKey(u.tag): u.tag};
     final spent = <String, double>{};
     for (final t in rows) {
-      if (t.type != TxType.expense ||
-          isTransferCategory(t.categoryId) ||
-          !countsInTotals(t)) {
-        continue;
-      }
-      final amount = t.spendAmount;
+      if (t.type != TxType.expense || !countsInTotals(t)) continue;
+      final amount = isTransferCategory(t.categoryId)
+          ? t.amount
+          : t.spendAmount;
       if (amount <= 0) continue;
       for (final tag in t.tags) {
         final k = tagKey(tag);
@@ -5041,7 +5064,8 @@ class FinanceProvider extends ChangeNotifier {
     // v20: reminders may carry `createdOn`; `patternPaid` (detected
     // payment key → due date marked paid).
     // v21: accounts may carry `linkedByHand` (keys typed in by hand).
-    'version': 21,
+    // v22: reminders may carry `onDate` (a one-time reminder).
+    'version': 22,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),

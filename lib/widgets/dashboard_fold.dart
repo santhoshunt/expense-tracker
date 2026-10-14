@@ -9,9 +9,11 @@ import 'motion.dart';
 /// away and, while folded, says in one line what they hold ("Swiggy
 /// ₹4.2K"), so a long page reads at a glance and opens where wanted.
 ///
-/// Each section is a row of one card shared with its neighbours ([first]
-/// and [last] round its ends): the summary sits at the heading's right, and
-/// the open section's cards lie flat inside the row.
+/// Folded sections are rows of one card shared with their folded neighbours
+/// ([first] and [last] round its ends), the summary at the heading's right.
+/// An open section is a card of its own (both set), its cards lying flat
+/// inside it, with [gapAbove] over it; the run after it starts with that
+/// gap too.
 class DashboardFold extends StatelessWidget {
   final String title;
 
@@ -27,6 +29,10 @@ class DashboardFold extends StatelessWidget {
   final bool first;
   final bool last;
 
+  /// The space above a [first] row: the page's gap at the top of the page,
+  /// [AppSpace.gap] between one card and the next.
+  final double gapAbove;
+
   const DashboardFold({
     super.key,
     required this.title,
@@ -37,6 +43,7 @@ class DashboardFold extends StatelessWidget {
     required this.children,
     this.first = true,
     this.last = true,
+    this.gapAbove = AppSpace.gap + 6,
   });
 
   @override
@@ -59,8 +66,8 @@ class DashboardFold extends StatelessWidget {
     final line = summary;
     final c = AppColors.of(context);
     return Padding(
-      // The group's first row keeps the page's gap above it.
-      padding: EdgeInsets.only(top: first ? AppSpace.gap + 6 : 0),
+      // A card's first row keeps its gap above it.
+      padding: EdgeInsets.only(top: first ? gapAbove : 0),
       child: GroupedSurface(
         first: first,
         last: last,

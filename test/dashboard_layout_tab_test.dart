@@ -157,9 +157,10 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('1 hidden'), 200);
+    // A non-breaking space keeps the count with its word.
+    await tester.scrollUntilVisible(find.text('1 hidden'), 200);
     expect(find.text('Dashboard'), findsOneWidget);
-    expect(find.text('1 hidden'), findsOneWidget);
+    expect(find.text('1 hidden'), findsOneWidget);
   });
 
   testWidgets('Reset to default asks, then restores the page', (tester) async {

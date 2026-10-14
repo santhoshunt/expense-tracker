@@ -109,6 +109,22 @@ void main() {
     expect(s.hidden.first.identity, anyOf('netflix', 'gym'));
   });
 
+  test(
+    'a hidden income pattern is listed as hidden only, outside the totals',
+    () {
+      final s = buildSubscriptions(
+        [...netflix, ...salary],
+        now: now,
+        hidden: {'income|salary'},
+      );
+      expect([for (final i in s.active) i.hit.label], ['Netflix']);
+      expect(s.stopped, isEmpty);
+      expect([for (final i in s.hidden) i.hit.label], ['Salary']);
+      expect(s.hidden.single.hit.type, TxType.income);
+      expect(s.yearlyTotal, closeTo(s.active.single.yearly, 1e-9));
+    },
+  );
+
   test('Upcoming still sees only the ±14/7-day window', () {
     final all = [...netflix, ...gym];
     expect(

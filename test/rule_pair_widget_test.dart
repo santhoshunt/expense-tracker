@@ -7,6 +7,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
+import 'package:expense_tracker/widgets/animated_fold.dart';
 
 Widget app(FinanceProvider p) => MultiProvider(
   providers: [
@@ -52,7 +53,9 @@ void main() {
       await tester.pump();
 
       // Default target is Food & Dining (expense), so the second slot offers
-      // income categories.
+      // income categories, behind its closed expander.
+      await tester.tap(find.text('Money in goes to another category'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Other direction'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Salary').last);
@@ -110,6 +113,96 @@ void main() {
     },
   );
 
+  Finder inDialog(Finder f) =>
+      find.descendant(of: find.byType(AlertDialog), matching: f);
+
+  testWidgets('New rule reads conditions, then category, then a closed '
+      'expander for the other direction', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New rule'));
+    await tester.pumpAndSettle();
+
+    double top(Finder f) => tester.getTopLeft(f).dy;
+    final condition = inDialog(find.byType(TextField)).first;
+    final orContains = find.text('Or contains…');
+    final classifyAs = find.text('Then classify as');
+    final expander = find.text('Money in goes to another category');
+    expect(top(condition), lessThan(top(orContains)));
+    expect(top(orContains), lessThan(top(classifyAs)));
+    expect(top(classifyAs), lessThan(top(expander)));
+    // The old always-on paragraph and doubled helper are gone.
+    expect(find.textContaining('Add another condition'), findsNothing);
+    expect(find.textContaining('Rules only fire'), findsNothing);
+    final food = categoryById('food').label;
+    expect(
+      find.text('Ignores case. Only money out matches $food.'),
+      findsOneWidget,
+    );
+
+    AnimatedFold fold() => tester.widget<AnimatedFold>(
+      find.ancestor(
+        of: find.text('Other direction'),
+        matching: find.byType(AnimatedFold),
+      ),
+    );
+    expect(fold().collapsed, isTrue);
+    await tester.tap(expander);
+    await tester.pumpAndSettle();
+    expect(fold().collapsed, isFalse);
+
+    // '|' would split the condition; the error names the button instead.
+    await tester.enterText(condition, 'amma|appa');
+    await tester.pump();
+    expect(
+      find.text('Remove "|". Use "Or contains…" instead.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    // An income rule flips the expander to money out. Opened from its row:
+    // the category picker lists income below the fold of a lazy list.
+    await p.addRule('salary words', 'salary');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('contains "salary words"'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit rule'), findsOneWidget);
+    expect(find.text('Money out goes to another category'), findsOneWidget);
+  });
+
+  testWidgets('Or contains adds a focused field under the others', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New rule'));
+    await tester.pumpAndSettle();
+    await tester.enterText(inDialog(find.byType(TextField)).first, 'amma');
+
+    await tester.tap(find.text('Or contains…'));
+    await tester.pumpAndSettle();
+    final fields = inDialog(find.byType(TextField));
+    expect(fields, findsNWidgets(2));
+    // The first keeps its text; the new one sits below it, focused.
+    expect(tester.widget<TextField>(fields.first).controller!.text, 'amma');
+    expect(
+      tester.getTopLeft(fields.at(1)).dy,
+      greaterThan(tester.getTopLeft(fields.first).dy),
+    );
+    expect(find.text('or contains…'), findsOneWidget);
+    expect(tester.widget<TextField>(fields.at(1)).focusNode!.hasFocus, isTrue);
+
+    await tester.enterText(fields.at(1), 'appa');
+    await tester.tap(find.text('Create'));
+    await tester.pumpAndSettle();
+    expect(p.rules.where((r) => !r.isBuiltIn).single.pattern, 'amma | appa');
+  });
+
   testWidgets('clearing the second slot deletes the twin', (tester) async {
     final p = FinanceProvider();
     await p.load();
@@ -120,6 +213,7 @@ void main() {
 
     await tester.tap(find.text('contains "amma"'));
     await tester.pumpAndSettle();
+    // A pair opens with its expander open: no tap needed to reach it.
     await tester.tap(find.text('Other direction'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Not for this direction').last);

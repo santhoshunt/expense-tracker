@@ -36,6 +36,17 @@ void main() {
     expect(hay.contains(normalizeSearchText('9999')), isFalse);
   });
 
+  test('a lakh amount matches its Indian grouping', () {
+    final hay = searchHaystack(manual(amount: 125000));
+    expect(hay.contains(normalizeSearchText('1,25,000')), isTrue);
+    expect(hay.contains(normalizeSearchText('1,25,000.00')), isTrue);
+    expect(hay.contains(normalizeSearchText('125,000')), isTrue);
+    expect(hay.contains(normalizeSearchText('125000')), isTrue);
+    // Paise stay with the grouped form too.
+    final paise = searchHaystack(manual(amount: 125000.5));
+    expect(paise.contains(normalizeSearchText('1,25,000.50')), isTrue);
+  });
+
   test('category label and account name are searchable', () {
     final hay = searchHaystack(manual(), accountName: 'Salary Account');
     expect(hay.contains('food dining'), isTrue, reason: 'Food & Dining');

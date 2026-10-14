@@ -254,6 +254,97 @@ void main() {
       expect(find.text('Current outstanding'), findsOneWidget);
     });
 
+    testWidgets('an open card counts its transactions in words', (
+      tester,
+    ) async {
+      final soon = DateTime.now().add(const Duration(milliseconds: 100));
+      final p = await load(
+        txs: [
+          row('h1', 100, date: soon),
+          row('h2', 200, date: soon.add(const Duration(milliseconds: 100))),
+          row('i1', 300, date: soon, acct: 'ICICI:2222'),
+        ],
+        accounts: [
+          Account(
+            id: 'b1',
+            name: 'HDFC',
+            type: AccountType.bank,
+            keys: const {'HDFC:1111'},
+          ),
+          Account(
+            id: 'b2',
+            name: 'ICICI',
+            type: AccountType.bank,
+            keys: const {'ICICI:2222'},
+          ),
+        ],
+      );
+      await tester.pumpWidget(app(p));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.text('2 transactions'), findsOneWidget);
+      expect(find.text('1 transaction'), findsOneWidget);
+      // The old "Bank · 2 txns" line, type label and shorthand, is gone.
+      expect(find.textContaining('· 2 txns'), findsNothing);
+    });
+
+    testWidgets("a card's Spent this month figure is red, its label muted", (
+      tester,
+    ) async {
+      final soon = DateTime.now().add(const Duration(milliseconds: 100));
+      final p = await load(
+        txs: [row('c1', 250, date: soon)],
+        accounts: [
+          Account(
+            id: 'card',
+            name: 'Card',
+            type: AccountType.creditCard,
+            keys: const {'HDFC:1111'},
+          ),
+        ],
+      );
+      await tester.pumpWidget(app(p));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final line = find.text('Spent this month ${fmtMoney(250)}');
+      expect(line, findsOneWidget);
+      final rich = tester.widget<Text>(line);
+      final figure = (rich.textSpan! as TextSpan).children!.single as TextSpan;
+      final context = tester.element(line);
+      expect(figure.style!.color, Theme.of(context).colorScheme.error);
+      expect(rich.style!.color, Theme.of(context).colorScheme.onSurfaceVariant);
+    });
+
+    testWidgets('the More menu sets Merge, Close and Delete apart', (
+      tester,
+    ) async {
+      // Made by hand with no number: never the orphaned kind, so Merge
+      // appears only in the menu.
+      final p = await load(
+        txs: const [],
+        accounts: [
+          Account(
+            id: 's1',
+            name: 'Piggy bank',
+            type: AccountType.savings,
+            keys: const {},
+          ),
+        ],
+      );
+      await tester.pumpWidget(app(p));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      await tester.tap(find.text('More'));
+      await tester.pumpAndSettle();
+      final divider = find.byType(PopupMenuDivider);
+      expect(divider, findsOneWidget);
+      double top(Finder f) => tester.getTopLeft(f).dy;
+      expect(top(find.text('Set balance…')), lessThan(top(divider)));
+      expect(top(divider), lessThan(top(find.text('Merge into…'))));
+      expect(top(divider), lessThan(top(find.text('Close account'))));
+      expect(top(divider), lessThan(top(find.text('Delete account'))));
+    });
+
     testWidgets('the All view groups accounts by type under headers', (
       tester,
     ) async {

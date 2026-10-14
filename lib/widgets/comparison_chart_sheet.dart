@@ -69,33 +69,54 @@ class _ComparisonChartBody extends StatelessWidget {
     // One point (the month's last day) draws no line: no Forecast key.
     final running = (s.predicted?.length ?? 0) > 1;
 
-    double? refAt(int day) {
-      final r = reference;
-      if (r == null || r.isEmpty) return null;
-      return r[(day - 1).clamp(0, r.length - 1)];
+    // The footer of one view: the month name makes Last month's lines
+    // longer than Usual's.
+    List<String> linesFor(bool usual) {
+      final ref = usual ? s.usual : s.lastMonth;
+      double? refAt(int day) {
+        if (ref == null || ref.isEmpty) return null;
+        return ref[(day - 1).clamp(0, ref.length - 1)];
+      }
+
+      final refToday = refAt(s.today);
+      // The month is still running on its last day: so far, not all of it.
+      return <String>[
+        if (s.predicted != null)
+          [
+            'So far ${fmtMoney(soFar)}',
+            if (refToday != null)
+              usual
+                  ? 'usually ${fmtMoney(refToday)} by day ${s.today}'
+                  : '$prevName by day ${s.today} ${fmtMoney(refToday)}',
+          ].join(' · ')
+        else
+          'All of $monthName ${fmtMoney(soFar)}',
+        [
+          if (s.forecastTotal != null) 'Forecast ${fmtMoney(s.forecastTotal!)}',
+          if (ref != null && ref.isNotEmpty)
+            usual
+                ? 'a usual month ${fmtMoney(ref.last)}'
+                : 'all of $prevName ${fmtMoney(ref.last)}',
+        ].join(' · '),
+      ].where((l) => l.isNotEmpty).toList();
     }
 
-    final refToday = refAt(s.today);
-    // The month is still running on its last day: so far, not all of it.
-    final lines = <String>[
-      if (s.predicted != null)
-        [
-          'So far ${fmtMoney(soFar)}',
-          if (refToday != null)
-            usual
-                ? 'usually ${fmtMoney(refToday)} by day ${s.today}'
-                : '$prevName by day ${s.today} ${fmtMoney(refToday)}',
-        ].join(' · ')
-      else
-        'All of $monthName ${fmtMoney(soFar)}',
-      [
-        if (s.forecastTotal != null) 'Forecast ${fmtMoney(s.forecastTotal!)}',
-        if (reference != null && reference.isNotEmpty)
-          usual
-              ? 'a usual month ${fmtMoney(reference.last)}'
-              : 'all of $prevName ${fmtMoney(reference.last)}',
-      ].join(' · '),
-    ].where((l) => l.isNotEmpty).toList();
+    // Both views laid out in one place, the other one invisible: the
+    // switch keeps the sheet's height, and the taller view sets it.
+    Widget both(Widget? Function(bool usual) part) => Stack(
+      fit: StackFit.passthrough,
+      children: [
+        for (final v in const [false, true])
+          if (part(v) case final child?)
+            Visibility(
+              visible: v == usual,
+              maintainSize: true,
+              maintainAnimation: true,
+              maintainState: true,
+              child: child,
+            ),
+      ],
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -119,15 +140,19 @@ class _ComparisonChartBody extends StatelessWidget {
           selected: {usual},
           onSelectionChanged: (v) => onUsual(v.first),
         ),
-        if (reference == null) ...[
-          const SizedBox(height: 8),
-          Text(
-            usual
-                ? 'A usual month needs two complete months on record.'
-                : '$prevName is not fully on record.',
-            style: muted,
-          ),
-        ],
+        both(
+          (v) => (v ? s.usual : s.lastMonth) != null
+              ? null
+              : Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    v
+                        ? 'A usual month needs two complete months on record.'
+                        : '$prevName is not fully on record.',
+                    style: muted,
+                  ),
+                ),
+        ),
         const SizedBox(height: 16),
         SizedBox(
           height: 200,
@@ -163,20 +188,40 @@ class _ComparisonChartBody extends StatelessWidget {
                 color: scheme.primary,
                 style: _Stroke.dashed,
               ),
-            if (reference != null)
-              _LegendKey(
-                label: refName,
-                color: scheme.onSurfaceVariant,
-                style: _Stroke.dotted,
+            // The widest of the two names holds the key's place.
+            if (s.lastMonth != null || s.usual != null)
+              Stack(
+                children: [
+                  for (final v in const [false, true])
+                    if ((v ? s.usual : s.lastMonth) != null)
+                      Visibility(
+                        visible: v == usual,
+                        maintainSize: true,
+                        maintainAnimation: true,
+                        maintainState: true,
+                        child: _LegendKey(
+                          label: v ? 'Usual' : prevName,
+                          color: scheme.onSurfaceVariant,
+                          style: _Stroke.dotted,
+                        ),
+                      ),
+                ],
               ),
           ],
         ),
         const SizedBox(height: 12),
-        for (final l in lines)
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text(l, style: muted),
+        both(
+          (v) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final l in linesFor(v))
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(l, style: muted),
+                ),
+            ],
           ),
+        ),
       ],
     );
   }

@@ -109,7 +109,7 @@ void main() {
     );
 
     // The tile opens the pair editor, where the pair is explained next to
-    // the Other direction field.
+    // the Other direction field; a pair opens with that expander open.
     await tester.tap(find.text('contains "amma"'));
     await pumpThrough(tester);
     expect(find.text('Edit rule pair'), findsOneWidget);
@@ -266,6 +266,10 @@ void main() {
     await tester.tap(find.text('New category'));
     await pumpThrough(tester);
     await expectTip(tester, 'Direction', 'Changing direction re-types');
+    // The switch and its tip wait behind the Transfer options expander.
+    expect(tipFinder('Transfer'), findsNothing);
+    await tester.tap(find.text('Transfer options'));
+    await pumpThrough(tester);
     await expectTip(tester, 'Transfer', 'Transfers are left out of income');
   });
 

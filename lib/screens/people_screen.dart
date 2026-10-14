@@ -271,9 +271,6 @@ class _PersonSheetState extends State<_PersonSheet> {
         .where((p) => p.key == widget.personKey)
         .firstOrNull;
     final text = Theme.of(context).textTheme;
-    final muted = text.bodySmall?.copyWith(
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
-    );
     if (b == null) {
       return const SafeArea(
         child: EmptyState(
@@ -303,6 +300,34 @@ class _PersonSheetState extends State<_PersonSheet> {
             style: text.titleMedium,
             textAlign: TextAlign.center,
           ),
+          // The bills first: they are what the person owes for, and each
+          // settles on its own.
+          if (b.open.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text('Open bills', style: text.titleSmall),
+            for (final s in b.open)
+              ListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  billTitle(s.bill),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                // What is left sits in the subtitle so Settle has the
+                // trailing slot to itself at large text.
+                subtitle: Text(
+                  '${fmtDateCompact(s.bill.date)} · ${fmtMoney(s.left)} '
+                  'left of ${fmtMoney(s.share)}',
+                ),
+                trailing: TextButton(
+                  onPressed: () => _settle(b, bill: s.bill),
+                  child: const Text('Settle'),
+                ),
+                onTap: () => showAddTransactionSheet(context, existing: s.bill),
+                onLongPress: () => _settle(b, bill: s.bill),
+              ),
+          ],
           const SizedBox(height: 12),
           ListTile(
             leading: const Icon(Icons.payments_outlined),
@@ -331,31 +356,6 @@ class _PersonSheetState extends State<_PersonSheet> {
               subtitle: const Text('Paid outside the app, or let go'),
               onTap: () => _settle(b),
             ),
-          if (b.open.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('Open bills', style: text.titleSmall),
-            Text(
-              'Long-press a bill to mark just that one settled.',
-              style: muted,
-            ),
-            for (final s in b.open)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  billTitle(s.bill),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  '${fmtDateCompact(s.bill.date)} · share '
-                  '${fmtMoney(s.share)}',
-                ),
-                trailing: Text('${fmtMoney(s.left)} left'),
-                onTap: () => showAddTransactionSheet(context, existing: s.bill),
-                onLongPress: () => _settle(b, bill: s.bill),
-              ),
-          ],
           if (b.repayments.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text('Repayments', style: text.titleSmall),

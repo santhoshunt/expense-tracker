@@ -266,17 +266,27 @@ void main() {
     expect(find.text(fmtMoney(50000)), findsNothing);
   });
 
-  testWidgets('a budget bar shows its spend against the limit', (tester) async {
+  testWidgets('a budget bar shows its month in the sheet, not a popup', (
+    tester,
+  ) async {
     final finance = FinanceProvider();
     await finance.load();
     final now = DateTime.now();
     final thisMonth = DateTime(now.year, now.month);
+    final lastMonth = DateTime(now.year, now.month - 1);
     await finance.addTransaction(
       type: TxType.expense,
       categoryId: 'entertainment',
       amount: 800,
       note: 'this month',
       date: DateTime(thisMonth.year, thisMonth.month, 1),
+    );
+    await finance.addTransaction(
+      type: TxType.expense,
+      categoryId: 'entertainment',
+      amount: 300,
+      note: 'last month',
+      date: DateTime(lastMonth.year, lastMonth.month, 1),
     );
     const budget = SpendBudget(
       id: 'b1',
@@ -306,20 +316,32 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
 
+    expect(find.text('${fmtMoney(800)} / ${fmtMoney(1000)}'), findsOneWidget);
+    expect(
+      find.text('${fmtMoneyCompact(200)} left this month'),
+      findsOneWidget,
+    );
+
     // The bars, not the (keyed) limit line drawn over them; the last is
-    // this month.
-    final bar = find
-        .byWidgetPredicate(
-          (w) => w is AnimatedFractionallySizedBox && w.key == null,
-        )
-        .last;
+    // this month, the one before it last month.
+    final bars = find.byWidgetPredicate(
+      (w) => w is AnimatedFractionallySizedBox && w.key == null,
+    );
+    final bar = bars.at(4);
     await tester.ensureVisible(bar);
     await tester.pumpAndSettle();
     await tester.tap(bar);
     await tester.pumpAndSettle();
 
-    expect(find.text('80% of limit'), findsOneWidget);
-    expect(find.text(fmtMoney(800)), findsOneWidget);
-    expect(find.text(fmtMoney(1000)), findsOneWidget);
+    expect(find.byType(ChartPopup), findsNothing);
+    expect(find.text(fmtMonth(lastMonth)), findsOneWidget);
+    expect(find.text('${fmtMoney(300)} / ${fmtMoney(1000)}'), findsOneWidget);
+    expect(
+      find.text(
+        '${fmtMoneyCompact(700)} left in '
+        '${DateFormat('MMM').format(lastMonth)}',
+      ),
+      findsOneWidget,
+    );
   });
 }

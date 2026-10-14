@@ -140,7 +140,7 @@ class UpcomingMonitor {
 
       for (final r in finance.reminders) {
         // Add it for me records the expense itself: nothing to remind.
-        if (r.autoAdd) continue;
+        if (r.autoAdd || reminderFinished(r, now)) continue;
         final due = reminderNextDue(r, now);
         final days = reminderDaysUntil(r, now);
         if (days > reminderWindowDays) continue;

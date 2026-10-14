@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../screens/add_transaction_sheet.dart';
 import '../services/safe_to_spend.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
+import '../utils/money_colors.dart';
+import 'reminder_editor_dialog.dart';
 
 /// Calendar heatmap of money-out for one month (which DATES were hot) plus
 /// the recurring weekday pattern underneath (which DAYS are usually hot).
@@ -17,8 +20,9 @@ import '../utils/format.dart';
 class SpendingHeatmap extends StatelessWidget {
   final DateTime month;
 
-  /// Unpaid bills to mark, from [billsDue]; the dashboard passes today to
-  /// the month's end for the current month and nothing for others.
+  /// Unpaid bills to mark, from [billsDue] plus reminders with no amount
+  /// (amount 0); the dashboard passes today to the month's end for the
+  /// current month and nothing for others.
   final List<DueBill> bills;
 
   const SpendingHeatmap({
@@ -56,17 +60,19 @@ class SpendingHeatmap extends StatelessWidget {
       (billsByDay[b.due.day] ??= []).add(b);
     }
 
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
     Widget dayCell(int day) {
       final spend = byDay[day] ?? 0;
       final dayBills = billsByDay[day] ?? const <DueBill>[];
-      final VoidCallback? open = spend == 0 && dayBills.isEmpty
+      final date = DateTime(month.year, month.month, day);
+      // A day still ahead opens too, to set a reminder on it; a past day
+      // with nothing on it has nothing to show.
+      final ahead = date.isAfter(today);
+      final VoidCallback? open = spend == 0 && dayBills.isEmpty && !ahead
           ? null
-          : () => _showDaySheet(
-              context,
-              DateTime(month.year, month.month, day),
-              spend,
-              dayBills,
-            );
+          : () => _showDaySheet(context, date, spend, dayBills, ahead: ahead);
       final intensity = maxDay == 0 ? 0.0 : (spend / maxDay).clamp(0.0, 1.0);
       // Zero-spend days stay neutral; hot days deepen toward the error
       // tint. Once the fill is strong enough that the default text colour
@@ -250,92 +256,138 @@ class SpendingHeatmap extends StatelessWidget {
   }
 
   /// One day's money-out rows, then the bills due that day; a row tap
-  /// opens the normal edit sheet.
+  /// opens the normal edit sheet. A day still [ahead] lists its bills, or
+  /// says none are due, and offers a one-time reminder on it.
   void _showDaySheet(
     BuildContext context,
     DateTime day,
     double total,
-    List<DueBill> dayBills,
-  ) {
+    List<DueBill> dayBills, {
+    required bool ahead,
+  }) {
     final finance = context.read<FinanceProvider>();
     showModalBottomSheet<void>(
       context: context,
       useSafeArea: true,
       showDragHandle: true,
+      // As tall as its rows, up to six tenths of the screen: a day with
+      // one line left most of a fixed-height sheet empty.
+      isScrollControlled: true,
       constraints: BoxConstraints(
         maxHeight: MediaQuery.sizeOf(context).height * 0.6,
       ),
       builder: (ctx) {
         final rows = finance.expensesOnDay(day);
         return SafeArea(
-          child: ListView(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.only(bottom: 16),
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                child: Text(
-                  total > 0
-                      ? '${fmtDate(day)} · ${fmtMoney(total)} spent'
-                      : fmtDate(day),
-                  style: Theme.of(ctx).textTheme.titleSmall,
-                ),
-              ),
-              for (final t in rows)
-                ListTile(
-                  dense: true,
-                  leading: Icon(
-                    t.category.icon,
-                    color: t.category.color,
-                    size: 20,
-                  ),
-                  title: Text(
-                    t.note.isNotEmpty ? t.note : t.category.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  // The header total counts only the user's own share of a
-                  // split bill — say so on the row, or a ₹125 header over a
-                  // single −₹500 row doesn't add up (same annotation as the
-                  // main transaction tile).
-                  // Left out when it would repeat the title (no note).
-                  subtitle: t.isSplit
-                      ? Text(
-                          '${t.category.label} · your share '
-                          '${fmtMoney(t.myShare!)}',
-                        )
-                      : t.note.isEmpty
-                      ? null
-                      : Text(t.category.label),
-                  trailing: Text(
-                    '−${fmtMoney(t.amount)}',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    showAddTransactionSheet(context, existing: t);
-                  },
-                ),
-              if (dayBills.isNotEmpty) ...[
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-                  child: Text('Due', style: Theme.of(ctx).textTheme.titleSmall),
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: Text(
+                    total > 0
+                        ? '${fmtDate(day)} · ${fmtMoney(total)} spent'
+                        : fmtDate(day),
+                    style: Theme.of(ctx).textTheme.titleSmall,
+                  ),
                 ),
-                for (final b in dayBills)
+                for (final t in rows)
                   ListTile(
                     dense: true,
-                    leading: const Icon(Icons.event_outlined, size: 20),
+                    leading: Icon(
+                      t.category.icon,
+                      color: t.category.color,
+                      size: 20,
+                    ),
                     title: Text(
-                      b.label,
+                      t.note.isNotEmpty ? t.note : t.category.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
+                    // The header total counts only the user's own share of a
+                    // split bill — say so on the row, or a ₹125 header over a
+                    // single −₹500 row doesn't add up (same annotation as the
+                    // main transaction tile).
+                    // Left out when it would repeat the title (no note).
+                    subtitle: t.isSplit
+                        ? Text(
+                            '${t.category.label} · your share '
+                            '${fmtMoney(t.myShare!)}',
+                          )
+                        : t.note.isEmpty
+                        ? null
+                        : Text(t.category.label),
                     trailing: Text(
-                      fmtMoney(b.amount),
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                      '−${fmtMoney(t.amount)}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: moneyColor(ctx, type: TxType.expense),
+                      ),
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      showAddTransactionSheet(context, existing: t);
+                    },
+                  ),
+                if (dayBills.isNotEmpty) ...[
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+                    child: Text(
+                      'Due',
+                      style: Theme.of(ctx).textTheme.titleSmall,
+                    ),
+                  ),
+                  for (final b in dayBills)
+                    ListTile(
+                      dense: true,
+                      leading: const Icon(Icons.event_outlined, size: 20),
+                      title: Text(
+                        b.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      // A reminder saved with no amount comes with 0: no
+                      // figure to show.
+                      trailing: b.amount == 0
+                          ? null
+                          : Text(
+                              fmtMoney(b.amount),
+                              style: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: moneyColor(ctx, type: TxType.expense),
+                              ),
+                            ),
+                    ),
+                ] else if (ahead)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+                    child: Text(
+                      'Nothing due on this day',
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                if (ahead)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton.tonalIcon(
+                        icon: const Icon(Icons.add_alert_outlined, size: 18),
+                        label: const Text('Set a reminder'),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          showReminderEditor(context, onDate: day);
+                        },
+                      ),
                     ),
                   ),
               ],
-            ],
+            ),
           ),
         );
       },

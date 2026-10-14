@@ -11,6 +11,7 @@ import '../services/notification_service.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
 import '../services/subscriptions.dart';
+import '../services/upcoming_items.dart' show hitMarkedPaid;
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
@@ -22,6 +23,7 @@ import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/tag_editor_dialog.dart';
 import '../widgets/glossy.dart';
+import '../widgets/transaction_tile.dart' show isLargeTextScale;
 import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
 import 'transactions_screen.dart' show TxFilterRequest;
@@ -207,8 +209,9 @@ class TagsTab extends StatelessWidget {
 
 /// Regular payments: the monthly ones the app spotted, plus the merchants
 /// the user marked (from a transaction's sheet or the selection bar), with
-/// what each costs a month and a year, price rises, and the ones that
-/// stopped. Hiding shares the Upcoming card's list.
+/// what each costs, price rises, and the ones that stopped; the header
+/// totals them a month and a year. Hiding shares the Upcoming card's list,
+/// so a hidden income pattern can be unhidden here too.
 class SubscriptionsTab extends StatefulWidget {
   const SubscriptionsTab({super.key});
 
@@ -328,14 +331,75 @@ class _SubscriptionTile extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final when = kind == _SubKind.active
         ? 'next ${fmtDateCompact(hit.nextDue)}'
-        : 'last paid ${fmtDateCompact(hit.lastDate)}';
+        : hit.type == TxType.expense
+        ? 'last paid ${fmtDateCompact(hit.lastDate)}'
+        : 'last received ${fmtDateCompact(hit.lastDate)}';
     final rise = item.priceRise;
     final cycle = context.select<FinanceProvider, SubscriptionCycle?>(
       (f) => f.subscriptionPinOf(hit.key),
     );
+    // The yearly cost sits in the tab's header line, so a row keeps to its
+    // amount and date.
+    final details = Text.rich(
+      TextSpan(
+        text:
+            '${fmtMoney(hit.expectedAmount)} '
+            '${(cycle ?? SubscriptionCycle.monthly).label.toLowerCase()} · '
+            '$when',
+        children: [
+          if (cycle != null)
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Tooltip(
+                  message: 'Marked by you',
+                  child: Icon(
+                    Icons.push_pin_outlined,
+                    size: 14,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+      style: text.bodySmall,
+    );
+    final Widget? extra = kind == _SubKind.hidden
+        ? TextButton(
+            onPressed: () =>
+                context.read<SettingsProvider>().unhideUpcoming(hit.key),
+            child: const Text('Unhide'),
+          )
+        : rise == null || kind != _SubKind.active
+        ? null
+        // Colour on the border and text only, never a filled badge.
+        : Tooltip(
+            message:
+                'Up ${fmtMoney(rise.amount)} since '
+                '${fmtDateCompact(rise.since)}',
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                border: Border.all(color: scheme.error),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                'Up ${fmtMoney(rise.amount)}',
+                style: text.labelSmall?.copyWith(color: scheme.error),
+              ),
+            ),
+          );
+    // At large text, Unhide or the badge takes a line under the subtitle
+    // so the name keeps its width beside the ⋮ at 320dp.
+    final stacked = isLargeTextScale(context);
 
     return ListTile(
       dense: true,
+      // The default 24dp end inset plus the ⋮ button's own padding set the
+      // glyph well inside the left inset; 4dp brings the two in line.
+      contentPadding: const EdgeInsetsDirectional.only(start: 16, end: 4),
       onTap: () => AppNav.instance.openTransactions(
         context,
         // The subscription's own tab: All would also list uncounted wallet
@@ -353,87 +417,94 @@ class _SubscriptionTile extends StatelessWidget {
         ),
       ),
       title: Text(hit.label),
-      subtitle: Text(
-        '${fmtMoney(hit.expectedAmount)} '
-        '${(cycle ?? SubscriptionCycle.monthly).label.toLowerCase()} · '
-        '${fmtMoney(item.yearly)} a year · $when'
-        '${cycle == null ? '' : ' · marked by you'}',
-        style: text.bodySmall,
-      ),
-      trailing: kind == _SubKind.hidden
-          ? TextButton(
-              onPressed: () =>
-                  context.read<SettingsProvider>().unhideUpcoming(hit.key),
-              child: const Text('Unhide'),
+      subtitle: stacked && extra != null
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [details, const SizedBox(height: 4), extra],
             )
-          : rise == null || kind != _SubKind.active
-          ? null
-          // Colour on the border and text only, never a filled badge.
-          : Tooltip(
-              message:
-                  'Up ${fmtMoney(rise.amount)} since '
-                  '${fmtDateCompact(rise.since)}',
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  border: Border.all(color: scheme.error),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  'Up ${fmtMoney(rise.amount)}',
-                  style: text.labelSmall?.copyWith(color: scheme.error),
-                ),
-              ),
-            ),
+          : details,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!stacked && extra != null) extra,
+          // The long-press menu, in reach of a tap.
+          IconButton(
+            tooltip: 'More',
+            icon: const Icon(Icons.more_vert, size: 20),
+            onPressed: () => _actions(context),
+          ),
+        ],
+      ),
     );
   }
 
-  /// Long-press: rename the payee, turn it into a reminder, or hide it; a
-  /// merchant the user marked can also change its cycle or be unmarked.
+  /// Long-press or ⋮: rename the payee, turn it into a reminder, or hide
+  /// it; one marked paid by hand can be marked unpaid; a merchant the user
+  /// marked can also change its cycle or be unmarked.
   Future<void> _actions(BuildContext context) async {
     final hit = item.hit;
     final marked = hit.pinned;
+    // Marked paid by hand from Upcoming or the heatmap: the lasting way
+    // back once that toast is gone.
+    final paidByHand = hitMarkedPaid(context.read<FinanceProvider>(), hit);
     final choice = await showModalBottomSheet<String>(
       context: context,
       useSafeArea: true,
       showDragHandle: true,
+      // Scrolls: a marked merchant has five actions, more than the sheet's
+      // height holds on a short screen or at large text.
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Rename'),
-              onTap: () => Navigator.pop(ctx, 'rename'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.add_alert_outlined),
-              title: const Text('Make a reminder'),
-              subtitle: const Text('For bills that may stop showing in SMS'),
-              onTap: () => Navigator.pop(ctx, 'reminder'),
-            ),
-            if (marked) ...[
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
               ListTile(
-                leading: const Icon(Icons.autorenew),
-                title: const Text('Change cycle'),
-                subtitle: const Text('Monthly, quarterly or yearly'),
-                onTap: () => Navigator.pop(ctx, 'cycle'),
+                leading: const Icon(Icons.edit_outlined),
+                title: const Text('Rename'),
+                onTap: () => Navigator.pop(ctx, 'rename'),
               ),
-              ListTile(
-                leading: const Icon(Icons.remove_circle_outline),
-                title: const Text('Not a subscription'),
-                subtitle: const Text('Removes your mark'),
-                onTap: () => Navigator.pop(ctx, 'unmark'),
-              ),
+              // Reminders are for money going out; a hidden income pattern
+              // has no bill to remind of.
+              if (hit.type == TxType.expense)
+                ListTile(
+                  leading: const Icon(Icons.add_alert_outlined),
+                  title: const Text('Make a reminder'),
+                  subtitle: const Text(
+                    'For bills that may stop showing in SMS',
+                  ),
+                  onTap: () => Navigator.pop(ctx, 'reminder'),
+                ),
+              if (paidByHand)
+                ListTile(
+                  leading: const Icon(Icons.undo),
+                  title: const Text('Mark unpaid'),
+                  subtitle: const Text('Its latest payment is due again'),
+                  onTap: () => Navigator.pop(ctx, 'unpaid'),
+                ),
+              if (marked) ...[
+                ListTile(
+                  leading: const Icon(Icons.autorenew),
+                  title: const Text('Change cycle'),
+                  subtitle: const Text('Monthly, quarterly or yearly'),
+                  onTap: () => Navigator.pop(ctx, 'cycle'),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.remove_circle_outline),
+                  title: const Text('Not a subscription'),
+                  subtitle: const Text('Removes your mark'),
+                  onTap: () => Navigator.pop(ctx, 'unmark'),
+                ),
+              ],
+              if (kind != _SubKind.hidden)
+                ListTile(
+                  leading: const Icon(Icons.visibility_off_outlined),
+                  title: const Text('Hide'),
+                  subtitle: const Text('Also hides it from Upcoming'),
+                  onTap: () => Navigator.pop(ctx, 'hide'),
+                ),
             ],
-            if (kind != _SubKind.hidden)
-              ListTile(
-                leading: const Icon(Icons.visibility_off_outlined),
-                title: const Text('Hide'),
-                subtitle: const Text('Also hides it from Upcoming'),
-                onTap: () => Navigator.pop(ctx, 'hide'),
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -468,6 +539,16 @@ class _SubscriptionTile extends StatelessWidget {
           tone: AppToastTone.removal,
         );
         await settings.hideUpcoming(hit.key);
+      case 'unpaid':
+        final finance = context.read<FinanceProvider>();
+        final before = finance.patternPaidThrough(hit.key);
+        showUndoSnackBar(
+          context,
+          'Marked "${hit.label}" unpaid',
+          () => finance.restorePatternPaid(hit.key, before),
+          icon: Icons.undo,
+        );
+        await finance.restorePatternPaid(hit.key, null);
       case 'cycle':
         final finance = context.read<FinanceProvider>();
         final current = finance.subscriptionPinOf(hit.key);
@@ -1015,8 +1096,29 @@ class _RemindersSection extends StatelessWidget {
       reminderCycleLabel(r),
       if (r.expectedAmount != null) fmtMoneyCompact(r.expectedAmount!),
       if (r.autoAdd) 'adds itself',
-      if (reminderPaidThisPeriod(r, now)) 'paid',
+      // A one-time reminder past its date or paid needs nothing more; it
+      // stays listed so it can be deleted.
+      if (reminderFinished(r, now))
+        'done'
+      else if (reminderPaidThisPeriod(r, now))
+        'paid',
     ].join(' · ');
+
+    Widget details(Reminder r) =>
+        Text(subtitle(r), style: Theme.of(context).textTheme.bodySmall);
+
+    // The lasting way back from a paid mark once its toast is gone. Only a
+    // real mark: Add it for me before its start date reads as paid too.
+    Widget? unpaidButton(Reminder r) =>
+        r.lastPaidMonth == null || !reminderPaidThisPeriod(r, now)
+        ? null
+        : TextButton(
+            onPressed: () => _markUnpaid(context, r),
+            child: const Text('Mark unpaid'),
+          );
+    // At large text the button takes a line under the subtitle, so the
+    // name keeps its width.
+    final stacked = isLargeTextScale(context);
 
     return FrostedPanel(
       radius: BorderRadius.circular(AppRadius.card),
@@ -1051,20 +1153,46 @@ class _RemindersSection extends StatelessWidget {
                   ),
                 ),
                 title: Text(r.name),
-                subtitle: Text(
-                  subtitle(r),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                trailing: IconButton(
-                  tooltip: 'Delete reminder',
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: () => _delete(context, r),
+                subtitle: stacked && unpaidButton(r) != null
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [details(r), unpaidButton(r)!],
+                      )
+                    : details(r),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!stacked && unpaidButton(r) != null) unpaidButton(r)!,
+                    IconButton(
+                      tooltip: 'Delete reminder',
+                      icon: const Icon(Icons.delete_outline, size: 20),
+                      onPressed: () => _delete(context, r),
+                    ),
+                  ],
                 ),
               ),
           ],
         ),
       ),
     );
+  }
+
+  /// Steps the paid mark back one period (a one-time reminder loses it) and
+  /// offers Undo, which marks that month paid again.
+  Future<void> _markUnpaid(BuildContext context, Reminder r) async {
+    final finance = context.read<FinanceProvider>();
+    final before = r.lastPaidMonth;
+    if (before == null) return;
+    // The toast first: the rebuild drops this row's button, and the toast
+    // needs a mounted context.
+    showUndoSnackBar(
+      context,
+      'Marked "${r.name}" unpaid',
+      () => finance.markReminderPaid(r.id, DateTime.parse('$before-01')),
+      icon: Icons.undo,
+    );
+    await finance.unmarkLatestReminderPaid(r.id);
   }
 
   /// Deletes at once and offers Undo, which returns the reminder to the

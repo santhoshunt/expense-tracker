@@ -71,10 +71,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
   }
 
-  testWidgets('fits 320dp at text scale 2.0 with the date showing', (
-    tester,
-  ) async {
-    final semantics = tester.ensureSemantics();
+  testWidgets('the screen fits 320dp at text scale 2.0', (tester) async {
     final p = await seeded('coffeerun');
     await pump(
       tester,
@@ -84,14 +81,65 @@ void main() {
       textScale: 2,
     );
     expect(tester.takeException(), isNull);
-    expect(tester.getSize(find.text(dateLabel)).width, greaterThan(0));
-    // The note no longer fits the line, but TalkBack still reads it.
-    expect(find.text('coffeerun'), findsNothing);
-    expect(
-      find.bySemanticsLabel(RegExp('coffeerun · $dateLabel')),
-      findsOneWidget,
+    expect(find.byType(TransactionTile), findsOneWidget);
+  });
+
+  testWidgets('a tile fits 320dp at text scale 2.0 with the date showing', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    final p = await seeded('coffeerun');
+    await pump(
+      tester,
+      p,
+      ListView(children: [TransactionTile(tx: p.transactions.single)]),
+      size: const Size(320, 640),
+      textScale: 2,
     );
+    expect(tester.takeException(), isNull);
+    expect(tester.getSize(find.text(dateLabel)).width, greaterThan(0));
+    // The note shows, or, squeezed out, TalkBack still reads it.
+    final noteShown = find.text('coffeerun').evaluate().isNotEmpty;
+    final noteRead = find
+        .bySemanticsLabel(RegExp('coffeerun · $dateLabel'))
+        .evaluate()
+        .isNotEmpty;
+    expect(noteShown || noteRead, isTrue);
     semantics.dispose();
+  });
+
+  testWidgets('above 1.6x text the amount sits on its own line', (
+    tester,
+  ) async {
+    final p = await seeded('coffeerun');
+    final amount = find.text('−${fmtMoney(120)}');
+    Future<void> at(double scale) => pump(
+      tester,
+      p,
+      ListView(children: [TransactionTile(tx: p.transactions.single)]),
+      size: const Size(320, 640),
+      textScale: scale,
+    );
+
+    // Side by side: the amount level with the category, to its right.
+    await at(1.3);
+    final title = find.text('Food & Dining');
+    expect(
+      tester.getTopLeft(amount).dx,
+      greaterThan(tester.getTopRight(title).dx),
+    );
+
+    // Stacked: under the category, starting where it starts.
+    await at(2.0);
+    expect(tester.takeException(), isNull);
+    expect(
+      tester.getTopLeft(amount).dy,
+      greaterThanOrEqualTo(tester.getBottomLeft(title).dy),
+    );
+    expect(
+      tester.getTopLeft(amount).dx,
+      moreOrLessEquals(tester.getTopLeft(title).dx, epsilon: 0.5),
+    );
   });
 
   testWidgets('at normal size the note, separator and date all show', (
@@ -101,7 +149,7 @@ void main() {
     await pump(
       tester,
       p,
-      const TransactionsScreen(),
+      ListView(children: [TransactionTile(tx: p.transactions.single)]),
       size: const Size(400, 800),
       textScale: 1,
     );
@@ -112,7 +160,9 @@ void main() {
     // 3/5 share of the line after the " · ".
     final note = tester.renderObject<RenderParagraph>(find.text('coffeerun'));
     final line = tester.getSize(
-      find.ancestor(of: find.text('coffeerun'), matching: find.byType(Row)).first,
+      find
+          .ancestor(of: find.text('coffeerun'), matching: find.byType(Row))
+          .first,
     );
     final separator = tester.getSize(find.text(' · '));
     final natural = note.getMaxIntrinsicWidth(double.infinity);

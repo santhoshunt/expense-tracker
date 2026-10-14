@@ -336,7 +336,11 @@ class UnderlineTabs<T> extends StatelessWidget {
 /// A row of outline pills for a filter with a few values (transaction type,
 /// account type). The selected pill gets an accent outline; the text stays
 /// in the plain text colours, never coloured on a fill.
-class ChipTabs<T> extends StatelessWidget {
+///
+/// When the row scrolls sideways, the selected pill is kept in view: on
+/// the first frame and whenever [selected] changes (a page swipe, a
+/// deep-link), so a pill picked off screen never stays hidden.
+class ChipTabs<T> extends StatefulWidget {
   final List<(T, String)> options;
   final T selected;
   final ValueChanged<T> onChanged;
@@ -349,8 +353,63 @@ class ChipTabs<T> extends StatelessWidget {
   });
 
   @override
+  State<ChipTabs<T>> createState() => _ChipTabsState<T>();
+}
+
+class _ChipTabsState<T> extends State<ChipTabs<T>> {
+  /// One key per pill, by position, to find the selected one's box.
+  List<GlobalKey> _keys = const [];
+
+  List<GlobalKey> _keysFor(int count) {
+    if (_keys.length != count) {
+      _keys = List.generate(count, (_) => GlobalKey());
+    }
+    return _keys;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _revealSelected(animate: false);
+  }
+
+  @override
+  void didUpdateWidget(covariant ChipTabs<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selected != widget.selected) _revealSelected(animate: true);
+  }
+
+  /// Centres the selected pill in the row, post-frame so it has a box.
+  /// Only the row's own scrollable moves: Scrollable.ensureVisible would
+  /// also scroll a page list the row sits in. The first frame jumps, so a
+  /// screen never opens with its chips sliding.
+  void _revealSelected({required bool animate}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final i = widget.options.indexWhere((o) => o.$1 == widget.selected);
+      if (i < 0 || i >= _keys.length) return;
+      final pill = _keys[i].currentContext;
+      if (pill == null) return;
+      final box = pill.findRenderObject();
+      final position = Scrollable.maybeOf(pill)?.position;
+      if (box == null || position == null) return;
+      position.ensureVisible(
+        box,
+        alignment: 0.5,
+        duration: animate
+            ? motionDuration(context, const Duration(milliseconds: 200))
+            : Duration.zero,
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final options = widget.options;
+    final selected = widget.selected;
+    final keys = _keysFor(options.length);
     // One row, scrolled sideways when it does not fit (large text on a
     // narrow phone): wrapped to a second row it pushed the list down and
     // off the screen. Five pills fit at 390dp.
@@ -359,12 +418,13 @@ class ChipTabs<T> extends StatelessWidget {
       child: Row(
         spacing: 6,
         children: [
-          for (final (value, label) in options)
+          for (final (i, (value, label)) in options.indexed)
             Semantics(
+              key: keys[i],
               button: true,
               selected: value == selected,
               label: label,
-              onTap: () => onChanged(value),
+              onTap: () => widget.onChanged(value),
               excludeSemantics: true,
               // A 36dp pill in a 44dp target: the 4dp above and below it take
               // the tap too. No taller: above the transaction list, with both
@@ -423,8 +483,8 @@ class ChipTabs<T> extends StatelessWidget {
   }
 
   void _tap(T value) {
-    if (value != selected) Haptics.tick();
-    onChanged(value);
+    if (value != widget.selected) Haptics.tick();
+    widget.onChanged(value);
   }
 }
 

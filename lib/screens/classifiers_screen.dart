@@ -14,10 +14,13 @@ import '../services/subscriptions.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
+import '../utils/money_colors.dart';
 import '../widgets/picker_sheet.dart';
+import '../widgets/dialog_expander.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
+import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/keyboard_unfocus.dart';
 import '../widgets/motion.dart';
@@ -48,31 +51,29 @@ const int kCockpitTabDashBreakdown = 10;
 /// (kCockpitTab* ids, in tab order). Six tabs on one bar were too many to
 /// scan, so the hub splits them by what they steer, as Settings does.
 enum CockpitGroup {
-  classify('Classify', 'Rules, import rules, review', Icons.rule, [
+  classify('Classify', Icons.rule, [
     kCockpitTabRules,
     kCockpitTabImport,
     kCockpitTabTransactions,
   ]),
-  organise('Organise', 'Categories, groups and tags', Icons.category_outlined, [
+  organise('Organise', Icons.category_outlined, [
     kCockpitTabCategories,
     kCockpitTabTags,
   ]),
-  plan('Plan', 'Budgets, reminders and subscriptions', Icons.track_changes, [
+  plan('Plan', Icons.track_changes, [
     kCockpitTabBudgets,
     kCockpitTabReminders,
     kCockpitTabSubscriptions,
   ]),
-  dashboard(
-    'Dashboard',
-    'Order and show the dashboard sections',
-    Icons.dashboard_customize_outlined,
-    [kCockpitTabDashOverview, kCockpitTabDashTrends, kCockpitTabDashBreakdown],
-  );
+  dashboard('Dashboard', Icons.dashboard_customize_outlined, [
+    kCockpitTabDashOverview,
+    kCockpitTabDashTrends,
+    kCockpitTabDashBreakdown,
+  ]);
 
-  const CockpitGroup(this.title, this.gist, this.icon, this.tabs);
+  const CockpitGroup(this.title, this.icon, this.tabs);
 
   final String title;
-  final String gist;
   final IconData icon;
   final List<int> tabs;
 
@@ -141,8 +142,10 @@ Map<String, ClassifierRule> _pairSiblings(List<ClassifierRule> rules) {
 class _CockpitHub extends StatelessWidget {
   const _CockpitHub();
 
+  /// "3 rules" with a non-breaking space, so a wrapped line never leaves a
+  /// number at one line's end and its noun on the next.
   static String _count(int n, String one, String many) =>
-      '$n ${n == 1 ? one : many}';
+      '$n ${n == 1 ? one : many}';
 
   @override
   Widget build(BuildContext context) {
@@ -195,15 +198,16 @@ class _CockpitHub extends StatelessWidget {
         ),
         _count(finance.allTags.length, 'tag', 'tags'),
       ],
+      // A limit passed leads: it is the one thing here that needs acting on.
       CockpitGroup.plan: [
+        if (over > 0) '$over over',
         if (cap > 0) 'Monthly cap set',
         _count(finance.budgets.length, 'budget', 'budgets'),
         _count(finance.reminders.length, 'reminder', 'reminders'),
         _count(subscriptions, 'subscription', 'subscriptions'),
-        if (over > 0) '$over over',
       ],
       CockpitGroup.dashboard: [
-        hiddenSections > 0 ? '$hiddenSections hidden' : 'All sections shown',
+        hiddenSections > 0 ? '$hiddenSections hidden' : 'All sections shown',
       ],
     };
     final textTheme = Theme.of(context).textTheme;
@@ -219,33 +223,26 @@ class _CockpitHub extends StatelessWidget {
             16,
             16 + MediaQuery.viewPaddingOf(context).bottom,
           ),
+          // One grouped card: the rows touch, a hairline between them.
           children: [
-            for (final (i, g) in CockpitGroup.values.indexed) ...[
-              if (i > 0) const SizedBox(height: 12),
-              FrostedPanel(
-                radius: BorderRadius.circular(AppRadius.card),
+            for (final (i, g) in CockpitGroup.values.indexed)
+              GroupedSurface(
+                first: i == 0,
+                last: i == CockpitGroup.values.length - 1,
                 child: ListTile(
-                  isThreeLine: true,
-                  // Three-line tiles pin the icons to the top; the cards
-                  // differ in height, so they sat at a different spot on
-                  // each one.
+                  // The counts wrap at large text; the icons stay level
+                  // with the middle of each row.
                   titleAlignment: ListTileTitleAlignment.center,
                   leading: Icon(g.icon),
                   title: Text(g.title),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(g.gist),
-                      const SizedBox(height: 2),
-                      Text(
-                        counts[g]!.join(' · '),
-                        style: textTheme.bodySmall?.copyWith(
-                          color: accentTextColor(context),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
+                  // The live counts say what is inside; the group's own
+                  // gist repeated them in words.
+                  subtitle: Text(
+                    counts[g]!.join(' · '),
+                    style: textTheme.bodySmall?.copyWith(
+                      color: accentTextColor(context),
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.push(
@@ -256,7 +253,6 @@ class _CockpitHub extends StatelessWidget {
                   ),
                 ),
               ),
-            ],
           ],
         ),
       ),
@@ -1286,7 +1282,12 @@ class _ClassificationTile extends StatelessWidget {
     final isIncome = tx.type == TxType.income;
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final amountColor = isIncome ? AppColors.of(context).green : scheme.error;
+    // Green in, red out, plain for a transfer: the Transactions rows' rule.
+    final amountColor = moneyColor(
+      context,
+      type: tx.type,
+      transfer: cat.isTransfer,
+    );
 
     final title = tx.note.isNotEmpty
         ? tx.note.split('\n').first
@@ -1637,7 +1638,9 @@ Future<void> _showImportRuleDialog(
                         'e.g. "will be debited"',
                   ),
                 ),
-                const SizedBox(height: 16),
+                // The field's helper line already sits under it; a full 16
+                // on top of that left the dropdown floating apart.
+                const SizedBox(height: 12),
                 // Short names fit the dialog's field; the helper explains.
                 AppDropdownField<ImportRuleKind>(
                   label: 'Then',
@@ -1721,16 +1724,17 @@ Future<void> _showRuleDialog(
   ClassifierRule? sibling,
   String? patternSuggestion,
 }) async {
-  // One controller per OR-condition. `allCtrls` only grows — DisposeScope
-  // reads the list at dispose time, so removed rows still get disposed.
+  // One controller per OR-condition. `allCtrls` only grows: DisposeScope
+  // reads the list at dispose time, so removed rows still get disposed. It
+  // also holds the focus nodes of conditions added in the dialog.
   final seeds = existing?.patterns ?? [patternSuggestion ?? ''];
   final ctrls = [
     for (final s in (seeds.isEmpty ? [''] : seeds))
       TextEditingController(text: s),
   ];
-  final allCtrls = List<TextEditingController>.of(ctrls);
-  // The condition field that should take focus: null = the first one.
-  TextEditingController? focusCtrl;
+  final allCtrls = List<ChangeNotifier>.of(ctrls);
+  // Focus nodes of the conditions added with "Or contains…".
+  final focusNodes = <TextEditingController, FocusNode>{};
   var categoryId = existing?.categoryId ?? 'food';
   // The opposite-direction twin (a second ordinary rule sharing the
   // pattern): pre-filled when editing a rule that already has one.
@@ -1743,6 +1747,27 @@ Future<void> _showRuleDialog(
               context.read<FinanceProvider>().rules,
             ));
   String? otherCategoryId = twin?.categoryId;
+  // The other-direction expander starts open on a pair, so its second
+  // category is in view.
+  var otherOpen = twin != null;
+
+  // What the rule matches, in one line under the fields: a pair stays
+  // readable while its expander is closed.
+  String helperLine() {
+    if (categoryId == kSpamCategoryId) {
+      return 'Ignores case. Matching messages are never imported.';
+    }
+    String side(TxCategory c) => c.type == TxType.income ? 'in' : 'out';
+    final first = categoryById(categoryId);
+    final other = otherCategoryId;
+    if (other == null) {
+      return 'Ignores case. Only money ${side(first)} matches '
+          '${first.label}.';
+    }
+    final second = categoryById(other);
+    return 'Ignores case. Money ${side(first)} matches ${first.label}, '
+        'money ${side(second)} matches ${second.label}.';
+  }
 
   await showDialog(
     context: context,
@@ -1769,9 +1794,92 @@ Future<void> _showRuleDialog(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Category first: it names what the rule DOES, and below
-                  // the condition list it sat under the fold once the
-                  // keyboard opened.
+                  // Conditions first, the way the sentence reads: "If the
+                  // SMS contains ... then classify as ...".
+                  for (var i = 0; i < ctrls.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            // Keyed by controller: removeAt(i) shifts later
+                            // rows across positional element slots — without
+                            // keys, focus jumps and a different row silently
+                            // resizes.
+                            key: ObjectKey(ctrls[i]),
+                            controller: ctrls[i],
+                            // The first field on open; one added later has
+                            // its own node, focused by the add button.
+                            focusNode: focusNodes[ctrls[i]],
+                            autofocus: i == 0,
+                            // Prefills from an SMS can run 5–6 display lines —
+                            // wrap instead of scrolling invisibly in one line.
+                            minLines: i == 0 ? 2 : 1,
+                            maxLines: 6,
+                            onChanged: (_) => setState(() {}),
+                            decoration: InputDecoration(
+                              labelText: i == 0
+                                  ? 'If the SMS contains…'
+                                  : 'or contains…',
+                              // '|' is the stored OR separator — typed here it
+                              // would silently split into extra conditions.
+                              errorText: ctrls[i].text.contains('|')
+                                  ? 'Remove "|". Use "Or contains…" instead.'
+                                  : null,
+                              suffixIcon: i == 0
+                                  ? const InfoTip(
+                                      title: 'If the SMS contains…',
+                                      message:
+                                          'Matches whole words in the SMS '
+                                          'text, ignoring case: "RD Ac" '
+                                          'matches "RD Ac 1234" but not '
+                                          '"card account". Apart from spam '
+                                          'rules, a rule fires only when the '
+                                          'message moves money in its '
+                                          "category's direction. Transactions "
+                                          'added by hand are never matched.',
+                                    )
+                                  : null,
+                            ),
+                          ),
+                        ),
+                        if (ctrls.length > 1)
+                          IconButton(
+                            tooltip: 'Remove condition',
+                            icon: const Icon(Icons.close, size: 20),
+                            onPressed: () => setState(() => ctrls.removeAt(i)),
+                          ),
+                      ],
+                    ),
+                  ],
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Or contains…'),
+                      // Appended under the others, right above this button.
+                      // The rows are keyed by controller, so the existing
+                      // fields keep their text. Focused after the frame that
+                      // builds it: autofocus is ignored while another field
+                      // holds focus, and focusing scrolls it into view.
+                      onPressed: () {
+                        final c = TextEditingController();
+                        final node = FocusNode();
+                        allCtrls
+                          ..add(c)
+                          ..add(node);
+                        focusNodes[c] = node;
+                        setState(() => ctrls.add(c));
+                        // Only while its field is mounted: the dialog may
+                        // close before the frame lands.
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (node.context != null) node.requestFocus();
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   // The field already has a suffix (the arrow), so the tip
                   // trails it like the conditions' remove button.
                   Row(
@@ -1814,133 +1922,56 @@ Future<void> _showRuleDialog(
                   // Rules only fire for alerts moving money in the category's
                   // direction (the matcher skips the rest), so one keyword
                   // needs a rule per direction to classify both ways. The
-                  // twin is a second ordinary rule sharing the pattern.
+                  // twin is a second ordinary rule sharing the pattern; most
+                  // rules need none, so it waits behind an expander.
                   if (categoryId != kSpamCategoryId) ...[
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: AppDropdownField<String?>(
-                            label: 'Other direction',
-                            value: otherCategoryId,
-                            items: _oppositeDirectionItems(
-                              categoryById(categoryId).type == TxType.income
-                                  ? TxType.expense
-                                  : TxType.income,
+                    const SizedBox(height: 4),
+                    DialogExpander(
+                      title: categoryById(categoryId).type == TxType.income
+                          ? 'Money out goes to another category'
+                          : 'Money in goes to another category',
+                      open: otherOpen,
+                      onToggle: () => setState(() => otherOpen = !otherOpen),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: AppDropdownField<String?>(
+                              label: 'Other direction',
+                              value: otherCategoryId,
+                              items: _oppositeDirectionItems(
+                                categoryById(categoryId).type == TxType.income
+                                    ? TxType.expense
+                                    : TxType.income,
+                              ),
+                              onChanged: (v) =>
+                                  setState(() => otherCategoryId = v),
                             ),
-                            onChanged: (v) =>
-                                setState(() => otherCategoryId = v),
                           ),
-                        ),
-                        // Explained here, while the pair is being made,
-                        // rather than on the finished row in the list.
-                        const InfoTip(
-                          title: 'Rule pair',
-                          message:
-                              'Picking a category here makes a rule pair: one '
-                              'pattern, two rules, one for money out and one '
-                              'for money in. The Rules list shows the pair as '
-                              'one row, and editing or deleting it changes '
-                              'both. Not for this direction removes the '
-                              'second rule.',
-                        ),
-                      ],
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4, left: 12),
-                      child: Text(
-                        'Rules only fire for messages moving money in the '
-                        "category's direction. A second category here "
-                        'lets the same words classify money in and out '
-                        'differently.',
-                        style: Theme.of(ctx).textTheme.bodySmall,
+                          // Explained here, while the pair is being made,
+                          // rather than on the finished row in the list.
+                          const InfoTip(
+                            title: 'Rule pair',
+                            message:
+                                'Picking a category here makes a rule pair: '
+                                'one pattern, two rules, one for money out '
+                                'and one for money in. The Rules list shows '
+                                'the pair as one row, and editing or deleting '
+                                'it changes both. Not for this direction '
+                                'removes the second rule.',
+                          ),
+                        ],
                       ),
                     ),
                   ],
-                  // The add-condition button sits with the dropdown, above
-                  // the conditions: with several fields plus a keyboard it
-                  // lived below the fold exactly when it was needed.
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('Add another condition (OR)'),
-                      // Inserted at the top so the new field appears right
-                      // under this button (appending put it below every
-                      // existing condition, off-screen with a keyboard up).
-                      // The rows are keyed by controller, so the existing
-                      // fields keep their text and focus.
-                      onPressed: () => setState(() {
-                        final c = TextEditingController();
-                        ctrls.insert(0, c);
-                        allCtrls.add(c);
-                        focusCtrl = c;
-                      }),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      helperLine(),
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  for (var i = 0; i < ctrls.length; i++) ...[
-                    if (i > 0) const SizedBox(height: 8),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            // Keyed by controller: removeAt(i) shifts later
-                            // rows across positional element slots — without
-                            // keys, focus jumps and a different row silently
-                            // resizes.
-                            key: ObjectKey(ctrls[i]),
-                            controller: ctrls[i],
-                            // First field on open, or the one just added.
-                            autofocus: focusCtrl == null
-                                ? i == 0
-                                : ctrls[i] == focusCtrl,
-                            // Prefills from an SMS can run 5–6 display lines —
-                            // wrap instead of scrolling invisibly in one line.
-                            minLines: i == 0 ? 2 : 1,
-                            maxLines: 6,
-                            onChanged: (_) => setState(() {}),
-                            decoration: InputDecoration(
-                              labelText: i == 0
-                                  ? 'If the SMS contains…'
-                                  : 'or contains…',
-                              helperText: i == ctrls.length - 1
-                                  ? 'Case-insensitive. Use "Add another '
-                                        'condition" for OR.'
-                                  : null,
-                              // '|' is the stored OR separator — typed here it
-                              // would silently split into extra conditions.
-                              errorText: ctrls[i].text.contains('|')
-                                  ? 'Remove "|". Use "Add another condition" '
-                                        'for OR.'
-                                  : null,
-                              suffixIcon: i == 0
-                                  ? const InfoTip(
-                                      title: 'If the SMS contains…',
-                                      message:
-                                          'Matches whole words in the SMS '
-                                          'text, ignoring case: "RD Ac" '
-                                          'matches "RD Ac 1234" but not '
-                                          '"card account". Apart from spam '
-                                          'rules, a rule fires only when the '
-                                          'message moves money in its '
-                                          "category's direction. Transactions "
-                                          'added by hand are never matched.',
-                                    )
-                                  : null,
-                            ),
-                          ),
-                        ),
-                        if (ctrls.length > 1)
-                          IconButton(
-                            tooltip: 'Remove condition',
-                            icon: const Icon(Icons.close, size: 20),
-                            onPressed: () => setState(() => ctrls.removeAt(i)),
-                          ),
-                      ],
-                    ),
-                  ],
                 ],
               ),
             ),

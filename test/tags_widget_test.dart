@@ -78,6 +78,12 @@ void main() {
       find.widgetWithText(TextFormField, 'Note (optional)'),
       'snacks',
     );
+    // A new entry keeps Tags under More details.
+    final more = find.text('More details');
+    await tester.ensureVisible(more);
+    await tester.pumpAndSettle();
+    await tester.tap(more);
+    await tester.pumpAndSettle();
     final recent = find.widgetWithText(ActionChip, '+ Goa trip');
     await tester.ensureVisible(recent);
     await tester.pumpAndSettle();

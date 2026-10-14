@@ -41,13 +41,17 @@ void main() {
   );
 
   /// The header's label: the bare month name inside the current year, with
-  /// the year appended outside it, so the tests outlive 2026.
-  Finder monthLabel(DateTime month) => find.text(
-    (month.year == DateTime.now().year
-            ? DateFormat('MMMM').format(month)
-            : DateFormat('MMMM yyyy').format(month))
-        .toUpperCase(),
-  );
+  /// the year appended outside it, so the tests outlive 2026. Above 1.6x
+  /// text the name is the short one ("JUL").
+  Finder monthLabel(DateTime month, {bool short = false}) {
+    final name = short ? 'MMM' : 'MMMM';
+    return find.text(
+      (month.year == DateTime.now().year
+              ? DateFormat(name).format(month)
+              : DateFormat('$name yyyy').format(month))
+          .toUpperCase(),
+    );
+  }
 
   final sticky = find.byKey(const ValueKey('sticky-month-header'));
 
@@ -128,7 +132,7 @@ void main() {
       await tester.pumpWidget(screen(p, textScale: scale));
       await tester.pumpAndSettle();
 
-      final july = monthLabel(DateTime(2026, 7));
+      final july = monthLabel(DateTime(2026, 7), short: scale > 1.6);
       final total = find.text('−${fmtMoneyCompact(410)}');
       final labelTop = tester.getTopLeft(july).dy;
       final totalRight = tester.getTopRight(total).dx;

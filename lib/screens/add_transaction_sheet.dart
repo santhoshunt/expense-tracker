@@ -12,6 +12,7 @@ import '../utils/format.dart';
 import '../widgets/cycle_label.dart';
 import '../widgets/date_time_picker.dart';
 import '../widgets/info_tip.dart';
+import '../widgets/motion.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/undo_snackbar.dart';
@@ -273,7 +274,25 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     }
     _initialAmountText = _amountCtrl.text;
     _initialFingerprint = _fingerprint();
+    // A new entry folds the rarely used fields away, unless one already
+    // holds something.
+    _moreOpen =
+        _tags.isNotEmpty ||
+        _senderCtrl.text.trim().isNotEmpty ||
+        _countIn != null ||
+        (!isEditing && _subscriptionShowsOn());
   }
+
+  /// Whether the Subscription switch would show on as the sheet opens:
+  /// the merchant already counts as one.
+  bool _subscriptionShowsOn() {
+    final key = _subscriptionKey();
+    return key != null && _subscriptionNow(key).on;
+  }
+
+  /// A new entry's "More details" fold: Tags, Subscription, Sender and
+  /// Count in. Editing shows them all, as it always has.
+  late bool _moreOpen;
 
   @override
   void dispose() {
@@ -884,6 +903,140 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     ];
   }
 
+  Widget _tagField(BuildContext context) => TagInput(
+    tags: _tags,
+    controller: _tagCtrl,
+    suggestions: [
+      for (final u in context.read<FinanceProvider>().allTags) u.tag,
+    ],
+    onChanged: (t) => setState(() => _tags = t),
+    colorOf: context.read<FinanceProvider>().tagColor,
+  );
+
+  Widget _senderField() => TextFormField(
+    controller: _senderCtrl,
+    decoration: const InputDecoration(
+      labelText: 'Sender (optional)',
+      helperText: 'Who the money moved to or from. SMS imports fill this in.',
+    ),
+    textInputAction: TextInputAction.done,
+    onFieldSubmitted: (_) => _save(),
+  );
+
+  /// Count in: month figures use another moment, the row keeps its own
+  /// date (and so the account balance stays right). Same top gap either
+  /// way, so setting or clearing it doesn't shift the buttons below.
+  Widget _countInField() => Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: _countIn == null
+          ? TextButton(
+              onPressed: _pickCountIn,
+              child: const Text(
+                'Count in another date ›',
+                semanticsLabel: 'Count in another date',
+              ),
+            )
+          : InputChip(
+              avatar: const Icon(Icons.event_repeat_outlined, size: 18),
+              label: Text('Counts in ${fmtCountIn(_countIn!)}'),
+              onPressed: _pickCountIn,
+              onDeleted: () => setState(() => _countIn = null),
+              deleteButtonTooltipMessage: 'Count on its own date',
+            ),
+    ),
+  );
+
+  /// A new entry's fold for the fields most entries never need. Closed,
+  /// its fields are not built at all, so nothing hidden can take focus.
+  Widget _moreDetails(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // TalkBack says whether the fold is open.
+        Semantics(
+          button: true,
+          expanded: _moreOpen,
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('More details'),
+            subtitle: Text(
+              'Tags, subscription, sender, count in another date',
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+            trailing: AnimatedRotation(
+              turns: _moreOpen ? 0.5 : 0,
+              duration: motionDuration(
+                context,
+                const Duration(milliseconds: 200),
+              ),
+              child: const Icon(Icons.expand_more),
+            ),
+            onTap: () => setState(() => _moreOpen = !_moreOpen),
+          ),
+        ),
+        AnimatedSize(
+          duration: motionDuration(context, const Duration(milliseconds: 200)),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.topCenter,
+          child: !_moreOpen
+              ? const SizedBox(width: double.infinity)
+              : Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _tagField(context),
+                      const SizedBox(height: 16),
+                      ..._subscriptionField(context),
+                      _senderField(),
+                      _countInField(),
+                    ],
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// Editing scrolls the whole form, as it always has. A new entry pins
+  /// Add in a footer under the scrolling form: the sheet sits on the
+  /// keyboard's inset, so Add stays in view while typing.
+  Widget _layout(Widget form) {
+    if (isEditing) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: form,
+      );
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Flexible(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: form,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+          child: FilledButton(
+            onPressed: _busy ? null : _save,
+            style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            child: const Text('Add'),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final categories = _categoriesFor(_kind);
@@ -912,7 +1065,12 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                 onPressed: () => Navigator.pop(ctx, false),
                 child: const Text('Keep editing'),
               ),
+              // The error style bulk Delete uses: this throws input away.
               FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Theme.of(ctx).colorScheme.error,
+                  foregroundColor: Theme.of(ctx).colorScheme.onError,
+                ),
                 onPressed: () => Navigator.pop(ctx, true),
                 child: const Text('Discard'),
               ),
@@ -922,9 +1080,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         if (discard == true && mounted) navigator.pop();
       },
       child: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Form(
+        child: _layout(
+          Form(
             key: _formKey,
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -1151,18 +1308,12 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   onChanged: (_) => setState(() {}),
                 ),
                 const SizedBox(height: 16),
-                TagInput(
-                  tags: _tags,
-                  controller: _tagCtrl,
-                  suggestions: [
-                    for (final u in context.read<FinanceProvider>().allTags)
-                      u.tag,
-                  ],
-                  onChanged: (t) => setState(() => _tags = t),
-                  colorOf: context.read<FinanceProvider>().tagColor,
-                ),
-                const SizedBox(height: 16),
-                ..._subscriptionField(context),
+                // A new entry has these under More details below.
+                if (isEditing) ...[
+                  _tagField(context),
+                  const SizedBox(height: 16),
+                  ..._subscriptionField(context),
+                ],
                 // The raw alert an SMS row was imported from — read-only so the
                 // review flow can still see the full message, while the Note
                 // field above stays purely the user's own text.
@@ -1181,17 +1332,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   ),
                   const SizedBox(height: 16),
                 ],
-                TextFormField(
-                  controller: _senderCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Sender (optional)',
-                    helperText:
-                        'Who the money moved to or from. SMS imports fill this in.',
-                  ),
-                  textInputAction: TextInputAction.done,
-                  onFieldSubmitted: (_) => _save(),
-                ),
-                const SizedBox(height: 16),
+                if (isEditing) ...[_senderField(), const SizedBox(height: 16)],
                 Builder(
                   builder: (context) {
                     // watch, not read: an account created while the sheet is
@@ -1350,46 +1491,16 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     ),
                   ],
                 ),
-                // Count in: month figures use another moment, the row keeps
-                // its own date (and so the account balance stays right).
-                // Same top gap either way, so setting or clearing it doesn't
-                // shift the buttons below.
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: _countIn == null
-                        ? TextButton(
-                            onPressed: _pickCountIn,
-                            child: const Text(
-                              'Count in another date ›',
-                              semanticsLabel: 'Count in another date',
-                            ),
-                          )
-                        : InputChip(
-                            avatar: const Icon(
-                              Icons.event_repeat_outlined,
-                              size: 18,
-                            ),
-                            label: Text('Counts in ${fmtCountIn(_countIn!)}'),
-                            onPressed: _pickCountIn,
-                            onDeleted: () => setState(() => _countIn = null),
-                            deleteButtonTooltipMessage: 'Count on its own date',
-                          ),
-                  ),
-                ),
-                const SizedBox(height: 20),
-                if (!isEditing)
-                  FilledButton(
-                    onPressed: _busy ? null : _save,
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: const Text('Add'),
-                  ),
+                // A new entry's Add sits in the footer below the form.
+                if (!isEditing) ...[
+                  const SizedBox(height: 8),
+                  _moreDetails(context),
+                ],
                 // When editing, Save sits at the top of the sheet — Delete
                 // stays alone down here, well away from it.
                 if (isEditing) ...[
+                  _countInField(),
+                  const SizedBox(height: 20),
                   OutlinedButton.icon(
                     onPressed: _busy ? null : _delete,
                     icon: const Icon(Icons.delete_outline),

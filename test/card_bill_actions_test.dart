@@ -233,6 +233,10 @@ void main() {
     ).colorScheme;
     expect(icon.color, scheme.error, reason: 'due today is inside the window');
     final amount = tester.widget<Text>(find.text(fmtMoney(5000)));
-    expect(amount.style?.color, isNull, reason: 'amount stays default-bold');
+    expect(
+      amount.style?.color,
+      scheme.onSurface,
+      reason: 'paying a card bill is a transfer: the figure stays plain',
+    );
   });
 }

@@ -641,10 +641,8 @@ void main() {
 
     await tester.tap(find.text('Transactions').last);
     await tester.pumpAndSettle();
-    // Filters sit behind the search field's sort, filter and export button.
+    // The search field's sort, filter and export button opens Filters.
     await tester.tap(find.byTooltip('Sort, filter and export'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ListTile, 'Filters'));
     await tester.pumpAndSettle();
 
     // Select Transport, then search for something it doesn't match.
@@ -684,6 +682,115 @@ void main() {
     expect(find.byTooltip('More'), findsOneWidget);
 
     debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('the SMS import button shows on the Transactions tab only', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+    final sms = find.byTooltip('Import from SMS');
+
+    expect(sms, findsNothing, reason: 'Dashboard');
+    await tester.tap(find.text('Transactions').last);
+    await tester.pumpAndSettle();
+    expect(sms, findsOneWidget);
+    await tester.tap(find.text('Accounts').last);
+    await tester.pumpAndSettle();
+    expect(sms, findsNothing);
+  });
+
+  testWidgets('the Transactions tab carries the pending-import count on '
+      'every tab', (tester) async {
+    Tx pendingTx(String id) => Tx(
+      id: id,
+      type: TxType.expense,
+      categoryId: 'other_expense',
+      amount: 100,
+      note: 'row $id',
+      date: DateTime(2026, 7, 1),
+      pending: true,
+    );
+    SharedPreferences.setMockInitialValues({
+      'transactions_v1': jsonEncode([
+        pendingTx('p1').toJson(),
+        pendingTx('p2').toJson(),
+      ]),
+    });
+    final p = FinanceProvider();
+    await p.load();
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    final navCount = find.descendant(
+      of: find.byType(NavigationBar),
+      matching: find.text('2'),
+    );
+    // On the Dashboard, where the SMS button (and its badge) is gone.
+    expect(find.byTooltip('Import from SMS'), findsNothing);
+    expect(navCount, findsOneWidget);
+
+    await tester.tap(find.text('Accounts').last);
+    await tester.pumpAndSettle();
+    expect(navCount, findsOneWidget);
+
+    // Selected, the tab keeps it, and the SMS button shows its own.
+    await tester.tap(find.text('Transactions').last);
+    await tester.pumpAndSettle();
+    expect(navCount, findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byTooltip('Import from SMS'),
+        matching: find.text('2'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a By tags tap lists the tag rows of every type', (tester) async {
+    tester.view.physicalSize = const Size(1080, 4000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final p = FinanceProvider();
+    await p.load();
+    final now = DateTime.now();
+    final month = DateTime(now.year, now.month, 1);
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 500,
+      note: 'lunch',
+      date: month,
+      tags: ['Goa trip'],
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: kSavingsTransferCategoryId,
+      amount: 2000,
+      note: 'trip fund',
+      date: month,
+      tags: ['Goa trip'],
+    );
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+    await openDashboardView(tester, 'Breakdown');
+    await openDashboardSection(tester, 'byTags');
+    final tagRow = find
+        .ancestor(
+          of: find.text('Goa trip'),
+          matching: find.byWidgetPredicate(
+            (w) => w is InkWell && w.onTap != null,
+          ),
+        )
+        .first;
+    await tester.tap(tagRow);
+    await tester.pumpAndSettle();
+    // The All tab, so the money-out transfer the tag total counts is
+    // listed beside the expense.
+    expect(find.text('lunch'), findsOneWidget);
+    expect(find.text('trip fund'), findsOneWidget);
   });
 
   testWidgets('search matches amount, category label and account name', (

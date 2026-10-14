@@ -114,6 +114,9 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
     expect(find.text('New category'), findsOneWidget);
+    // The colours sit in the sheet the icon circle opens.
+    await tester.tap(find.bySemanticsLabel('Icon and colour'));
+    await tester.pumpAndSettle();
     expect(find.text('Colour · None'), findsOneWidget);
   });
 

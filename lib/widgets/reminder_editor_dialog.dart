@@ -6,8 +6,9 @@ import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../services/reminder_schedule.dart';
+import '../utils/app_theme.dart';
+import '../utils/dates.dart';
 import '../utils/format.dart';
-import 'cycle_label.dart';
 import 'dispose_scope.dart';
 import 'info_tip.dart';
 import 'picker_sheet.dart';
@@ -19,7 +20,8 @@ import 'picker_sheet.dart';
 ///
 /// The [name], [dayOfMonth], [amount], [categoryId], [cycle] and
 /// [anchorMonth] prefill a NEW reminder (the Subscriptions list's "Make a
-/// reminder"); [existing] wins over them when editing.
+/// reminder"); [existing] wins over them when editing. A given [onDate]
+/// (the heatmap's "Set a reminder") opens on Once with that date.
 Future<void> showReminderEditor(
   BuildContext context, {
   Reminder? existing,
@@ -29,6 +31,7 @@ Future<void> showReminderEditor(
   String? categoryId,
   SubscriptionCycle? cycle,
   int? anchorMonth,
+  DateTime? onDate,
 }) async {
   final finance = context.read<FinanceProvider>();
   final nameCtrl = TextEditingController(text: existing?.name ?? name ?? '');
@@ -44,6 +47,21 @@ Future<void> showReminderEditor(
               ? (anchorMonth ?? DateTime.now().month)
               : existing.anchorMonth)
           .clamp(1, 12);
+  // A one-time date also sets the day and month, so switching to a
+  // repeating choice keeps the same day instead of day 1.
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final startOnce = existing != null
+      ? reminderOnceDate(existing)
+      : (onDate == null
+            ? null
+            : DateTime(onDate.year, onDate.month, onDate.day));
+  DateTime? onceDate = startOnce;
+  var once = startOnce != null;
+  if (startOnce != null) {
+    day = startOnce.day;
+    month = startOnce.month;
+  }
   var autoAdd = existing?.autoAdd ?? false;
   String? accountId = existing?.accountId;
   // Open accounts, plus a closed one this reminder already pays from, so a
@@ -99,8 +117,35 @@ Future<void> showReminderEditor(
               amountText.isNotEmpty && (amount == null || amount <= 0);
           // Adding the expense needs to know how much.
           final amountMissing = autoAdd && amountText.isEmpty;
+          final shownDate = onceDate;
           final valid =
-              nameCtrl.text.trim().isNotEmpty && !amountBad && !amountMissing;
+              nameCtrl.text.trim().isNotEmpty &&
+              !amountBad &&
+              !amountMissing &&
+              (!once || shownDate != null);
+          String dateText(DateTime? d) =>
+              d == null ? 'Pick a date' : fmtDate(d);
+          Future<void> pickDate() async {
+            final last = DateTime(today.year + 5, today.month, today.day);
+            // showDatePicker asserts on a start outside its range: an older
+            // date being edited opens on today.
+            final start = shownDate ?? today;
+            final picked = await showDatePicker(
+              context: ctx,
+              initialDate: start.isBefore(today)
+                  ? today
+                  : (start.isAfter(last) ? last : start),
+              firstDate: today,
+              lastDate: last,
+            );
+            if (picked == null || !ctx.mounted) return;
+            setState(() {
+              onceDate = DateTime(picked.year, picked.month, picked.day);
+              day = picked.day;
+              month = picked.month;
+            });
+          }
+
           return AlertDialog(
             title: Text(existing == null ? 'New reminder' : 'Edit reminder'),
             content: SingleChildScrollView(
@@ -122,43 +167,72 @@ Future<void> showReminderEditor(
                   const SizedBox(height: 16),
                   Text('Repeats', style: Theme.of(ctx).textTheme.labelLarge),
                   const SizedBox(height: 8),
-                  SegmentedButton<SubscriptionCycle>(
-                    showSelectedIcon: false,
-                    segments: [
-                      for (final c in SubscriptionCycle.values)
-                        ButtonSegment(value: c, label: cycleLabel(c.label)),
+                  // Chips, not segments: four segments in a dialog this
+                  // narrow each shrank their label to a different size.
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      for (final r in _Repeat.values)
+                        ChoiceChip(
+                          label: Text(r.label),
+                          selected:
+                              r == (once ? _Repeat.once : _Repeat.of(repeats)),
+                          onSelected: (_) => setState(() {
+                            once = r == _Repeat.once;
+                            repeats = r.cycle ?? repeats;
+                          }),
+                        ),
                     ],
-                    selected: {repeats},
-                    onSelectionChanged: (s) =>
-                        setState(() => repeats = s.first),
                   ),
                   const SizedBox(height: 16),
-                  // Dropdowns carry their own arrow suffix, so each tip
-                  // trails its field instead.
-                  Row(
-                    children: [
-                      Expanded(
-                        child: AppDropdownField<int>(
-                          label: 'Due day',
-                          value: day,
-                          items: [
-                            for (var d = 1; d <= 31; d++)
-                              PickerItem(value: d, label: '$d'),
-                          ],
-                          onChanged: (v) {
-                            if (v != null) setState(() => day = v);
-                          },
+                  if (once)
+                    // One button for a screen reader: the field's label,
+                    // value and icon would otherwise read as three parts.
+                    Semantics(
+                      button: true,
+                      label: 'Date, ${dateText(shownDate)}',
+                      excludeSemantics: true,
+                      onTap: pickDate,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(AppRadius.control),
+                        onTap: pickDate,
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Date',
+                            suffixIcon: Icon(Icons.calendar_today, size: 18),
+                          ),
+                          child: Text(dateText(shownDate), maxLines: 1),
                         ),
                       ),
-                      const InfoTip(
-                        title: 'Due day',
-                        message:
-                            'Days 29 to 31 fall on the last day of shorter '
-                            'months.',
-                      ),
-                    ],
-                  ),
-                  if (repeats != SubscriptionCycle.monthly) ...[
+                    )
+                  else
+                    // Dropdowns carry their own arrow suffix, so each tip
+                    // trails its field instead.
+                    Row(
+                      children: [
+                        Expanded(
+                          child: AppDropdownField<int>(
+                            label: 'Due day',
+                            value: day,
+                            items: [
+                              for (var d = 1; d <= 31; d++)
+                                PickerItem(value: d, label: '$d'),
+                            ],
+                            onChanged: (v) {
+                              if (v != null) setState(() => day = v);
+                            },
+                          ),
+                        ),
+                        const InfoTip(
+                          title: 'Due day',
+                          message:
+                              'Days 29 to 31 fall on the last day of shorter '
+                              'months.',
+                        ),
+                      ],
+                    ),
+                  if (!once && repeats != SubscriptionCycle.monthly) ...[
                     const SizedBox(height: 16),
                     AppDropdownField<int>(
                       label: repeats == SubscriptionCycle.yearly
@@ -268,24 +342,39 @@ Future<void> showReminderEditor(
                 onPressed: !valid
                     ? null
                     : () {
+                        // Once is stored as yearly on its own day and
+                        // month, which is how an older build reads it.
+                        final onceDay = once ? shownDate : null;
+                        final onceKey = onceDay == null
+                            ? null
+                            : '${monthKey(onceDay)}-'
+                                  '${onceDay.day.toString().padLeft(2, '0')}';
+                        final saveCycle = onceDay == null
+                            ? repeats
+                            : SubscriptionCycle.yearly;
+                        final saveDay = onceDay?.day ?? day;
                         // Quarterly keeps the picked months' first one;
                         // monthly stores the current month, unused.
-                        final anchor = switch (repeats) {
-                          SubscriptionCycle.monthly => DateTime.now().month,
-                          SubscriptionCycle.quarterly => (month - 1) % 3 + 1,
-                          SubscriptionCycle.yearly => month,
-                        };
+                        final anchor =
+                            onceDay?.month ??
+                            switch (repeats) {
+                              SubscriptionCycle.monthly => DateTime.now().month,
+                              SubscriptionCycle.quarterly =>
+                                (month - 1) % 3 + 1,
+                              SubscriptionCycle.yearly => month,
+                            };
                         final account = autoAdd ? accountId : null;
                         if (existing == null) {
                           finance.addReminder(
                             name: nameCtrl.text.trim(),
-                            dayOfMonth: day,
+                            dayOfMonth: saveDay,
                             expectedAmount: amount,
                             categoryId: selectedCategory,
-                            cycle: repeats,
+                            cycle: saveCycle,
                             anchorMonth: anchor,
                             autoAdd: autoAdd,
                             accountId: account,
+                            onDate: onceKey,
                           );
                         } else {
                           // The stored copy, not the one this dialog opened
@@ -295,18 +384,26 @@ Future<void> showReminderEditor(
                             (x) => x.id == existing.id,
                             orElse: () => existing,
                           );
+                          // A new one-time date starts unpaid: a mark kept
+                          // from the old date or cycle would read as done
+                          // the moment it saves.
+                          final freshOnce =
+                              onceKey != null && onceKey != current.onDate;
                           finance.updateReminder(
                             current.copyWith(
                               name: nameCtrl.text.trim(),
-                              dayOfMonth: day,
+                              dayOfMonth: saveDay,
                               expectedAmount: amount,
                               clearExpectedAmount: amount == null,
                               categoryId: selectedCategory,
-                              cycle: repeats,
+                              cycle: saveCycle,
                               anchorMonth: anchor,
                               autoAdd: autoAdd,
                               accountId: account,
                               clearAccountId: account == null,
+                              onDate: onceKey,
+                              clearOnDate: onceKey == null,
+                              clearLastPaidMonth: freshOnce,
                             ),
                           );
                         }
@@ -320,4 +417,22 @@ Future<void> showReminderEditor(
       ),
     ),
   );
+}
+
+/// The Repeats choices: Once first, then the repeating cycles.
+enum _Repeat {
+  once('Once', null),
+  monthly('Monthly', SubscriptionCycle.monthly),
+  quarterly('Quarterly', SubscriptionCycle.quarterly),
+  yearly('Yearly', SubscriptionCycle.yearly);
+
+  final String label;
+
+  /// Null for Once, which is stored as yearly with [Reminder.onDate].
+  final SubscriptionCycle? cycle;
+
+  const _Repeat(this.label, this.cycle);
+
+  static _Repeat of(SubscriptionCycle c) =>
+      values.firstWhere((r) => r.cycle == c);
 }

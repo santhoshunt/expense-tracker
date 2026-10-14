@@ -11,6 +11,7 @@ import '../services/sms_parser.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
+import '../utils/money_colors.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/animated_fold.dart';
 import '../widgets/balance_breakdown.dart';
@@ -456,10 +457,12 @@ class _AccountCard extends StatelessWidget {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
+                            // No type: the section header or the type
+                            // filter above already names it.
                             if (expanded)
                               Text(
-                                '${account.typeLabel} · $txCount '
-                                'txn${txCount == 1 ? '' : 's'}',
+                                '$txCount transaction'
+                                '${txCount == 1 ? '' : 's'}',
                                 style: muted,
                               )
                             else
@@ -1243,8 +1246,20 @@ class _CardFigures extends StatelessWidget {
         ],
         const SizedBox(height: 6),
         InfoLabel(
-          label: Text(
-            'Spent this month ${fmtMoney(spent)}',
+          // The label muted, the figure red: it is money out.
+          label: Text.rich(
+            TextSpan(
+              text: 'Spent this month ',
+              children: [
+                TextSpan(
+                  text: fmtMoney(spent),
+                  style: TextStyle(
+                    color: moneyColor(context, type: TxType.expense),
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
           tip: InfoTip(
@@ -1359,14 +1374,14 @@ class _AccountMenu extends StatelessWidget {
       // A closed account is an archive entry: everything except Reopen and
       // Delete is managing a live account, so the menu shrinks.
       itemBuilder: (_) => account.isClosed
-          ? [
+          ? <PopupMenuEntry<String>>[
               const PopupMenuItem(value: 'reopen', child: Text('Reopen')),
               const PopupMenuItem(
                 value: 'delete',
                 child: Text('Delete account'),
               ),
             ]
-          : [
+          : <PopupMenuEntry<String>>[
               const PopupMenuItem(value: 'rename', child: Text('Rename')),
               // Wallets are entered by hand; no bank number resolves to one.
               if (!account.isWallet)
@@ -1400,6 +1415,9 @@ class _AccountMenu extends StatelessWidget {
                   account.isCard ? 'Set outstanding…' : 'Set balance…',
                 ),
               ),
+              // A rule between editing the account and ending it: Merge,
+              // Close and Delete each make it go away.
+              const PopupMenuDivider(),
               const PopupMenuItem(value: 'merge', child: Text('Merge into…')),
               if (account.type == AccountType.savings || account.isWallet)
                 const PopupMenuItem(

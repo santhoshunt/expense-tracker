@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/account.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../screens/accounts_screen.dart' show showCreditLimitDialog;
+import '../screens/app_nav.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import 'glossy.dart';
@@ -60,11 +63,19 @@ Future<void> showBalanceBreakdownSheet(
                   ),
                   const SizedBox(height: 16),
                   if (useAccounts) ...[
+                    // Opens Accounts on its Banks filter.
                     BreakdownRow(
                       icon: Icons.account_balance_outlined,
                       color: AppColors.of(ctx).green,
                       label: 'Bank balances',
                       amount: '+${fmtMoney(finance.bankBalanceTotal)}',
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        AppNav.instance.openAccounts(
+                          context,
+                          type: AccountType.bank,
+                        );
+                      },
                     ),
                     BreakdownRow(
                       icon: Icons.credit_card,
@@ -76,6 +87,8 @@ Future<void> showBalanceBreakdownSheet(
                     // so say so — otherwise the net figure reads as complete
                     // when it is quietly optimistic.
                     if (finance.cardsMissingLimit > 0)
+                      // One card: its credit limit dialog. Several: Accounts
+                      // on its Credit cards filter, where each has the button.
                       BreakdownRow(
                         icon: Icons.help_outline,
                         color: AppColors.of(ctx).orange,
@@ -84,6 +97,24 @@ Future<void> showBalanceBreakdownSheet(
                             '${finance.cardsMissingLimit == 1 ? ' needs' : 's need'}'
                             ' a credit limit, not counted',
                         amount: '?',
+                        onTap: () {
+                          final missing = [
+                            for (final a in finance.accounts)
+                              if (!a.isClosed &&
+                                  a.isCard &&
+                                  finance.accountOutstanding(a) == null)
+                                a,
+                          ];
+                          Navigator.pop(ctx);
+                          if (missing.length == 1) {
+                            showCreditLimitDialog(context, missing.single);
+                          } else {
+                            AppNav.instance.openAccounts(
+                              context,
+                              type: AccountType.creditCard,
+                            );
+                          }
+                        },
                       ),
                     const Divider(height: 24),
                     BreakdownRow(
@@ -164,6 +195,9 @@ class BreakdownRow extends StatelessWidget {
   final String amount;
   final bool bold;
 
+  /// Makes the row a button, with a chevron after the amount.
+  final VoidCallback? onTap;
+
   const BreakdownRow({
     super.key,
     required this.icon,
@@ -171,6 +205,7 @@ class BreakdownRow extends StatelessWidget {
     required this.label,
     required this.amount,
     this.bold = false,
+    this.onTap,
   });
 
   @override
@@ -179,6 +214,35 @@ class BreakdownRow extends StatelessWidget {
       fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
       fontSize: bold ? 16 : 14,
     );
+    final tap = onTap;
+    if (tap != null) {
+      // One button node: the label and amount read as its name.
+      return Semantics(
+        container: true,
+        button: true,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.control),
+          onTap: tap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48),
+            child: Row(
+              children: [
+                Expanded(child: _row(style)),
+                Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    return _row(style);
+  }
+
+  Widget _row(TextStyle style) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(

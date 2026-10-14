@@ -1074,19 +1074,25 @@ class _Section extends StatelessWidget {
     // controls, on one row, and no top gap.
     if (DashboardFoldScope.of(context)) {
       final line = subtitle == null ? null : Text(subtitle!, style: small);
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (trailing != null)
-            Row(
+      // Inset like the card's body, so the line starts where its text does.
+      final Widget? head = trailing != null
+          ? Row(
               children: [
                 Expanded(child: line ?? const SizedBox.shrink()),
                 trailing!,
               ],
             )
-          else
-            ?line,
-          if (trailing != null || line != null) const SizedBox(height: 8),
+          : line;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (head != null) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: AppSpace.card),
+              child: head,
+            ),
+            const SizedBox(height: 8),
+          ],
           _card(context),
         ],
       );

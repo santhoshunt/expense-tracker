@@ -18,7 +18,7 @@ import 'package:expense_tracker/widgets/lock_gate.dart';
 import 'dashboard_test_utils.dart';
 
 /// The v1.37.0 layout: the month selector and ⋯ menu in the app bar, the
-/// balance card's stat columns, the budget ring grid, the budget and
+/// balance card's stat columns, the budget rows, the budget and
 /// forecast sharing a card, Upcoming's Show all and the notice slot.
 /// Amounts and notes are made up.
 void main() {
@@ -212,7 +212,7 @@ void main() {
   });
 
   group('budgets', () {
-    testWidgets('custom budgets are rings, and a ring opens its sheet', (
+    testWidgets('custom budgets are rows, and a row opens its sheet', (
       tester,
     ) async {
       await pumpHome(
@@ -242,8 +242,23 @@ void main() {
       for (final name in ['Eating out', 'Rides', 'Gadgets']) {
         expect(find.text(name), findsOneWidget, reason: name);
       }
-      expect(find.text('25%'), findsOneWidget);
-      expect(find.text('${fmtMoneyCompact(3000)} left'), findsOneWidget);
+      expect(
+        find.text('${fmtMoneyTidy(1000)} of ${fmtMoneyTidy(4000)} · 25%'),
+        findsOneWidget,
+      );
+      final left = find.text('${fmtMoneyTidy(3000)} left');
+      expect(left, findsOneWidget);
+      // The amount sits at the right end of the name's line.
+      expect(tester.getRect(left).right, greaterThan(300));
+      expect(
+        (tester.getCenter(left).dy - tester.getCenter(budgets).dy).abs(),
+        lessThan(4),
+      );
+      // One row each, stacked: the old grid set two side by side.
+      final rides = tester.getTopLeft(find.text('Rides'));
+      final eating = tester.getTopLeft(budgets);
+      expect(rides.dy, greaterThan(eating.dy));
+      expect(rides.dx, eating.dx);
       await tester.tap(budgets);
       await settle(tester);
       expect(find.byType(BottomSheet), findsOneWidget);

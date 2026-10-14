@@ -120,6 +120,7 @@ List<UpcomingItem> buildUpcomingItems(
     );
   }
   for (final r in finance.reminders) {
+    if (reminderFinished(r, now)) continue;
     final days = reminderDaysUntil(r, now);
     if (days > 7) continue;
     items.add(
@@ -148,7 +149,9 @@ List<UpcomingItem> buildUpcomingItems(
 /// - any reminder in the hit's category expecting the same amount (to the
 ///   rupee) due within 3 days of the hit's next date.
 bool reminderCoversHit(Reminder r, RecurringHit h, DateTime now) {
-  if (h.type != TxType.expense) return false;
+  // A finished one-time reminder is gone from Upcoming; it must not keep
+  // hiding the payment it once stood for.
+  if (h.type != TxType.expense || reminderFinished(r, now)) return false;
   if (r.autoAdd) {
     final name = r.name
         .toLowerCase()

@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../models/transaction.dart' show TxType;
 import '../services/monthly_recap.dart';
 import '../services/spend_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
+import '../utils/money_colors.dart';
 import 'dashboard_fold.dart';
 import 'info_tip.dart';
 import 'status_dot.dart';
@@ -74,8 +76,9 @@ class _DeltaNote extends StatelessWidget {
 /// days: spent and saved, then the top categories, the biggest merchant
 /// and any budget that ended over. No income: the card is about spending.
 ///
-/// No close button: it steps aside on its own for [MonthPaceCard]. The
-/// links reuse the dashboard's deep-link callbacks, scoped to its month.
+/// It steps aside on its own for [MonthPaceCard]; [onDone] puts it away
+/// sooner. The links reuse the dashboard's deep-link callbacks, scoped to
+/// its month.
 class MonthlyRecapCard extends StatelessWidget {
   final MonthlyRecap recap;
   final void Function(String categoryId, DateTime month)? onViewCategory;
@@ -85,6 +88,9 @@ class MonthlyRecapCard extends StatelessWidget {
   /// The overall cap has no budget id; it opens the month's spending.
   final void Function(DateTime month)? onViewSpending;
 
+  /// The Done button: hides this month's recap. Null leaves the button out.
+  final VoidCallback? onDone;
+
   const MonthlyRecapCard({
     super.key,
     required this.recap,
@@ -92,6 +98,7 @@ class MonthlyRecapCard extends StatelessWidget {
     this.onViewMerchant,
     this.onViewBudget,
     this.onViewSpending,
+    this.onDone,
   });
 
   @override
@@ -202,6 +209,11 @@ class MonthlyRecapCard extends StatelessWidget {
                 month: recap.month,
                 onViewBudget: onViewBudget,
                 onViewSpending: onViewSpending,
+              ),
+            if (onDone case final done?)
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(onPressed: done, child: const Text('Done')),
               ),
           ],
         ),
@@ -458,11 +470,20 @@ class _BudgetLine extends StatelessWidget {
               ),
             ),
             TextSpan(
-              text:
-                  '${fmtMoney(b.spent)} of ${fmtMoney(b.limit)} · '
-                  '${over ? 'over by ${fmtMoney(b.spent - b.limit)}' : '${fmtMoney(b.limit - b.spent)} left'}',
+              text: '${fmtMoney(b.spent)} of ${fmtMoney(b.limit)} · ',
               style: TextStyle(
                 color: over ? scheme.onSurface : scheme.onSurfaceVariant,
+              ),
+            ),
+            // The overshoot in the money-out red.
+            TextSpan(
+              text: over
+                  ? 'over by ${fmtMoney(b.spent - b.limit)}'
+                  : '${fmtMoney(b.limit - b.spent)} left',
+              style: TextStyle(
+                color: over
+                    ? moneyColor(context, type: TxType.expense)
+                    : scheme.onSurfaceVariant,
               ),
             ),
           ],
