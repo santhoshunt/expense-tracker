@@ -95,7 +95,8 @@ void main() {
     expect(find.byType(MonthlyRecapCard), findsOneWidget);
     expect(find.byType(MonthPaceCard), findsNothing);
     expect(inRecap(find.text('$lastName recap')), findsOneWidget);
-    expect(inRecap(find.text(fmtMoney(400))), findsOneWidget);
+    // Spent, and the only top category's row.
+    expect(inRecap(find.text(fmtMoney(400))), findsNWidgets(2));
     expect(inRecap(find.text('Income')), findsNothing);
     expect(inRecap(find.text(fmtMoney(3000))), findsNothing);
     expect(inRecap(find.byIcon(Icons.close)), findsNothing);

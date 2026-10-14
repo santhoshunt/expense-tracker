@@ -3,11 +3,14 @@ import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
 import '../providers/finance_provider.dart';
+import '../services/recurring_detector.dart'
+    show merchantDisplayLabel, recurringKeyOf;
 import '../services/spend_comparison.dart' show kUsualWindowMonths;
 import '../services/spend_history.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
 import 'monthly_bar_chart.dart';
+import 'rename_merchant_dialog.dart';
 
 /// One category's or merchant's spend across [months]: a bar per month,
 /// its usual month, its biggest month and the shown month's (or year's)
@@ -24,6 +27,14 @@ Future<void> showSpendHistorySheet(
   Color? color,
   VoidCallback? onViewTransactions,
 }) {
+  // A merchant's identity (the key after "kind|"), for its Rename button.
+  final key = subject.merchantKey;
+  final identity = key?.substring(key.indexOf('|') + 1);
+  // The name it had on opening, when that was the user's own: a Reset in
+  // Rename then falls back to the detected identity, not that old name.
+  final openAlias = identity == null
+      ? null
+      : context.read<FinanceProvider>().merchantAlias(identity);
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -50,6 +61,13 @@ Future<void> showSpendHistorySheet(
         // that period has rows: never an empty list. Rows, not spend: a
         // split the user paid none of is ₹0 here but still a row to open.
         final periodRows = yearView ? h.totalCount : h.anchorCount;
+        // A rename made from here shows at once.
+        final alias = identity == null ? null : finance.merchantAlias(identity);
+        final title =
+            alias ??
+            (openAlias != null
+                ? _detectedLabel(finance, key!, identity!)
+                : subject.label);
 
         return SafeArea(
           child: SingleChildScrollView(
@@ -79,7 +97,7 @@ Future<void> showSpendHistorySheet(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            subject.label,
+                            title,
                             style: theme.textTheme.titleLarge,
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
@@ -96,7 +114,7 @@ Future<void> showSpendHistorySheet(
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 12),
                     child: Text(
-                      'Nothing spent on ${subject.label} in these months.',
+                      'Nothing spent on $title in these months.',
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: scheme.onSurfaceVariant,
                       ),
@@ -155,6 +173,20 @@ Future<void> showSpendHistorySheet(
                     },
                   ),
                 ],
+                // The same rename as a long-press on a Top merchants row,
+                // in sight here.
+                if (identity != null) ...[
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    label: const Text('Rename'),
+                    onPressed: () => showRenameMerchantDialog(
+                      ctx,
+                      identity: identity,
+                      currentLabel: title,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -162,6 +194,15 @@ Future<void> showSpendHistorySheet(
       },
     ),
   );
+}
+
+/// A merchant's name without the user's own: what Top merchants shows for
+/// its rows ([merchantDisplayLabel]), or [identity] when it has none.
+String _detectedLabel(FinanceProvider finance, String key, String identity) {
+  for (final t in finance.countedTransactions) {
+    if (recurringKeyOf(t) == key) return merchantDisplayLabel(t);
+  }
+  return identity;
 }
 
 /// The figure tiles: three across, equal in width and height, when each

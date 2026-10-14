@@ -352,8 +352,8 @@ class _PrivacyPage extends StatelessWidget {
 
 /// Category order for the add and edit sheets. Cockpit opens from the
 /// home screen's ⋮ menu.
-class _CategoriesRulesPage extends StatelessWidget {
-  const _CategoriesRulesPage();
+class _CategoryOrderPage extends StatelessWidget {
+  const _CategoryOrderPage();
 
   @override
   Widget build(BuildContext context) {
@@ -362,11 +362,13 @@ class _CategoriesRulesPage extends StatelessWidget {
     );
 
     return SettingsGroupPage(
-      title: 'Categories and rules',
+      title: 'Category order',
       children: [
+        // The page title names the setting; the heading says where the
+        // order shows, and keeps the tip with its Edit categories link.
         _PageHeading(
           label: Text(
-            'Category order',
+            'In the add and edit sheets',
             style: Theme.of(context).textTheme.titleMedium,
           ),
           tip: const InfoTip(

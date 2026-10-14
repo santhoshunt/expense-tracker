@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:expense_tracker/screens/app_nav.dart';
 import 'package:expense_tracker/screens/home_app_bar.dart';
 import 'package:expense_tracker/widgets/dashboard_fold.dart';
 
@@ -11,7 +12,7 @@ import 'package:expense_tracker/widgets/dashboard_fold.dart';
 Widget dashboardShell(Widget dashboard) => Scaffold(
   appBar: AppBar(
     title: const DashboardMonthTitle(),
-    actions: const [HomeMenu(onDashboard: true)],
+    actions: const [HomeMenu(tab: kHomeTabDashboard)],
   ),
   body: dashboard,
 );

@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- updatePeriodMillis=0: figures only change while the app runs (the Dart
      side pushes updates through the method channel), so periodic launcher
-     wakeups would redraw identical data. -->
+     wakeups would redraw identical data. reconfigurable: Android 12+
+     launchers offer the budget picker again from the widget's long-press
+     menu. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:configure="com.fabletest.expense_tracker.BudgetWidgetConfigActivity"
     android:description="@string/budget_widget_description"
@@ -10,7 +12,8 @@
     android:minHeight="40dp"
     android:targetCellWidth="4"
     android:targetCellHeight="1"
-    android:previewLayout="@layout/budget_widget"
+    android:previewLayout="@layout/budget_widget_preview"
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="0"
-    android:widgetCategory="home_screen" />
+    android:widgetCategory="home_screen"
+    android:widgetFeatures="reconfigurable" />

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Budgets list (4x2). Drawn from the budget snapshot, so like the budget
+     widgets it redraws when the app pushes figures (updatePeriodMillis=0).
+     No configure step: it lists every budget. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/home_widget_budgets_description"
+    android:initialLayout="@layout/home_widget_budgets"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:previewLayout="@layout/home_widget_budgets_preview"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

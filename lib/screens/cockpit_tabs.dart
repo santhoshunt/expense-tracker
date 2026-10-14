@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart' show NumberFormat;
 import 'package:provider/provider.dart';
 
 import '../models/reminder.dart';
@@ -630,9 +631,7 @@ class _BudgetSectionState extends State<_BudgetSection>
     super.initState();
     _settings = context.read<SettingsProvider>();
     final budget = _settings.monthlyBudget;
-    _capCtrl = TextEditingController(
-      text: budget <= 0 ? '' : budget.toStringAsFixed(0),
-    );
+    _capCtrl = TextEditingController(text: _capText(budget));
     // Commit on focus loss, NOT per keystroke: notifying listeners on every
     // character rebuilds the whole screen with the keyboard open, and the
     // keep-focused-field-visible logic then fights scroll gestures.
@@ -651,6 +650,13 @@ class _BudgetSectionState extends State<_BudgetSection>
   void _onCapFocusChange() {
     if (!_capFocus.hasFocus) _commitCap();
   }
+
+  /// Indian grouping, as every amount on screen reads ("40,000",
+  /// "1,50,000"); blank for no cap. parseAmount reads the commas back.
+  static final NumberFormat _capGrouping = NumberFormat.decimalPattern('en_IN');
+
+  static String _capText(double cap) =>
+      cap <= 0 ? '' : _capGrouping.format(cap);
 
   /// Set when the cap field holds text that doesn't parse — the old
   /// `parseAmount(...) ?? 0` silently switched the budget off while the
@@ -705,6 +711,12 @@ class _BudgetSectionState extends State<_BudgetSection>
     if (_capError != null && interactive && mounted) {
       setState(() => _capError = null);
     }
+    // Typed "40000" reads back "40,000" once the field lets go. Not during
+    // teardown: the field is going away.
+    if (interactive && mounted) {
+      final shown = _capText(v);
+      if (_capCtrl.text != shown) _capCtrl.text = shown;
+    }
     _settings.setMonthlyBudget(v);
   }
 
@@ -753,6 +765,30 @@ class _BudgetSectionState extends State<_BudgetSection>
               textInputAction: TextInputAction.done,
               decoration: InputDecoration(
                 labelText: 'Monthly cap',
+                // The theme's borderless outline floats the label onto the
+                // box's top edge, half outside the fill. A borderless
+                // underline keeps it inside; focus draws the accent line.
+                border: const UnderlineInputBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(AppRadius.control),
+                  ),
+                  borderSide: BorderSide.none,
+                ),
+                enabledBorder: const UnderlineInputBorder(
+                  borderRadius: BorderRadius.all(
+                    Radius.circular(AppRadius.control),
+                  ),
+                  borderSide: BorderSide.none,
+                ),
+                focusedBorder: UnderlineInputBorder(
+                  borderRadius: const BorderRadius.all(
+                    Radius.circular(AppRadius.control),
+                  ),
+                  borderSide: BorderSide(
+                    color: Theme.of(context).colorScheme.primary,
+                    width: 1.5,
+                  ),
+                ),
                 prefixText: '₹ ',
                 helperText: 'Leave blank to turn the budget off',
                 errorText: _capError,

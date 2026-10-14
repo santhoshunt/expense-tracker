@@ -179,12 +179,12 @@
         <!-- Home-screen budget widgets: render the per-budget snapshot the
              Flutter side writes into SharedPreferences; each instance is
              configured to one budget via BudgetWidgetConfigActivity. Two
-             picker entries — compact 4×1 (bar only) and detailed 4×2 (adds
-             status + month lines). -->
+             picker entries: compact 4x1 (ring and two lines) and detailed
+             4x2 (a larger ring and the updated line). -->
         <receiver
             android:name=".BudgetWidgetProvider"
             android:exported="true"
-            android:label="Budget (compact)">
+            android:label="@string/budget_widget_compact_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
             </intent-filter>
@@ -195,7 +195,7 @@
         <receiver
             android:name=".BudgetWidgetDetailedProvider"
             android:exported="true"
-            android:label="Budget (detailed)">
+            android:label="@string/budget_widget_detailed_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
             </intent-filter>
@@ -211,8 +211,10 @@
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
             </intent-filter>
         </activity>
-        <!-- Month pace, Upcoming bills and Today and Add widgets
-             (HomeWidgets.kt): no configure step, one shared snapshot. -->
+        <!-- Month pace, Upcoming, Today and Add, Spending split,
+             Budgets list, Recent and Quick actions widgets (HomeWidgets.kt):
+             no configure step; Budgets list reads the budget snapshot, the
+             rest one shared snapshot. -->
         <receiver
             android:name=".MonthPaceWidgetProvider"
             android:exported="true"
@@ -256,6 +258,39 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/home_widget_split_info"/>
+        </receiver>
+        <receiver
+            android:name=".BudgetsListWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_budgets_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_budgets_info"/>
+        </receiver>
+        <receiver
+            android:name=".RecentWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_recent_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_recent_info"/>
+        </receiver>
+        <receiver
+            android:name=".QuickActionsWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_actions_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_actions_info"/>
         </receiver>
         <!-- Background SMS import (BackgroundImport.kt). Off in the manifest;
              switched on only while Auto-import is Every SMS. Only the system

@@ -122,9 +122,10 @@ class BackgroundImportScheduler {
 }
 
 /// One background import: the SMS inbox and captured notifications into the
-/// review queue, as the Auto-import setting allows for [trigger]. Rows stay
-/// pending. [syncWidgets] refreshes the home-screen widgets (the headless
-/// engine has no Home screen listening for changes); [notify] posts or
+/// ledger, as the Auto-import setting allows for [trigger]. Sure rows count
+/// at once; the rest wait pending in review. [syncWidgets] refreshes the
+/// home-screen widgets (the headless engine has no Home screen listening
+/// for changes); [notify] posts or
 /// clears the review notification. Never throws: [BackgroundImportResult.ok]
 /// is false when the import failed part-way.
 Future<BackgroundImportResult> runBackgroundImport(
@@ -137,6 +138,8 @@ Future<BackgroundImportResult> runBackgroundImport(
   bool postReminders = true,
 }) async {
   var imported = 0;
+  // Of [imported], the rows that wait in review rather than counted at once.
+  var toReview = 0;
   var ok = true;
   final mode = settings.autoImport;
   final runs = switch (trigger) {
@@ -146,8 +149,12 @@ Future<BackgroundImportResult> runBackgroundImport(
   };
   if (runs) {
     try {
-      imported += await import.drainNotifications(finance);
-      imported += (await import.maybeAutoRun(finance, mode))?.imported ?? 0;
+      final drained = await import.drainNotifications(finance);
+      imported += drained;
+      toReview += drained == 0 ? 0 : drained - import.lastDrainCounted;
+      final run = await import.maybeAutoRun(finance, mode);
+      imported += run?.imported ?? 0;
+      toReview += run?.toReview ?? 0;
     } catch (e) {
       ok = false;
       debugPrint('Background import failed: $e');
@@ -174,8 +181,9 @@ Future<BackgroundImportResult> runBackgroundImport(
     }
   }
   if (notify) {
-    // Only new rows post it: a swiped-away note stays away until then.
-    await ReviewNotifier.sync(finance.pendingCount, allowPost: imported > 0);
+    // Only new rows that wait in review post it: a swiped-away note stays
+    // away until then, and rows that counted at once ask for no review.
+    await ReviewNotifier.sync(finance.pendingCount, allowPost: toReview > 0);
   }
   return (imported: imported, ok: ok);
 }

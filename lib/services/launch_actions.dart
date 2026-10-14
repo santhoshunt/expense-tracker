@@ -19,6 +19,12 @@ enum LaunchAction {
   /// An unusual spending alert: the category's history sheet, for the
   /// category and month [LaunchActions.takeHistory] hands over.
   openCategoryHistory,
+
+  /// The Quick actions widget's Income button: the add sheet as Income.
+  addIncome,
+
+  /// The Recent widget: the Transactions tab.
+  openTransactions,
 }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
@@ -60,6 +66,8 @@ class LaunchActions {
     'open_upcoming' => LaunchAction.openUpcoming,
     'open_today' => LaunchAction.openToday,
     'open_breakdown' => LaunchAction.openBreakdown,
+    'add_income' => LaunchAction.addIncome,
+    'open_transactions' => LaunchAction.openTransactions,
     _ => null,
   };
 

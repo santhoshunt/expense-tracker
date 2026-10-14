@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -22,6 +23,7 @@ import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/link_pill.dart';
 import '../widgets/motion.dart';
+import '../widgets/pdf_export_flow.dart';
 import '../widgets/section_header.dart';
 import '../widgets/status_dot.dart';
 import '../widgets/undo_snackbar.dart';
@@ -40,14 +42,39 @@ class AccountsScreen extends StatefulWidget {
 class _AccountsScreenState extends State<AccountsScreen> {
   AccountType? _typeFilter; // null = all
 
-  /// Order the pager steps through.
-  static const List<AccountType?> _filterOrder = [
-    null,
-    AccountType.bank,
-    AccountType.creditCard,
-    AccountType.savings,
-    AccountType.wallet,
-  ];
+  /// Order the pager steps through, and its chips: Savings only while
+  /// there is a savings account, open or closed ([_orderFor]).
+  List<AccountType?> _filterOrder = _orderFor(null);
+
+  /// The pages for [finance]'s accounts; every page when null.
+  static List<AccountType?> _orderFor(FinanceProvider? finance) {
+    bool savings(Account a) => a.type == AccountType.savings;
+    final hasSavings =
+        finance == null ||
+        finance.openAccounts.any(savings) ||
+        finance.closedAccounts.any(savings);
+    return [
+      null,
+      AccountType.bank,
+      AccountType.creditCard,
+      if (hasSavings) AccountType.savings,
+      AccountType.wallet,
+    ];
+  }
+
+  static String _chipLabel(AccountType? t) => switch (t) {
+    null => 'All',
+    AccountType.bank => 'Banks',
+    AccountType.creditCard => 'Cards',
+    AccountType.savings => 'Savings',
+    AccountType.wallet => 'Wallets',
+  };
+
+  /// [t]'s page, or All's when [t] has no page.
+  int _pageOf(AccountType? t) {
+    final i = _filterOrder.indexOf(t);
+    return i < 0 ? 0 : i;
+  }
 
   late final PageController _pageCtrl = PageController();
 
@@ -60,15 +87,44 @@ class _AccountsScreenState extends State<AccountsScreen> {
       this,
       showType: (t) => WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _pageCtrl.hasClients) {
-          _pageCtrl.jumpToPage(_filterOrder.indexOf(t));
+          _pageCtrl.jumpToPage(_pageOf(t));
         }
       }),
     );
+    // The "This page" part of Home's ⋮ menu. The entries never change, and
+    // each reads the ledger when tapped.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppNav.instance.pageMenu.publish(this, kHomeTabAccounts, [
+        PageMenuAction(
+          icon: Icons.add,
+          label: 'New account',
+          // Same as the floating button on this tab.
+          onTap: () => showAddAccountDialog(context),
+        ),
+        PageMenuAction(
+          icon: Icons.account_balance_wallet_outlined,
+          label: 'Balance breakdown',
+          onTap: () => showBalanceBreakdownSheet(
+            context,
+            context.read<FinanceProvider>(),
+          ),
+        ),
+        PageMenuAction(
+          icon: Icons.picture_as_pdf_outlined,
+          label: 'Export statement (PDF)',
+          // The PDF report Settings, Backup makes.
+          onTap: () =>
+              exportPdfWithRange(context, context.read<FinanceProvider>()),
+        ),
+      ]);
+    });
   }
 
   @override
   void dispose() {
     AppNav.instance.detachAccounts(this);
+    AppNav.instance.pageMenu.detach(this);
     _pageCtrl.dispose();
     super.dispose();
   }
@@ -96,6 +152,19 @@ class _AccountsScreenState extends State<AccountsScreen> {
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
     final scheme = Theme.of(context).colorScheme;
+
+    // The first savings account added, or the last one gone, adds or drops
+    // the Savings page: the pager follows the chip that stays selected, or
+    // All when Savings itself went.
+    final order = _orderFor(finance);
+    if (!listEquals(order, _filterOrder)) {
+      _filterOrder = order;
+      if (!order.contains(_typeFilter)) _typeFilter = null;
+      final page = _pageOf(_typeFilter);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _pageCtrl.hasClients) _pageCtrl.jumpToPage(page);
+      });
+    }
 
     final net = finance.netWorth;
     // The accounts the net figure is made of: savings and asset accounts
@@ -130,12 +199,18 @@ class _AccountsScreenState extends State<AccountsScreen> {
                         children: [
                           // Plain text colour: amounts are never coloured;
                           // the accent stays on the icon.
-                          MorphingAmount(
-                            value: net,
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w700,
-                              color: scheme.onSurface,
+                          // Scales down rather than cutting digits at large
+                          // text, as the Dashboard's balance.
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            alignment: Alignment.centerLeft,
+                            child: MorphingAmount(
+                              value: net,
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.w700,
+                                color: scheme.onSurface,
+                              ),
                             ),
                           ),
                           // The label opens its tip; the rest of the card
@@ -174,7 +249,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
             ),
           ),
         ),
-        // Type filter: All / Bank / Cards / Savings / Wallets.
+        // Type filter: All / Bank / Cards / Savings / Wallets, Savings only
+        // with a savings account to show.
         // Pills, not a boxed segmented bar: a swipe sets the selection
         // through onPageChanged, a tap animates the pager there.
         Padding(
@@ -182,13 +258,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
           child: Align(
             alignment: Alignment.centerLeft,
             child: ChipTabs<AccountType?>(
-              options: const [
-                (null, 'All'),
-                (AccountType.bank, 'Banks'),
-                (AccountType.creditCard, 'Cards'),
-                (AccountType.savings, 'Savings'),
-                (AccountType.wallet, 'Wallets'),
-              ],
+              options: [for (final t in order) (t, _chipLabel(t))],
               selected: _typeFilter,
               onChanged: _setTypeFilter,
             ),

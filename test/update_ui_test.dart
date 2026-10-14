@@ -151,6 +151,9 @@ void main() {
   testWidgets('without the install permission it explains and opens '
       'settings', (tester) async {
     final (installer, downloader) = await openSheet(tester, allowed: false);
+    // The newest notes start open and push the button down.
+    await tester.ensureVisible(find.text('Download & install'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Download & install'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Android needs your OK first'), findsOneWidget);
@@ -165,6 +168,8 @@ void main() {
 
   testWidgets('a double tap starts one download', (tester) async {
     final (installer, downloader) = await openSheet(tester, refusal: 'refused');
+    await tester.ensureVisible(find.text('Download & install'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Download & install'));
     await tester.tap(find.text('Download & install'), warnIfMissed: false);
     await tester.pumpAndSettle();
@@ -177,6 +182,8 @@ void main() {
       tester,
       refusal: "This update is not signed with this app's key.",
     );
+    await tester.ensureVisible(find.text('Download & install'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Download & install'));
     await tester.pumpAndSettle();
     expect(downloader.downloads, 1);

@@ -8,21 +8,15 @@ import 'people_screen.dart';
 import 'transactions_screen.dart';
 
 /// What the Dashboard puts in Home's app bar: the shown month or year with
-/// its arrows, and the Dashboard's entries in the ⋯ menu. The Dashboard
-/// owns the month and Year view state and [update]s this after each change;
-/// Home's bar listens. Null callbacks leave their control disabled.
+/// its arrows. Its ⋮ entries go through [PageMenu]. The Dashboard owns the
+/// month and Year view state and [update]s this after each change; Home's
+/// bar listens. Null callbacks leave their control disabled.
 class DashboardHeader extends ChangeNotifier {
   String label = '';
   bool yearMode = false;
   VoidCallback? onPrev;
   VoidCallback? onNext;
   VoidCallback? onPick;
-  VoidCallback? onToggleYear;
-  VoidCallback? onExportPdf;
-
-  /// Opens the Year view tip, anchored to the context of the ⋯ button.
-  void Function(BuildContext anchor)? onAboutYear;
-  VoidCallback? onCustomise;
 
   /// The Dashboard State whose callbacks the fields hold.
   Object? _owner;
@@ -38,10 +32,6 @@ class DashboardHeader extends ChangeNotifier {
     required VoidCallback? onPrev,
     required VoidCallback? onNext,
     required VoidCallback onPick,
-    required VoidCallback onToggleYear,
-    required VoidCallback onExportPdf,
-    required void Function(BuildContext anchor) onAboutYear,
-    required VoidCallback onCustomise,
   }) {
     final changed =
         owner != _owner ||
@@ -56,10 +46,6 @@ class DashboardHeader extends ChangeNotifier {
     this.onPrev = onPrev;
     this.onNext = onNext;
     this.onPick = onPick;
-    this.onToggleYear = onToggleYear;
-    this.onExportPdf = onExportPdf;
-    this.onAboutYear = onAboutYear;
-    this.onCustomise = onCustomise;
     if (changed) notifyListeners();
   }
 
@@ -73,11 +59,52 @@ class DashboardHeader extends ChangeNotifier {
     onPrev = null;
     onNext = null;
     onPick = null;
-    onToggleYear = null;
-    onExportPdf = null;
-    onAboutYear = null;
-    onCustomise = null;
   }
+}
+
+/// One entry in the "This page" part of Home's ⋮ menu. [trailing], when
+/// set, sits at the row's end (the Year view tip's ⓘ).
+class PageMenuAction {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Widget? trailing;
+  const PageMenuAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.trailing,
+  });
+}
+
+/// The "This page" entries each Home tab puts in the ⋮ menu, so the menu
+/// has the same two sections (This page, then App) on every tab. A tab
+/// [publish]es after it builds and [detach]es in dispose, like
+/// [DashboardHeader].
+class PageMenu extends ChangeNotifier {
+  final Map<int, ({Object owner, List<PageMenuAction> actions})> _byTab = {};
+
+  /// [actions] for [tab], from [owner]. Notifies only when the labels
+  /// change or the owner is new: callbacks are fresh closures every build.
+  void publish(Object owner, int tab, List<PageMenuAction> actions) {
+    final old = _byTab[tab];
+    final changed =
+        old == null ||
+        old.owner != owner ||
+        old.actions.length != actions.length ||
+        [
+          for (var i = 0; i < actions.length; i++)
+            old.actions[i].label != actions[i].label,
+        ].any((d) => d);
+    _byTab[tab] = (owner: owner, actions: List.unmodifiable(actions));
+    if (changed) notifyListeners();
+  }
+
+  /// Drops [owner]'s entries when it goes; a newer owner's stay. No
+  /// notification, for the same reason as [DashboardHeader.detach].
+  void detach(Object owner) => _byTab.removeWhere((_, v) => v.owner == owner);
+
+  List<PageMenuAction> actionsFor(int tab) => _byTab[tab]?.actions ?? const [];
 }
 
 /// Home tab indices (HomeScreen's bottom navigation).
@@ -99,6 +126,9 @@ class AppNav {
 
   /// The Dashboard's month selector and menu entries, shown in Home's bar.
   final DashboardHeader dashboardHeader = DashboardHeader();
+
+  /// Each tab's "This page" entries for Home's ⋮ menu.
+  final PageMenu pageMenu = PageMenu();
 
   Object? _homeOwner;
   void Function(int tab)? _setHomeTab;

@@ -4,6 +4,7 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/format.dart';
 import 'budget.dart';
+import 'notification_ids.dart';
 import 'notification_service.dart';
 
 /// Evaluates the monthly spending cap AND every custom spend budget after
@@ -70,7 +71,7 @@ class BudgetMonitor {
                 spent: finance.budgetSpentInMonth(month),
                 cap: settings.monthlyBudget,
                 key: budgetAlertMonthKey(now),
-                id: 90000 + now.month, // stable per month
+                id: NotificationIds.cap(now.month), // stable per month
                 name: null,
               ),
             for (final b in customBudgets)
@@ -78,11 +79,9 @@ class BudgetMonitor {
                 spent: finance.budgetSpentFor(b, month),
                 cap: b.limit,
                 key: customBudgetAlertKey(b.id, now),
-                // Stable per budget (Dart string hashes are content-derived);
-                // distinct from the cap's 90000-range ids. Masked, not .abs():
-                // abs() of the minimum int is still negative, and a wider range
-                // makes two budgets colliding on one notification id unlikely.
-                id: 92000 + ((b.id.hashCode & 0x7fffffff) % 100000),
+                // Stable per budget, in its own 300000 range: the old
+                // 92000-based range ran over every fixed id from 93000 up.
+                id: NotificationIds.customBudget(b.id),
                 name: b.name,
               ),
           ];

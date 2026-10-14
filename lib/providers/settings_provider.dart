@@ -418,6 +418,16 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  /// Undo of [dismissPairSuggestion]: the pair is suggested again.
+  Future<void> restorePairSuggestion(String key) async {
+    if (!_dismissedPairs.remove(key)) return;
+    notifyListeners();
+    await _persistPref(
+      _kDismissedPairs,
+      (p) => p.setStringList(_kDismissedPairs, _dismissedPairs.toList()),
+    );
+  }
+
   /// Best-effort prefs write. A platform failure must neither crash the
   /// caller (setters aren't awaited by their UI) nor skip a pending
   /// notifyListeners — the in-memory value stands either way, it just won't

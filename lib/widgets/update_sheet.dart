@@ -15,6 +15,13 @@ import 'undo_snackbar.dart';
 /// The app's own package, named in the sheet's list of checks.
 const kAppPackage = 'com.fabletest.expense_tracker';
 
+/// A version written one way everywhere on the sheet: "v1.38.0", whether it
+/// came as a release tag ("v1.38.0") or as the installed version ("1.38.0").
+String versionLabel(String version) {
+  final v = version.trim();
+  return v.startsWith('v') || v.startsWith('V') ? 'v${v.substring(1)}' : 'v$v';
+}
+
 /// Lets the user pick one of [updates] and install it: the exact download
 /// URL and the checks made before installing are on screen before the tap.
 /// Nothing downloads or installs until Download & install.
@@ -55,7 +62,9 @@ class UpdateSheet extends StatefulWidget {
 
 class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
   late ReleaseOption _picked = widget.updates.newer.first;
-  final Set<String> _notesOpen = {};
+
+  /// The newest release's notes start open: they are what the update is.
+  late final Set<String> _notesOpen = {widget.updates.newer.first.tag};
   _Step _step = _Step.choose;
   int _received = 0;
   DownloadCancel? _cancel;
@@ -189,6 +198,7 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
       color: scheme.onSurfaceVariant,
     );
     final busy = _step == _Step.downloading || _step == _Step.installing;
+    final newer = widget.updates.newer;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
       child: Column(
@@ -198,11 +208,17 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
             children: [
               Expanded(
                 child: Text(
-                  'Choose a version',
+                  // Nothing to choose between when one version is offered.
+                  newer.length == 1
+                      ? 'Update to ${versionLabel(newer.first.tag)}'
+                      : 'Choose a version',
                   style: theme.textTheme.titleLarge,
                 ),
               ),
-              Text('On ${widget.updates.currentVersion}', style: muted),
+              Text(
+                'On ${versionLabel(widget.updates.currentVersion)}',
+                style: muted,
+              ),
             ],
           ),
           const SizedBox(height: 8),
@@ -281,28 +297,42 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
         ? null
         : DateFormat('d MMM yyyy').format(o.publishedAt!);
     final open = _notesOpen.contains(o.tag);
+    // One version: nothing to choose, so no radio button.
+    final only = widget.updates.newer.length == 1;
+    final notesButton = o.notes.isEmpty
+        ? null
+        : IconButton(
+            tooltip: open ? 'Hide notes' : 'Show notes',
+            icon: Icon(open ? Icons.expand_less : Icons.expand_more),
+            onPressed: () => setState(
+              () => open ? _notesOpen.remove(o.tag) : _notesOpen.add(o.tag),
+            ),
+          );
+    final title = Text(versionLabel(o.tag));
+    final subtitle = Text([?date, '${_mb(o.sizeBytes)} MB'].join(' · '));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        RadioListTile<String>(
-          value: o.tag,
-          contentPadding: EdgeInsets.zero,
-          title: Text(o.tag),
-          subtitle: Text([?date, '${_mb(o.sizeBytes)} MB'].join(' · ')),
-          secondary: o.notes.isEmpty
-              ? null
-              : IconButton(
-                  tooltip: open ? 'Hide notes' : 'Show notes',
-                  icon: Icon(open ? Icons.expand_less : Icons.expand_more),
-                  onPressed: () => setState(
-                    () =>
-                        open ? _notesOpen.remove(o.tag) : _notesOpen.add(o.tag),
-                  ),
-                ),
-        ),
+        if (only)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: title,
+            subtitle: subtitle,
+            trailing: notesButton,
+          )
+        else
+          RadioListTile<String>(
+            value: o.tag,
+            contentPadding: EdgeInsets.zero,
+            title: title,
+            subtitle: subtitle,
+            secondary: notesButton,
+          ),
         if (open)
           Padding(
-            padding: const EdgeInsets.fromLTRB(48, 0, 8, 8),
+            // Lined up with the version label: the radio and its gap take
+            // 56dp; with no radio the label starts at the edge.
+            padding: EdgeInsets.fromLTRB(only ? 0 : 56, 0, 8, 8),
             child: LinkifiedText(o.notes, style: muted),
           ),
       ],
@@ -313,14 +343,18 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
     switch (_step) {
       case _Step.choose:
         return [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          // Stacks the buttons, right-aligned, when one row cannot hold
+          // them (320dp at 2x text).
+          OverflowBar(
+            alignment: MainAxisAlignment.end,
+            overflowAlignment: OverflowBarAlignment.end,
+            spacing: 8,
+            overflowSpacing: 8,
             children: [
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
                 child: const Text('Cancel'),
               ),
-              const SizedBox(width: 8),
               FilledButton.icon(
                 onPressed: _start,
                 icon: const Icon(Icons.system_update_alt),
@@ -338,14 +372,16 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
             style: theme.textTheme.bodyMedium,
           ),
           const SizedBox(height: 12),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          OverflowBar(
+            alignment: MainAxisAlignment.end,
+            overflowAlignment: OverflowBarAlignment.end,
+            spacing: 8,
+            overflowSpacing: 8,
             children: [
               TextButton(
                 onPressed: () => setState(() => _step = _Step.choose),
                 child: const Text('Back'),
               ),
-              const SizedBox(width: 8),
               FilledButton(
                 onPressed: widget.installer.openInstallSettings,
                 child: const Text('Open settings'),

@@ -12,6 +12,7 @@ import '../utils/text_scale.dart';
 import 'glossy.dart';
 import 'grouped_surface.dart';
 import 'motion.dart';
+import 'status_dot.dart';
 
 // Kept importable from here: other screens take isLargeTextScale from this
 // file.
@@ -104,47 +105,102 @@ class TransactionTile extends StatelessWidget {
   /// note and it drop out, leaving the date the whole line, once the
   /// date's 2/5 share of what is left after the " · " can't hold even a
   /// "…".
-  Widget _noteAndDate(String? note, String date, TextStyle? lineStyle) =>
-      LayoutBuilder(
-        builder: (context, constraints) {
-          String? shownNote;
-          if (note != null) {
-            final left =
-                constraints.maxWidth - _textWidth(context, ' · ', lineStyle);
-            final ellipsis = _textWidth(context, '…', lineStyle);
-            if (left * 2 / 5 >= ellipsis) shownNote = note;
-          }
-          return Row(
-            children: [
-              if (shownNote != null) ...[
-                Flexible(
-                  flex: 3,
-                  child: Text(
-                    shownNote,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: lineStyle,
-                  ),
-                ),
-                Text(' · ', style: lineStyle),
-              ],
+  ///
+  /// [isNew] ends the line with " · new" as its own rigid text, so the note
+  /// and date ellipsize before "new" does. Where even that is wider than
+  /// the line, "new" alone takes the line (TalkBack still reads the note
+  /// and date); where "new" itself can't fit, the line is as without it.
+  /// The dot before the line carries "New" for TalkBack, so the text
+  /// leaves it out. [date] may be null only with [isNew].
+  Widget _noteAndDate(
+    String? note,
+    String? date,
+    TextStyle? lineStyle, {
+    bool isNew = false,
+  }) => LayoutBuilder(
+    builder: (context, constraints) {
+      var width = constraints.maxWidth;
+      final read = [?note, ?date].join(' · ');
+      var withNew = isNew;
+      if (withNew) {
+        final full = read.isEmpty ? 'new' : ' · new';
+        final fullWidth = _textWidth(context, full, lineStyle);
+        if (fullWidth <= width) {
+          width -= fullWidth;
+        } else if (_textWidth(context, 'new', lineStyle) <= width) {
+          return Semantics(
+            label: read,
+            child: ExcludeSemantics(
+              child: Text('new', maxLines: 1, style: lineStyle),
+            ),
+          );
+        } else {
+          withNew = false;
+        }
+      }
+      final suffix = withNew
+          ? ExcludeSemantics(
+              child: Text(
+                read.isEmpty ? 'new' : ' · new',
+                maxLines: 1,
+                style: lineStyle,
+              ),
+            )
+          : null;
+      if (date == null) {
+        return Row(
+          children: [
+            if (note != null)
               Flexible(
-                flex: 2,
                 child: Text(
-                  date,
-                  // TalkBack still reads a note left out.
-                  semanticsLabel: note != null && shownNote == null
-                      ? '$note · $date'
-                      : null,
+                  note,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: lineStyle,
                 ),
               ),
-            ],
-          );
-        },
+            ?suffix,
+          ],
+        );
+      }
+      String? shownNote;
+      if (note != null) {
+        final left = width - _textWidth(context, ' · ', lineStyle);
+        final ellipsis = _textWidth(context, '…', lineStyle);
+        if (left * 2 / 5 >= ellipsis) shownNote = note;
+      }
+      return Row(
+        children: [
+          if (shownNote != null) ...[
+            Flexible(
+              flex: 3,
+              child: Text(
+                shownNote,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: lineStyle,
+              ),
+            ),
+            Text(' · ', style: lineStyle),
+          ],
+          Flexible(
+            flex: 2,
+            child: Text(
+              date,
+              // TalkBack still reads a note left out.
+              semanticsLabel: note != null && shownNote == null
+                  ? '$note · $date'
+                  : null,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: lineStyle,
+            ),
+          ),
+          ?suffix,
+        ],
       );
+    },
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -170,7 +226,15 @@ class TransactionTile extends StatelessWidget {
     // knows. Second line: the user's note (when present) with the date after
     // it; the full sender/SMS detail stays available in the edit sheet.
     final title = cat.label;
-    final note = tx.note.isEmpty ? null : tx.note.split('\n').first;
+    var note = tx.note.isEmpty ? null : tx.note.split('\n').first;
+    // An SMS row without a note names its merchant there instead (the
+    // user's alias when there is one). An alert with no merchant in it
+    // leaves the slot empty rather than show a generic "Payment".
+    if (note == null && tx.source == TxSource.sms && tx.smsText.isNotEmpty) {
+      note = context.select<FinanceProvider, String?>(
+        (f) => f.merchantLabelFor(tx),
+      );
+    }
     // Compact (no year): the list already groups under month headers, and
     // the full form crowded the note off the line at large font scales.
     // Under a day header only the time is new, and a midnight row has none.
@@ -183,16 +247,33 @@ class TransactionTile extends StatelessWidget {
     final lineStyle = textTheme.bodySmall?.copyWith(
       color: scheme.onSurfaceVariant,
     );
-    final Widget? noteLine = switch ((note, dateLabel)) {
-      (null, null) => null,
-      (final onlyNote?, null) => Text(
-        onlyNote,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: lineStyle,
-      ),
-      (_, final date?) => _noteAndDate(note, date, lineStyle),
-    };
+    // An import that counted at once without review: a dot leads the line
+    // and "new" ends it, until the row is opened or marked seen.
+    final isNew = tx.unseen;
+    final Widget? line = isNew
+        ? _noteAndDate(note, dateLabel, lineStyle, isNew: true)
+        : switch ((note, dateLabel)) {
+            (null, null) => null,
+            (final onlyNote?, null) => Text(
+              onlyNote,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: lineStyle,
+            ),
+            (_, final date?) => _noteAndDate(note, date, lineStyle),
+          };
+    final Widget? noteLine = line == null || !isNew
+        ? line
+        : Row(
+            children: [
+              Semantics(
+                label: 'New',
+                child: StatusDot(color: accentTextColor(context)),
+              ),
+              const SizedBox(width: 6),
+              Expanded(child: line),
+            ],
+          );
     // Large text stacks the amount under the category instead of beside
     // it, so the category keeps the row's width.
     final stacked = isLargeTextScale(context);

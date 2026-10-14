@@ -31,6 +31,7 @@ import '../widgets/glossy.dart';
 import '../widgets/month_picker_sheet.dart';
 import '../widgets/motion.dart';
 import '../widgets/picker_sheet.dart';
+import '../widgets/status_dot.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/transaction_tile.dart';
 import '../widgets/undo_snackbar.dart';
@@ -242,7 +243,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   /// Ids of transactions picked in multi-select mode; non-empty = selecting.
   final Set<String> _selected = {};
-  bool get _selecting => _selected.isNotEmpty;
+
+  /// Selection mode entered from the ⋮ menu's Select transactions, before
+  /// any row is picked. Cleared by build once a row is picked, so from
+  /// then on an empty selection ends the mode as before.
+  bool _selectMode = false;
+  bool get _selecting => _selectMode || _selected.isNotEmpty;
 
   void _toggleSelect(String id) {
     // No tick here: selection starts with a long-press, which already
@@ -265,18 +271,35 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     for (final f in _Filter.values) f: ItemPositionsListener.create(),
   };
 
-  // The month jump panel floats over the list, so it only shows while the
-  // user is scrolling (plus a grace period) — parked off-screen otherwise it
-  // covers the month totals and trailing amounts.
+  // The month jump panel floats over the list, so it shows only for a short
+  // while after a scroll comes to rest. It stays out of the way while a
+  // finger drags the list, and parked off-screen otherwise, where it would
+  // cover the month totals and trailing amounts.
   bool _jumpVisible = false;
   Timer? _jumpHideTimer;
 
-  void _pokeJumpControls() {
-    if (!_jumpVisible) setState(() => _jumpVisible = true);
+  /// Applied in a microtask: a scroll can end during layout (the list
+  /// shrinking under a fling), where a setState is not allowed.
+  void _setJumpVisible(bool visible) => scheduleMicrotask(() {
+    if (mounted && _jumpVisible != visible) {
+      setState(() => _jumpVisible = visible);
+    }
+  });
+
+  /// A finger is moving the list: the panel steps aside at once.
+  void _hideJumpControls() {
     _jumpHideTimer?.cancel();
-    _jumpHideTimer = Timer(const Duration(milliseconds: 1600), () {
-      if (mounted) setState(() => _jumpVisible = false);
-    });
+    _setJumpVisible(false);
+  }
+
+  /// The list came to rest: the panel shows, and goes again 1.6 s later.
+  void _pokeJumpControls() {
+    _setJumpVisible(true);
+    _jumpHideTimer?.cancel();
+    _jumpHideTimer = Timer(
+      const Duration(milliseconds: 1600),
+      () => _setJumpVisible(false),
+    );
   }
 
   // The filter → group → sort → flatten pipeline walks the whole ledger, so
@@ -452,6 +475,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       // A deep-link is a navigation, not an edit — leftover multi-select
       // mode would greet it with a selection bar nobody asked for.
       _selected.clear();
+      _selectMode = false;
       _accountId = req?.accountId;
       _rangeFilter = req?.range;
       _rangeCounted = req?.range != null && req!.rangeCounted;
@@ -483,8 +507,62 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     });
   }
 
+  /// The pending count the ⋮ menu entries were last scheduled for: the
+  /// only part of their labels that changes.
+  int? _menuPending;
+
+  /// Publishes this tab's "This page" entries in Home's ⋮ menu after the
+  /// frame, and only when their labels change.
+  void _scheduleMenuPublish(int pendingCount) {
+    if (_menuPending == pendingCount) return;
+    _menuPending = pendingCount;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      AppNav.instance.pageMenu.publish(this, kHomeTabTransactions, [
+        if (pendingCount > 0)
+          PageMenuAction(
+            icon: Icons.inbox_outlined,
+            label: 'Review imports ($pendingCount)',
+            onTap: _openReview,
+          ),
+        PageMenuAction(
+          icon: Icons.checklist,
+          label: 'Select transactions',
+          onTap: _enterSelectMode,
+        ),
+        PageMenuAction(
+          icon: Icons.download_outlined,
+          label: 'Export CSV',
+          onTap: _exportCsv,
+        ),
+      ]);
+    });
+  }
+
+  /// Opens whichever review card is folded. Both sit pinned above the
+  /// list, so opening them is all it takes to bring them into view.
+  void _openReview() {
+    if (!mounted) return;
+    final settings = context.read<SettingsProvider>();
+    final pending = context.read<FinanceProvider>().pendingTransactions;
+    if (pending.any((t) => !t.suspectedSpam) &&
+        settings.isSectionCollapsed('pending_review')) {
+      settings.toggleSection('pending_review');
+    }
+    if (pending.any((t) => t.suspectedSpam) &&
+        settings.isSectionCollapsed('spam_review')) {
+      settings.toggleSection('spam_review');
+    }
+  }
+
+  /// Selection mode with nothing picked yet: row taps then select.
+  void _enterSelectMode() {
+    if (mounted) setState(() => _selectMode = true);
+  }
+
   @override
   void dispose() {
+    AppNav.instance.pageMenu.detach(this);
     _jumpHideTimer?.cancel();
     _searchDebounce?.cancel();
     _searchCtrl.dispose();
@@ -775,7 +853,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       // sticky band's spot, as _stickyMonth decides) → previous month.
       final atHeader =
           headers[current] == top.index &&
-          top.itemLeadingEdge * _viewport + _kMonthHeaderTop > 0;
+          top.itemLeadingEdge * _viewport + _headerTopAt(top.index) > 0;
       final target = (current - (atHeader ? 1 : 0)).clamp(
         0,
         headers.length - 1,
@@ -817,9 +895,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     // line up once the row's top padding has scrolled away.
     final labelBelowBand =
         data.rows[top.index].$1 != null &&
-        top.itemLeadingEdge * viewport + _kMonthHeaderTop > 0;
+        top.itemLeadingEdge * viewport + _headerTopAt(top.index) > 0;
     return labelBelowBand ? null : data.rowMonths[top.index];
   }
+
+  /// Whether the "N new · Mark all seen" line shows above the list, as the
+  /// last build decided.
+  bool _newLineShown = false;
+
+  /// The top gap of the month header at row [index]. The list's first
+  /// header keeps a small one while the "N new" line sits right above it:
+  /// that line's 48dp button already leaves the room.
+  double _headerTopAt(int index) => index == 0 && _newLineShown
+      ? _kMonthHeaderTopUnderLine
+      : _kMonthHeaderTop;
 
   Widget _stickyBand(
     BuildContext context,
@@ -884,13 +973,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   key: const ValueKey('sticky-month-header'),
                   height: band,
                   alignment: Alignment.centerLeft,
-                  // The card fill with a hairline edge: reads as a pinned
-                  // strip over the rows rather than a gap cut out of the
-                  // backdrop.
+                  // The card fill, fully opaque, with a hairline edge: reads
+                  // as a pinned strip over the rows, and no row text shows
+                  // through it.
                   decoration: BoxDecoration(
-                    color: (colors.cardFill ?? scheme.surface).withValues(
-                      alpha: 0.97,
-                    ),
+                    color: colors.cardFill ?? scheme.surface,
                   ),
                   // Drawn over the content: a border in [decoration] pads
                   // the child by its width and lifts the label off the
@@ -924,15 +1011,25 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final pending = allPending.where((t) => !t.suspectedSpam).toList();
     final spamSuspects = allPending.where((t) => t.suspectedSpam).toList();
     final filtered = _pageDataFor(_filter, finance, allConfirmed).filtered;
+    _scheduleMenuPublish(finance.pendingCount);
+    _newLineShown = finance.unseenCount > 0;
     // Drop selections that no longer exist (deleted, or re-filtered away by
     // an edit) so the action bar count never lies.
     if (_selected.isNotEmpty) {
+      // A picked row ends the menu's empty selection mode: from here an
+      // empty selection closes the bar, as after a long-press.
+      _selectMode = false;
       final visible = {for (final t in filtered) t.id};
       _selected.removeWhere((id) => !visible.contains(id));
     }
     final activeAccount = _accountId == null
         ? null
         : finance.accountById(_accountId!);
+    // Rebuilds on "Not a transfer" and its Undo: the suggestions below
+    // read the dismissed list, which lives in settings, not the ledger.
+    context.select<SettingsProvider, int>(
+      (s) => s.dismissedPairSuggestions.length,
+    );
     final suggestions = pending.isEmpty
         ? const <PairSuggestion>[]
         : _pairSuggestions(finance, allPending, allConfirmed);
@@ -952,114 +1049,152 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     // so the list slides instead of jumping. Each child is built only while
     // it shows: once hidden, the switcher keeps the last built copy for the
     // fold-out, so no card is ever built from an empty list.
-    return Column(
-      children: [
-        AnimatedPresence(
-          key: const ValueKey('spam-card'),
-          visible: spamSuspects.isNotEmpty,
-          child: spamSuspects.isEmpty
-              ? const SizedBox.shrink()
-              : _SuspectedSpamCard(suspects: spamSuspects),
-        ),
-        AnimatedPresence(
-          key: const ValueKey('pending-card'),
-          visible: pending.isNotEmpty,
-          child: pending.isEmpty
-              ? const SizedBox.shrink()
-              : _PendingReviewCard(pending: pending, suggestions: suggestions),
-        ),
-        _SearchAndFilterBar(
-          searchCtrl: _searchCtrl,
-          onSearch: _onSearchChanged,
-          onClearSearch: () {
-            _searchDebounce?.cancel();
-            setState(() => _search = '');
-          },
-          filter: _filter,
-          onFilter: _setFilter,
-          hasAdvancedFilters: _hasAdvancedFilters,
-          onOpenFilters: _openFilterSheet,
-        ),
-        AnimatedPresence(
-          key: const ValueKey('filter-chips'),
-          visible: hasFilterChips,
-          child: !hasFilterChips
-              ? const SizedBox.shrink()
-              // Single-line, horizontally scrollable strip of COMPACT chips —
-              // a wrapping layout grew a row per filter and buried the list
-              // when several were active.
-              // Left-aligned under the type chips: a narrower strip would
-              // otherwise sit centred. Each chip is capped at the strip's
-              // width, its label ellipsized, so its ✕ never runs off screen
-              // at large text.
-              : Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: LayoutBuilder(
-                    builder: (context, box) => Align(
-                      alignment: AlignmentDirectional.centerStart,
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          children: [
-                            for (final chip in _activeFilterChips(
-                              finance,
-                              activeAccount,
-                            ))
-                              Padding(
-                                padding: const EdgeInsets.only(right: 8),
-                                child: ConstrainedBox(
-                                  constraints: BoxConstraints(
-                                    maxWidth: math.max(0.0, box.maxWidth - 32),
+    //
+    // The two review cards share at most [_kReviewCardsShare] of the
+    // height and scroll inside it: open, with large text on a small phone,
+    // they used to take the whole screen and leave the list none. They stay
+    // out of the list itself, whose rows are indexed for the month jumps
+    // and the sticky band.
+    return LayoutBuilder(
+      builder: (context, box) => Column(
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: box.maxHeight.isFinite
+                  ? box.maxHeight * _kReviewCardsShare
+                  : double.infinity,
+            ),
+            child: _ReviewCardsScroll(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  AnimatedPresence(
+                    key: const ValueKey('spam-card'),
+                    visible: spamSuspects.isNotEmpty,
+                    child: spamSuspects.isEmpty
+                        ? const SizedBox.shrink()
+                        : _SuspectedSpamCard(suspects: spamSuspects),
+                  ),
+                  AnimatedPresence(
+                    key: const ValueKey('pending-card'),
+                    visible: pending.isNotEmpty,
+                    child: pending.isEmpty
+                        ? const SizedBox.shrink()
+                        : _PendingReviewCard(
+                            pending: pending,
+                            suggestions: suggestions,
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          _SearchAndFilterBar(
+            searchCtrl: _searchCtrl,
+            onSearch: _onSearchChanged,
+            onClearSearch: () {
+              _searchDebounce?.cancel();
+              setState(() => _search = '');
+            },
+            filter: _filter,
+            onFilter: _setFilter,
+            hasAdvancedFilters: _hasAdvancedFilters,
+            onOpenFilters: _openFilterSheet,
+          ),
+          AnimatedPresence(
+            key: const ValueKey('filter-chips'),
+            visible: hasFilterChips,
+            child: !hasFilterChips
+                ? const SizedBox.shrink()
+                // Single-line, horizontally scrollable strip of COMPACT chips —
+                // a wrapping layout grew a row per filter and buried the list
+                // when several were active.
+                // Left-aligned under the type chips: a narrower strip would
+                // otherwise sit centred. Each chip is capped at the strip's
+                // width, its label ellipsized, so its ✕ never runs off screen
+                // at large text.
+                : Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: LayoutBuilder(
+                      builder: (context, box) => Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Row(
+                            children: [
+                              for (final chip in _activeFilterChips(
+                                finance,
+                                activeAccount,
+                              ))
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      maxWidth: math.max(
+                                        0.0,
+                                        box.maxWidth - 32,
+                                      ),
+                                    ),
+                                    child: chip,
                                   ),
-                                  child: chip,
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-        ),
-        AnimatedPresence(
-          key: const ValueKey('selection-bar'),
-          visible: _selecting,
-          child: !_selecting
-              ? const SizedBox.shrink()
-              : _SelectionBar(
-                  count: _selected.length,
-                  onSelectAll: () => setState(
-                    () => _selected.addAll([for (final t in filtered) t.id]),
-                  ),
-                  onCategory: () => _bulkCategory(filtered),
-                  onAccount: _bulkAccount,
-                  onCountIn: _bulkCountIn,
-                  onDateTime: _bulkDateTime,
-                  onTags: _bulkTags,
-                  onSubscription: _bulkSubscription,
-                  // Pairing is a two-row concept — the button only exists at
-                  // exactly two selected.
-                  onPair: _selected.length == 2 ? _bulkPair : null,
-                  onDelete: _bulkDelete,
-                  onClose: () => setState(_selected.clear),
-                ),
-        ),
-        Expanded(
-          child: PageView(
-            controller: _pageCtrl,
-            onPageChanged: (i) {
-              if (_sliding) return;
-              final f = _Filter.values[i];
-              if (f != _filter) setState(() => _filter = f);
-            },
-            children: [
-              for (final f in _Filter.values)
-                _buildPage(f, finance, allConfirmed),
-            ],
           ),
-        ),
-      ],
+          AnimatedPresence(
+            key: const ValueKey('selection-bar'),
+            visible: _selecting,
+            child: !_selecting
+                ? const SizedBox.shrink()
+                : _SelectionBar(
+                    count: _selected.length,
+                    onSelectAll: () => setState(
+                      () => _selected.addAll([for (final t in filtered) t.id]),
+                    ),
+                    onCategory: () => _bulkCategory(filtered),
+                    onAccount: _bulkAccount,
+                    onCountIn: _bulkCountIn,
+                    onDateTime: _bulkDateTime,
+                    onTags: _bulkTags,
+                    onSubscription: _bulkSubscription,
+                    // Pairing is a two-row concept — the button only exists at
+                    // exactly two selected.
+                    onPair: _selected.length == 2 ? _bulkPair : null,
+                    onDelete: _bulkDelete,
+                    onClose: () => setState(() {
+                      _selected.clear();
+                      _selectMode = false;
+                    }),
+                  ),
+          ),
+          AnimatedPresence(
+            key: const ValueKey('unseen-line'),
+            visible: finance.unseenCount > 0,
+            child: finance.unseenCount == 0
+                ? const SizedBox.shrink()
+                : _UnseenLine(count: finance.unseenCount),
+          ),
+          Expanded(
+            child: PageView(
+              controller: _pageCtrl,
+              onPageChanged: (i) {
+                if (_sliding) return;
+                final f = _Filter.values[i];
+                if (f != _filter) setState(() => _filter = f);
+              },
+              children: [
+                for (final f in _Filter.values)
+                  _buildPage(f, finance, allConfirmed),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1133,10 +1268,16 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 // headers never need to be mounted to be reachable.
                 NotificationListener<ScrollNotification>(
                   onNotification: (n) {
-                    if (n is ScrollStartNotification ||
-                        n is ScrollUpdateNotification) {
-                      _pokeJumpControls();
+                    // Only a drag hides the panel: an arrow tap scrolls the
+                    // list too, and the panel must stay under the finger
+                    // for the next tap.
+                    if ((n is ScrollStartNotification &&
+                            n.dragDetails != null) ||
+                        (n is ScrollUpdateNotification &&
+                            n.dragDetails != null)) {
+                      _hideJumpControls();
                     }
+                    if (n is ScrollEndNotification) _pokeJumpControls();
                     if (n is ScrollStartNotification) _listMoving = true;
                     if (n is ScrollEndNotification) _listMoving = false;
                     return false;
@@ -1153,6 +1294,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           month: month,
                           txs: data.groups[month]!,
                           onSelectMonth: () => _selectMonth(month),
+                          top: _headerTopAt(i),
                         );
                       }
                       final shape = data.shapes[i];
@@ -1226,6 +1368,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       ),
                       curve: Curves.easeOut,
                       child: AnimatedOpacity(
+                        key: const ValueKey('jump-controls'),
                         opacity: _jumpVisible ? 1 : 0,
                         duration: motionDuration(
                           context,
@@ -1234,10 +1377,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         child: IgnorePointer(
                           ignoring: !_jumpVisible,
                           child: _JumpControls(
-                            months: data.months,
                             onUp: () => _stepMonth(up: true),
                             onDown: () => _stepMonth(up: false),
-                            onMonth: _scrollToMonth,
                           ),
                         ),
                       ),
@@ -2874,6 +3015,14 @@ class _SearchAndFilterBar extends StatelessWidget {
 /// Space above a list month header's label.
 const double _kMonthHeaderTop = 24;
 
+/// [_kMonthHeaderTop] for the list's first header while the "N new" line
+/// shows above it.
+const double _kMonthHeaderTopUnderLine = 4;
+
+/// The most of the tab's height the open review cards take together; past
+/// it they scroll inside that space.
+const double _kReviewCardsShare = 0.4;
+
 /// Room a month header keeps beside its name for the Select month button:
 /// the 18dp icon, its padding and the compact tap target around it.
 const double _kSelectMonthWidth = 48;
@@ -3027,11 +3176,16 @@ class _MonthHeader extends StatelessWidget {
   /// The sticky copy: tight padding so it covers as few rows as it can.
   final bool compact;
 
+  /// The gap above the row in the list (see _headerTopAt); the sticky copy
+  /// has none.
+  final double top;
+
   const _MonthHeader({
     required this.month,
     required this.txs,
     this.onSelectMonth,
     this.compact = false,
+    this.top = _kMonthHeaderTop,
   });
 
   /// Totals per month list: the sticky copy rebuilds on every scroll frame,
@@ -3059,7 +3213,7 @@ class _MonthHeader extends StatelessWidget {
       // never slides under the nav pill.
       padding: compact
           ? const EdgeInsets.fromLTRB(20, 0, 52, 0)
-          : const EdgeInsets.fromLTRB(20, _kMonthHeaderTop, 52, 6),
+          : EdgeInsets.fromLTRB(20, top, 52, 6),
       child: ConstrainedBox(
         constraints: BoxConstraints(minHeight: _monthHeaderRowHeight(context)),
         child: _row(context, scheme, label, income, expense),
@@ -3200,56 +3354,52 @@ class _MonthHeader extends StatelessWidget {
   );
 }
 
+/// Width of the month jump panel: slim, so it covers little of the rows,
+/// inside the 52dp gutter [_MonthHeader] keeps clear.
+const double _kJumpControlsWidth = 32;
+
+/// The month jump panel: up and down only. The month list opens from the
+/// sticky month band instead. Each button is a tall 48dp target in the
+/// slim width.
 class _JumpControls extends StatelessWidget {
-  final List<DateTime> months;
   final VoidCallback onUp;
   final VoidCallback onDown;
-  final ValueChanged<DateTime> onMonth;
 
-  const _JumpControls({
-    required this.months,
-    required this.onUp,
-    required this.onDown,
-    required this.onMonth,
-  });
+  const _JumpControls({required this.onUp, required this.onDown});
 
   @override
   Widget build(BuildContext context) {
+    final style = IconButton.styleFrom(
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      minimumSize: const Size(_kJumpControlsWidth, 48),
+      fixedSize: const Size(_kJumpControlsWidth, 48),
+      padding: EdgeInsets.zero,
+    );
     return FrostedPanel(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // The list runs newest first, so up is the newer month.
-          IconButton(
-            tooltip: 'Newer month',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.keyboard_double_arrow_up, size: 20),
-            onPressed: onUp,
-          ),
-          IconButton(
-            tooltip: 'Jump to month',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.calendar_month, size: 20),
-            onPressed: () => _showMonthPicker(context),
-          ),
-          IconButton(
-            tooltip: 'Older month',
-            visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.keyboard_double_arrow_down, size: 20),
-            onPressed: onDown,
-          ),
-        ],
+      child: SizedBox(
+        width: _kJumpControlsWidth,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // The list runs newest first, so up is the newer month.
+            IconButton(
+              key: const ValueKey('jump-up'),
+              tooltip: 'Newer month',
+              style: style,
+              icon: const Icon(Icons.keyboard_double_arrow_up, size: 20),
+              onPressed: onUp,
+            ),
+            IconButton(
+              key: const ValueKey('jump-down'),
+              tooltip: 'Older month',
+              style: style,
+              icon: const Icon(Icons.keyboard_double_arrow_down, size: 20),
+              onPressed: onDown,
+            ),
+          ],
+        ),
       ),
     );
-  }
-
-  Future<void> _showMonthPicker(BuildContext context) async {
-    final picked = await showMonthPickerSheet(
-      context,
-      title: 'Jump to month',
-      months: months,
-    );
-    if (picked != null) onMonth(picked);
   }
 }
 
@@ -3270,6 +3420,128 @@ class _FoldTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       collapsed ? label : InfoLabel(icon: true, label: label, tip: tip);
+}
+
+/// The review cards' capped area. When the cards outgrow it, it says so: a
+/// scrollbar that stays visible, and, while more lies below, the last card
+/// fades out over its bottom 24dp and ends on the card's rounded corners
+/// instead of a flat cut.
+class _ReviewCardsScroll extends StatefulWidget {
+  final Widget child;
+  const _ReviewCardsScroll({required this.child});
+
+  @override
+  State<_ReviewCardsScroll> createState() => _ReviewCardsScrollState();
+}
+
+class _ReviewCardsScrollState extends State<_ReviewCardsScroll> {
+  final _ctrl = ScrollController();
+
+  /// The cards are taller than the area.
+  bool _overflow = false;
+
+  /// Some of them lie below the area's bottom edge.
+  bool _moreBelow = false;
+
+  /// Applied in a microtask: metrics change during layout, where a
+  /// setState is not allowed.
+  void _update(ScrollMetrics m) {
+    final overflow = m.maxScrollExtent > 0.5;
+    final moreBelow = m.extentAfter > 0.5;
+    if (overflow == _overflow && moreBelow == _moreBelow) return;
+    scheduleMicrotask(() {
+      if (!mounted) return;
+      if (overflow == _overflow && moreBelow == _moreBelow) return;
+      setState(() {
+        _overflow = overflow;
+        _moreBelow = moreBelow;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // A fold or a new row changes the height without a scroll: check after
+    // every layout this widget takes part in.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _ctrl.hasClients && _ctrl.position.hasContentDimensions) {
+        _update(_ctrl.position);
+      }
+    });
+    // The same widgets every time, only their settings change: swapping a
+    // wrapper in or out would rebuild the cards and lose their state.
+    return NotificationListener<Notification>(
+      onNotification: (n) {
+        // Depth 0 only: the review list inside a card scrolls too.
+        if (n is ScrollMetricsNotification && n.depth == 0) {
+          _update(n.metrics);
+        } else if (n is ScrollNotification && n.depth == 0) {
+          _update(n.metrics);
+        }
+        return false;
+      },
+      child: Scrollbar(
+        controller: _ctrl,
+        thumbVisibility: _overflow,
+        child: ClipPath(
+          clipper: _CardBottomClip(rounded: _moreBelow),
+          child: ShaderMask(
+            // dstIn keeps the cards where the gradient is opaque; dst
+            // leaves them untouched.
+            blendMode: _moreBelow ? BlendMode.dstIn : BlendMode.dst,
+            shaderCallback: (rect) => LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: const [Colors.black, Colors.black, Colors.transparent],
+              stops: [0, rect.height <= 24 ? 0 : 1 - 24 / rect.height, 1],
+            ).createShader(rect),
+            child: SingleChildScrollView(
+              key: const ValueKey('review-cards'),
+              controller: _ctrl,
+              primary: false,
+              child: widget.child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Clips the review cards' area. While a card runs past its bottom edge,
+/// the edge follows the cards' rounded corners (inside their 16dp side
+/// margins); otherwise it is the plain rectangle.
+class _CardBottomClip extends CustomClipper<Path> {
+  final bool rounded;
+  const _CardBottomClip({required this.rounded});
+
+  @override
+  Path getClip(Size size) {
+    if (!rounded) return Path()..addRect(Offset.zero & size);
+    const inset = 16.0;
+    const r = Radius.circular(AppRadius.card);
+    return Path()
+      ..addRect(Rect.fromLTWH(0, 0, size.width, math.max(0, size.height - r.y)))
+      ..addRRect(
+        RRect.fromLTRBAndCorners(
+          inset,
+          0,
+          math.max(inset, size.width - inset),
+          size.height,
+          bottomLeft: r,
+          bottomRight: r,
+        ),
+      );
+  }
+
+  @override
+  bool shouldReclip(_CardBottomClip old) => old.rounded != rounded;
 }
 
 /// Review queue for regular SMS imports: confirm/discard each, or the batch.
@@ -3394,9 +3666,11 @@ class _PendingReviewCard extends StatelessWidget {
                           tip: const InfoTip(
                             title: 'Imported from SMS',
                             message:
-                                'Rows read from your SMS wait here until you '
-                                'confirm or discard them. They do not count '
-                                'in any total until confirmed.',
+                                'These imports need a look: the app was not '
+                                'sure of their account, category or whether '
+                                'they are a transfer. They count once you '
+                                'confirm them. Other imports already count '
+                                'and show as new in the list.',
                             link: InfoLink(
                               prompt: 'Imports classified wrong?',
                               label: 'Set up transaction rules',
@@ -3435,10 +3709,13 @@ class _PendingReviewCard extends StatelessWidget {
                 // fire them, and the wrapped title above keeps its room.
                 // Compact everywhere: two review cards + toolbar + list must
                 // fit short viewports without overflowing the tab Column.
+                // An OverflowBar: at 320dp with large text the two buttons
+                // stack, right-aligned, instead of running off the card.
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
+                  child: OverflowBar(
+                    alignment: MainAxisAlignment.end,
+                    overflowAlignment: OverflowBarAlignment.end,
                     children: [
                       // Plain text: the dialog's red button carries the
                       // warning.
@@ -3531,16 +3808,29 @@ class _TransferSuggestionRow extends StatelessWidget {
               ),
             ],
           ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          // Stacks, right-aligned, when the two buttons do not fit side by
+          // side (320dp with large text).
+          OverflowBar(
+            alignment: MainAxisAlignment.end,
+            overflowAlignment: OverflowBarAlignment.end,
             children: [
               TextButton(
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
                 ),
-                onPressed: () => context
-                    .read<SettingsProvider>()
-                    .dismissPairSuggestion(s.key),
+                onPressed: () {
+                  final settings = context.read<SettingsProvider>();
+                  final key = s.key;
+                  // The toast goes up before the dismissal notifies: this
+                  // row leaves the tree once it does.
+                  showUndoSnackBar(
+                    context,
+                    'Marked not a $kindLabel',
+                    () => settings.restorePairSuggestion(key),
+                    icon: Icons.link_off,
+                  );
+                  settings.dismissPairSuggestion(key);
+                },
                 child: const Text('Not a transfer'),
               ),
               FilledButton.tonal(
@@ -3619,8 +3909,7 @@ class _SuspectedSpamCard extends StatelessWidget {
                         child: _FoldTitle(
                           collapsed: collapsed,
                           label: Text(
-                            'Suspected spam · ${suspects.length}, review one '
-                            'by one',
+                            'Suspected spam · ${suspects.length} to review',
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
                           tip: const InfoTip(
@@ -3662,7 +3951,8 @@ class _SuspectedSpamCard extends StatelessWidget {
                 shrinkWrap: true,
                 padding: EdgeInsets.zero,
                 itemCount: suspects.length,
-                itemBuilder: (context, i) => _PendingRow(tx: suspects[i]),
+                itemBuilder: (context, i) =>
+                    _PendingRow(tx: suspects[i], spam: true),
               ),
             ),
           ),
@@ -3672,21 +3962,47 @@ class _SuspectedSpamCard extends StatelessWidget {
   }
 }
 
+/// One import waiting for review: "category · merchant" over the amount,
+/// the date and the sender, with Confirm and Discard. Above
+/// [kLargeTextScale] the two buttons move under the text, so the text
+/// keeps the row's width.
 class _PendingRow extends StatelessWidget {
   final Tx tx;
-  const _PendingRow({required this.tx});
+
+  /// A suspected spam row: its amount is plain text, not money green or
+  /// red, since it may be no money at all.
+  final bool spam;
+  const _PendingRow({required this.tx, this.spam = false});
+
+  /// "Food & Dining · Swiggy": what the row would count as, and where. The
+  /// category alone when the row names no merchant, as on the Cockpit's
+  /// Review tab.
+  static String titleOf(Tx tx, FinanceProvider finance) {
+    final merchant = merchantLabelOrNull(tx, alias: finance.merchantAlias);
+    return merchant == null
+        ? tx.category.label
+        : '${tx.category.label} · $merchant';
+  }
+
+  /// "13 Oct, 12:02 PM · VM-DEMOBK", without the sender when there is none.
+  static String whenAndWho(Tx tx) => [
+    fmtDateCompact(tx.date),
+    if (tx.sender.isNotEmpty) tx.sender,
+  ].join(' · ');
 
   @override
   Widget build(BuildContext context) {
     final cat = tx.category;
     final isIncome = tx.type == TxType.income;
-    return ListTile(
+    final large = isLargeTextScale(context);
+    final finance = context.read<FinanceProvider>();
+    final tile = ListTile(
       dense: true,
       // Starts in line with the card header's icon; the end keeps the
       // Material 3 default.
-      contentPadding: const EdgeInsetsDirectional.only(
+      contentPadding: EdgeInsetsDirectional.only(
         start: AppSpace.card,
-        end: 24,
+        end: large ? AppSpace.card : 24,
       ),
       onTap: () => showAddTransactionSheet(context, existing: tx),
       leading: CircleAvatar(
@@ -3699,76 +4015,169 @@ class _PendingRow extends StatelessWidget {
         ),
       ),
       title: Text(
-        tx.sender.isNotEmpty ? tx.sender : cat.label,
-        maxLines: 1,
+        titleOf(tx, finance),
+        maxLines: large ? 2 : 1,
         overflow: TextOverflow.ellipsis,
       ),
-      // The amount in its money colour, as on the ledger rows.
+      // The amount in its money colour, as on the ledger rows; plain on a
+      // spam suspect.
       subtitle: Text.rich(
         TextSpan(
           children: [
             TextSpan(
               text: '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
               style: TextStyle(
-                color: moneyColor(
-                  context,
-                  type: tx.type,
-                  transfer: isTransferCategory(tx.categoryId),
-                ),
+                color: spam
+                    ? Theme.of(context).colorScheme.onSurface
+                    : moneyColor(
+                        context,
+                        type: tx.type,
+                        transfer: isTransferCategory(tx.categoryId),
+                      ),
               ),
             ),
-            TextSpan(text: ' · ${fmtDateMaybeTime(tx.date)}\n${tx.smsText}'),
+            TextSpan(text: ' · ${whenAndWho(tx)}'),
           ],
         ),
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            tooltip: 'Confirm',
-            icon: Icon(
-              Icons.check_circle_outline,
-              color: AppColors.of(context).green,
+      trailing: large ? null : _actions(context),
+    );
+    if (!large) return tile;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        tile,
+        Padding(
+          padding: const EdgeInsetsDirectional.only(end: 8),
+          child: Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: _actions(context),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _actions(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      IconButton(
+        tooltip: 'Confirm',
+        icon: Icon(
+          Icons.check_circle_outline,
+          color: AppColors.of(context).green,
+        ),
+        // Symmetric with Discard below: a mis-tapped Confirm silently
+        // moved the row into the ledger with nothing to grab. Undo puts
+        // the captured pending copy back in the queue.
+        onPressed: () {
+          final finance = context.read<FinanceProvider>();
+          final confirmed = tx;
+          finance.confirmTransaction(confirmed.id);
+          showUndoSnackBar(
+            context,
+            'Confirmed ${fmtMoney(confirmed.amount)} from '
+            '${confirmed.sender.isEmpty ? 'SMS' : confirmed.sender}',
+            () => finance.restoreEditedTransactions([confirmed]),
+            icon: Icons.done_all,
+            tone: AppToastTone.success,
+          );
+        },
+      ),
+      IconButton(
+        tooltip: 'Discard',
+        icon: const Icon(Icons.cancel_outlined),
+        onPressed: () {
+          final finance = context.read<FinanceProvider>();
+          final discarded = tx;
+          finance.deleteTransaction(discarded.id);
+          // Restoring keeps pending: true, so the row returns to this
+          // review queue rather than silently joining the ledger.
+          showUndoSnackBar(
+            context,
+            'Discarded ${fmtMoney(discarded.amount)} from '
+            '${discarded.sender.isEmpty ? 'SMS' : discarded.sender}',
+            () => finance.restoreTransaction(discarded),
+            icon: Icons.block,
+            tone: AppToastTone.removal,
+          );
+        },
+      ),
+    ],
+  );
+}
+
+/// "3 new · Mark all seen" above the list while imports that counted at
+/// once still carry their "new" marker.
+class _UnseenLine extends StatelessWidget {
+  final int count;
+  const _UnseenLine({required this.count});
+
+  void _markAllSeen(BuildContext context) {
+    final finance = context.read<FinanceProvider>();
+    // The rows as they are, for Undo: restoring them brings the markers
+    // back.
+    final snapshot = [
+      ...finance.transactions,
+      ...finance.pendingTransactions,
+    ].where((t) => t.unseen).toList();
+    if (snapshot.isEmpty) return;
+    // The markers clear in memory before the first await, so the toast
+    // goes up while this context is still mounted.
+    finance.markAllSeen();
+    showUndoSnackBar(
+      context,
+      'Marked ${snapshot.length} as seen',
+      () => finance.restoreEditedTransactions(snapshot),
+      icon: Icons.done_all,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    // One size for the count and the button, the button's own.
+    final size = theme.textTheme.labelLarge;
+    // Start-aligned at the list's 20dp inset (the screen's Column centres
+    // what does not fill it). The button keeps its 48dp tap target.
+    return Align(
+      alignment: AlignmentDirectional.centerStart,
+      child: Padding(
+        padding: const EdgeInsetsDirectional.fromSTEB(20, 0, 12, 0),
+        // Wraps, so "Mark all seen" drops under the count at 320dp with
+        // large text instead of overflowing.
+        child: Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 2,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // The rows' "new" dot.
+                StatusDot(color: accentTextColor(context)),
+                const SizedBox(width: 6),
+                Text(
+                  '$count new ·',
+                  style: size?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+              ],
             ),
-            // Symmetric with Discard below: a mis-tapped Confirm silently
-            // moved the row into the ledger with nothing to grab — Undo
-            // puts the captured pending copy back in the queue.
-            onPressed: () {
-              final finance = context.read<FinanceProvider>();
-              final confirmed = tx;
-              finance.confirmTransaction(confirmed.id);
-              showUndoSnackBar(
-                context,
-                'Confirmed ${fmtMoney(confirmed.amount)} from '
-                '${confirmed.sender.isEmpty ? 'SMS' : confirmed.sender}',
-                () => finance.restoreEditedTransactions([confirmed]),
-                icon: Icons.done_all,
-                tone: AppToastTone.success,
-              );
-            },
-          ),
-          IconButton(
-            tooltip: 'Discard',
-            icon: const Icon(Icons.cancel_outlined),
-            onPressed: () {
-              final finance = context.read<FinanceProvider>();
-              final discarded = tx;
-              finance.deleteTransaction(discarded.id);
-              // Restoring keeps pending: true, so the row returns to this
-              // review queue rather than silently joining the ledger.
-              showUndoSnackBar(
-                context,
-                'Discarded ${fmtMoney(discarded.amount)} from '
-                '${discarded.sender.isEmpty ? 'SMS' : discarded.sender}',
-                () => finance.restoreTransaction(discarded),
-                icon: Icons.block,
-                tone: AppToastTone.removal,
-              );
-            },
-          ),
-        ],
+            TextButton(
+              style: TextButton.styleFrom(
+                textStyle: size,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: () => _markAllSeen(context),
+              child: const Text('Mark all seen'),
+            ),
+          ],
+        ),
       ),
     );
   }

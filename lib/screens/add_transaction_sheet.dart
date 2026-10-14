@@ -31,11 +31,18 @@ class TxPrefill {
 
 /// Opens the add sheet, or the edit sheet for [existing]. Completes with the
 /// new row's id after an add, and null otherwise (edit, delete, dismiss).
+/// [income] starts a new entry on Income with that side's usual first
+/// category (the Quick actions widget's "+ Income").
 Future<String?> showAddTransactionSheet(
   BuildContext context, {
   Tx? existing,
   TxPrefill? prefill,
+  bool income = false,
 }) {
+  // Opening a row that counted at once clears its "new" marker.
+  if (existing != null && existing.unseen) {
+    context.read<FinanceProvider>().markSeen(existing.id);
+  }
   return showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
@@ -47,7 +54,11 @@ Future<String?> showAddTransactionSheet(
     // to the sheet's own MediaQuery.
     builder: (ctx) => Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-      child: _AddTransactionForm(existing: existing, prefill: prefill),
+      child: _AddTransactionForm(
+        existing: existing,
+        prefill: prefill,
+        income: income,
+      ),
     ),
   );
 }
@@ -76,7 +87,8 @@ class _PersonEntry {
 class _AddTransactionForm extends StatefulWidget {
   final Tx? existing;
   final TxPrefill? prefill;
-  const _AddTransactionForm({this.existing, this.prefill});
+  final bool income;
+  const _AddTransactionForm({this.existing, this.prefill, this.income = false});
 
   @override
   State<_AddTransactionForm> createState() => _AddTransactionFormState();
@@ -230,7 +242,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         e?.category ??
         (prefill == null ? null : categoryById(prefill.categoryId));
     if (startCategory == null) {
-      _kind = _EntryKind.expense;
+      _kind = widget.income && e == null
+          ? _EntryKind.income
+          : _EntryKind.expense;
     } else if (startCategory.isTransfer) {
       _kind = _EntryKind.transfer;
     } else {
@@ -625,6 +639,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             walletCounted: _accountId == null
                 ? widget.existing!.walletCounted && _kind != _EntryKind.transfer
                 : onWallet && _walletCounted,
+            // existing is the snapshot from before the sheet cleared the
+            // "new" marker; it must not put it back.
+            unseen: false,
           ),
         );
         if (_accountId != null && _accountId != _initialAccountId) {
@@ -663,7 +680,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     setState(() => _busy = true);
     final finance = context.read<FinanceProvider>();
     final navigator = Navigator.of(context);
-    final tx = widget.existing!;
+    // Without the "new" marker opening the sheet cleared, so Undo does not
+    // bring it back.
+    final tx = widget.existing!.copyWith(unseen: false);
     // Deleting one leg of a pair unlinks the other; the snapshot lets Undo
     // put both the row and the partner's link back.
     final partner = await finance.deleteTransaction(tx.id);

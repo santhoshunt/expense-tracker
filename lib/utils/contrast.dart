@@ -21,7 +21,7 @@ double contrastRatio(Color a, Color b) {
 /// Darkens [color] (keeping its hue) until it reads against [background]
 /// at [minRatio]. Returns [color] untouched when it already passes — so
 /// dark themes and already-dark custom colours cost nothing.
-Color _darkenForContrast(Color color, Color background, double minRatio) {
+Color darkenForContrast(Color color, Color background, double minRatio) {
   var c = color;
   var hsl = HSLColor.fromColor(color);
   while (contrastRatio(c, background) < minRatio && hsl.lightness > 0.05) {
@@ -38,9 +38,15 @@ Color _darkenForContrast(Color color, Color background, double minRatio) {
 /// Dark mode returns the accent as-is.
 Color accentTextColor(BuildContext context) {
   final scheme = Theme.of(context).colorScheme;
-  if (scheme.brightness == Brightness.dark) return scheme.primary;
+  return accentTextFor(scheme.primary, scheme.brightness);
+}
+
+/// [accentTextColor] without a BuildContext, for [accent] in a theme of
+/// [brightness] (the home-screen widgets' theme is built from settings).
+Color accentTextFor(Color accent, Brightness brightness) {
+  if (brightness == Brightness.dark) return accent;
   // Worst case is a white card; passing there also passes the off-white bg.
-  return _darkenForContrast(scheme.primary, Colors.white, 4.5);
+  return darkenForContrast(accent, Colors.white, 4.5);
 }
 
 /// Category glyph colour for the icon-on-tint badges (a category icon drawn
@@ -52,5 +58,5 @@ Color categoryGlyphColor(BuildContext context, Color base) {
   final scheme = Theme.of(context).colorScheme;
   if (scheme.brightness == Brightness.dark) return base;
   final tint = Color.alphaBlend(base.withValues(alpha: 0.15), scheme.surface);
-  return _darkenForContrast(base, tint, 3.0);
+  return darkenForContrast(base, tint, 3.0);
 }

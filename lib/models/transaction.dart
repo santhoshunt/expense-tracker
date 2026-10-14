@@ -35,14 +35,19 @@ class TxCategory {
     'label': label,
     'type': type.name,
     if (isTransfer) 'transfer': true,
-    'icon': kCategoryIconChoices.entries
-        .firstWhere(
-          (e) => e.value == icon,
-          orElse: () => kCategoryIconChoices.entries.first,
-        )
-        .key,
+    'icon': iconKey,
     'color': color.toARGB32(),
   };
+
+  /// The [kCategoryIconChoices] key of [icon], the name it is stored and
+  /// shown by (the home-screen widgets map it to their own drawables);
+  /// 'category' for an icon outside the choices.
+  String get iconKey => kCategoryIconChoices.entries
+      .firstWhere(
+        (e) => e.value == icon,
+        orElse: () => kCategoryIconChoices.entries.first,
+      )
+      .key;
 
   factory TxCategory.fromJson(Map<String, dynamic> json) => TxCategory(
     id: json['id'] as String,
@@ -483,6 +488,11 @@ class Tx {
   /// FinanceProvider.countsInTotals); inert on every other account.
   final bool walletCounted;
 
+  /// An SMS import that counted at once, without review, and that the user
+  /// has not looked at yet: the ledger marks it "new" until its row is
+  /// opened or Mark all seen runs. Never set on a pending row.
+  final bool unseen;
+
   const Tx({
     required this.id,
     required this.type,
@@ -506,6 +516,7 @@ class Tx {
     this.repaidBy,
     this.countIn,
     this.walletCounted = false,
+    this.unseen = false,
   });
 
   /// The date period figures use: [countIn] when set, else [date].
@@ -567,6 +578,7 @@ class Tx {
       repaidBy: repaidBy,
       countIn: countIn,
       walletCounted: walletCounted,
+      unseen: unseen,
     );
   }
 
@@ -600,6 +612,7 @@ class Tx {
     DateTime? countIn,
     bool clearCountIn = false,
     bool? walletCounted,
+    bool? unseen,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -629,6 +642,7 @@ class Tx {
         ? null
         : normalizeCountIn(countIn ?? this.countIn, date ?? this.date),
     walletCounted: walletCounted ?? this.walletCounted,
+    unseen: unseen ?? this.unseen,
   );
 
   Map<String, dynamic> toJson() => {
@@ -654,6 +668,7 @@ class Tx {
     if (repaidBy != null) 'repaidBy': repaidBy,
     if (countIn != null) 'countIn': countIn!.toIso8601String(),
     if (walletCounted) 'walletCounted': true,
+    if (unseen) 'unseen': true,
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) {
@@ -693,6 +708,7 @@ class Tx {
         _ => null,
       }, date),
       walletCounted: json['walletCounted'] == true,
+      unseen: json['unseen'] == true,
     );
   }
 }

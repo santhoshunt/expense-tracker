@@ -25,10 +25,10 @@ int epochDay(DateTime d) =>
     DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch ~/
     Duration.millisecondsPerDay;
 
-/// Feeds the Month pace, Upcoming and Today widgets
-/// (HomeWidgets.kt). Like [BudgetWidgetService], Dart computes and native
-/// draws; the snapshot carries dates and a usual-by-day curve so the
-/// widgets stay right across midnight without the app running.
+/// Feeds the Month pace, Upcoming, Today and Add, Spending split and
+/// Recent widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart
+/// computes and native draws; the snapshot carries dates and a usual-by-day
+/// curve so the widgets stay right across midnight without the app running.
 class HomeWidgetsService {
   static const _dataKey = 'home_widget_data_v1';
   static const _themeKey = 'budget_widget_theme_v1';
@@ -131,15 +131,18 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
   );
   final upcoming = [
     for (final u in allUpcoming)
-      // Bills only: no salary or interest, and no card cycle that owes
-      // nothing yet.
-      if (u.type == TxType.expense && !u.muted && u.days >= -7) u,
+      // No card cycle that owes nothing yet; income due (a salary) shows
+      // too, in green.
+      if (!u.muted && u.days >= -7) u,
   ].take(kUpcomingWidgetRows);
+  final hideIncome = settings.hideIncome;
   return {
     'computedDay': epochDay(now),
     // year * 12 + month: compared as a number, so no locale can change it.
     'monthKey': month.year * 12 + month.month,
     'monthLabel': DateFormat('MMMM').format(month),
+    // Imports waiting in review: Today and Recent name them.
+    'pendingCount': finance.pendingCount,
     'pace': {
       'spent': spent,
       'spentLabel': fmtMoneyTidy(spent),
@@ -147,14 +150,10 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       'capLabel': fmtMoneyTidy(cap),
       'usualByDay': usualCumulativeByDay(finance, month),
     },
-    'upcoming': [
-      for (final u in upcoming)
-        {
-          'label': u.label,
-          'dueDay': epochDay(u.due),
-          'dueLabel': DateFormat('d MMM').format(u.due),
-          'amountLabel': u.amount == null ? null : fmtMoneyTidy(u.amount!),
-        },
+    'upcoming': [for (final u in upcoming) _upcomingRow(u, hideIncome)],
+    'recent': [
+      for (final t in finance.transactions.take(kRecentWidgetRows))
+        _recentRow(finance, t, hideIncome),
     ],
     'split': _split(finance, month),
     'today': {
@@ -169,12 +168,83 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
     if (safe != null)
       'safe': {
         'day': epochDay(now),
+        // Every label is then "Over budget", which the widget prints alone.
+        'overCap': safe.overCap,
         'label': _safeLabel(safe, safe.leftToday),
         'next': [
           for (var d = safe.today + 1; d < safe.today + safe.daysLeft; d++)
             _safeLabel(safe, safe.allowanceOn(d) ?? 0),
         ],
       },
+  };
+}
+
+/// Rows the Recent widget shows: the newest confirmed transactions.
+const int kRecentWidgetRows = 4;
+
+/// How a widget colours an amount (the snapshot's `kind`): 'in' green,
+/// 'out' red, and 'neutral' plain for money that is neither income nor
+/// spend: a transfer, or a row left out of the totals.
+String _kindOf(TxType type, {required bool neutral}) => neutral
+    ? 'neutral'
+    : type == TxType.income
+    ? 'in'
+    : 'out';
+
+/// [amount] with the sign of [type], as the ledger prints it; income is
+/// masked when Hide income is on.
+String _signedLabel(double amount, TxType type, bool hideIncome) {
+  final sign = type == TxType.income ? '+' : '−';
+  if (type == TxType.income && hideIncome) return '$sign$kMaskedAmount';
+  return '$sign${fmtMoneyTidy(amount)}';
+}
+
+/// One Upcoming widget row. `kind` colours the amount; the widget works
+/// overdue out from the dates on the day it draws.
+Map<String, dynamic> _upcomingRow(UpcomingItem u, bool hideIncome) {
+  final transfer = u.categoryId != null && isTransferCategory(u.categoryId!);
+  final kind = _kindOf(u.type, neutral: transfer);
+  final amount = u.amount;
+  return {
+    'label': u.label,
+    'dueDay': epochDay(u.due),
+    'dueLabel': DateFormat('d MMM').format(u.due),
+    // Bills keep a plain amount (nothing has left yet); income due carries
+    // its "+" and is masked when Hide income is on.
+    'amountLabel': amount == null
+        ? null
+        : kind == 'in'
+        ? _signedLabel(amount, u.type, hideIncome)
+        : fmtMoneyTidy(amount),
+    'kind': kind,
+    'icon': u.kind == UpcomingKind.cardBill
+        ? 'card'
+        : categoryById(u.categoryId ?? '', fallbackType: u.type).iconKey,
+  };
+}
+
+/// One Recent widget row: the category, the merchant when there is one,
+/// and the day and time, which Kotlin turns into "Today" or "Yesterday" on
+/// the day it draws.
+Map<String, dynamic> _recentRow(
+  FinanceProvider finance,
+  Tx t,
+  bool hideIncome,
+) {
+  final neutral =
+      isTransferCategory(t.categoryId) || !finance.countsInTotals(t);
+  final kind = _kindOf(t.type, neutral: neutral);
+  final midnight = t.date.hour == 0 && t.date.minute == 0;
+  return {
+    'label': t.category.label,
+    'merchant': merchantLabelOrNull(t, alias: finance.merchantAlias),
+    'day': epochDay(t.date),
+    'timeLabel': midnight ? null : fmtTime(t.date),
+    'dateLabel': DateFormat('d MMM').format(t.date),
+    'amountLabel': _signedLabel(t.amount, t.type, hideIncome),
+    'kind': kind,
+    'unseen': t.unseen,
+    'icon': t.category.iconKey,
   };
 }
 

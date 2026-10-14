@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Picker preview only: the Month pace bar about 60% along, with the
+     usual-by-today tick a little further. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="14dp"
+    android:viewportWidth="200"
+    android:viewportHeight="14">
+    <path
+        android:fillColor="#3B3F4F"
+        android:pathData="M4,3h192a4,4 0,0 1,0 8h-192a4,4 0,0 1,0 -8z" />
+    <path
+        android:fillColor="#4A90E2"
+        android:pathData="M4,3h112a4,4 0,0 1,0 8h-112a4,4 0,0 1,0 -8z" />
+    <path
+        android:fillColor="#B4C0C8"
+        android:pathData="M136,0h2v14h-2z" />
+</vector>

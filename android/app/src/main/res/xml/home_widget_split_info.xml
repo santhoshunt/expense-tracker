@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Spending split (4×2). updatePeriodMillis: a 30-minute redraw from the
+<!-- Spending split (4x2). updatePeriodMillis: a 30-minute redraw from the
      stored snapshot (Android's floor), so a new month shows empty without
      the app running. No configure step. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
@@ -9,7 +9,7 @@
     android:minHeight="110dp"
     android:targetCellWidth="4"
     android:targetCellHeight="2"
-    android:previewLayout="@layout/home_widget_split"
+    android:previewLayout="@layout/home_widget_split_preview"
     android:resizeMode="horizontal|vertical"
     android:updatePeriodMillis="1800000"
     android:widgetCategory="home_screen" />

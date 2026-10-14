@@ -39,6 +39,19 @@ import 'dashboard_screen.dart';
 import 'home_app_bar.dart';
 import 'transactions_screen.dart';
 
+/// An import's figures for its toast: "8 added, 2 to review" when some rows
+/// counted at once and some wait, otherwise the one part ("8 added", "2 to
+/// review"). [imported] is every new row, [counted] the ones that counted
+/// at once.
+@visibleForTesting
+String importCountsText(int imported, int counted) {
+  final added = counted.clamp(0, imported);
+  final toReview = imported - added;
+  if (added > 0 && toReview > 0) return '$added added, $toReview to review';
+  if (added > 0) return '$added added';
+  return '$toReview to review';
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -358,6 +371,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     switch (action) {
       case LaunchAction.addExpense:
         showAddTransactionSheet(context);
+      case LaunchAction.addIncome:
+        showAddTransactionSheet(context, income: true);
+      // All transactions, clearing a filter an earlier Today tap left.
+      case LaunchAction.openTransactions:
+        _openTransactions(const TxFilterRequest());
       case LaunchAction.importSms:
         if (_smsImport.isSupported && !_importing) _importFromSms();
       case LaunchAction.openRecap:
@@ -497,9 +515,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final messenger = ScaffoldMessenger.of(context);
     final front =
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    final finance = context.read<FinanceProvider>();
+    // The run may hold two imports (the notification buffer, then SMS), so
+    // the rows left waiting are read off the review count around it.
+    final pendingBefore = finance.pendingCount;
     try {
       final result = await runBackgroundImport(
-        context.read<FinanceProvider>(),
+        finance,
         context.read<SettingsProvider>(),
         trigger,
         import: _smsImport,
@@ -510,10 +532,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       unawaited(_postDueReminders());
       final imported = result.imported;
       if (mounted && front && imported > 0) {
+        final waiting = (finance.pendingCount - pendingBefore).clamp(
+          0,
+          imported,
+        );
         showAppToastOn(
           messenger,
-          'Auto-import: $imported new transaction'
-          '${imported == 1 ? '' : 's'} to review.',
+          'Auto-import: ${importCountsText(imported, imported - waiting)}.',
           tone: AppToastTone.success,
           icon: Icons.sms_outlined,
         );
@@ -612,6 +637,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // auto-import cadence. drainNotifications() is a no-op when access
       // hasn't been granted.
       final notifImported = await _smsImport.drainNotifications(finance);
+      // Read before the SMS run replaces it; a drain with nothing to add
+      // never calls addImported, so its figure would be stale.
+      final notifCounted = notifImported > 0 ? finance.lastImportCounted : 0;
 
       final result = await _smsImport.maybeAutoRun(
         finance,
@@ -622,10 +650,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // Combine notification-only imports with SMS auto-import results.
       final totalImported = (result?.imported ?? 0) + notifImported;
       if (totalImported == 0) return;
+      final totalCounted = (result?.counted ?? 0) + notifCounted;
       showAppToastOn(
         messenger,
-        'Auto-import: $totalImported new transaction'
-        '${totalImported == 1 ? '' : 's'} to review.',
+        'Auto-import: ${importCountsText(totalImported, totalCounted)}.',
         tone: AppToastTone.success,
         icon: Icons.sms_outlined,
       );
@@ -751,7 +779,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       } else {
         final parts = <String>[];
         if (result.imported > 0) {
-          parts.add('${result.imported} new to review');
+          parts.add(importCountsText(result.imported, result.counted));
         }
         if (result.spamDropped > 0) {
           parts.add('${result.spamDropped} spam dropped by your rules');
@@ -912,9 +940,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   onPressed: _importing ? null : _importFromSms,
                 ),
-              // Cockpit, Settings and, on the Dashboard, the month row's
-              // Year view, PDF export, Year view tip and Customise.
-              HomeMenu(onDashboard: _index == kHomeTabDashboard),
+              // The shown tab's own entries, then Cockpit, People and
+              // Settings.
+              HomeMenu(tab: _index),
             ],
           ),
           body: Column(

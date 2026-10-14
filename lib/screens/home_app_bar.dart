@@ -75,79 +75,102 @@ class DashboardMonthTitle extends StatelessWidget {
   }
 }
 
-enum _MenuItem {
-  toggleYear,
-  exportPdf,
-  aboutYear,
-  customise,
-  cockpit,
-  settings,
-}
-
-/// The app bar's ⋯: Cockpit and Settings on every tab and, [onDashboard],
-/// what used to crowd the Dashboard's month row: Year view, the PDF export,
-/// the Year view tip and Customise this page.
+/// The app bar's ⋮, the same two sections on every tab: "This page", the
+/// entries the shown [tab] publishes through [AppNav.pageMenu], then "App":
+/// Cockpit, People and Settings. A tab with no entries shows App alone.
 class HomeMenu extends StatelessWidget {
-  final bool onDashboard;
-  const HomeMenu({super.key, required this.onDashboard});
+  /// The shown home tab (a kHomeTab* index).
+  final int tab;
+
+  const HomeMenu({super.key, required this.tab});
+
+  static PopupMenuItem<VoidCallback> _item(
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    Widget? trailing,
+  }) => PopupMenuItem(
+    value: onTap,
+    child: ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(icon),
+      title: Text(label),
+      trailing: trailing,
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
-    final header = AppNav.instance.dashboardHeader;
-    PopupMenuItem<_MenuItem> item(_MenuItem v, IconData icon, String label) =>
-        PopupMenuItem(
-          value: v,
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(icon),
-            title: Text(label),
-          ),
-        );
-    return ListenableBuilder(
-      listenable: header,
-      // The button's own context anchors the Year view tip.
-      builder: (context, _) => PopupMenuButton<_MenuItem>(
-        tooltip: 'More',
-        icon: const Icon(Icons.more_vert),
-        onSelected: (v) => switch (v) {
-          _MenuItem.toggleYear => header.onToggleYear?.call(),
-          _MenuItem.exportPdf => header.onExportPdf?.call(),
-          _MenuItem.aboutYear => header.onAboutYear?.call(context),
-          _MenuItem.customise => header.onCustomise?.call(),
-          _MenuItem.cockpit => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
-          ),
-          _MenuItem.settings => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const SettingsScreen()),
-          ),
-        },
-        itemBuilder: (_) => [
-          if (onDashboard) ...[
-            item(
-              _MenuItem.toggleYear,
-              header.yearMode ? Icons.calendar_view_month : Icons.date_range,
-              header.yearMode ? 'Month view' : 'Year view',
-            ),
-            item(
-              _MenuItem.exportPdf,
-              Icons.picture_as_pdf_outlined,
-              header.yearMode
-                  ? 'Export year report (PDF)'
-                  : 'Export month report (PDF)',
-            ),
-            item(_MenuItem.aboutYear, Icons.info_outline, 'About Year view'),
-            item(
-              _MenuItem.customise,
-              Icons.dashboard_customize_outlined,
-              'Customise this page',
-            ),
+    return PopupMenuButton<VoidCallback>(
+      tooltip: 'More',
+      icon: const Icon(Icons.more_vert),
+      onSelected: (run) => run(),
+      // Read when the menu opens, so it lists the tab's latest entries: the
+      // button itself shows nothing that changes, so it listens to nothing.
+      itemBuilder: (_) {
+        final page = AppNav.instance.pageMenu.actionsFor(tab);
+        return [
+          if (page.isNotEmpty) ...[
+            const _MenuSectionLabel('This page'),
+            for (final a in page)
+              _item(a.icon, a.label, a.onTap, trailing: a.trailing),
             const PopupMenuDivider(),
           ],
-          item(_MenuItem.cockpit, Icons.tune, 'Cockpit'),
-          item(_MenuItem.settings, Icons.settings_outlined, 'Settings'),
-        ],
+          const _MenuSectionLabel('App'),
+          _item(
+            Icons.tune,
+            'Cockpit',
+            () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
+            ),
+          ),
+          _item(Icons.people_outline, 'People', () => goPeople(context)),
+          _item(
+            Icons.settings_outlined,
+            'Settings',
+            () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SettingsScreen()),
+            ),
+          ),
+        ];
+      },
+    );
+  }
+}
+
+/// A section's small muted name in the ⋮ menu ("This page", "App"). Not
+/// selectable: it only heads the rows under it.
+class _MenuSectionLabel extends PopupMenuEntry<VoidCallback> {
+  final String label;
+  const _MenuSectionLabel(this.label);
+
+  @override
+  double get height => 32;
+
+  @override
+  bool represents(VoidCallback? value) => false;
+
+  @override
+  State<_MenuSectionLabel> createState() => _MenuSectionLabelState();
+}
+
+class _MenuSectionLabelState extends State<_MenuSectionLabel> {
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Semantics(
+      header: true,
+      child: Padding(
+        // The rows' own inset, so the label lines up with their icons.
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: Text(
+          widget.label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
       ),
     );
   }

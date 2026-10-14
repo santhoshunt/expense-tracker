@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Picker preview only: a full ring, over budget. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:pathData="M24,4a20,20 0,1 1,0 40a20,20 0,1 1,0 -40"
+        android:strokeWidth="6"
+        android:strokeColor="#FF7CA3" />
+</vector>

@@ -22,6 +22,8 @@ import '../services/notification_source.dart';
 import '../services/sms_source.dart';
 import '../utils/app_palettes.dart';
 import '../utils/app_theme.dart';
+import '../utils/text_scale.dart';
+import '../widgets/pdf_export_flow.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/undo_snackbar.dart';
 import '../widgets/hue_color_picker.dart';
@@ -42,11 +44,56 @@ EdgeInsets _settingsPadding(BuildContext context) => EdgeInsets.fromLTRB(
   16 + MediaQuery.viewPaddingOf(context).bottom,
 );
 
+/// The Settings root's Backup line: "Last backup today", "Last backup
+/// yesterday", "Last backup 2 days ago" (calendar days before [now]), or
+/// "Last backup failed" while a failure is recorded. "Reconnect Google
+/// Drive" when the recorded failure is [kDriveReconnectMessage], the one
+/// DriveBackupService stores when access must be granted again (the Backup
+/// page's banner offers Reconnect for the same text). Null when nothing has
+/// been backed up and nothing failed: the row then says what the page holds.
+String? backupStatusLine(DateTime? last, String? error, DateTime now) {
+  if (error == kDriveReconnectMessage) return 'Reconnect Google Drive';
+  if (error != null) return 'Last backup failed';
+  if (last == null) return null;
+  final days = DateUtils.dateOnly(
+    now,
+  ).difference(DateUtils.dateOnly(last)).inDays;
+  return switch (days) {
+    <= 0 => 'Last backup today',
+    1 => 'Last backup yesterday',
+    _ => 'Last backup $days days ago',
+  };
+}
+
 /// Settings root: one row per group, each opening a [SettingsGroupPage]
 /// (built in settings_pages.dart). A group with no supported section on
 /// this device is left out.
-class SettingsScreen extends StatelessWidget {
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
+
+  @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  /// [backupStatusLine] once the Drive state has loaded; null until then.
+  String? _backupLine;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBackupLine();
+  }
+
+  /// Reads only the stored last backup and last failure: asking for the
+  /// account would reach the platform's sign-in.
+  Future<void> _loadBackupLine() async {
+    final svc = context.read<DriveBackupService>();
+    final last = await svc.lastBackupAt();
+    final error = await svc.lastError();
+    if (!mounted) return;
+    setState(() => _backupLine = backupStatusLine(last, error, DateTime.now()));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -72,12 +119,13 @@ class SettingsScreen extends StatelessWidget {
       settings.appLock ? 'Lock on' : 'Lock off',
       if (settings.hideIncome) 'Income hidden',
     ].join(' · ');
+    final large = isLargeTextScale(context);
     final categoryOrder = switch (settings.categoryOrder) {
       CategoryOrder.mostUsed => 'Most used first',
       CategoryOrder.alphabetical => 'A to Z',
     };
-    // Backup and About have no stored value here to show: Drive state and
-    // the version load asynchronously on their own pages.
+    // Backup shows the last backup once it has loaded. About has no stored
+    // value to show: the version loads on its own page.
     final groups = <(IconData, String, String, WidgetBuilder)>[
       (
         Icons.palette_outlined,
@@ -95,15 +143,15 @@ class SettingsScreen extends StatelessWidget {
       (
         Icons.cloud_outlined,
         'Backup and data',
-        'Google Drive, export, import, delete',
+        _backupLine ?? 'Google Drive, export, import, delete',
         (_) => const _BackupDataPage(),
       ),
       (Icons.lock_outline, 'Privacy', privacy, (_) => const _PrivacyPage()),
       (
         Icons.category_outlined,
-        'Categories and rules',
+        'Category order',
         categoryOrder,
-        (_) => const _CategoriesRulesPage(),
+        (_) => const _CategoryOrderPage(),
       ),
       (
         Icons.info_outline,
@@ -125,13 +173,21 @@ class SettingsScreen extends StatelessWidget {
               GroupedSurface(
                 first: i == 0,
                 last: i == groups.length - 1,
+                // At large text the icon and chevron go, so the words get
+                // the row's width ("Appearanc/e" broke mid-word at 320dp).
                 child: ListTile(
-                  leading: Icon(icon),
+                  leading: large ? null : Icon(icon),
                   title: Text(title),
                   subtitle: Text(value),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () =>
-                      Navigator.push(context, MaterialPageRoute(builder: page)),
+                  trailing: large ? null : const Icon(Icons.chevron_right),
+                  // Back from a page: a backup may have run or failed there.
+                  onTap: () async {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: page),
+                    );
+                    if (mounted) await _loadBackupLine();
+                  },
                 ),
               ),
           ],
@@ -1059,20 +1115,8 @@ class _DataSectionState extends State<_DataSection> {
             );
           }
         case 'export_pdf':
-          final sel = await _askExportRange();
-          if (sel.cancelled) return;
-          final path = await _withBusy(
-            'Building PDF report…',
-            () => BackupService.exportPdf(finance, range: sel.range),
-          );
-          if (path != null && path.isNotEmpty) {
-            showAppToastOn(
-              messenger,
-              'Saved to $path',
-              tone: AppToastTone.success,
-              icon: Icons.download_done,
-            );
-          }
+          // The shared flow: dates, spinner, report and its own toasts.
+          await exportPdfWithRange(context, finance);
         case 'delete_all':
           final includeConfig = await _confirmDeleteAll();
           if (includeConfig == null) return;
@@ -1609,7 +1653,7 @@ class _AboutSectionState extends State<_AboutSection> {
         case UpToDate(:final currentVersion):
           showAppToastOn(
             messenger,
-            "You're on the latest version ($currentVersion).",
+            "You're on the latest version (${versionLabel(currentVersion)}).",
             tone: AppToastTone.success,
             icon: Icons.verified_outlined,
           );
@@ -1660,7 +1704,11 @@ class _AboutSectionState extends State<_AboutSection> {
           ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('Version'),
-            subtitle: Text(_lastKnownVersion ?? '…'),
+            // Written as the update sheet writes it: "v1.38.1".
+            subtitle: Text(switch (_lastKnownVersion) {
+              final v? => versionLabel(v),
+              null => '…',
+            }),
           ),
           ListTile(
             leading: const Icon(Icons.system_update_alt),

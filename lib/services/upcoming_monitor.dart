@@ -5,6 +5,7 @@ import '../providers/settings_provider.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
 import 'card_bill.dart';
+import 'notification_ids.dart';
 import 'notification_service.dart';
 import 'recurring_detector.dart';
 import 'reminder_schedule.dart';
@@ -102,9 +103,8 @@ class UpcomingMonitor {
         if (s.daysUntil > cardWindowDays) continue;
         checks.add((
           key: cardDueKey(a.id, s.due),
-          // Masked hash, same scheme as BudgetMonitor's custom-budget ids;
-          // the 94xxx range is distinct from budget alerts (90xxx/92xxx).
-          id: 94000 + ((a.id.hashCode & 0x7fffffff) % 1000),
+          // 94000 to 94999; every range is listed in NotificationIds.
+          id: NotificationIds.cardBill(a.id),
           title: '${a.name} bill due ${_inDays(s.daysUntil)}',
           body: '${fmtMoney(out)} due on ${fmtDate(s.due)}',
         ));
@@ -128,7 +128,7 @@ class UpcomingMonitor {
         if (days > recurringWindowDays) continue;
         checks.add((
           key: recurringDueKey(h.key, h.nextDue),
-          id: 95000 + ((h.key.hashCode & 0x7fffffff) % 1000),
+          id: NotificationIds.recurring(h.key),
           title: 'Upcoming payment: ${h.label}',
           body: days < 0
               ? '~${fmtMoney(h.expectedAmount)} was expected on '
@@ -150,7 +150,7 @@ class UpcomingMonitor {
             : 'due ${_inDays(days)} (${fmtDate(due)})';
         checks.add((
           key: reminderDueKey(r.id, due),
-          id: 96000 + ((r.id.hashCode & 0x7fffffff) % 1000),
+          id: NotificationIds.reminder(r.id),
           title: 'Reminder: ${r.name}',
           body: amount == null ? when : '${fmtMoney(amount)} $when',
         ));

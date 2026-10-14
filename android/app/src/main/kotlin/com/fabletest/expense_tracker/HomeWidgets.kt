@@ -7,42 +7,49 @@ import android.content.ComponentName
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Bundle
+import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
 import org.json.JSONObject
-import java.text.NumberFormat
 import java.time.LocalDate
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.roundToLong
 
 /**
- * The Month pace, Upcoming bills and Today and Add widgets. Pure display,
- * like [BudgetWidgetProvider]: the Dart side writes one snapshot
- * (`flutter.home_widget_data_v1`, home_widgets_service.dart) and this draws
- * it. The snapshot carries dates rather than "today" labels, so a redraw
- * after midnight (every 30 minutes, see the *_info.xml files) shows the new
- * day without the app running.
+ * The Month pace, Upcoming, Today and Add, Spending split, Budgets
+ * list, Recent and Quick actions widgets. Pure display, like
+ * [BudgetWidgetProvider]: the Dart side writes the snapshots
+ * (`flutter.home_widget_data_v1`, home_widgets_service.dart, and the budget
+ * one for Budgets list) and this draws them. The snapshot carries dates
+ * rather than "today" labels, so a redraw after midnight (every 30 minutes,
+ * see the *_info.xml files) shows the new day without the app running.
  */
 object HomeWidgets {
-    private const val FLUTTER_PREFS = "FlutterSharedPreferences"
     private const val DATA_KEY = "flutter.home_widget_data_v1"
-    private const val THEME_KEY = "flutter.budget_widget_theme_v1"
+
+    /** The card padding every 4x2 layout uses, in dp: 16 at the sides and
+     * 10 above and below. The fit sums below count on these. */
+    private const val PAD_H = 16
+    private const val PAD_V = 10
+
+    /** The gap above each list row (Upcoming, Budgets list, Recent). */
+    private const val ROW_GAP = 4f
 
     /** What a widget's PendingIntent is for; see [requestCode]. */
     const val PURPOSE_OPEN = 1
     const val PURPOSE_ADD = 2
     const val PURPOSE_BUDGET = 3
+    const val PURPOSE_INCOME = 4
+    const val PURPOSE_IMPORT = 5
 
     /** One request code per widget and purpose. Every tap is an ACTION_RUN
      * intent on the same activity, and intents differing only in extras are
      * the same PendingIntent: a shared code would let one widget's tap
-     * overwrite another's. Widget ids are unique, so id and purpose never
-     * collide. */
+     * overwrite another's. Widget ids are unique and purposes stay below 8,
+     * so id and purpose never collide. */
     fun requestCode(id: Int, purpose: Int): Int = id * 8 + purpose
 
     private val providers = listOf(
@@ -50,45 +57,22 @@ object HomeWidgets {
         UpcomingWidgetProvider::class.java,
         TodayAddWidgetProvider::class.java,
         SpendingSplitWidgetProvider::class.java,
+        BudgetsListWidgetProvider::class.java,
+        RecentWidgetProvider::class.java,
+        QuickActionsWidgetProvider::class.java,
     )
-
-    /** The app's colours, as buildWidgetTheme writes them; dark-kit
-     * defaults until the app has synced once. */
-    private class Theme(private val json: JSONObject?) {
-        private fun c(key: String, fallback: Long) =
-            (json?.optLong(key, fallback) ?: fallback).toInt()
-
-        val surface = c("surface", 0xFF252836)
-        val text = c("text", 0xFFFFFFFF)
-        val textSecondary = c("textSecondary", 0xFFB4C0C8)
-        val track = c("track", 0xFF3B3F4F)
-        val over = c("over", 0xFFFF7CA3)
-        val accent = c("accent", 0xFF4A90E2)
-    }
-
-    private fun prefs(context: Context) =
-        context.getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
-
-    private fun readJson(context: Context, key: String): JSONObject? = try {
-        prefs(context).getString(key, null)?.let { JSONObject(it) }
-    } catch (_: Exception) {
-        // A malformed snapshot shows the empty state instead of crashing
-        // the launcher that hosts the widget.
-        null
-    }
 
     private fun today(): Long = LocalDate.now().toEpochDay()
 
-    /** Whole rupees the way the app's fmtMoney groups them. */
-    private fun rupees(v: Double): String =
-        "₹" + NumberFormat.getIntegerInstance(Locale.US).format(abs(v).roundToLong())
-
     fun refreshAll(context: Context) {
+        for (cls in providers) refresh(context, cls)
+    }
+
+    /** Redraws every instance of one widget. */
+    fun refresh(context: Context, cls: Class<out AppWidgetProvider>) {
         val manager = AppWidgetManager.getInstance(context)
-        for (cls in providers) {
-            for (id in manager.getAppWidgetIds(ComponentName(context, cls))) {
-                render(context, manager, id)
-            }
+        for (id in manager.getAppWidgetIds(ComponentName(context, cls))) {
+            render(context, manager, id)
         }
     }
 
@@ -98,29 +82,47 @@ object HomeWidgets {
         // keeps its last picture instead.
         try {
             val provider = manager.getAppWidgetInfo(id)?.provider?.className ?: return
-            val data = readJson(context, DATA_KEY)
-            val theme = Theme(readJson(context, THEME_KEY))
-            val views = when (provider) {
+            val data = WidgetKit.readObject(context, DATA_KEY)
+            val theme = WidgetTheme.read(context)
+            // Each builder gets the width and height it is drawn at, in dp,
+            // and keeps to it: rows drop out and lines hide rather than clip.
+            val build: (Int, Int, WidgetKit.Bitmaps) -> RemoteViews = when (provider) {
                 MonthPaceWidgetProvider::class.java.name ->
-                    pace(context, manager, id, data, theme)
-                UpcomingWidgetProvider::class.java.name -> upcoming(context, id, data, theme)
-                TodayAddWidgetProvider::class.java.name -> todayAdd(context, id, data, theme)
+                    ({ w, h, b -> pace(context, w, h, b, id, data, theme) })
+                UpcomingWidgetProvider::class.java.name ->
+                    ({ _, h, _ -> upcoming(context, h, id, data, theme) })
+                TodayAddWidgetProvider::class.java.name ->
+                    ({ w, h, _ -> todayAdd(context, w, h, id, data, theme) })
                 SpendingSplitWidgetProvider::class.java.name ->
-                    split(context, manager, id, data, theme)
+                    ({ w, h, b -> split(context, w, h, b, id, data, theme) })
+                BudgetsListWidgetProvider::class.java.name ->
+                    ({ _, h, b -> budgets(context, h, b, id, theme) })
+                RecentWidgetProvider::class.java.name ->
+                    ({ _, h, _ -> recent(context, h, id, data, theme) })
+                QuickActionsWidgetProvider::class.java.name ->
+                    ({ w, _, _ -> actions(context, w, id, theme) })
                 else -> return
             }
-            manager.updateAppWidget(id, views)
+            // The fallbacks are the smallest a launcher gives: 4 columns of
+            // about 62dp, and one row of 48dp or two of 110dp.
+            val oneRow = provider == TodayAddWidgetProvider::class.java.name ||
+                provider == QuickActionsWidgetProvider::class.java.name
+            WidgetKit.update(context, manager, id, 250, if (oneRow) 48 else 110, build)
         } catch (_: Exception) {
             // Drawn again on the next data change or 30-minute redraw.
         }
     }
 
-    /** Opens the app on [action]: the part of it this widget shows. Widget
-     * ids are unique, so one request code per widget never collides. */
-    private fun openApp(context: Context, id: Int, action: String): PendingIntent =
+    /** Opens the app on [action]: the part of it this widget shows. */
+    private fun openApp(
+        context: Context,
+        id: Int,
+        action: String,
+        purpose: Int = PURPOSE_OPEN,
+    ): PendingIntent =
         PendingIntent.getActivity(
             context,
-            requestCode(id, PURPOSE_OPEN),
+            requestCode(id, purpose),
             QuickActions.intent(context, action)
                 ?: BudgetWidgetProvider.launchIntent(context),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -129,27 +131,35 @@ object HomeWidgets {
     private fun base(
         context: Context,
         layout: Int,
-        theme: Theme,
+        theme: WidgetTheme,
         id: Int,
         action: String,
     ): RemoteViews =
         RemoteViews(context.packageName, layout).apply {
-            setInt(R.id.hw_bg, "setColorFilter", theme.surface)
+            WidgetKit.applyCard(this, theme)
             setOnClickPendingIntent(R.id.hw_root, openApp(context, id, action))
         }
+
+    /** "Today", "Yesterday" or the date, for an epoch [day]. */
+    private fun dayName(day: Long, dateLabel: String): String = when (today() - day) {
+        0L -> "Today"
+        1L -> "Yesterday"
+        else -> dateLabel
+    }
 
     // --- Month pace ---------------------------------------------------------
 
     private fun pace(
         context: Context,
-        manager: AppWidgetManager,
+        widthDp: Int,
+        heightDp: Int,
+        bitmaps: WidgetKit.Bitmaps,
         id: Int,
         data: JSONObject?,
-        theme: Theme,
+        theme: WidgetTheme,
     ): RemoteViews {
         val views = base(context, R.layout.home_widget_pace, theme, id, QuickActions.OPEN_PACE)
         views.setTextColor(R.id.hw_title, theme.textSecondary)
-        views.setTextColor(R.id.hw_amount, theme.text)
         views.setTextColor(R.id.hw_sub, theme.text)
         views.setTextColor(R.id.hw_marker_label, theme.textSecondary)
         views.setTextColor(R.id.hw_empty, theme.textSecondary)
@@ -181,16 +191,31 @@ object HomeWidgets {
         val monthName = if (sameMonth) data.optString("monthLabel")
         else now.month.getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH)
         views.setTextViewText(R.id.hw_title, "$monthName so far · day ${now.dayOfMonth}")
-        views.setTextViewText(
-            R.id.hw_amount,
-            if (sameMonth) pace.optString("spentLabel") else "₹0"
+        // The amount (2dp under the title), the 14dp bar 6dp under it and
+        // the gap line 4dp under that always show; the title only when the
+        // height has room for it as well, so large text never clips.
+        val core = 2 + WidgetKit.lineDp(context, 22f) + 6 + 14 + 4 +
+            maxOf(WidgetKit.lineDp(context, 13f), WidgetKit.lineDp(context, 11f))
+        val withTitle = core + WidgetKit.lineDp(context, 12f)
+        views.setViewVisibility(
+            R.id.hw_title,
+            if (withTitle <= heightDp - 2 * PAD_V) View.VISIBLE else View.GONE
         )
+        // Money out, as the app prints it: a minus and the expense red.
+        // Nothing spent is a plain ₹0.
+        if (spent >= 0.5) {
+            views.setTextViewText(R.id.hw_amount, "−${pace.optString("spentLabel")}")
+            views.setTextColor(R.id.hw_amount, theme.over)
+        } else {
+            views.setTextViewText(R.id.hw_amount, "₹0")
+            views.setTextColor(R.id.hw_amount, theme.text)
+        }
         val sub = when {
             cap > 0 -> "${(spent / cap * 100).toInt()}% of ${pace.optString("capLabel")} cap"
             usualToday == null -> "Spent this month"
             abs(spent - usualToday) < 1 -> "About the same as usual by today"
-            spent < usualToday -> "${rupees(usualToday - spent)} under usual by today"
-            else -> "${rupees(spent - usualToday)} over usual by today"
+            spent < usualToday -> "${WidgetKit.rupees(usualToday - spent)} under usual by today"
+            else -> "${WidgetKit.rupees(spent - usualToday)} over usual by today"
         }
         views.setTextViewText(R.id.hw_sub, sub)
         views.setTextColor(R.id.hw_sub, if (cap > 0 && spent > cap) theme.over else theme.text)
@@ -206,29 +231,30 @@ object HomeWidgets {
             (usualToday / scale).coerceIn(0.0, 1.0)
         } else null
         val barColor = if (cap > 0 && spent > cap) theme.over else theme.accent
-        views.setImageViewBitmap(
-            R.id.hw_bar,
-            paceBar(context, manager.getAppWidgetOptions(id), fill, marker, barColor, theme)
-        )
+        // One bar per width: both orientations share it where the widths
+        // match. Without bitmaps (the fallback update) the bar stays empty.
+        bitmaps.get("bar:$widthDp") {
+            paceBar(context, widthDp, fill, marker, barColor, theme)
+        }?.let { views.setImageViewBitmap(R.id.hw_bar, it) }
         return views
     }
 
-    /** Track, fill and the usual-by-today tick, sized to the widget. */
+    /** Track, fill and the usual-by-today tick, drawn at the width the bar
+     * has (the widget's width less the card's side padding), so fitXY
+     * keeps its proportions and never squashes the rounded ends or the
+     * tick. At most 2 pixels per dp and 1200 pixels wide: flat shapes
+     * stay sharp scaled up, and the two orientations' bars stay under
+     * about 270 KB together. */
     private fun paceBar(
         context: Context,
-        options: Bundle?,
+        widgetW: Int,
         fill: Double,
         marker: Double?,
         barColor: Int,
-        theme: Theme,
+        theme: WidgetTheme,
     ): Bitmap {
-        val density = context.resources.displayMetrics.density
-        // The widest the launcher draws it (landscape), minus the layout's
-        // 16dp side padding; fitXY only ever shrinks it. 250dp is the
-        // declared minimum.
-        val widthDp = (options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, 250)
-            ?.takeIf { it > 0 } ?: 250) - 32
-        val w = (widthDp * density).toInt().coerceIn(64, 1600)
+        val density = minOf(context.resources.displayMetrics.density, 2f)
+        val w = ((widgetW - 2 * PAD_H) * density).toInt().coerceIn(64, 1200)
         val h = (14 * density).toInt().coerceAtLeast(8)
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
@@ -254,19 +280,22 @@ object HomeWidgets {
         return bmp
     }
 
-    // --- Upcoming bills -----------------------------------------------------
+    // --- Upcoming -----------------------------------------------------------
 
-    private val rowIds = listOf(
-        Triple(R.id.hw_row1, R.id.hw_name1, R.id.hw_meta1),
-        Triple(R.id.hw_row2, R.id.hw_name2, R.id.hw_meta2),
-        Triple(R.id.hw_row3, R.id.hw_name3, R.id.hw_meta3),
+    private class UpcomingRow(val row: Int, val icon: Int, val name: Int, val meta: Int)
+
+    private val upcomingRows = listOf(
+        UpcomingRow(R.id.hw_row1, R.id.hw_icon1, R.id.hw_name1, R.id.hw_meta1),
+        UpcomingRow(R.id.hw_row2, R.id.hw_icon2, R.id.hw_name2, R.id.hw_meta2),
+        UpcomingRow(R.id.hw_row3, R.id.hw_icon3, R.id.hw_name3, R.id.hw_meta3),
     )
 
     private fun upcoming(
         context: Context,
+        heightDp: Int,
         id: Int,
         data: JSONObject?,
-        theme: Theme,
+        theme: WidgetTheme,
     ): RemoteViews {
         // Every row opens the Upcoming card, so the whole widget shares one
         // intent.
@@ -275,35 +304,53 @@ object HomeWidgets {
         )
         views.setTextColor(R.id.hw_title, theme.textSecondary)
         views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        // As many rows as the height holds under the title: a row is its
+        // gap and its tallest part (the 16dp icon or the 14sp name).
+        val room = heightDp - 2 * PAD_V - WidgetKit.lineDp(context, 12f)
+        val rowDp = ROW_GAP + maxOf(16f, WidgetKit.lineDp(context, 14f))
+        val fit = WidgetKit.rowsThatFit(room, rowDp, 1, upcomingRows.size)
         val today = today()
         val items = data?.optJSONArray("upcoming")
-        val rows = mutableListOf<Pair<String, String>>()
+        val rows = mutableListOf<JSONObject>()
         if (items != null) {
             for (i in 0 until items.length()) {
                 val o = items.optJSONObject(i) ?: continue
-                val days = o.optLong("dueDay", today) - today
                 // Same grace as the app: a week overdue, then it drops off.
-                if (days < -7) continue
-                val due = when {
-                    days < 0 -> "Overdue"
-                    days == 0L -> "Today"
-                    days == 1L -> "Tomorrow"
-                    else -> o.optString("dueLabel")
-                }
-                val amount = o.optString("amountLabel").takeIf { !o.isNull("amountLabel") }
-                rows += o.optString("label") to (if (amount == null) due else "$due · $amount")
-                if (rows.size == rowIds.size) break
+                if (o.optLong("dueDay", today) - today < -7) continue
+                rows += o
+                if (rows.size == fit) break
             }
         }
-        rowIds.forEachIndexed { i, (row, name, meta) ->
-            val r = rows.getOrNull(i)
-            views.setViewVisibility(row, if (r == null) View.GONE else View.VISIBLE)
-            if (r != null) {
-                views.setTextViewText(name, r.first)
-                views.setTextViewText(meta, r.second)
-                views.setTextColor(name, theme.text)
-                views.setTextColor(meta, theme.textSecondary)
+        upcomingRows.forEachIndexed { i, ids ->
+            val o = rows.getOrNull(i)
+            views.setViewVisibility(ids.row, if (o == null) View.GONE else View.VISIBLE)
+            if (o == null) return@forEachIndexed
+            val days = o.optLong("dueDay", today) - today
+            // Overdue from the dates on the day it draws, so a redraw after
+            // midnight is right without the app.
+            val line = WidgetKit.Line()
+            when {
+                days < 0 -> line.add("● Overdue", theme.over, bold = true)
+                days == 0L -> line.add("Today", theme.textSecondary)
+                days == 1L -> line.add("Tomorrow", theme.textSecondary)
+                else -> line.add(o.optString("dueLabel"), theme.textSecondary)
             }
+            if (!o.isNull("amountLabel")) {
+                val kind = o.optString("kind", "out")
+                line.add(" · ", theme.textSecondary)
+                // Income due ("in") in green with its plus; bills ("out")
+                // and "neutral" transfers plain: nothing has moved yet.
+                line.add(
+                    o.optString("amountLabel"),
+                    if (kind == "in") theme.safe else theme.textSecondary,
+                    bold = kind == "in"
+                )
+            }
+            views.setTextViewText(ids.name, o.optString("label"))
+            views.setTextColor(ids.name, theme.text)
+            views.setTextViewText(ids.meta, line.build())
+            views.setImageViewResource(ids.icon, WidgetKit.icon(o.optString("icon")))
+            views.setInt(ids.icon, "setColorFilter", theme.textSecondary)
         }
         views.setViewVisibility(R.id.hw_empty, if (rows.isEmpty()) View.VISIBLE else View.GONE)
         views.setTextViewText(
@@ -316,68 +363,110 @@ object HomeWidgets {
 
     // --- Today and Add ------------------------------------------------------
 
-    private fun todayAdd(context: Context, id: Int, data: JSONObject?, theme: Theme): RemoteViews {
+    private fun todayAdd(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
         val views = base(context, R.layout.home_widget_today, theme, id, QuickActions.OPEN_TODAY)
-        views.setTextColor(R.id.hw_title, theme.textSecondary)
-        views.setTextColor(R.id.hw_amount, theme.text)
         views.setOnClickPendingIntent(R.id.hw_open, openApp(context, id, QuickActions.OPEN_TODAY))
 
         val t = data?.optJSONObject("today")
-        val count = t?.optInt("count", 0) ?: 0
-        views.setTextViewText(
-            R.id.hw_amount,
-            when {
-                t == null -> "Open the app once to start"
-                // Written on an earlier day: nothing is recorded for today.
-                t.optLong("day", -1) != today() -> "₹0 · no payments yet"
-                count == 0 -> "₹0 · no payments yet"
-                else -> "${t.optString("spentLabel")} · $count payment${if (count == 1) "" else "s"}"
+        // Written on an earlier day: nothing is recorded for today.
+        val fresh = t != null && t.optLong("day", -1) == today()
+        val count = if (fresh) t?.optInt("count", 0) ?: 0 else 0
+        val pending = data?.optInt("pendingCount", 0) ?: 0
+
+        // Line one: "Today · 2 payments · 3 to review". Where that is wider
+        // than the text has (the width less the 16dp and 8dp padding, the
+        // 8dp gap and the Add button), the payment count goes first, so the
+        // review count never ends in an ellipsis.
+        val payments = if (count == 0) "no payments yet"
+        else "$count payment${if (count == 1) "" else "s"}"
+        val titles = if (pending > 0) listOf(
+            "Today · $payments · $pending to review",
+            "Today · $pending to review",
+        ) else listOf("Today · $payments")
+        val addDp = 32 + WidgetKit.textWidthDp(
+            context, context.getString(R.string.home_widget_add), 14f, bold = true
+        )
+        val textDp = widthDp - 16 - 8 - 8 - addDp
+        val title = titles.firstOrNull { WidgetKit.textWidthDp(context, it, 12f) <= textDp }
+            ?: titles.last()
+        views.setTextViewText(R.id.hw_title, title)
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        // Both lines inside the 4dp padding, or the day's spend alone: a
+        // one-row cell with large text has room for one line.
+        val twoLines = WidgetKit.lineDp(context, 12f) + WidgetKit.lineDp(context, 14f)
+        val showTitle = twoLines <= heightDp - 8
+        views.setViewVisibility(R.id.hw_title, if (showTitle) View.VISIBLE else View.GONE)
+
+        // Line two: the day's spend as money out, then safe to spend.
+        val line = WidgetKit.Line()
+        if (t == null) {
+            line.add("Open the app once to start", theme.textSecondary)
+        } else {
+            val spent = if (fresh) t.optDouble("spent", 0.0) else 0.0
+            if (spent >= 0.5) {
+                line.add("−${t.optString("spentLabel")}", theme.over, bold = true)
+            } else {
+                line.add("₹0", theme.text, bold = true)
             }
-        )
-
-        // Safe to spend: today's figure, or the one worked out for a later
-        // day of the same month. Hidden without a budget and past the
-        // month's end, until the app writes a new snapshot.
-        val safe = data?.optJSONObject("safe")
-        val safeLabel = safe?.let { s ->
-            if (!s.has("day")) return@let null
-            val offset = today() - s.optLong("day")
-            when {
-                offset == 0L -> s.optString("label")
-                offset > 0L -> {
-                    val next = s.optJSONArray("next")
-                    if (next != null && offset <= next.length()) {
-                        next.optString((offset - 1).toInt())
-                    } else {
-                        null
-                    }
+            // With the first line hidden, the review count moves here,
+            // ahead of safe to spend, so an ellipsis cuts that first.
+            if (!showTitle && pending > 0) {
+                line.add(" · ", theme.textSecondary)
+                line.add("$pending to review", theme.accentText, bold = true)
+            }
+            val safe = data?.optJSONObject("safe")
+            val safeLabel = safeLabel(safe)
+            if (safeLabel != null) {
+                line.add(" · ", theme.textSecondary)
+                // Over the cap every label reads "Over budget" (older
+                // snapshots carry no overCap flag).
+                if (safe?.optBoolean("overCap", false) == true ||
+                    safeLabel == "Over budget"
+                ) {
+                    line.add("Over budget", theme.over)
+                } else {
+                    line.add(safeLabel, theme.text, bold = true)
+                    line.add(" safe to spend", theme.textSecondary)
                 }
-                else -> null
-            }?.ifEmpty { null }
+            }
         }
-        views.setViewVisibility(
-            R.id.hw_safe_row,
-            if (safeLabel == null) View.GONE else View.VISIBLE
-        )
-        views.setTextColor(R.id.hw_safe_title, theme.textSecondary)
-        views.setTextColor(R.id.hw_safe_amount, theme.text)
-        views.setTextViewText(R.id.hw_safe_amount, safeLabel ?: "")
+        views.setTextViewText(R.id.hw_amount, line.build())
 
-        // Dark or white label on the accent, whichever reads better.
+        // The app's onAccent rule: white on the accent unless it is light.
         views.setInt(R.id.hw_add_bg, "setColorFilter", theme.accent)
-        views.setTextColor(R.id.hw_add_label, onColor(theme.accent))
-        QuickActions.intent(context, QuickActions.ADD_EXPENSE)?.let { add ->
-            views.setOnClickPendingIntent(
-                R.id.hw_add,
-                PendingIntent.getActivity(
-                    context,
-                    requestCode(id, PURPOSE_ADD),
-                    add,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-            )
-        }
+        views.setTextColor(R.id.hw_add_label, theme.onAccent)
+        views.setOnClickPendingIntent(
+            R.id.hw_add,
+            openApp(context, id, QuickActions.ADD_EXPENSE, PURPOSE_ADD)
+        )
         return views
+    }
+
+    /** Safe to spend: today's figure, or the one worked out for a later day
+     * of the same month. Null without a budget and past the month's end,
+     * until the app writes a new snapshot. */
+    private fun safeLabel(safe: JSONObject?): String? = safe?.let { s ->
+        if (!s.has("day")) return@let null
+        val offset = today() - s.optLong("day")
+        when {
+            offset == 0L -> s.optString("label")
+            offset > 0L -> {
+                val next = s.optJSONArray("next")
+                if (next != null && offset <= next.length()) {
+                    next.optString((offset - 1).toInt())
+                } else {
+                    null
+                }
+            }
+            else -> null
+        }?.ifEmpty { null }
     }
 
     // --- Spending split -----------------------------------------------------
@@ -396,10 +485,12 @@ object HomeWidgets {
     /** This month's spend as a donut, beside the largest categories. */
     private fun split(
         context: Context,
-        manager: AppWidgetManager,
+        widthDp: Int,
+        heightDp: Int,
+        bitmaps: WidgetKit.Bitmaps,
         id: Int,
         data: JSONObject?,
-        theme: Theme,
+        theme: WidgetTheme,
     ): RemoteViews {
         val views = base(
             context, R.layout.home_widget_split, theme, id, QuickActions.OPEN_BREAKDOWN
@@ -427,13 +518,24 @@ object HomeWidgets {
         }
         views.setViewVisibility(R.id.hw_body, View.VISIBLE)
         views.setViewVisibility(R.id.hw_empty, View.GONE)
+        // The body is the height under the title (the card's padding, the
+        // title and its 4dp gap). The legend shows as many rows as that
+        // holds (1dp gap, then the 12sp line or the 8dp dot); a row that
+        // does not fit is left out rather than cut, and its slice stays in
+        // the donut.
+        val bodyDp = splitBodyDp(context, heightDp)
+        val rowDp = 1 + maxOf(8f, WidgetKit.lineDp(context, 12f))
+        val fit = WidgetKit.rowsThatFit(bodyDp, rowDp, 1, splitRows.size)
         val slices = mutableListOf<Pair<Double, Int>>()
         splitRows.forEachIndexed { i, (row, name, amount) ->
             val o = rows.optJSONObject(i)
-            views.setViewVisibility(row, if (o == null) View.GONE else View.VISIBLE)
-            if (o == null) return@forEachIndexed
-            val color = o.optLong("color", 0xFF888780).toInt()
-            slices += o.optDouble("amount", 0.0) to color
+            val color = o?.optLong("color", 0xFF888780)?.toInt() ?: 0
+            if (o != null) slices += o.optDouble("amount", 0.0) to color
+            if (o == null || i >= fit) {
+                views.setViewVisibility(row, View.GONE)
+                return@forEachIndexed
+            }
+            views.setViewVisibility(row, View.VISIBLE)
             views.setTextViewText(name, o.optString("label"))
             views.setTextViewText(amount, o.optString("amountLabel"))
             views.setTextColor(name, theme.text)
@@ -441,26 +543,46 @@ object HomeWidgets {
             // The colour is on the dot only; the text stays on the surface.
             views.setInt(splitDots[i], "setColorFilter", color)
         }
-        views.setImageViewBitmap(
-            R.id.hw_donut,
-            donut(context, slices, total, split.optString("totalLabel"), theme)
-        )
+        // One donut for both orientations, drawn for the larger of the two
+        // and at most 300 pixels across (360 KB); fitCenter shows it
+        // at each orientation's size, square, with no distortion. Without
+        // bitmaps (the fallback update) the rows take the width.
+        val drawDp = bitmaps.sizes.maxOf { (w, h) -> donutDp(context, w, h) }
+        bitmaps.get("donut") {
+            donut(context, drawDp, slices, total, split.optString("totalLabel"), theme)
+        }?.let { views.setImageViewBitmap(R.id.hw_donut, it) }
         return views
     }
 
-    /** A ring of [slices] (amount, colour) on the track, the total inside. */
+    /** The height under Spending split's title: the card's padding, the
+     * title and its 4dp gap taken off. */
+    private fun splitBodyDp(context: Context, heightDp: Int): Float =
+        heightDp - 2 * PAD_V - 4 - WidgetKit.lineDp(context, 12f)
+
+    /** The donut's size: as tall as the body, and never more than 40% of
+     * the width, so the rows keep their room. */
+    private fun donutDp(context: Context, widthDp: Int, heightDp: Int): Int =
+        minOf(splitBodyDp(context, heightDp).toInt(), (widthDp * 0.4).toInt())
+            .coerceIn(32, 160)
+
+    /** A ring of [slices] (amount, colour) on the track, the total inside,
+     * [sizeDp] across; the stroke and the label scale with it. At most 300
+     * pixels across (360 KB): a larger donut on a dense screen is drawn at
+     * fewer pixels per dp and scaled up by fitCenter. */
     private fun donut(
         context: Context,
+        sizeDp: Int,
         slices: List<Pair<Double, Int>>,
         total: Double,
         label: String,
-        theme: Theme,
+        theme: WidgetTheme,
     ): Bitmap {
-        val density = context.resources.displayMetrics.density
-        val size = (68 * density).toInt().coerceAtLeast(32)
+        val density = minOf(context.resources.displayMetrics.density, 300f / sizeDp)
+        val size = (sizeDp * density).toInt().coerceAtLeast(32)
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        val stroke = 10 * density
+        // 10dp of stroke and 13dp of label at the old fixed 68dp.
+        val stroke = size * 10f / 68f
         val inset = stroke / 2 + density
         val oval = RectF(inset, inset, size - inset, size - inset)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -484,7 +606,7 @@ object HomeWidgets {
             color = theme.text
             textAlign = Paint.Align.CENTER
             isFakeBoldText = true
-            textSize = 13 * density
+            textSize = size * 13f / 68f
         }
         // Shrinks a long total to fit inside the ring.
         val room = size - 2 * (stroke + 4 * density)
@@ -496,34 +618,239 @@ object HomeWidgets {
         return bmp
     }
 
-    private fun luminance(c: Int): Double {
-        fun ch(v: Int): Double {
-            val s = v / 255.0
-            return if (s <= 0.03928) s / 12.92 else Math.pow((s + 0.055) / 1.055, 2.4)
+    // --- Budgets list -------------------------------------------------------
+
+    private class ListRow(val row: Int, val lead: Int, val name: Int, val amount: Int)
+
+    private val budgetRows = listOf(
+        ListRow(R.id.hw_row1, R.id.hw_ring1, R.id.hw_name1, R.id.hw_amt1),
+        ListRow(R.id.hw_row2, R.id.hw_ring2, R.id.hw_name2, R.id.hw_amt2),
+        ListRow(R.id.hw_row3, R.id.hw_ring3, R.id.hw_name3, R.id.hw_amt3),
+        ListRow(R.id.hw_row4, R.id.hw_ring4, R.id.hw_name4, R.id.hw_amt4),
+    )
+
+    /** Up to four budgets from the budget snapshot, the overall cap first:
+     * a small ring each, the name, and what is left or over; past what the
+     * height holds, one row fewer and a count of the rest. */
+    private fun budgets(
+        context: Context,
+        heightDp: Int,
+        bitmaps: WidgetKit.Bitmaps,
+        id: Int,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_budgets, theme, id, QuickActions.OPEN_BUDGETS
+        )
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_side, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val list = WidgetKit.readArray(context, BudgetWidgetProvider.DATA_KEY)
+        val entries = if (list == null) emptyList()
+        else (0 until list.length()).mapNotNull { list.optJSONObject(it) }
+        val first = entries.firstOrNull()
+        views.setTextViewText(
+            R.id.hw_side,
+            first?.optString("monthName")?.ifEmpty { first.optString("monthLabel") } ?: ""
+        )
+        // As many rows as the height holds under the header (a row is its
+        // gap and the 16dp ring or the 13sp line, whichever is taller), up
+        // to four. With more budgets than that, one row fewer and a
+        // "+N more" line, which is shorter than the row it replaces; with
+        // room for one row only, that row alone.
+        val room = heightDp - 2 * PAD_V - WidgetKit.lineDp(context, 12f)
+        val rowDp = ROW_GAP + maxOf(16f, WidgetKit.lineDp(context, 13f))
+        val fit = WidgetKit.rowsThatFit(room, rowDp, 1, budgetRows.size)
+        val shown = when {
+            entries.size <= fit -> entries.size
+            fit >= 2 -> fit - 1
+            else -> 1
         }
-        return 0.2126 * ch(Color.red(c)) + 0.7152 * ch(Color.green(c)) + 0.0722 * ch(Color.blue(c))
+        budgetRows.forEachIndexed { i, ids ->
+            val e = if (i < shown) entries.getOrNull(i) else null
+            views.setViewVisibility(ids.row, if (e == null) View.GONE else View.VISIBLE)
+            if (e == null) return@forEachIndexed
+            val spent = e.optDouble("spent", 0.0)
+            val limit = e.optDouble("limit", 0.0)
+            val pct = if (limit <= 0) 0 else ((spent / limit) * 100).toInt().coerceAtLeast(0)
+            val over = e.optBoolean("over", spent > limit)
+            // Keyed by row, so both orientations send each ring once.
+            bitmaps.get("ring:$i") {
+                WidgetKit.ring(context, 16, 3f, pct, theme.ringColor(pct), theme.track)
+            }?.let { views.setImageViewBitmap(ids.lead, it) }
+            views.setTextViewText(ids.name, e.optString("name"))
+            views.setTextColor(ids.name, theme.text)
+            views.setTextViewText(
+                ids.amount,
+                e.optString("leftLabel").ifEmpty { e.optString("statusLabel") }
+            )
+            views.setTextColor(ids.amount, if (over) theme.over else theme.text)
+        }
+        // The rest are not dropped silently: a muted count, and the tap
+        // opens every budget in the app.
+        val more = entries.size - shown
+        views.setViewVisibility(
+            R.id.hw_more,
+            if (more > 0 && fit >= 2) View.VISIBLE else View.GONE
+        )
+        views.setTextViewText(R.id.hw_more, "+$more more")
+        views.setTextColor(R.id.hw_more, theme.textSecondary)
+        views.setViewVisibility(R.id.hw_empty, if (entries.isEmpty()) View.VISIBLE else View.GONE)
+        views.setTextViewText(
+            R.id.hw_empty,
+            if (list == null) context.getString(R.string.home_widget_empty)
+            else "No budgets yet. Set a monthly cap or a budget in the app."
+        )
+        return views
     }
 
-    private fun onColor(bg: Int): Int {
-        val dark = 0xFF1B1927.toInt()
-        val l = luminance(bg)
-        val vsWhite = 1.05 / (l + 0.05)
-        val vsDark = (l + 0.05) / (luminance(dark) + 0.05)
-        return if (vsDark >= vsWhite) dark else Color.WHITE
+    // --- Recent -------------------------------------------------------------
+
+    private class RecentRow(
+        val row: Int,
+        val dot: Int,
+        val icon: Int,
+        val name: Int,
+        val time: Int,
+        val amount: Int,
+    )
+
+    private val recentRows = listOf(
+        RecentRow(R.id.hw_row1, R.id.hw_dot1, R.id.hw_icon1, R.id.hw_name1, R.id.hw_when1, R.id.hw_amt1),
+        RecentRow(R.id.hw_row2, R.id.hw_dot2, R.id.hw_icon2, R.id.hw_name2, R.id.hw_when2, R.id.hw_amt2),
+        RecentRow(R.id.hw_row3, R.id.hw_dot3, R.id.hw_icon3, R.id.hw_name3, R.id.hw_when3, R.id.hw_amt3),
+        RecentRow(R.id.hw_row4, R.id.hw_dot4, R.id.hw_icon4, R.id.hw_name4, R.id.hw_when4, R.id.hw_amt4),
+    )
+
+    /** The newest four confirmed rows, and how many imports wait. */
+    private fun recent(
+        context: Context,
+        heightDp: Int,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_recent, theme, id, QuickActions.OPEN_TRANSACTIONS
+        )
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val pending = data?.optInt("pendingCount", 0) ?: 0
+        views.setViewVisibility(R.id.hw_side, if (pending > 0) View.VISIBLE else View.GONE)
+        views.setTextViewText(R.id.hw_side, "$pending to review")
+        views.setTextColor(R.id.hw_side, theme.accentText)
+        val items = data?.optJSONArray("recent")
+        // As many rows as the height holds under the header: a row is its
+        // gap and the 13sp name (taller than the 15dp icon and the 11sp
+        // time), up to four, the newest first.
+        val room = heightDp - 2 * PAD_V - WidgetKit.lineDp(context, 12f)
+        val rowDp = ROW_GAP + maxOf(15f, WidgetKit.lineDp(context, 13f))
+        val fit = WidgetKit.rowsThatFit(room, rowDp, 1, recentRows.size)
+        recentRows.forEachIndexed { i, ids ->
+            val o = if (i < fit) items?.optJSONObject(i) else null
+            views.setViewVisibility(ids.row, if (o == null) View.GONE else View.VISIBLE)
+            if (o == null) return@forEachIndexed
+            // The merchant names a row best; the category when there is none.
+            val merchant = if (o.isNull("merchant")) "" else o.optString("merchant")
+            views.setTextViewText(ids.name, merchant.ifEmpty { o.optString("label") })
+            views.setTextColor(ids.name, theme.text)
+            val day = dayName(o.optLong("day", -1), o.optString("dateLabel"))
+            val time = if (o.isNull("timeLabel")) "" else o.optString("timeLabel")
+            views.setTextViewText(
+                ids.time,
+                if (day == "Today" && time.isNotEmpty()) time else day
+            )
+            views.setTextColor(ids.time, theme.textSecondary)
+            views.setTextViewText(ids.amount, o.optString("amountLabel"))
+            views.setTextColor(ids.amount, theme.moneyColor(o.optString("kind")))
+            views.setImageViewResource(ids.icon, WidgetKit.icon(o.optString("icon")))
+            views.setInt(ids.icon, "setColorFilter", theme.textSecondary)
+            // The accent dot marks a row that counted at once and is not
+            // opened yet; invisible, not gone, so the icons stay in line.
+            views.setViewVisibility(
+                ids.dot,
+                if (o.optBoolean("unseen", false)) View.VISIBLE else View.INVISIBLE
+            )
+            views.setInt(ids.dot, "setColorFilter", theme.accent)
+        }
+        val empty = items == null || items.length() == 0
+        views.setViewVisibility(R.id.hw_empty, if (empty) View.VISIBLE else View.GONE)
+        views.setTextViewText(
+            R.id.hw_empty,
+            if (data == null) context.getString(R.string.home_widget_empty)
+            else "No transactions yet."
+        )
+        return views
+    }
+
+    // --- Quick actions ------------------------------------------------------
+
+    private fun actions(context: Context, widthDp: Int, id: Int, theme: WidgetTheme): RemoteViews {
+        val views = RemoteViews(context.packageName, R.layout.home_widget_actions)
+        WidgetKit.applyCard(views, theme)
+        // Each label has a third of the width less the 6dp card padding,
+        // the 3dp button margins and its own 6dp padding. The three share
+        // one size: 13sp, or smaller down to 11sp where "Import SMS" would
+        // otherwise end in an ellipsis on a narrow widget or with large text.
+        val labels = listOf(
+            R.id.hw_act_expense_label to R.string.home_widget_action_expense,
+            R.id.hw_act_income_label to R.string.home_widget_action_income,
+            R.id.hw_act_import_label to R.string.shortcut_import_sms,
+        )
+        val roomDp = (widthDp - 12 - 18) / 3f - 12
+        val sp = listOf(13f, 12f, 11f).firstOrNull { size ->
+            labels.all { (_, text) ->
+                WidgetKit.textWidthDp(context, context.getString(text), size, bold = true) <= roomDp
+            }
+        } ?: 11f
+        for ((label, _) in labels) {
+            views.setTextViewTextSize(label, TypedValue.COMPLEX_UNIT_SP, sp)
+        }
+        // Expense is the main action: the accent fill with the app's label
+        // colour on it. The other two sit on the neutral track colour.
+        views.setInt(R.id.hw_act_expense_bg, "setColorFilter", theme.accent)
+        views.setTextColor(R.id.hw_act_expense_label, theme.onAccent)
+        views.setInt(R.id.hw_act_income_bg, "setColorFilter", theme.track)
+        views.setTextColor(R.id.hw_act_income_label, theme.text)
+        views.setInt(R.id.hw_act_import_bg, "setColorFilter", theme.track)
+        views.setTextColor(R.id.hw_act_import_label, theme.text)
+        views.setOnClickPendingIntent(
+            R.id.hw_act_expense,
+            openApp(context, id, QuickActions.ADD_EXPENSE, PURPOSE_ADD)
+        )
+        views.setOnClickPendingIntent(
+            R.id.hw_act_income,
+            openApp(context, id, QuickActions.ADD_INCOME, PURPOSE_INCOME)
+        )
+        views.setOnClickPendingIntent(
+            R.id.hw_act_import,
+            openApp(context, id, QuickActions.IMPORT_SMS, PURPOSE_IMPORT)
+        )
+        return views
     }
 }
 
-/** Month pace (4×2): spent so far against the cap or a usual month. */
+/** Month pace (4x2): spent so far against the cap or a usual month. */
 class MonthPaceWidgetProvider : HomeWidgetProviderBase()
 
-/** Upcoming bills (4×2): the next three due. */
+/** Upcoming (4x2): the next three bills or income due. */
 class UpcomingWidgetProvider : HomeWidgetProviderBase()
 
-/** Today and Add (4×1): today's spend and an Add expense button. */
+/** Today and Add (4x1): today's spend and an Add expense button. */
 class TodayAddWidgetProvider : HomeWidgetProviderBase()
 
-/** Spending split (4×2): this month's spend by category, as a donut. */
+/** Spending split (4x2): this month's spend by category, as a donut. */
 class SpendingSplitWidgetProvider : HomeWidgetProviderBase()
+
+/** Budgets list (4x2): every budget's left or over, from the budget
+ * snapshot. */
+class BudgetsListWidgetProvider : HomeWidgetProviderBase()
+
+/** Recent (4x2): the newest four transactions and the review count. */
+class RecentWidgetProvider : HomeWidgetProviderBase()
+
+/** Quick actions (4x1): Expense, Income and Import SMS buttons. */
+class QuickActionsWidgetProvider : HomeWidgetProviderBase()
 
 /** One picker entry per subclass; [HomeWidgets.render] picks the layout. */
 abstract class HomeWidgetProviderBase : AppWidgetProvider() {
@@ -531,7 +858,8 @@ abstract class HomeWidgetProviderBase : AppWidgetProvider() {
         for (id in ids) HomeWidgets.render(context, manager, id)
     }
 
-    /** A resize changes the pace bar's width. */
+    /** A resize changes the rows that fit, the pace bar's width and the
+     * donut's size. */
     override fun onAppWidgetOptionsChanged(
         context: Context,
         manager: AppWidgetManager,

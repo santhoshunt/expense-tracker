@@ -92,6 +92,17 @@ Color budgetColor(BuildContext context, double pct) {
   return colors.green;
 }
 
+/// The card and panel fill: [surface] with a trace of [accent] (5% in dark,
+/// 3.5% in light), echoing AmbientBackground's glow. The home-screen
+/// widgets use it too (buildWidgetTheme).
+Color cardFillFor(Color surface, Color accent, {required bool light}) =>
+    Color.alphaBlend(accent.withValues(alpha: light ? 0.035 : 0.05), surface);
+
+/// Text and icons on an accent fill: [ink] (the theme's dark ink) on light
+/// accents such as mint and sunset, white on the rest.
+Color onAccentFor(Color accent, Color ink) =>
+    accent.computeLuminance() > 0.45 ? ink : Colors.white;
+
 /// The app's corner-radius scale. Every rounded corner should sit on one of
 /// these tiers — an audit found 13 distinct ad-hoc radii, several of them
 /// same-role-different-value (category avatars at 11 vs 12, icon-picker
@@ -183,7 +194,7 @@ ThemeData _buildAppTheme({
   final ink = dark ? p.bg : FigmaPalette.bg;
 
   // Light accents (mint, sunset) need dark text/icons on top of them.
-  final onAccent = accent.computeLuminance() > 0.45 ? ink : Colors.white;
+  final onAccent = onAccentFor(accent, ink);
   final accentLight = Color.lerp(accent, Colors.white, 0.35)!;
   final accentGlow = accent.withValues(alpha: 0.30);
   Color blend(Color c, double alpha) =>
@@ -241,7 +252,7 @@ ThemeData _buildAppTheme({
   );
 
   // Cards carry a trace of the accent, echoing AmbientBackground's glow.
-  final cardFill = blend(accent, dark ? 0.05 : 0.035);
+  final cardFill = cardFillFor(surface, accent, light: !dark);
   final appColors = (!dark ? AppColors.light : AppColors.dark).copyWith(
     cardOutline: dark && p.outlineCards ? border : null,
     cardFill: cardFill,

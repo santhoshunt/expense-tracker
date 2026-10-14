@@ -156,6 +156,10 @@ class _Derived {
   List<Tx>? counted;
   List<Tx>? pending;
   int? pendingCount;
+  int? unseenCount;
+
+  /// Row id to [FinanceProvider.merchantLabelFor], null included.
+  final Map<String, String?> merchantLabels = {};
   Map<String, List<Tx>>? byAccount;
   Map<String, Account>? accountById;
 
@@ -262,6 +266,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _patternPaidKey = 'pattern_paid_v1';
   static const _remindersKey = 'reminders_v1';
   static const _remindersEarlyRescanKey = 'reminders_early_rescan_v1';
+  static const _importsAutoCountedKey = 'imports_auto_counted_v1';
 
   final List<Tx> _transactions = [];
   final List<ClassifierRule> _rules = [];
@@ -345,6 +350,40 @@ class FinanceProvider extends ChangeNotifier {
   /// the app bar badge reads this on every change.
   int get pendingCount =>
       _d.pendingCount ??= _transactions.where((t) => t.pending).length;
+
+  /// Imports that counted at once and still carry the "new" marker
+  /// ([Tx.unseen]).
+  int get unseenCount =>
+      _d.unseenCount ??= _transactions.where((t) => t.unseen).length;
+
+  /// How many rows the most recent [addImported] counted at once rather
+  /// than sending to review. Its callers read it right after the call, so
+  /// the import result keeps its two-number shape.
+  int get lastImportCounted => _lastImportCounted;
+  int _lastImportCounted = 0;
+
+  /// Clears the "new" marker on [id], as opening the row does.
+  Future<void> markSeen(String id) async {
+    final i = _transactions.indexWhere((t) => t.id == id);
+    if (i == -1 || !_transactions[i].unseen) return;
+    _transactions[i] = _transactions[i].copyWith(unseen: false);
+    notifyListeners();
+    await _persist(tx: true);
+  }
+
+  /// Clears every "new" marker in one write.
+  Future<void> markAllSeen() async {
+    var changed = false;
+    for (var i = 0; i < _transactions.length; i++) {
+      if (_transactions[i].unseen) {
+        _transactions[i] = _transactions[i].copyWith(unseen: false);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    notifyListeners();
+    await _persist(tx: true);
+  }
 
   /// Total entries held, confirmed and pending. Cheap: no filtering or sorting.
   int get transactionCount => _transactions.length;
@@ -1405,6 +1444,20 @@ class FinanceProvider extends ChangeNotifier {
         !_loadWarnings.contains('categories') &&
         !_loadWarnings.contains('category styles');
     if (registryIntact && _sanitizeAllSplits()) await _persist(tx: true);
+    // Once, on the first launch of 1.38.1: imports waiting in review that
+    // would now count at once ([_isSureImport]) count, marked new. Not when
+    // the ledger, rules, accounts or category registry failed to load: the
+    // test would read the wrong data and the flag would make that final.
+    if (!(prefs.getBool(_importsAutoCountedKey) ?? false) &&
+        registryIntact &&
+        !_loadWarnings.contains('transactions') &&
+        !_loadWarnings.contains('rules') &&
+        !_loadWarnings.contains('accounts')) {
+      if (_countSurePendingImports() > 0) await _persist(tx: true);
+      // A save that failed leaves the rows counted in memory only: try
+      // again on the next launch.
+      if (!_persistFailed) await prefs.setBool(_importsAutoCountedKey, true);
+    }
     // Colours of tags no row carries any more: the Undo that could bring
     // such a tag back does not outlive the app session.
     if (_tagColors.isNotEmpty && !_loadWarnings.contains('transactions')) {
@@ -1901,6 +1954,8 @@ class FinanceProvider extends ChangeNotifier {
         categoryId: cat,
         userCategorized: true,
         pending: false,
+        // Linking the legs is looking at them.
+        unseen: false,
         clearMyShare: true,
       ),
     );
@@ -2137,7 +2192,8 @@ class FinanceProvider extends ChangeNotifier {
     return null;
   }
 
-  /// Dry run for the rule dialog: how many pending imports saving [pattern]
+  /// Dry run for the rule dialog: how many pending imports, and imports
+  /// still marked new ([Tx.unseen]), saving [pattern]
   /// → [categoryId] would drop as spam, honouring the same first-match-wins
   /// priority [_reapplyRulesToHistory] uses (an earlier rule that already
   /// claims a message shadows the candidate). [replacingRuleId] simulates
@@ -2161,7 +2217,9 @@ class FinanceProvider extends ChangeNotifier {
           ];
     var drops = 0;
     for (final t in _transactions) {
-      if (t.source != TxSource.sms || t.userCategorized || !t.pending) {
+      if (t.source != TxSource.sms ||
+          t.userCategorized ||
+          !(t.pending || t.unseen)) {
         continue;
       }
       final text = t.smsText;
@@ -2525,6 +2583,16 @@ class FinanceProvider extends ChangeNotifier {
   /// The user's name for a merchant identity, or null. Passed as the `alias`
   /// lookup to `topMerchants`/`detectRecurring`/`merchantDisplayLabel`.
   String? merchantAlias(String identity) => _merchantAliases[identity];
+
+  /// [t]'s merchant as the app names it, the user's alias first, or null
+  /// when the row names none ([merchantLabelOrNull]). Cached per row until
+  /// the next change: list rows ask on every rebuild, and the merchant is
+  /// read with an uncached regex.
+  String? merchantLabelFor(Tx t) {
+    final cache = _d.merchantLabels;
+    if (cache.containsKey(t.id)) return cache[t.id];
+    return cache[t.id] = merchantLabelOrNull(t, alias: merchantAlias);
+  }
 
   /// [merchantAlias] resolved from a row.
   String? merchantAliasFor(Tx t) {
@@ -4566,8 +4634,9 @@ class FinanceProvider extends ChangeNotifier {
   /// rule is added or edited, so changes take effect retroactively with the
   /// same first-match-wins priority imports use. Messages matching no rule
   /// keep their current category (they may have been set by hand). Spam
-  /// rules drop pending matches only; confirmed entries were already
-  /// reviewed by the user and are never auto-removed.
+  /// rules drop pending matches, and rows that counted at once and are
+  /// still marked new ([Tx.unseen]), only; other confirmed entries were
+  /// already reviewed by the user and are never auto-removed.
   /// Caller is responsible for notifyListeners + _persist.
   /// Returns what actually happened so callers can tell the user — a
   /// too-broad new spam rule used to wipe the whole review queue with no
@@ -4592,7 +4661,9 @@ class FinanceProvider extends ChangeNotifier {
       final rule = _matchRule(text, t.type);
       if (rule == null) continue;
       if (rule.isSpamRule) {
-        if (t.pending) {
+        // A row that counted at once and is still marked new was never
+        // reviewed either.
+        if (t.pending || t.unseen) {
           _transactions.removeAt(i);
           dropped.add(t);
         }
@@ -4612,8 +4683,11 @@ class FinanceProvider extends ChangeNotifier {
 
   // --- SMS import -----------------------------------------------------------
 
-  /// Adds parsed SMS transactions as pending entries, skipping duplicates and
-  /// rule-confirmed spam. Returns (added, confirmedSpamDropped).
+  /// Adds parsed SMS transactions, skipping duplicates and rule-confirmed
+  /// spam. Returns (added, confirmedSpamDropped). A sure row
+  /// ([_isSureImport]) counts at once with the "new" marker ([Tx.unseen]);
+  /// every other row waits pending for review. [lastImportCounted] says how
+  /// many counted.
   ///
   /// Rule handling: a matching spam rule drops the message entirely; a
   /// matching category rule overrides the parser's category guess and clears
@@ -4625,10 +4699,17 @@ class FinanceProvider extends ChangeNotifier {
   /// treated as the same bank alert sent twice. Fuzzy matching is only used to *skip* an import —
   /// never to touch existing user data.
   Future<(int, int)> addImported(List<ParsedTxn> parsed) async {
+    _lastImportCounted = 0;
+    if (parsed.isEmpty) return (0, 0);
     // Rows are only appended below, so everything from here on is new.
     final firstNew = _transactions.length;
     var added = 0;
     var spamDropped = 0;
+    // Taken before any row or account is added, so the sure test below
+    // sees the ledger as it was and row order decides nothing.
+    final keysWithConfirmed = _keysWithConfirmedRows();
+    // New rows (by index) whose category a non-spam rule chose.
+    final ruleRows = <int>{};
     // Duplicate lookups, built once per batch — a linear scan of the ledger
     // per parsed message made a year-long backfill against a 10k-row ledger
     // cost tens of millions of comparisons.
@@ -4755,6 +4836,9 @@ class FinanceProvider extends ChangeNotifier {
             : 'other_income';
       }
 
+      if (rule != null && categoryId == rule.categoryId) {
+        ruleRows.add(_transactions.length);
+      }
       _transactions.add(
         Tx(
           id: _newId(),
@@ -4786,12 +4870,193 @@ class FinanceProvider extends ChangeNotifier {
       added++;
     }
     if (added > 0) {
+      // Sure rows count at once, marked new; the rest wait in review. Every
+      // row was added pending first, so the pair check sees the whole batch,
+      // later rows included, and neither leg of a transfer counts.
+      Map<String, Set<String>>? merchants;
+      Map<int, List<Tx>>? byPaise;
+      Map<int, List<Tx>> pairPool() => byPaise ??= _rowsByPaise(_transactions);
+      // Earlier rows that counted at once but are the other leg of a new
+      // row's possible transfer: they go back to review with it.
+      final backToReview = <String>{};
+      for (var i = firstNew; i < _transactions.length; i++) {
+        final t = _transactions[i];
+        final sure = _isSureImport(
+          t,
+          fromRule: ruleRows.contains(i),
+          keysWithConfirmed: keysWithConfirmed,
+          merchantCategories: () =>
+              merchants ??= _merchantCategoriesOf(_transactions.take(firstNew)),
+          pairPool: pairPool,
+        );
+        if (sure) {
+          _transactions[i] = t.copyWith(pending: false, unseen: true);
+          _lastImportCounted++;
+          continue;
+        }
+        // The review queue never suggests a pair with a spam suspect.
+        if (t.suspectedSpam) continue;
+        for (final other in pairPool()[_inPaise(t.amount)] ?? const <Tx>[]) {
+          // The pool holds this batch's rows as added, pending, so only
+          // earlier rows can match here.
+          if (other.pending ||
+              !other.unseen ||
+              other.userCategorized ||
+              other.pairId != null ||
+              other.type == t.type ||
+              other.acctKey == t.acctKey ||
+              other.date.difference(t.date).abs() > kPairDateWindow) {
+            continue;
+          }
+          backToReview.add(other.id);
+        }
+      }
+      if (backToReview.isNotEmpty) {
+        for (var i = 0; i < firstNew; i++) {
+          final t = _transactions[i];
+          if (!backToReview.contains(t.id)) continue;
+          _transactions[i] = t.copyWith(pending: true, unseen: false);
+        }
+      }
       // A bank alert for a reminder's amount near its due day pays it.
       final paid = _markRemindersPaidBy(_transactions.sublist(firstNew));
       notifyListeners();
       await _persist(tx: true, accounts: true, reminders: paid);
     }
     return (added, spamDropped);
+  }
+
+  /// Whether the SMS import [row], carrying its final category, is sure
+  /// enough to count without review. All must hold:
+  ///  * not suspected spam;
+  ///  * its account key is in [keysWithConfirmed]: owned by an account
+  ///    that already has a confirmed row;
+  ///  * the category is neither a transfer nor Other;
+  ///  * a non-spam rule chose the category ([fromRule]), or confirmed rows
+  ///    of the same merchant ([recurringKeyOf]) carry that category;
+  ///  * no possible transfer partner: no opposite-direction row of the same
+  ///    amount, to the paisa, on another account key within
+  ///    [kPairDateWindow]. Such a row stays pending, so the pair suggestion
+  ///    in the review queue still shows;
+  ///  * not a possible duplicate: no other row of the same direction and
+  ///    amount, to the paisa, on the same account key (or one with none)
+  ///    within a day. Both copies in one batch stay pending.
+  /// [merchantCategories] and [pairPool] are built on first use, once per
+  /// pass: the merchant lookup is an uncached regex per row.
+  bool _isSureImport(
+    Tx row, {
+    required bool fromRule,
+    required Set<String> keysWithConfirmed,
+    required Map<String, Set<String>> Function() merchantCategories,
+    required Map<int, List<Tx>> Function() pairPool,
+  }) {
+    if (row.suspectedSpam) return false;
+    final key = row.acctKey;
+    if (key == null || !keysWithConfirmed.contains(key)) return false;
+    final cat = row.categoryId;
+    if (isTransferCategory(cat) ||
+        cat == 'other_expense' ||
+        cat == 'other_income') {
+      return false;
+    }
+    if (!fromRule) {
+      final merchant = recurringKeyOf(row);
+      if (merchant == null) return false;
+      if (!(merchantCategories()[merchant]?.contains(cat) ?? false)) {
+        return false;
+      }
+    }
+    for (final other in pairPool()[_inPaise(row.amount)] ?? const <Tx>[]) {
+      if (other.id == row.id) continue;
+      final gap = other.date.difference(row.date).abs();
+      if (other.type == row.type) {
+        // A possible duplicate: the same alert twice, or two real payments
+        // the user should tell apart.
+        if ((other.acctKey == null || other.acctKey == key) &&
+            gap <= const Duration(days: 1)) {
+          return false;
+        }
+        continue;
+      }
+      if (other.acctKey == key) continue;
+      if (gap <= kPairDateWindow) return false;
+    }
+    return true;
+  }
+
+  static int _inPaise(double amount) => (amount * 100).round();
+
+  /// [rows] bucketed by amount in paise, for the pair check in
+  /// [_isSureImport].
+  static Map<int, List<Tx>> _rowsByPaise(Iterable<Tx> rows) {
+    final map = <int, List<Tx>>{};
+    for (final t in rows) {
+      (map[_inPaise(t.amount)] ??= []).add(t);
+    }
+    return map;
+  }
+
+  /// Merchant ([recurringKeyOf]) to the categories its confirmed rows
+  /// among [rows] carry. Only rows the user has seen: a row that counted
+  /// at once and is still marked new must not vouch for the next one.
+  static Map<String, Set<String>> _merchantCategoriesOf(Iterable<Tx> rows) {
+    final map = <String, Set<String>>{};
+    for (final t in rows) {
+      if (t.pending || t.unseen) continue;
+      final key = recurringKeyOf(t);
+      if (key != null) (map[key] ??= {}).add(t.categoryId);
+    }
+    return map;
+  }
+
+  /// Account keys whose account has at least one confirmed row. Read from
+  /// the ledger directly, not the derived cache, so it is right mid-load and
+  /// mid-batch too.
+  Set<String> _keysWithConfirmedRows() {
+    final withRows = <String>{};
+    for (final t in _transactions) {
+      if (t.pending) continue;
+      final id = _keyIndex[t.acctKey];
+      if (id != null) withRows.add(id);
+    }
+    return {
+      for (final e in _keyIndex.entries)
+        if (withRows.contains(e.value)) e.key,
+    };
+  }
+
+  /// The one-time pass on load: pending imports that meet [_isSureImport]
+  /// count, marked new, as they would have on import. Every row is tested
+  /// before any changes, so two pending legs of one transfer keep each
+  /// other pending. Returns how many counted.
+  int _countSurePendingImports() {
+    final keysWithConfirmed = _keysWithConfirmedRows();
+    Map<String, Set<String>>? merchants;
+    Map<int, List<Tx>>? byPaise;
+    final sure = <int>[];
+    for (var i = 0; i < _transactions.length; i++) {
+      final t = _transactions[i];
+      if (!t.pending || t.suspectedSpam || t.source != TxSource.sms) continue;
+      final text = t.smsText;
+      final rule = text.isEmpty ? null : _matchRule(text, t.type);
+      if (rule != null && rule.isSpamRule) continue;
+      final ok = _isSureImport(
+        t,
+        fromRule: rule != null && rule.categoryId == t.categoryId,
+        keysWithConfirmed: keysWithConfirmed,
+        merchantCategories: () =>
+            merchants ??= _merchantCategoriesOf(_transactions),
+        pairPool: () => byPaise ??= _rowsByPaise(_transactions),
+      );
+      if (ok) sure.add(i);
+    }
+    for (final i in sure) {
+      _transactions[i] = _transactions[i].copyWith(
+        pending: false,
+        unseen: true,
+      );
+    }
+    return sure.length;
   }
 
   Future<void> confirmTransaction(String id) async {
@@ -5065,7 +5330,8 @@ class FinanceProvider extends ChangeNotifier {
     // payment key → due date marked paid).
     // v21: accounts may carry `linkedByHand` (keys typed in by hand).
     // v22: reminders may carry `onDate` (a one-time reminder).
-    'version': 22,
+    // v23: transactions may carry `unseen`.
+    'version': 23,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),

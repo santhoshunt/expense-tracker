@@ -613,7 +613,12 @@ class BackupService {
 
   // --- PDF -------------------------------------------------------------------
 
-  static final _money = NumberFormat.currency(symbol: '₹', decimalDigits: 2);
+  // Lakh grouping ("₹1,42,500.00"), as fmtMoney writes amounts in the app.
+  static final _money = NumberFormat.currency(
+    locale: 'en_IN',
+    symbol: '₹',
+    decimalDigits: 2,
+  );
   static final _date = DateFormat('dd-MM-yy');
 
   static const PdfColor _green = PdfColor.fromInt(0xFF2E7D6B);

@@ -40,6 +40,9 @@ void main() {
 
     final (added, _) = await p.addImported([txn(amount: 250, ref: 'REF1')]);
     expect(added, 1);
+    // No account in the alert, so it is not sure enough to count at once
+    // (import_auto_count_test covers the rows that do).
+    expect(p.lastImportCounted, 0);
     expect(p.pendingTransactions.length, 1);
     expect(p.transactions, isEmpty);
     expect(p.totalExpense, 0);

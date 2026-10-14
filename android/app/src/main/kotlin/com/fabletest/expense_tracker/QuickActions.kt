@@ -8,12 +8,16 @@ import android.graphics.drawable.Icon
 import android.os.Build
 import android.util.Log
 
-/** Launcher shortcuts and the Quick Settings tile: intents that open the app
- * with a "launch action" extra, which Dart turns into a screen. */
+/** Launcher shortcuts, the Quick Settings tile and the home-screen widgets:
+ * intents that open the app with a "launch action" extra, which Dart turns
+ * into a screen (LaunchActions.fromName in launch_actions.dart). */
 object QuickActions {
     const val EXTRA = "launch_action"
     const val ADD_EXPENSE = "add_expense"
     const val IMPORT_SMS = "import_sms"
+
+    /** The Quick actions widget's Income button. */
+    const val ADD_INCOME = "add_income"
 
     /** Home-screen widget taps: each opens its own part of the app. */
     const val OPEN_BUDGET = "open_budget"
@@ -22,6 +26,7 @@ object QuickActions {
     const val OPEN_UPCOMING = "open_upcoming"
     const val OPEN_TODAY = "open_today"
     const val OPEN_BREAKDOWN = "open_breakdown"
+    const val OPEN_TRANSACTIONS = "open_transactions"
 
     /** Opens the enabled launcher entry with [action].
      *
@@ -50,8 +55,9 @@ object QuickActions {
         if (intent == null) return null
         if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return null
         return when (val action = intent.getStringExtra(EXTRA)) {
-            ADD_EXPENSE, IMPORT_SMS, OPEN_BUDGET, OPEN_BUDGETS, OPEN_PACE,
-            OPEN_UPCOMING, OPEN_TODAY, OPEN_BREAKDOWN -> action
+            ADD_EXPENSE, ADD_INCOME, IMPORT_SMS, OPEN_BUDGET, OPEN_BUDGETS,
+            OPEN_PACE, OPEN_UPCOMING, OPEN_TODAY, OPEN_BREAKDOWN,
+            OPEN_TRANSACTIONS -> action
             else -> null
         }
     }

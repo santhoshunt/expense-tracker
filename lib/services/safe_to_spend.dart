@@ -165,17 +165,25 @@ bool pendingIsSpend(FinanceProvider finance, Tx t) =>
     !isTransferCategory(t.categoryId) &&
     finance.countsInTotals(t);
 
+/// The rows waiting for review that count as spend in [month] (by
+/// effective date).
+Iterable<Tx> _pendingSpendRows(FinanceProvider finance, DateTime month) =>
+    finance.pendingTransactions.where((t) {
+      final d = t.effectiveDate;
+      return d.year == month.year &&
+          d.month == month.month &&
+          pendingIsSpend(finance, t);
+    });
+
 /// Spend on rows still waiting for review whose effective date is in
 /// [month].
-double pendingSpendIn(FinanceProvider finance, DateTime month) {
-  var sum = 0.0;
-  for (final t in finance.pendingTransactions) {
-    final d = t.effectiveDate;
-    if (d.year != month.year || d.month != month.month) continue;
-    if (pendingIsSpend(finance, t)) sum += t.spendAmount;
-  }
-  return sum;
-}
+double pendingSpendIn(FinanceProvider finance, DateTime month) =>
+    _pendingSpendRows(finance, month).fold(0.0, (s, t) => s + t.spendAmount);
+
+/// How many rows [pendingSpendIn] adds up: those with an amount to add (a
+/// split the user paid none of adds nothing, so it is not counted).
+int pendingSpendCountIn(FinanceProvider finance, DateTime month) =>
+    _pendingSpendRows(finance, month).where((t) => t.spendAmount > 0).length;
 
 /// Null without a cap ([cap] <= 0).
 ///

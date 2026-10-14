@@ -87,7 +87,8 @@ void main() {
       // A passed limit leads the line.
       (
         'Plan',
-        '1${nb}over · 1${nb}budget · 1${nb}reminder · 0${nb}subscriptions',
+        '1${nb}budget over · 1${nb}budget · 1${nb}reminder · '
+            '0${nb}subscriptions',
         'Budgets',
       ),
       ('Dashboard', 'All sections shown', 'Overview'),
@@ -192,7 +193,7 @@ void main() {
       'SMS import',
       'Backup and data',
       'Privacy',
-      'Categories and rules',
+      'Category order',
       'About',
     ]) {
       await tester.tap(find.text(group));
@@ -203,11 +204,11 @@ void main() {
       await tester.pageBack();
       await pumpThrough(tester);
     }
-    // Cockpit opens from the home screen's ⋮ menu; the Categories and rules
-    // page no longer repeats it.
-    await tester.tap(find.text('Categories and rules'));
+    // Cockpit opens from the home screen's ⋮ menu; the Category order page
+    // no longer repeats it.
+    await tester.tap(find.text('Category order'));
     await pumpThrough(tester);
     expect(find.text('Open Cockpit', skipOffstage: false), findsNothing);
-    expect(find.text('Category order'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Category order'), findsOneWidget);
   });
 }

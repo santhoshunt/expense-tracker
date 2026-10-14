@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Today and Add (4×1): today's spend and, with a monthly budget set, safe to
-     spend today on the left (opens the app), an Add button on the right
-     (opens the Add expense sheet). -->
+<!-- Today and Add (4x1): on the left (opens today's transactions) the day's
+     payments and imports to review, then the day's spend and, with a
+     monthly budget, safe to spend; on the right an Add button (opens the
+     Add expense sheet). Where a one-row cell with large text holds one
+     line only, HomeWidgets.todayAdd hides the first line rather than clip
+     both, and the review count moves into the second; where the first
+     line is too wide, it drops the payment count before the review count. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/hw_root"
     android:layout_width="match_parent"
@@ -14,7 +18,16 @@
         android:importantForAccessibility="no"
         android:scaleType="fitXY"
         android:src="@drawable/budget_widget_bg"
-        android:tint="#252836" />
+        android:tint="#262A3A" />
+
+    <ImageView
+        android:id="@+id/hw_border"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_card_border"
+        android:visibility="gone" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -33,72 +46,30 @@
             android:layout_weight="1"
             android:orientation="vertical">
 
-            <LinearLayout
+            <TextView
+                android:id="@+id/hw_title"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="@string/home_widget_today_title"
+                android:textColor="#B4C0C8"
+                android:textSize="12sp" />
 
-                <TextView
-                    android:id="@+id/hw_title"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="8dp"
-                    android:maxLines="1"
-                    android:text="Today"
-                    android:textColor="#B4C0C8"
-                    android:textSize="13sp" />
-
-                <TextView
-                    android:id="@+id/hw_amount"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:ellipsize="end"
-                    android:gravity="end"
-                    android:maxLines="1"
-                    android:text="₹0"
-                    android:textColor="#FFFFFF"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:id="@+id/hw_safe_row"
+            <TextView
+                android:id="@+id/hw_amount"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone">
-
-                <TextView
-                    android:id="@+id/hw_safe_title"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginEnd="8dp"
-                    android:maxLines="1"
-                    android:text="Safe to spend"
-                    android:textColor="#B4C0C8"
-                    android:textSize="13sp" />
-
-                <TextView
-                    android:id="@+id/hw_safe_amount"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:ellipsize="end"
-                    android:gravity="end"
-                    android:maxLines="1"
-                    android:textColor="#FFFFFF"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp" />
         </LinearLayout>
 
         <FrameLayout
             android:id="@+id/hw_add"
             android:layout_width="wrap_content"
-            android:layout_height="32dp"
+            android:layout_height="36dp"
             android:contentDescription="@string/shortcut_add_expense">
 
             <ImageView
@@ -114,11 +85,13 @@
                 android:id="@+id/hw_add_label"
                 android:layout_width="wrap_content"
                 android:layout_height="match_parent"
+                android:ellipsize="end"
                 android:gravity="center"
                 android:importantForAccessibility="no"
+                android:maxLines="1"
                 android:paddingHorizontal="16dp"
-                android:text="+ Add"
-                android:textColor="#1B1927"
+                android:text="@string/home_widget_add"
+                android:textColor="#FFFFFF"
                 android:textSize="14sp"
                 android:textStyle="bold" />
         </FrameLayout>

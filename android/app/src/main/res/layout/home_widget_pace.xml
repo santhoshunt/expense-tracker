@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Month pace (4×2): spent so far, a bar against the cap (or a usual
+<!-- Month pace (4x2): spent so far, a bar against the cap (or a usual
      month) with a tick where a usual month is by today, and the gap. The
-     bar is a bitmap drawn in HomeWidgets.kt: RemoteViews cannot place a
-     marker by weight below Android 12. -->
+     bar is a bitmap drawn in HomeWidgets.kt at the widget's width:
+     RemoteViews cannot place a marker by weight below Android 12. Where
+     the height cannot hold every line at the user's font size,
+     HomeWidgets.pace hides the title rather than clip the amount. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/hw_root"
     android:layout_width="match_parent"
@@ -15,7 +17,16 @@
         android:importantForAccessibility="no"
         android:scaleType="fitXY"
         android:src="@drawable/budget_widget_bg"
-        android:tint="#252836" />
+        android:tint="#262A3A" />
+
+    <ImageView
+        android:id="@+id/hw_border"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_card_border"
+        android:visibility="gone" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -37,7 +48,6 @@
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:text="This month so far"
                 android:textColor="#B4C0C8"
                 android:textSize="12sp" />
 
@@ -48,7 +58,6 @@
                 android:layout_marginTop="2dp"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:text="₹0"
                 android:textColor="#FFFFFF"
                 android:textSize="22sp"
                 android:textStyle="bold" />
@@ -57,14 +66,14 @@
                 android:id="@+id/hw_bar"
                 android:layout_width="match_parent"
                 android:layout_height="14dp"
-                android:layout_marginTop="8dp"
+                android:layout_marginTop="6dp"
                 android:importantForAccessibility="no"
                 android:scaleType="fitXY" />
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="4dp"
                 android:orientation="horizontal">
 
                 <TextView
@@ -82,8 +91,9 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
+                    android:ellipsize="end"
                     android:maxLines="1"
-                    android:text="│ usual by today"
+                    android:text="@string/home_widget_usual_marker"
                     android:textColor="#B4C0C8"
                     android:textSize="11sp" />
             </LinearLayout>
@@ -93,7 +103,9 @@
             android:id="@+id/hw_empty"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:ellipsize="end"
             android:gravity="center"
+            android:maxLines="3"
             android:text="@string/home_widget_empty"
             android:textColor="#B4C0C8"
             android:textSize="13sp"

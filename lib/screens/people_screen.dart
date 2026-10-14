@@ -5,6 +5,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
+import '../utils/text_scale.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/fold_section.dart';
 import '../widgets/glossy.dart';
@@ -49,7 +50,8 @@ class _PeopleScreenState extends State<PeopleScreen> {
         backgroundColor: Colors.transparent,
         appBar: AppBar(title: const Text('Who owes you')),
         body: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
+          // 16, the Settings and Cockpit card inset.
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
           children: [
             // Left-aligned: stretched across the list, the whole row would
             // open the tip.
@@ -133,6 +135,10 @@ String _initials(String name) {
 
 String _count(int n, String one, String many) => '$n ${n == 1 ? one : many}';
 
+/// "7 Oct": the day a bill was split, without its time. The time wrapped
+/// the People rows onto a third line and says nothing about who owes what.
+String _day(DateTime d) => fmtDateCompact(DateUtils.dateOnly(d));
+
 class _PersonTile extends StatelessWidget {
   final PersonBalance balance;
 
@@ -149,25 +155,44 @@ class _PersonTile extends StatelessWidget {
     final parts = [
       if (b.open.isNotEmpty) ...[
         _count(b.open.length, 'open bill', 'open bills'),
-        'oldest ${fmtDateCompact(b.open.first.bill.date)}',
+        'oldest ${_day(b.open.first.bill.date)}',
       ] else
         'All settled',
       if (b.credit > 0) '${fmtMoney(b.credit)} paid ahead',
     ];
+    // Large text: no avatar, and the amount moves under the subtitle. Beside
+    // it, the subtitle was squeezed to two letters a line at 320dp.
+    final large = isLargeTextScale(context);
+    final owed = b.owed > 0
+        ? Text(
+            fmtMoney(b.owed),
+            style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+          )
+        : null;
     return ListTile(
       dense: true,
-      leading: CircleAvatar(
-        radius: 18,
-        child: Text(_initials(b.name), style: text.labelMedium),
+      leading: large
+          ? null
+          : CircleAvatar(
+              radius: 18,
+              child: Text(_initials(b.name), style: text.labelMedium),
+            ),
+      title: Text(
+        b.name,
+        maxLines: large ? 3 : 1,
+        overflow: TextOverflow.ellipsis,
       ),
-      title: Text(b.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(parts.join(' · '), style: text.bodySmall),
-      trailing: b.owed > 0
-          ? Text(
-              fmtMoney(b.owed),
-              style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+      subtitle: large && owed != null
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(parts.join(' · '), style: text.bodySmall),
+                const SizedBox(height: 2),
+                owed,
+              ],
             )
-          : null,
+          : Text(parts.join(' · '), style: text.bodySmall),
+      trailing: large ? null : owed,
       onTap: () => showPersonSheet(page, b.key),
     );
   }
@@ -317,7 +342,7 @@ class _PersonSheetState extends State<_PersonSheet> {
                 // What is left sits in the subtitle so Settle has the
                 // trailing slot to itself at large text.
                 subtitle: Text(
-                  '${fmtDateCompact(s.bill.date)} · ${fmtMoney(s.left)} '
+                  '${_day(s.bill.date)} · ${fmtMoney(s.left)} '
                   'left of ${fmtMoney(s.share)}',
                 ),
                 trailing: TextButton(
@@ -329,7 +354,9 @@ class _PersonSheetState extends State<_PersonSheet> {
               ),
           ],
           const SizedBox(height: 12),
+          // No inset of their own: the actions line up with the bills above.
           ListTile(
+            contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.payments_outlined),
             title: const Text('Record repayment'),
             // A bank SMS for the same money would import it a second time.
@@ -339,6 +366,7 @@ class _PersonSheetState extends State<_PersonSheet> {
             onTap: () => _record(b),
           ),
           ListTile(
+            contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.link),
             title: const Text('Link a payment you received'),
             subtitle: Text(
@@ -351,6 +379,7 @@ class _PersonSheetState extends State<_PersonSheet> {
           ),
           if (b.owed > 0)
             ListTile(
+              contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.task_alt),
               title: const Text('Mark all settled'),
               subtitle: const Text('Paid outside the app, or let go'),
@@ -364,7 +393,7 @@ class _PersonSheetState extends State<_PersonSheet> {
                 dense: true,
                 contentPadding: EdgeInsets.zero,
                 title: Text('+${fmtMoney(r.amount)}'),
-                subtitle: Text(fmtDateCompact(r.date)),
+                subtitle: Text(_day(r.date)),
                 onTap: () => showAddTransactionSheet(context, existing: r),
               ),
           ],
@@ -382,7 +411,7 @@ class _PersonSheetState extends State<_PersonSheet> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    subtitle: Text(fmtDateCompact(s.bill.date)),
+                    subtitle: Text(_day(s.bill.date)),
                     trailing: Text(fmtMoney(s.share)),
                     onTap: () =>
                         showAddTransactionSheet(context, existing: s.bill),

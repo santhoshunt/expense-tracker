@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Picker preview only: a four-slice spending donut. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="68dp"
+    android:height="68dp"
+    android:viewportWidth="68"
+    android:viewportHeight="68">
+    <path
+        android:pathData="M34,7A27,27 0,0 1,61 34"
+        android:strokeWidth="10"
+        android:strokeColor="#FF7CA3" />
+    <path
+        android:pathData="M61,34A27,27 0,0 1,34 61"
+        android:strokeWidth="10"
+        android:strokeColor="#FFB572" />
+    <path
+        android:pathData="M34,61A27,27 0,0 1,7 34"
+        android:strokeWidth="10"
+        android:strokeColor="#4A90E2" />
+    <path
+        android:pathData="M7,34A27,27 0,0 1,34 7"
+        android:strokeWidth="10"
+        android:strokeColor="#888780" />
+</vector>

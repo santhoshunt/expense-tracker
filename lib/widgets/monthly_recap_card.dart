@@ -8,6 +8,7 @@ import '../utils/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
 import '../utils/money_colors.dart';
+import '../utils/text_scale.dart';
 import 'dashboard_fold.dart';
 import 'info_tip.dart';
 import 'status_dot.dart';
@@ -117,7 +118,10 @@ class MonthlyRecapCard extends StatelessWidget {
         : '${deltaPhrase(compare)} than $prevShort';
     final merchant = recap.topMerchant;
 
+    // No margin: the Overview spaces its cards itself, and the default 4dp
+    // made this card narrower than the cards above and below it.
     return Card(
+      margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(
           AppSpace.card,
@@ -166,27 +170,27 @@ class MonthlyRecapCard extends StatelessWidget {
               Divider(height: 1, color: scheme.outlineVariant),
               const SizedBox(height: 4),
             ],
-            if (recap.topCategories.isNotEmpty)
-              _Line(
-                label: 'Top',
-                onTap: null,
-                linkRow: onViewCategory != null,
-                child: Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    for (final (i, e) in recap.topCategories.indexed) ...[
-                      if (i > 0) Text(' · ', style: muted),
-                      _Link(
-                        text: '${e.key.label} ${fmtMoney(e.value)}',
-                        style: muted,
-                        onTap: onViewCategory == null
-                            ? null
-                            : () => onViewCategory!(e.key.id, recap.month),
-                      ),
-                    ],
-                  ],
+            if (recap.topCategories.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Top categories',
+                  style: text.bodySmall?.copyWith(
+                    color: scheme.onSurface,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
+              for (final e in recap.topCategories)
+                _AmountRow(
+                  label: e.key.label,
+                  amount: fmtMoney(e.value),
+                  style: muted,
+                  onTap: onViewCategory == null
+                      ? null
+                      : () => onViewCategory!(e.key.id, recap.month),
+                ),
+            ],
             if (merchant != null)
               _Line(
                 label: 'Biggest merchant',
@@ -263,7 +267,9 @@ class MonthPaceCard extends StatelessWidget {
         ? '1 to ${c.throughDay} $short against $prevWindow'
         : 'All of $short against all of $prevShort';
 
+    // No margin, as the recap card.
     return Card(
+      margin: EdgeInsets.zero,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(
           AppSpace.card,
@@ -568,44 +574,43 @@ class _Line extends StatelessWidget {
   final VoidCallback? onTap;
   final Widget child;
 
-  /// The [child] is a row of [_Link]s: the label centres on their first
-  /// row instead of sitting at their top edge.
-  final bool linkRow;
-
-  const _Line({
-    required this.label,
-    required this.onTap,
-    required this.child,
-    this.linkRow = false,
-  });
+  const _Line({required this.label, required this.onTap, required this.child});
 
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
+    // At large text the label sits above the value, so the value gets the
+    // card's whole width instead of a narrow second column.
+    final stacked = isLargeTextScale(context);
     final labelText = Text(
-      '$label: ',
+      stacked ? label : '$label: ',
       style: text.bodySmall?.copyWith(
         color: scheme.onSurface,
         fontWeight: FontWeight.w600,
       ),
     );
     final body = Padding(
-      padding: EdgeInsets.symmetric(vertical: linkRow ? 0 : 4),
-      // The label wraps within half the row instead of pushing the value
-      // off the card at a large font size on a narrow phone.
-      child: LayoutBuilder(
-        builder: (context, box) => Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: box.maxWidth * 0.5),
-              child: linkRow ? _TapHeight(child: labelText) : labelText,
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: stacked
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [labelText, child],
+            )
+          // The label wraps within half the row instead of pushing the
+          // value off the card.
+          : LayoutBuilder(
+              builder: (context, box) => Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: box.maxWidth * 0.5),
+                    child: labelText,
+                  ),
+                  Expanded(child: child),
+                ],
+              ),
             ),
-            Expanded(child: child),
-          ],
-        ),
-      ),
     );
     if (onTap == null) return body;
     return InkWell(
@@ -616,25 +621,59 @@ class _Line extends StatelessWidget {
   }
 }
 
-/// A tappable run of text inside a [_Line], for lines that hold several
-/// targets (the top categories).
-class _Link extends StatelessWidget {
-  final String text;
+/// One top category: its name on the left, its amount on the right, at
+/// least [_kTapHeight] tall. The whole row is the tap target when [onTap]
+/// is set.
+class _AmountRow extends StatelessWidget {
+  final String label;
+  final String amount;
   final TextStyle? style;
   final VoidCallback? onTap;
 
-  const _Link({required this.text, required this.style, required this.onTap});
+  const _AmountRow({
+    required this.label,
+    required this.amount,
+    required this.style,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final label = Text(text, style: style);
-    if (onTap == null) return label;
-    return InkWell(
-      borderRadius: BorderRadius.circular(AppRadius.control),
-      onTap: onTap,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: _kTapHeight),
-        child: Align(widthFactor: 1, child: label),
+    final row = ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: _kTapHeight),
+      // The amount keeps up to half the row and shrinks past that, so a
+      // lakh-sized figure at large text never pushes the name off the card.
+      child: LayoutBuilder(
+        builder: (context, box) => Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: style,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: box.maxWidth * 0.5),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: AlignmentDirectional.centerEnd,
+                child: Text(amount, style: style, maxLines: 1),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (onTap == null) return row;
+    return Semantics(
+      button: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.control),
+        onTap: onTap,
+        child: row,
       ),
     );
   }

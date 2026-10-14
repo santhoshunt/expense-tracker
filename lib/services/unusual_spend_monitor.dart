@@ -4,6 +4,7 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/dates.dart';
 import 'launch_actions.dart';
+import 'notification_ids.dart';
 import 'notification_service.dart';
 import 'unusual_spend.dart';
 
@@ -36,12 +37,11 @@ class UnusualSpendMonitor {
   static String firedKey(String categoryId, DateTime month) =>
       '$markerPrefix${categoryId}_${monthKey(month)}';
 
-  /// Stable per category. Above 192000: custom budget alerts use
-  /// 92000 + a hash below 100000, which reaches 191999. A range as wide,
-  /// so two categories alerting in one month rarely share an id (a shared
-  /// id replaces the earlier note in the shade).
+  /// Stable per category, 200000 to 299999 (see NotificationIds). A wide
+  /// range, so two categories alerting in one month rarely share an id (a
+  /// shared id replaces the earlier note in the shade).
   static int notificationId(String categoryId) =>
-      200000 + ((categoryId.hashCode & 0x7fffffff) % 100000);
+      NotificationIds.unusual(categoryId);
 
   Future<void> check(FinanceProvider finance, SettingsProvider settings) async {
     if (_busy) {

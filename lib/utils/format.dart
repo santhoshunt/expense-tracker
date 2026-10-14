@@ -1,13 +1,22 @@
 import 'package:flutter/material.dart' show DateTimeRange;
 import 'package:intl/intl.dart';
 
+// Indian grouping: "₹1,42,500.00", the way bank alerts write amounts.
 final NumberFormat _currency = NumberFormat.currency(
+  locale: 'en_IN',
   symbol: '₹',
   decimalDigits: 2,
 );
+// Compact keeps the default locale: en_IN's compact form swaps K for T, L
+// and Cr.
 final NumberFormat _currencyCompact = NumberFormat.compactCurrency(
   symbol: '₹',
   decimalDigits: 1,
+);
+final NumberFormat _wholeRupees = NumberFormat.currency(
+  locale: 'en_IN',
+  symbol: '₹',
+  decimalDigits: 0,
 );
 final DateFormat _date = DateFormat('d MMM yyyy');
 final DateFormat _dateTime = DateFormat('d MMM yyyy, h:mm a');
@@ -52,7 +61,11 @@ String fmtPerPoint(double v) => '₹${_perPoint.format(v)}';
 String fmtPerPointField(double v) => _perPoint.format(v);
 
 final NumberFormat _perPoint = NumberFormat('0.00##');
-String fmtMoneyCompact(double v) => _signed(v, _currencyCompact);
+
+/// "₹39.1K" for larger amounts; whole rupees below ₹1,000, where the one
+/// decimal ("₹77.7") read like paise.
+String fmtMoneyCompact(double v) =>
+    _signed(v, v.abs() < 999.5 ? _wholeRupees : _currencyCompact);
 
 /// [fmtMoney] without a trailing ".00": the forced two decimals read as
 /// clutter at home-screen widget size ("₹60,000.00 of ₹60,000.00").

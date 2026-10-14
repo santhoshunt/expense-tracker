@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Quick actions (4x1): three fixed buttons, so nothing to redraw on a
+     timer (updatePeriodMillis=0); the theme follows the app's pushes.
+     Widens only: the buttons keep their height. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/home_widget_actions_description"
+    android:initialLayout="@layout/home_widget_actions"
+    android:minWidth="250dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="180dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:previewLayout="@layout/home_widget_actions_preview"
+    android:resizeMode="horizontal"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

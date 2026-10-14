@@ -17,14 +17,22 @@ class SmsImportResult {
   /// Dropped by a user spam rule — never imported.
   final int spamDropped;
 
+  /// Of [imported], the rows that counted at once; the rest wait in
+  /// review (see FinanceProvider.lastImportCounted).
+  final int counted;
+
   const SmsImportResult({
     required this.scanned,
     required this.matched,
     required this.imported,
     required this.spamDropped,
+    this.counted = 0,
   });
 
   int get duplicates => matched - imported - spamDropped;
+
+  /// Imported rows waiting in review.
+  int get toReview => imported - counted;
 }
 
 /// Orchestrates one import run: permission → query window →
@@ -131,7 +139,11 @@ class SmsImportService {
   /// Imports the RCS notification buffer, then clears what was saved.
   /// Safe to call on every launch — [NotificationSource.peek] is a no-op
   /// when notification access is not granted or the platform is not Android.
+  ///
+  /// Returns how many rows it added; [lastDrainCounted] says how many of
+  /// those counted at once.
   Future<int> drainNotifications(FinanceProvider finance) async {
+    lastDrainCounted = 0;
     // Captures are ephemeral (no backfill), so the buffer is cleared only
     // once the rows are saved. While ledger writes are known to be failing,
     // leave the messages buffered — importing them now would hold them only
@@ -167,13 +179,17 @@ class SmsImportService {
         );
       }
     }
-    final (imported, _) = parsed.isEmpty
-        ? (0, 0)
-        : await finance.addImported(parsed);
+    final (imported, _) = await finance.addImported(parsed);
+    // Read at once, before any other await lets another import reset it.
+    lastDrainCounted = finance.lastImportCounted;
     await _recordMisses(misses);
     if (!finance.persistFailed) await notifications.ack(batch);
     return imported;
   }
+
+  /// Of the rows the last [drainNotifications] added, how many counted at
+  /// once rather than waiting in review. Zero when it imported nothing.
+  int lastDrainCounted = 0;
 
   /// Scan window, by precedence: [range] (explicit calendar range) >
   /// [lookback] (e.g. last 90 days) > incremental since the last run
@@ -223,6 +239,8 @@ class SmsImportService {
         }
       }
       final (imported, spamDropped) = await finance.addImported(parsed);
+      // Read at once, before any other await lets another import reset it.
+      final counted = finance.lastImportCounted;
       await _recordMisses(misses);
       if (!finance.persistFailed) await notifications.ack(batch);
       return SmsImportResult(
@@ -230,6 +248,7 @@ class SmsImportService {
         matched: parsed.length,
         imported: imported,
         spamDropped: spamDropped,
+        counted: counted,
       );
     }
 
@@ -332,6 +351,8 @@ class SmsImportService {
     }
 
     final (imported, spamDropped) = await finance.addImported(parsed);
+    // Read at once, before any other await lets another import reset it.
+    final counted = finance.lastImportCounted;
     await _recordMisses(misses);
     if (!finance.persistFailed) await notifications.ack(batch);
     // Advance the marker only when this scan is authoritative up to
@@ -364,6 +385,7 @@ class SmsImportService {
       matched: parsed.length,
       imported: imported,
       spamDropped: spamDropped,
+      counted: counted,
     );
   }
 }

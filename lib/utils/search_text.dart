@@ -15,8 +15,8 @@ String normalizeSearchText(String s) =>
 /// Beyond the note, SMS body and sender this carries the category label, the
 /// account name, the merchant label (plus any user alias), the tags, the
 /// people on a split or the payer of a repayment, and the amount in
-/// several spellings: "125000", "125000.00", the formatted "₹125,000.00"
-/// and the Indian grouping "1,25,000" and "1,25,000.00", so a typed
+/// several spellings: "125000", "125000.00", the formatted "₹1,25,000.00",
+/// the Indian grouping "1,25,000" and the Western "125,000.00", so a typed
 /// "125000", "125,000" or "1,25,000" all land.
 String searchHaystack(Tx t, {String? accountName, String? merchantAlias}) {
   final parts = <String>[
@@ -35,6 +35,7 @@ String searchHaystack(Tx t, {String? accountName, String? merchantAlias}) {
     fmtMoney(t.amount),
     _indianWhole.format(t.amount),
     _indianFixed.format(t.amount),
+    _westernFixed.format(t.amount),
   ];
   return normalizeSearchText(parts.join(' '));
 }
@@ -43,3 +44,6 @@ String searchHaystack(Tx t, {String? accountName, String? merchantAlias}) {
 /// when the amount has them) and "1,25,000.00".
 final NumberFormat _indianWhole = NumberFormat.decimalPattern('en_IN');
 final NumberFormat _indianFixed = NumberFormat('#,##,##0.00', 'en_IN');
+
+/// Thousands grouping, "125,000.00", for a query typed that way.
+final NumberFormat _westernFixed = NumberFormat('#,##0.00', 'en_US');

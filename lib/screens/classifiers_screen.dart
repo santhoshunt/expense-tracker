@@ -9,12 +9,14 @@ import '../models/transaction.dart';
 import '../models/dashboard_layout.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/recurring_detector.dart';
 import '../services/sms_parser.dart';
 import '../services/subscriptions.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
 import '../utils/money_colors.dart';
+import '../utils/text_scale.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dialog_expander.dart';
 import '../widgets/dispose_scope.dart';
@@ -142,10 +144,11 @@ Map<String, ClassifierRule> _pairSiblings(List<ClassifierRule> rules) {
 class _CockpitHub extends StatelessWidget {
   const _CockpitHub();
 
-  /// "3 rules" with a non-breaking space, so a wrapped line never leaves a
-  /// number at one line's end and its noun on the next.
+  /// "3 rules" with a non-breaking space (U+00A0) between the number and its
+  /// noun, so a wrapped line never leaves a number at one line's end and its
+  /// noun on the next.
   static String _count(int n, String one, String many) =>
-      '$n ${n == 1 ? one : many}';
+      '$n\u{a0}${n == 1 ? one : many}';
 
   @override
   Widget build(BuildContext context) {
@@ -200,17 +203,23 @@ class _CockpitHub extends StatelessWidget {
       ],
       // A limit passed leads: it is the one thing here that needs acting on.
       CockpitGroup.plan: [
-        if (over > 0) '$over over',
+        // "1 budget over", the line's one warning, drawn in the error
+        // colour below. Only the number and its noun are held together;
+        // "over" may wrap.
+        if (over > 0) '${_count(over, 'budget', 'budgets')} over',
         if (cap > 0) 'Monthly cap set',
         _count(finance.budgets.length, 'budget', 'budgets'),
         _count(finance.reminders.length, 'reminder', 'reminders'),
         _count(subscriptions, 'subscription', 'subscriptions'),
       ],
       CockpitGroup.dashboard: [
-        hiddenSections > 0 ? '$hiddenSections hidden' : 'All sections shown',
+        hiddenSections > 0
+            ? '$hiddenSections\u{a0}hidden'
+            : 'All sections shown',
       ],
     };
-    final textTheme = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final large = isLargeTextScale(context);
 
     return AmbientBackground(
       child: Scaffold(
@@ -233,18 +242,32 @@ class _CockpitHub extends StatelessWidget {
                   // The counts wrap at large text; the icons stay level
                   // with the middle of each row.
                   titleAlignment: ListTileTitleAlignment.center,
-                  leading: Icon(g.icon),
+                  // At large text the icon and chevron go, so the words get
+                  // the row's width instead of breaking mid-word.
+                  leading: large ? null : Icon(g.icon),
                   title: Text(g.title),
                   // The live counts say what is inside; the group's own
-                  // gist repeated them in words.
-                  subtitle: Text(
-                    counts[g]!.join(' · '),
-                    style: textTheme.bodySmall?.copyWith(
-                      color: accentTextColor(context),
-                      fontWeight: FontWeight.w600,
+                  // gist repeated them in words. Muted like the Settings
+                  // root's lines; only a passed limit takes a colour.
+                  subtitle: Text.rich(
+                    TextSpan(
+                      children: [
+                        for (final (j, part) in counts[g]!.indexed) ...[
+                          if (j > 0) const TextSpan(text: ' · '),
+                          TextSpan(
+                            text: part,
+                            style: g == CockpitGroup.plan && over > 0 && j == 0
+                                ? TextStyle(
+                                    color: scheme.error,
+                                    fontWeight: FontWeight.w500,
+                                  )
+                                : null,
+                          ),
+                        ],
+                      ],
                     ),
                   ),
-                  trailing: const Icon(Icons.chevron_right),
+                  trailing: large ? null : const Icon(Icons.chevron_right),
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -359,6 +382,12 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
                 ? null
                 : TabBar(
                     controller: tab,
+                    // Large text: the labels scroll whole instead of being
+                    // cut to "Budge" and "Remir" in fixed thirds.
+                    isScrollable: isLargeTextScale(context),
+                    tabAlignment: isLargeTextScale(context)
+                        ? TabAlignment.start
+                        : null,
                     tabs: [
                       for (final t in _tabs) Tab(text: _kCockpitTabLabels[t]),
                     ],
@@ -468,8 +497,10 @@ class _RulesTabState extends State<_RulesTab> {
       if (applied.reclassified > 0)
         '${applied.reclassified} transaction'
             '${applied.reclassified == 1 ? '' : 's'} reclassified',
+      // Recent: rows waiting for review and rows still marked new, which
+      // already count.
       if (applied.droppedPending > 0)
-        '${applied.droppedPending} pending import'
+        '${applied.droppedPending} recent import'
             '${applied.droppedPending == 1 ? '' : 's'} dropped as spam',
     ];
     showAppToastOn(
@@ -1161,6 +1192,44 @@ class _TransactionsTabState extends State<_TransactionsTab> {
   final _searchCtrl = TextEditingController();
   Timer? _searchDebounce;
 
+  /// The row just recategorised. It shows "Make rule" until another row is
+  /// moved, the rule is made, or the move is undone: the toast has room for
+  /// Undo only.
+  String? _ruleOfferId;
+
+  /// Moves [before] to [categoryId], with Undo. Runs here, not in the row:
+  /// a search filter can unmount the row while the picker is open.
+  Future<void> _recategorise(Tx before, String categoryId) async {
+    if (categoryId == before.categoryId) return;
+    final finance = context.read<FinanceProvider>();
+    // Reclassifying also rewrites tx.type: the category's own type is
+    // authoritative, which keeps transfer categories (either direction)
+    // consistent with the app-wide `tx.type == category.type` invariant.
+    final c = categoryById(categoryId);
+    await finance.updateTransaction(
+      before.copyWith(categoryId: c.id, type: c.type),
+    );
+    if (!mounted) return;
+    setState(() => _ruleOfferId = before.id);
+    showUndoSnackBar(context, 'Moved to ${c.label}', () {
+      // The snapshot also restores the row's earlier "set by hand" flag.
+      finance.restoreEditedTransactions([before]);
+      if (mounted && _ruleOfferId == before.id) {
+        setState(() => _ruleOfferId = null);
+      }
+    }, icon: Icons.category_outlined);
+  }
+
+  /// Opens the rule dialog from the row's message, set to its new category.
+  Future<void> _makeRule(Tx tx) {
+    setState(() => _ruleOfferId = null);
+    return _showRuleDialog(
+      context,
+      patternSuggestion: _rulePatternFor(tx),
+      categorySuggestion: tx.categoryId,
+    );
+  }
+
   @override
   void dispose() {
     _searchDebounce?.cancel();
@@ -1264,7 +1333,13 @@ class _TransactionsTabState extends State<_TransactionsTab> {
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(0, 4, 0, 88),
                   itemCount: txs.length,
-                  itemBuilder: (context, i) => _ClassificationTile(tx: txs[i]),
+                  itemBuilder: (context, i) => _ClassificationTile(
+                    tx: txs[i],
+                    alias: finance.merchantAlias,
+                    offerRule: txs[i].id == _ruleOfferId,
+                    onPicked: _recategorise,
+                    onMakeRule: _makeRule,
+                  ),
                 ),
         ),
       ],
@@ -1272,9 +1347,39 @@ class _TransactionsTabState extends State<_TransactionsTab> {
   }
 }
 
+/// The pattern a rule made from [tx] starts with: the first line of its SMS
+/// (or of the note, for manual rows), since rules match against the SMS
+/// text. '|' is the stored OR separator, so a prefill carrying one (common
+/// in UPI alerts) would open the dialog already in its error state; it is
+/// cut at the pipe, and the fragment before it is still a valid substring.
+String _rulePatternFor(Tx tx) =>
+    tx.smsText.split('\n').first.split('|').first.trim();
+
+/// A Review row's title: "Food & Dining · Croma". The category alone when
+/// no merchant can be told apart.
+String _reviewRowTitle(Tx tx, {MerchantAliasLookup? alias}) {
+  final merchant = merchantLabelOrNull(tx, alias: alias);
+  return merchant == null
+      ? tx.category.label
+      : '${tx.category.label} · $merchant';
+}
+
 class _ClassificationTile extends StatelessWidget {
   final Tx tx;
-  const _ClassificationTile({required this.tx});
+  final MerchantAliasLookup? alias;
+
+  /// Shows "Make rule" under the row: it was just recategorised.
+  final bool offerRule;
+  final Future<void> Function(Tx before, String categoryId) onPicked;
+  final Future<void> Function(Tx tx) onMakeRule;
+
+  const _ClassificationTile({
+    required this.tx,
+    required this.alias,
+    required this.offerRule,
+    required this.onPicked,
+    required this.onMakeRule,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1289,11 +1394,21 @@ class _ClassificationTile extends StatelessWidget {
       transfer: cat.isTransfer,
     );
 
-    final title = tx.note.isNotEmpty
-        ? tx.note.split('\n').first
-        : tx.smsBody.isNotEmpty
-        ? tx.smsBody.split('\n').first
-        : (tx.sender.isNotEmpty ? tx.sender : cat.label);
+    // Category and merchant, not the raw SMS: the category is what a tap
+    // changes, and the merchant is what a rule would match.
+    final title = _reviewRowTitle(tx, alias: alias);
+    final canMakeRule = offerRule && _rulePatternFor(tx).isNotEmpty;
+    // Large text: no icon, and the amount moves under the date, so the
+    // words get the row's width (at 320dp and 2x text the title read "Tra…").
+    final large = isLargeTextScale(context);
+    final amount = Text(
+      '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
+      style: TextStyle(
+        color: amountColor,
+        fontWeight: FontWeight.w700,
+        fontSize: 15,
+      ),
+    );
 
     // No swipe-to-delete, matching TransactionTile — deleting lives in the
     // edit flows (with Undo).
@@ -1307,64 +1422,86 @@ class _ClassificationTile extends StatelessWidget {
           onLongPress: () => _showRuleFromTransaction(context),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Rounded-square category icon
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: cat.color.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    cat.icon,
-                    color: categoryGlyphColor(context, cat.color),
-                    size: 22,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
+                Row(
+                  children: [
+                    if (!large) ...[
+                      // Rounded-square category icon
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: cat.color.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          cat.icon,
+                          color: categoryGlyphColor(context, cat.color),
+                          size: 22,
                         ),
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${cat.label} · ${fmtDateMaybeTime(tx.date)}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
+                      const SizedBox(width: 12),
                     ],
-                  ),
-                ),
-                const SizedBox(width: 12),
-                // Width-capped like TransactionTile: shrink extreme
-                // figures instead of overflowing the row.
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 140),
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
-                      style: TextStyle(
-                        color: amountColor,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            maxLines: large ? 3 : 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          // The amount stays on the right in its money colour,
+                          // so the line under the title is the date alone.
+                          Text(
+                            fmtDateCompact(tx.date),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                          if (large)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: amount,
+                            ),
+                        ],
                       ),
                     ),
-                  ),
+                    if (!large) ...[
+                      const SizedBox(width: 12),
+                      // Width-capped like TransactionTile: shrink extreme
+                      // figures instead of overflowing the row.
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 140),
+                        child: FittedBox(fit: BoxFit.scaleDown, child: amount),
+                      ),
+                    ],
+                  ],
                 ),
+                // Its own line under the text, lined up with the title: in
+                // the text column at 320dp and 2x text it had room for a
+                // letter or two. Large text has no icon to line up with.
+                if (canMakeRule)
+                  Padding(
+                    padding: EdgeInsets.only(left: large ? 0 : 56),
+                    // No icon: at 2x text its width wrapped the label.
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        minimumSize: const Size(48, 48),
+                      ),
+                      onPressed: () => onMakeRule(tx),
+                      child: const Text('Make rule'),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1376,7 +1513,6 @@ class _ClassificationTile extends StatelessWidget {
   /// Category picker — tap to reassign. Changing type is allowed since SMS
   /// imports sometimes miscategorise income vs expense.
   Future<void> _showCategoryPicker(BuildContext context) async {
-    final finance = context.read<FinanceProvider>();
     final result = await showPickerSheet<String>(
       context: context,
       title: 'Category',
@@ -1385,26 +1521,13 @@ class _ClassificationTile extends StatelessWidget {
     );
     final id = result?.value;
     if (id == null) return;
-    // Reclassifying also rewrites tx.type — the category's own type is
-    // authoritative, which keeps transfer categories (either direction)
-    // consistent with the app-wide `tx.type == category.type` invariant.
-    final c = categoryById(id);
-    await finance.updateTransaction(
-      tx.copyWith(categoryId: c.id, type: c.type),
-    );
+    await onPicked(tx, id);
   }
 
   /// Long-press shortcut: opens the rule dialog with the transaction body
   /// pre-filled as the pattern, making it easy to codify a manual correction.
-  Future<void> _showRuleFromTransaction(BuildContext context) {
-    // Use the first line of the SMS body (or the note for manual rows) as a
-    // suggested pattern — rules match against the SMS text. '|' is the
-    // stored OR separator, so a prefill carrying one (common in UPI alerts)
-    // would open the dialog already in its error state — trim at the pipe:
-    // the fragment before it is still a valid substring of the SMS.
-    final suggestion = tx.smsText.split('\n').first.split('|').first.trim();
-    return _showRuleDialog(context, patternSuggestion: suggestion);
-  }
+  Future<void> _showRuleFromTransaction(BuildContext context) =>
+      _showRuleDialog(context, patternSuggestion: _rulePatternFor(tx));
 }
 
 // ── Shared dialog helpers ─────────────────────────────────────────────────────
@@ -1723,6 +1846,7 @@ Future<void> _showRuleDialog(
   ClassifierRule? existing,
   ClassifierRule? sibling,
   String? patternSuggestion,
+  String? categorySuggestion,
 }) async {
   // One controller per OR-condition. `allCtrls` only grows: DisposeScope
   // reads the list at dispose time, so removed rows still get disposed. It
@@ -1735,7 +1859,7 @@ Future<void> _showRuleDialog(
   final allCtrls = List<ChangeNotifier>.of(ctrls);
   // Focus nodes of the conditions added with "Or contains…".
   final focusNodes = <TextEditingController, FocusNode>{};
-  var categoryId = existing?.categoryId ?? 'food';
+  var categoryId = existing?.categoryId ?? categorySuggestion ?? 'food';
   // The opposite-direction twin (a second ordinary rule sharing the
   // pattern): pre-filled when editing a rule that already has one.
   final twin =
@@ -1914,8 +2038,8 @@ Future<void> _showRuleDialog(
                             'Saving applies the rule to past SMS rows right '
                             'away, except rows you categorised by hand. '
                             'Spam: matching messages are never imported, and '
-                            'matching imports still waiting for review are '
-                            'deleted after you confirm.',
+                            'matching recent imports, waiting for review or '
+                            'still marked new, are deleted after you confirm.',
                       ),
                     ],
                   ),
@@ -2019,11 +2143,12 @@ Future<void> _showRuleDialog(
                         final ok = await showDialog<bool>(
                           context: ctx,
                           builder: (dCtx) => AlertDialog(
-                            title: const Text('Drop pending imports?'),
+                            // Rows waiting for review and rows still marked
+                            // new (already counted) both drop.
+                            title: const Text('Drop recent imports?'),
                             content: Text(
-                              'This rule matches $wouldDrop pending import'
-                              '${wouldDrop == 1 ? '' : 's'} in the review '
-                              'queue and will remove '
+                              'This rule matches $wouldDrop recent import'
+                              '${wouldDrop == 1 ? '' : 's'} and will remove '
                               '${wouldDrop == 1 ? 'it' : 'them'} as spam.',
                             ),
                             actions: [
@@ -2084,7 +2209,7 @@ Future<void> _showRuleDialog(
                               '${applied.reclassified == 1 ? '' : 's'} '
                               'reclassified',
                         if (applied.droppedPending > 0)
-                          '${applied.droppedPending} pending import'
+                          '${applied.droppedPending} recent import'
                               '${applied.droppedPending == 1 ? '' : 's'} '
                               'dropped as spam',
                       ];

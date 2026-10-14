@@ -53,7 +53,7 @@ void main() {
       'SMS import': 'Automatic SMS import',
       'Backup and data': 'Cloud backup',
       'Privacy': 'App lock',
-      'Categories and rules': 'Category order',
+      'Category order': 'In the add and edit sheets',
       'About': 'Check for updates',
     };
     for (final title in pages.keys) {
@@ -119,7 +119,7 @@ void main() {
     await tester.pageBack();
     await pumpThrough(tester);
 
-    await tester.tap(find.text('Categories and rules'));
+    await tester.tap(find.text('Category order'));
     await pumpThrough(tester);
     expect(find.text('By amount over the last three months'), findsOneWidget);
     expect(find.textContaining('How the category list'), findsNothing);

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/semantics.dart' show CustomSemanticsAction;
 import 'package:provider/provider.dart';
 
 import '../models/account.dart';
@@ -362,6 +363,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void dispose() {
     AppNav.instance.detachDashboard(this);
     AppNav.instance.dashboardHeader.detach(this);
+    AppNav.instance.pageMenu.detach(this);
     _jumpReset?.cancel();
     _pageCtrl.dispose();
     super.dispose();
@@ -977,7 +979,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  /// The Year view tip, opened from Home's ⋯ menu ("About Year view").
+  /// The Year view tip, opened from the "i" on the Year view row of Home's
+  /// ⋮ menu.
   static const _yearTip = InfoTip(
     title: 'Year view',
     message:
@@ -988,10 +991,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
         'heatmap, merchants, groups and transfers are hidden.',
   );
 
-  /// Hands the month selector and the Dashboard's menu entries to Home's
-  /// app bar ([DashboardHeader]): the arrows, the tappable month label, the
-  /// PDF export, the Month/Year switch, the Year view tip and Customise.
-  /// After the frame: the bar rebuilds on the change, and a listener must
+  /// Hands the month selector to Home's app bar ([DashboardHeader]): the
+  /// arrows and the tappable month label; and the Dashboard's ⋮ entries
+  /// ([PageMenu]): the Month/Year switch with the Year view tip, the PDF
+  /// export and Customise. After the frame: the bar rebuilds on the change, and a listener must
   /// not rebuild mid-build. `_month` and `_yearMode` stay in this State.
   void _publishHeader(FinanceProvider finance, DateTime latestMonth) {
     final sm = _yearStartMonth;
@@ -1014,12 +1017,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
         onNext: canNext ? () => _shiftMonth(1) : null,
         // Browsing back a year used to take 12 arrow taps.
         onPick: () => _pickMonth(context, finance),
-        // Month is the default; nothing is persisted.
-        onToggleYear: () => setState(() => _yearMode = !_yearMode),
-        onExportPdf: () => _exportPdf(context, finance),
-        onAboutYear: (anchor) => openInfoTip(anchor, _yearTip),
-        onCustomise: () => goCockpitDashboard(context, page),
       );
+      // The "This page" part of Home's ⋮ menu.
+      AppNav.instance.pageMenu.publish(this, kHomeTabDashboard, [
+        PageMenuAction(
+          icon: _yearMode ? Icons.calendar_view_month : Icons.date_range,
+          label: _yearMode ? 'Month view' : 'Year view',
+          // Month is the default; nothing is persisted.
+          onTap: () => setState(() => _yearMode = !_yearMode),
+          // Its own tap: the tip opens over the menu, pointing at the "i",
+          // and the view stays as it is. A menu row is one node for a
+          // screen reader, so the tip is also the row's custom action.
+          trailing: Builder(
+            builder: (anchor) => Semantics(
+              customSemanticsActions: {
+                const CustomSemanticsAction(label: 'About Year view'): () =>
+                    openInfoTip(anchor, _yearTip),
+              },
+              child: IconButton(
+                tooltip: 'About Year view',
+                icon: const Icon(Icons.info_outline, size: 20),
+                onPressed: () => openInfoTip(anchor, _yearTip),
+              ),
+            ),
+          ),
+        ),
+        PageMenuAction(
+          icon: Icons.picture_as_pdf_outlined,
+          label: _yearMode
+              ? 'Export year report (PDF)'
+              : 'Export month report (PDF)',
+          onTap: () => _exportPdf(context, finance),
+        ),
+        PageMenuAction(
+          icon: Icons.dashboard_customize_outlined,
+          label: 'Customise this page',
+          onTap: () => goCockpitDashboard(context, page),
+        ),
+      ]);
     });
   }
 
@@ -3226,12 +3261,19 @@ class _BalanceCard extends StatelessWidget {
         const SizedBox(height: 2),
         // Morphs in place when the figure changes (edit, import, sync).
         // The text colour, not accent: colour sits on markers, not figures.
-        MorphingAmount(
-          value: _useAccounts ? finance.netWorth : finance.balance,
-          style: TextStyle(
-            color: scheme.onSurface,
-            fontSize: AppFigure.hero,
-            fontWeight: FontWeight.w700,
+        // Scales down rather than cutting digits: a lakh figure at large
+        // text is wider than a 320dp card.
+        FittedBox(
+          key: const ValueKey('balance-figure'),
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: MorphingAmount(
+            value: _useAccounts ? finance.netWorth : finance.balance,
+            style: TextStyle(
+              color: scheme.onSurface,
+              fontSize: AppFigure.hero,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
       ],
@@ -3490,6 +3532,13 @@ class _ForecastBody extends StatelessWidget {
     };
     final showEveryday = everydayHow != null && f.daysAfterToday > 0;
     final under = f.underCap;
+    // Spent so far includes rows still waiting for review, which the balance
+    // card leaves out: the label says how many, so the two figures don't
+    // seem to disagree.
+    final toReview = pendingSpendCountIn(
+      context.watch<FinanceProvider>(),
+      DateTime(f.lastDay.year, f.lastDay.month),
+    );
 
     Widget row(
       String label,
@@ -3497,52 +3546,52 @@ class _ForecastBody extends StatelessWidget {
       String? detail,
       VoidCallback? onTap,
     }) {
+      // The label wraps, whole words only: the amount keeps at most 40% of
+      // the row and shrinks past that, so at large text on a narrow phone
+      // the label column stays wider than its longest word. The amounts
+      // end at the card's edge, as the recap's do; a tappable row's
+      // chevron follows its label instead of taking a slot after them.
       final line = Padding(
         padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: muted,
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (detail != null)
-                    Text(
-                      detail,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
+        child: LayoutBuilder(
+          builder: (context, box) => Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(child: Text(label, style: muted)),
+                        if (onTap != null)
+                          Icon(
+                            Icons.chevron_right,
+                            size: 18,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                      ],
+                    ),
+                    if (detail != null)
+                      Text(
+                        detail,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            // Shrinks under its cap rather than overflowing at large text,
-            // as the balance breakdown's rows do.
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 140),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(fmtMoney(amount)),
+              const SizedBox(width: 8),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: box.maxWidth * 0.4),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: AlignmentDirectional.centerEnd,
+                  child: Text(fmtMoney(amount), maxLines: 1),
+                ),
               ),
-            ),
-            // Every row keeps the chevron's width, so the amounts line up.
-            SizedBox(
-              width: 18,
-              child: onTap == null
-                  ? null
-                  : Icon(
-                      Icons.chevron_right,
-                      size: 18,
-                      color: scheme.onSurfaceVariant,
-                    ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
       if (onTap == null) return line;
@@ -3565,12 +3614,8 @@ class _ForecastBody extends StatelessWidget {
             const SizedBox(width: 8),
             Flexible(
               child: InfoLabel(
-                label: Text(
-                  'Month-end forecast',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: muted,
-                ),
+                // Wraps at large text rather than cutting the name short.
+                label: Text('Month-end forecast', style: muted),
                 tip: InfoTip(
                   title: 'Month-end forecast',
                   message:
@@ -3610,7 +3655,12 @@ class _ForecastBody extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
         const SizedBox(height: 4),
-        row('Spent so far', f.spentSoFar),
+        row(
+          toReview == 0
+              ? 'Spent so far'
+              : 'Spent so far, with $toReview to review',
+          f.spentSoFar,
+        ),
         if (f.billsDue > 0)
           row(
             'Bills due (${f.bills.length})',

@@ -10,6 +10,8 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/budget_widget_service.dart';
 import 'package:expense_tracker/utils/app_palettes.dart';
+import 'package:expense_tracker/utils/app_theme.dart';
+import 'package:expense_tracker/utils/contrast.dart';
 import 'package:expense_tracker/utils/figma_palette.dart';
 
 /// The Android budget widget renders whatever [buildWidgetSnapshot] writes —
@@ -145,4 +147,114 @@ void main() {
       FigmaPaletteLight.textPrimary.toARGB32(),
     );
   });
+
+  test('the widget card matches the app card: fill, hairline and the '
+      'label on the accent', () async {
+    final (_, s) = await loaded();
+    // Mint is a light accent: the app writes dark ink on it.
+    for (final accent in [s.accent, FigmaPalette.green]) {
+      for (final palette in [
+        AppPalette.standard,
+        AppPalette.midnight,
+        AppPalette.amoled,
+      ]) {
+        // A palette brings its own accent; the swatch is picked after.
+        await s.setPalette(palette);
+        await s.setAccent(accent);
+        for (final mode in [ThemeMode.dark, ThemeMode.light]) {
+          await s.setMode(mode);
+          final brightness = mode == ThemeMode.light
+              ? Brightness.light
+              : Brightness.dark;
+          final app = buildAppTheme(
+            brightness: brightness,
+            accent: accent,
+            palette: palette,
+          );
+          final colors = app.extension<AppColors>()!;
+          final w = buildWidgetTheme(s, brightness);
+          final why = '$palette $mode $accent';
+          expect(w['cardFill'], colors.cardFill!.toARGB32(), reason: why);
+          expect(w['border'], colors.cardOutline?.toARGB32(), reason: why);
+          expect(
+            w['onAccent'],
+            app.colorScheme.onPrimary.toARGB32(),
+            reason: why,
+          );
+          expect(w['bg'], app.scaffoldBackgroundColor.toARGB32(), reason: why);
+        }
+      }
+    }
+  });
+
+  testWidgets('accent text on the widgets matches the app\'s '
+      'accentTextColor', (tester) async {
+    final s = SettingsProvider();
+    await tester.runAsync(s.load);
+    for (final accent in [FigmaPalette.blue, FigmaPalette.green]) {
+      await tester.runAsync(() => s.setAccent(accent));
+      for (final mode in [ThemeMode.dark, ThemeMode.light]) {
+        await tester.runAsync(() => s.setMode(mode));
+        final brightness = mode == ThemeMode.light
+            ? Brightness.light
+            : Brightness.dark;
+        late Color expected;
+        await tester.pumpWidget(
+          Theme(
+            data: buildAppTheme(brightness: brightness, accent: accent),
+            child: Builder(
+              builder: (context) {
+                expected = accentTextColor(context);
+                return const SizedBox();
+              },
+            ),
+          ),
+        );
+        expect(
+          buildWidgetTheme(s, brightness)['accentText'],
+          expected.toARGB32(),
+          reason: '$mode $accent',
+        );
+      }
+    }
+  });
+
+  test(
+    'entries carry the left or over line, the month and the ring icon',
+    () async {
+      final (f, s) = await loaded();
+      await s.setMonthlyBudget(1000);
+      await f.addBudget(
+        name: 'Eating out',
+        limit: 200,
+        mode: BudgetMode.include,
+        categoryIds: const {'food'},
+      );
+      await f.addBudget(
+        name: 'Everything else',
+        limit: 5000,
+        mode: BudgetMode.exclude,
+        categoryIds: const {'food'},
+      );
+      await f.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 250,
+        note: '',
+        date: DateTime(2026, 7, 5, 21),
+      );
+      final snap = buildWidgetSnapshot(f, s, now);
+      expect(
+        [for (final e in snap) e['leftLabel']],
+        ['₹750 left', '₹50 over', '₹5,000 left'],
+      );
+      expect([for (final e in snap) e['over']], [false, true, false]);
+      expect(
+        [for (final e in snap) e['icon']],
+        [kWalletWidgetIcon, 'food', kWalletWidgetIcon],
+      );
+      expect(snap.first['monthName'], 'July');
+      expect(snap.first['updatedShort'], '18 Jul');
+    },
+  );
 }

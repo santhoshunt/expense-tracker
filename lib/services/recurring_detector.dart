@@ -266,7 +266,13 @@ double _median(List<double> values) {
 /// — alert bodies shout in ALL CAPS), the note for manual ones. Shared by
 /// recurring detection and the merchant spend breakdown. A user [alias] for
 /// the row's identity wins over the derived text.
-String merchantDisplayLabel(Tx t, {MerchantAliasLookup? alias}) {
+String merchantDisplayLabel(Tx t, {MerchantAliasLookup? alias}) =>
+    merchantLabelOrNull(t, alias: alias) ?? 'Payment';
+
+/// [merchantDisplayLabel] without its "Payment" fallback: null when the row
+/// names no merchant, so a "category · merchant" title can drop the part
+/// rather than compare against the fallback text.
+String? merchantLabelOrNull(Tx t, {MerchantAliasLookup? alias}) {
   if (alias != null) {
     final identity = merchantIdentityOf(t);
     final named = identity == null ? null : alias(identity);
@@ -278,7 +284,7 @@ String merchantDisplayLabel(Tx t, {MerchantAliasLookup? alias}) {
   // Mirror recurringKeyOf: an SMS row without an extractable merchant is
   // identified (and therefore labeled) by the user's note.
   if (raw.isEmpty) raw = t.note.trim();
-  if (raw.isEmpty) return 'Payment';
+  if (raw.isEmpty) return null;
   return raw
       .split(RegExp(r'\s+'))
       .map(

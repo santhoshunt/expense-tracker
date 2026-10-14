@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Spending split (4×2): this month's spend as a donut (a bitmap drawn in
-     HomeWidgets.kt, total inside) beside the largest three categories and
-     Other. Fixed rows: four fit two cells and never scroll. The title sits
-     at the top and the body is centred in the height left under it, so a
-     taller cell leaves no gap at the bottom. At the smallest size with
-     large text the rows column is capped at that height and its last row
-     clips, never the title. -->
+     HomeWidgets.kt at the widget's height, total inside) beside the largest three categories and
+     Other. Fixed rows that never scroll. The title sits at the top and the
+     body fills and is centred in the height left under it, so a taller
+     cell leaves no gap at the bottom; with the body gone, the title and
+     the empty line centre together. HomeWidgets.split shows as many rows
+     as that height holds at the user's font size, so the last row drops
+     out rather than clip. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/hw_root"
     android:layout_width="match_parent"
@@ -18,15 +19,24 @@
         android:importantForAccessibility="no"
         android:scaleType="fitXY"
         android:src="@drawable/budget_widget_bg"
-        android:tint="#252836" />
+        android:tint="#262A3A" />
+
+    <ImageView
+        android:id="@+id/hw_border"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_card_border"
+        android:visibility="gone" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:gravity="top"
+        android:gravity="center_vertical"
         android:orientation="vertical"
         android:paddingHorizontal="16dp"
-        android:paddingVertical="8dp">
+        android:paddingVertical="10dp">
 
         <TextView
             android:id="@+id/hw_title"
@@ -47,10 +57,13 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
+            <!-- As tall as the body; the bitmap is drawn square at that
+                 height (HomeWidgets.split), so the width follows it. -->
             <ImageView
                 android:id="@+id/hw_donut"
-                android:layout_width="68dp"
-                android:layout_height="68dp"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:adjustViewBounds="true"
                 android:importantForAccessibility="no"
                 android:scaleType="fitCenter" />
 
@@ -92,6 +105,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="8dp"
+                        android:ellipsize="end"
                         android:maxLines="1"
                         android:textColor="#B4C0C8"
                         android:textSize="12sp" />
@@ -127,6 +141,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="8dp"
+                        android:ellipsize="end"
                         android:maxLines="1"
                         android:textColor="#B4C0C8"
                         android:textSize="12sp" />
@@ -162,6 +177,7 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="8dp"
+                        android:ellipsize="end"
                         android:maxLines="1"
                         android:textColor="#B4C0C8"
                         android:textSize="12sp" />
@@ -197,10 +213,12 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="8dp"
+                        android:ellipsize="end"
                         android:maxLines="1"
                         android:textColor="#B4C0C8"
                         android:textSize="12sp" />
-                </LinearLayout>            </LinearLayout>
+                </LinearLayout>
+            </LinearLayout>
         </LinearLayout>
 
         <TextView
@@ -208,6 +226,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:maxLines="3"
             android:text="@string/home_widget_empty"
             android:textColor="#B4C0C8"
             android:textSize="13sp"

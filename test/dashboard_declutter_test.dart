@@ -111,21 +111,24 @@ void main() {
       expect(find.byTooltip('Settings'), findsNothing);
     });
 
-    testWidgets('⋯ holds the month row and Cockpit and Settings', (
+    testWidgets('⋯ holds the page entries, then Cockpit, People, Settings', (
       tester,
     ) async {
       await pumpHome(tester);
       await openMenu(tester);
       for (final label in [
+        'This page',
         'Year view',
         'Export month report (PDF)',
-        'About Year view',
         'Customise this page',
+        'App',
         'Cockpit',
+        'People',
         'Settings',
       ]) {
         expect(find.text(label), findsWidgets, reason: label);
       }
+      expect(find.byTooltip('About Year view'), findsOneWidget);
       await tester.tap(find.text('Year view'));
       await settle(tester);
       expect(
@@ -144,18 +147,19 @@ void main() {
     testWidgets('About Year view opens the tip', (tester) async {
       await pumpHome(tester);
       await openMenu(tester);
-      await tester.tap(find.text('About Year view'));
+      await tester.tap(find.byTooltip('About Year view'));
       await settle(tester);
       expect(find.textContaining('adds up the 12 months'), findsOneWidget);
     });
 
-    testWidgets('other tabs keep only Cockpit and Settings in ⋯', (
+    testWidgets('other tabs show their own page entries, then the App ones', (
       tester,
     ) async {
       await pumpHome(tester);
       await tester.tap(find.text('Transactions').last);
       await settle(tester);
       await openMenu(tester);
+      expect(find.text('Export CSV'), findsOneWidget);
       expect(find.text('Cockpit'), findsOneWidget);
       expect(find.text('Settings'), findsOneWidget);
       expect(find.text('Year view'), findsNothing);

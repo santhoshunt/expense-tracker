@@ -1,18 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Shown in the launcher's widget picker under each preview. -->
-    <string name="budget_widget_description">One budget\'s monthly progress at a glance: name, amounts and bar.</string>
-    <string name="budget_widget_detailed_description">One budget\'s monthly progress with percent used, amount left and last update.</string>
+    <string name="budget_widget_compact_label">Budget (compact)</string>
+    <string name="budget_widget_detailed_label">Budget (detailed)</string>
+    <string name="budget_widget_description">One budget\'s month at a glance: a ring, what is left and how much is spent.</string>
+    <string name="budget_widget_detailed_description">One budget\'s month with a larger ring, what is left, percent used and the last update.</string>
+    <string name="budget_widget_empty">Open Expense Tracker to set up this widget.</string>
     <string name="home_widget_pace_label">Month pace</string>
     <string name="home_widget_pace_description">This month\'s spend against your cap and a usual month by today.</string>
-    <string name="home_widget_upcoming_label">Upcoming bills</string>
-    <string name="home_widget_upcoming_description">The next three bills due, nearest first.</string>
+    <string name="home_widget_upcoming_label">Upcoming</string>
+    <string name="home_widget_upcoming_description">The next three bills and income due, nearest first.</string>
     <string name="home_widget_today_label">Today and Add</string>
-    <string name="home_widget_today_description">What you spent today, with a button to add an expense.</string>
+    <string name="home_widget_today_description">What you spent today and what waits for review, with a button to add an expense.</string>
     <string name="home_widget_split_label">Spending split</string>
     <string name="home_widget_split_description">This month\'s spending by category, as a donut with the top three.</string>
+    <string name="home_widget_budgets_label">Budgets list</string>
+    <string name="home_widget_budgets_description">Every budget on one card: what is left or over in each.</string>
+    <string name="home_widget_recent_label">Recent</string>
+    <string name="home_widget_recent_description">Your latest four transactions and how many imports wait for review.</string>
+    <string name="home_widget_actions_label">Quick actions</string>
+    <string name="home_widget_actions_description">Add an expense or income, or import SMS, in one tap.</string>
     <string name="home_widget_empty">Open Expense Tracker to set up this widget.</string>
-    <!-- Launcher long-press shortcuts and the Quick Settings tile. -->
+    <!-- Text inside the widgets. -->
+    <string name="home_widget_upcoming_title">Upcoming</string>
+    <string name="home_widget_today_title">Today</string>
+    <string name="home_widget_budgets_title">Budgets</string>
+    <string name="home_widget_recent_title">Recent</string>
+    <string name="home_widget_usual_marker">│ usual by today</string>
+    <string name="home_widget_add">+ Add</string>
+    <string name="home_widget_action_expense">− Expense</string>
+    <string name="home_widget_action_income">+ Income</string>
+    <!-- Launcher long-press shortcuts, the Quick Settings tile and the
+         Quick actions widget. -->
     <string name="shortcut_add_expense">Add expense</string>
+    <string name="shortcut_add_income">Add income</string>
     <string name="shortcut_import_sms">Import SMS</string>
 </resources>
