@@ -92,6 +92,10 @@ class MonthlyRecapCard extends StatelessWidget {
   /// The Done button: hides this month's recap. Null leaves the button out.
   final VoidCallback? onDone;
 
+  /// False leaves out the "September recap" title and its gap, for a host
+  /// that draws its own header (the recap sheet).
+  final bool showTitle;
+
   const MonthlyRecapCard({
     super.key,
     required this.recap,
@@ -100,6 +104,7 @@ class MonthlyRecapCard extends StatelessWidget {
     this.onViewBudget,
     this.onViewSpending,
     this.onDone,
+    this.showTitle = true,
   });
 
   @override
@@ -133,19 +138,22 @@ class MonthlyRecapCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // The title is its own tip.
-            InfoLabel(
-              label: Text('$monthName recap', style: text.titleMedium),
-              tip: const InfoTip(
-                title: 'Monthly recap',
-                message:
-                    "Last month's totals, shown for the first $kRecapDays "
-                    "days of the month; after that, this month's pace takes "
-                    "its place. It updates if you edit last month's "
-                    'transactions. A notification on the 1st says when a '
-                    'new one is ready.',
+            if (showTitle) ...[
+              InfoLabel(
+                label: Text('$monthName recap', style: text.titleMedium),
+                tip: const InfoTip(
+                  title: 'Monthly recap',
+                  message:
+                      "Last month's totals, shown for the first $kRecapDays "
+                      "days of the month; after that, this month's pace "
+                      "takes its place. It updates if you edit last month's "
+                      'transactions. A notification on the 1st says when a '
+                      "new one is ready. Any month's recap also opens from "
+                      'the ⋮ menu.',
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
+              const SizedBox(height: 8),
+            ],
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

@@ -66,6 +66,16 @@ class NotificationService {
   /// Fixed, so every reschedule replaces the one pending recap.
   static const recapNotificationId = 97000;
 
+  /// Its own channel, not the recap's: Android mutes channels one at a
+  /// time, and a shared one would tie the two notes together.
+  static const _weeklyChannelId = 'weekly_digest';
+  static const _weeklyChannelName = 'Weekly digest';
+  static const _weeklyChannelDescription =
+      "A note on Monday that last week's digest is ready";
+
+  /// Fixed, so every reschedule replaces the one pending digest note.
+  static const weeklyDigestNotificationId = 98000;
+
   static const _reviewChannelId = 'import_review';
   static const _reviewChannelName = 'Transactions to review';
   static const _reviewChannelDescription =
@@ -118,6 +128,17 @@ class NotificationService {
               _recapChannelId,
               _recapChannelName,
               description: _recapChannelDescription,
+            ),
+          );
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.createNotificationChannel(
+            const AndroidNotificationChannel(
+              _weeklyChannelId,
+              _weeklyChannelName,
+              description: _weeklyChannelDescription,
             ),
           );
       await _plugin
@@ -305,6 +326,34 @@ class NotificationService {
     );
   }
 
+  /// Schedules the Monday note that [week]'s digest is ready, replacing any
+  /// pending one (same id). [weekLabel] names its dates ("12 to 18 Oct").
+  /// No amounts, for the same reasons as [scheduleRecap], which this
+  /// mirrors. The payload carries [week], so a late tap still opens it.
+  Future<void> scheduleWeeklyDigest(
+    DateTime when,
+    DateTime week,
+    String weekLabel,
+  ) async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
+    await init();
+    await _plugin.zonedSchedule(
+      id: weeklyDigestNotificationId,
+      title: 'Your week, $weekLabel',
+      body: 'See how last week went.',
+      scheduledDate: tz.TZDateTime.from(when, tz.UTC),
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _weeklyChannelId,
+          _weeklyChannelName,
+          channelDescription: _weeklyChannelDescription,
+        ),
+      ),
+      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+      payload: weeklyPayload(week),
+    );
+  }
+
   /// "N imported transactions are waiting". A count only, no amounts or
   /// merchants: it can show on the lock screen. Re-posting the same id
   /// updates the text without sounding again.
@@ -341,6 +390,17 @@ class NotificationService {
     final pending = await _plugin.pendingNotificationRequests();
     if (pending.any((r) => r.id == recapNotificationId)) {
       await _plugin.cancel(id: recapNotificationId);
+    }
+  }
+
+  /// Drops the booked digest note, if any; one already showing stays, as
+  /// in [cancelRecap].
+  Future<void> cancelWeeklyDigest() async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
+    await init();
+    final pending = await _plugin.pendingNotificationRequests();
+    if (pending.any((r) => r.id == weeklyDigestNotificationId)) {
+      await _plugin.cancel(id: weeklyDigestNotificationId);
     }
   }
 }

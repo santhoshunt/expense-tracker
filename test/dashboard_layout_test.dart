@@ -64,7 +64,9 @@ void main() {
       final l = DashboardPageLayout.fromJson(DashboardPage.overview, {
         'order': ['upcoming', 'monthlyBudget', 'recap', 'budgets', 'owed'],
       });
+      // 1.39 adds the This week row, back in at the top.
       expect(l.order, [
+        DashboardSection.week,
         DashboardSection.upcoming,
         DashboardSection.monthlyBudget,
         DashboardSection.forecast,

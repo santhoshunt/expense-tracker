@@ -850,7 +850,9 @@ class _BudgetSectionState extends State<_BudgetSection>
             // Alerts silently go nowhere while notifications cannot be shown —
             // say WHICH problem it is, since each has a different remedy and
             // only a fresh runtime denial can be fixed from inside the app.
-            if (((hasCap && settings.budgetAlerts) || settings.unusualAlerts) &&
+            if (((hasCap && settings.budgetAlerts) ||
+                    settings.unusualAlerts ||
+                    settings.weeklyDigest) &&
                 _notifStatus != null &&
                 _notifStatus != NotificationStatus.enabled)
               Padding(
@@ -939,6 +941,33 @@ class _BudgetSectionState extends State<_BudgetSection>
                 value: settings.unusualAlerts,
                 onChanged: (on) async {
                   await context.read<SettingsProvider>().setUnusualAlerts(on);
+                  if (on) {
+                    await NotificationService.instance.requestPermission();
+                  }
+                  await _checkNotifications();
+                },
+              ),
+            ),
+            // Only the note: the digest itself always opens from the
+            // Overview and the ⋮ menu.
+            _SwitchWithTip(
+              tip: const InfoTip(
+                title: 'Weekly digest',
+                message:
+                    "Every Monday at 9 AM, a note says last week's digest is "
+                    'ready. The note shows no amounts. The digest also opens '
+                    'any time from This week on the Overview or the ⋮ menu.',
+              ),
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Weekly digest'),
+                subtitle: Text(
+                  'A note on Monday morning about last week',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                value: settings.weeklyDigest,
+                onChanged: (on) async {
+                  await context.read<SettingsProvider>().setWeeklyDigest(on);
                   if (on) {
                     await NotificationService.instance.requestPermission();
                   }

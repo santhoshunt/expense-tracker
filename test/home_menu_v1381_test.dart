@@ -91,7 +91,11 @@ void main() {
     await settle(tester);
   }
 
-  Finder tile(String label) => find.widgetWithText(ListTile, label);
+  /// The menu row showing [label].
+  Finder tile(String label) => find.ancestor(
+    of: find.text(label),
+    matching: find.byWidgetPredicate((w) => w is PopupMenuItem),
+  );
 
   group('the ⋮ menu', () {
     testWidgets('Dashboard: This page, then App', (tester) async {
@@ -99,8 +103,8 @@ void main() {
       await openMenu(tester);
       for (final label in [
         'Year view',
-        'Export month report (PDF)',
-        'Customise this page',
+        'Month report (PDF)',
+        'Customise page',
         'Cockpit',
         'People',
         'Settings',
@@ -112,7 +116,7 @@ void main() {
       expect(find.byTooltip('About Year view'), findsOneWidget);
       double top(Finder f) => tester.getTopLeft(f).dy;
       expect(top(find.text('This page')), lessThan(top(tile('Year view'))));
-      expect(top(tile('Customise this page')), lessThan(top(find.text('App'))));
+      expect(top(tile('Customise page')), lessThan(top(find.text('App'))));
       expect(top(find.text('App')), lessThan(top(tile('Cockpit'))));
       expect(find.byType(PopupMenuDivider), findsOneWidget);
     });
@@ -124,7 +128,7 @@ void main() {
       await settle(tester);
       await openMenu(tester);
       expect(tile('Month view'), findsOneWidget);
-      expect(tile('Export year report (PDF)'), findsOneWidget);
+      expect(tile('Year report (PDF)'), findsOneWidget);
       expect(tile('Year view'), findsNothing);
     });
 
@@ -178,7 +182,7 @@ void main() {
       AppNav.instance.pageMenu.publish(owner, kHomeTabTransactions, [
         PageMenuAction(
           icon: Icons.checklist,
-          label: 'Select transactions',
+          label: 'Select',
           onTap: () => selected++,
         ),
         PageMenuAction(
@@ -191,15 +195,12 @@ void main() {
       await openMenu(tester);
       double top(Finder f) => tester.getTopLeft(f).dy;
       expect(find.text('This page'), findsOneWidget);
-      expect(
-        top(tile('Select transactions')),
-        lessThan(top(tile('Export CSV'))),
-      );
+      expect(top(tile('Select')), lessThan(top(tile('Export CSV'))));
       expect(top(tile('Export CSV')), lessThan(top(find.text('App'))));
       expect(tile('Cockpit'), findsOneWidget);
       // Another tab's entries stay out.
       expect(tile('Year view'), findsNothing);
-      await tester.tap(tile('Select transactions'));
+      await tester.tap(tile('Select'));
       await settle(tester);
       expect(selected, 1);
       expect(find.text('App'), findsNothing, reason: 'the menu closed');
@@ -222,7 +223,7 @@ void main() {
       expect(find.byType(PeopleScreen), findsOneWidget);
     });
 
-    testWidgets('Accounts: New account, Balance breakdown, Export statement', (
+    testWidgets('Accounts: New account, Balance breakdown, Statement', (
       tester,
     ) async {
       await pumpHome(tester);
@@ -233,7 +234,7 @@ void main() {
       for (final label in [
         'New account',
         'Balance breakdown',
-        'Export statement (PDF)',
+        'Statement (PDF)',
       ]) {
         expect(tile(label), findsOneWidget, reason: label);
       }
@@ -243,11 +244,11 @@ void main() {
       // The menu closed and the sheet, titled the same, opened.
       expect(tile('Balance breakdown'), findsNothing);
       expect(find.text('Balance breakdown'), findsOneWidget);
-      // Export statement asks which dates, through the shared flow.
+      // Statement (PDF) asks which dates, through the shared flow.
       await tester.tapAt(const Offset(5, 5));
       await settle(tester);
       await openMenu(tester);
-      await tester.tap(tile('Export statement (PDF)'));
+      await tester.tap(tile('Statement (PDF)'));
       await settle(tester);
       expect(find.text('Export which dates?'), findsOneWidget);
       expect(find.text('All transactions'), findsOneWidget);

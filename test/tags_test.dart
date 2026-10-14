@@ -309,7 +309,7 @@ void main() {
       final p = await tagged();
       await p.setTagColor('Work', pink);
       final data = p.exportData();
-      expect(data['version'], 23);
+      expect(data['version'], 24);
       final fresh = FinanceProvider();
       await fresh.load();
       await fresh.importData(data, replace: true);

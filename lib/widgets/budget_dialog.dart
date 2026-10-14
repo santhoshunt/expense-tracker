@@ -4,9 +4,12 @@ import 'package:provider/provider.dart';
 import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../utils/app_theme.dart';
+import '../utils/contrast.dart';
 import '../utils/format.dart';
 import 'category_chip_label.dart';
 import 'dispose_scope.dart';
+import 'icon_picker_sheet.dart';
 import 'info_tip.dart';
 
 /// Create/edit dialog for a [SpendBudget]. Shared by Settings ("Custom
@@ -32,6 +35,8 @@ Future<void> showBudgetDialog(
     ...?existing?.categoryIds,
     if (existing == null) ...?presetCategoryIds,
   };
+  // The picked icon's key, or null for Automatic.
+  var iconKey = existing?.iconKey;
 
   // Groupable categories bucketed by parent group ("Other" last), so the
   // picker mirrors the dashboard's grouping.
@@ -63,6 +68,28 @@ Future<void> showBudgetDialog(
               limit != null &&
               limit > 0 &&
               (mode == BudgetMode.exclude || selected.isNotEmpty);
+          // What the icon button shows: the picked icon, else what
+          // Automatic gives for the current mode and picks.
+          final automaticIcon = budgetIcon(
+            SpendBudget(
+              id: '',
+              name: '',
+              limit: 0,
+              mode: mode,
+              categoryIds: selected,
+            ),
+          );
+          final scheme = Theme.of(ctx).colorScheme;
+          Future<void> pickIcon() async {
+            final picked = await showIconPickerSheet(
+              ctx,
+              selected: iconKey,
+              automaticIcon: automaticIcon,
+            );
+            if (picked == null) return;
+            setState(() => iconKey = picked.isEmpty ? null : picked);
+          }
+
           return AlertDialog(
             title: Text(existing == null ? 'New budget' : 'Edit budget'),
             content: SingleChildScrollView(
@@ -72,17 +99,70 @@ Future<void> showBudgetDialog(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  TextField(
-                    controller: nameCtrl,
-                    // A preset name is already filled in; the limit is the
-                    // field that still needs typing.
-                    autofocus: existing == null && presetName == null,
-                    textCapitalization: TextCapitalization.sentences,
-                    decoration: const InputDecoration(
-                      labelText: 'Name',
-                      hintText: 'e.g. Personal spending',
-                    ),
-                    onChanged: (_) => setState(() {}),
+                  Row(
+                    children: [
+                      // The whole 48dp square takes the tap, not only the
+                      // 40dp tile drawn in it.
+                      SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: Semantics(
+                          button: true,
+                          label: 'Budget icon',
+                          // excludeSemantics drops the InkWell's own tap
+                          // action too, so it is exposed here.
+                          onTap: pickIcon,
+                          excludeSemantics: true,
+                          child: Tooltip(
+                            message: 'Budget icon',
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(
+                                AppRadius.control,
+                              ),
+                              onTap: pickIcon,
+                              child: Center(
+                                child: Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: scheme.primary.withValues(
+                                      alpha: 0.15,
+                                    ),
+                                    borderRadius: BorderRadius.circular(
+                                      AppRadius.control,
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    kCategoryIconChoices[iconKey] ??
+                                        automaticIcon,
+                                    size: 21,
+                                    color: categoryGlyphColor(
+                                      ctx,
+                                      scheme.primary,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: nameCtrl,
+                          // A preset name is already filled in; the limit is
+                          // the field that still needs typing.
+                          autofocus: existing == null && presetName == null,
+                          textCapitalization: TextCapitalization.sentences,
+                          decoration: const InputDecoration(
+                            labelText: 'Name',
+                            hintText: 'e.g. Personal spending',
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 16),
                   TextField(
@@ -207,6 +287,7 @@ Future<void> showBudgetDialog(
                             limit: limit,
                             mode: mode,
                             categoryIds: {...selected},
+                            iconKey: iconKey,
                           );
                         } else {
                           finance.updateBudget(
@@ -215,6 +296,8 @@ Future<void> showBudgetDialog(
                               limit: limit,
                               mode: mode,
                               categoryIds: {...selected},
+                              iconKey: iconKey,
+                              clearIconKey: iconKey == null,
                             ),
                           );
                         }

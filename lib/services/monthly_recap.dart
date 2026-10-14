@@ -13,8 +13,9 @@ const int kRecapDays = 7;
 /// pace (false) on [now].
 bool showsRecap(DateTime now) => now.day <= kRecapDays;
 
-/// The clock the dashboard's recap and pace cards read. Widget tests swap
-/// it to pick a day of the month; nothing else should.
+/// The clock the dashboard's recap and pace cards, its ⋮ recap entry and
+/// the recap sheet read. Widget tests swap it to pick a day of the month;
+/// nothing else should.
 DateTime Function() recapClock = DateTime.now;
 
 /// A budget's standing for a month. [budgetId] is null for the overall
@@ -108,6 +109,30 @@ MonthlyRecap? buildMonthlyRecap(
         if (s.spent > s.limit) s,
     ],
   );
+}
+
+/// The recap of [month] (its first day), whatever today is, or null when
+/// that month holds no confirmed transactions. Built as the 1st of the
+/// month after would build it, so the figures match the card's.
+MonthlyRecap? buildRecapFor(
+  FinanceProvider finance,
+  SettingsProvider settings,
+  DateTime month,
+) => buildMonthlyRecap(
+  finance,
+  settings,
+  now: DateTime(month.year, month.month + 1, 1),
+);
+
+/// Months with a recap as of [now]: [monthsWithData] before today's
+/// month, newest first.
+List<DateTime> recapMonths(Iterable<DateTime> monthsWithData, DateTime now) {
+  final thisMonth = DateTime(now.year, now.month);
+  return {
+    for (final m in monthsWithData)
+      if (DateTime(m.year, m.month).isBefore(thisMonth))
+        DateTime(m.year, m.month),
+  }.toList()..sort((a, b) => b.compareTo(a));
 }
 
 /// Budgets worth a line on the pace card: at or past this share of their

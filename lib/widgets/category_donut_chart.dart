@@ -32,12 +32,18 @@ class CategoryDonutChart extends StatefulWidget {
   /// Shown instead of the chart when nothing was spent.
   final String emptyText;
 
+  /// When nothing was spent, draw a grey ring with "₹0" at the chart's
+  /// usual size and put [emptyText] under it, instead of the shorter text
+  /// alone, so a sheet stepping through months keeps its height.
+  final bool emptyRing;
+
   const CategoryDonutChart({
     super.key,
     required this.data,
     this.onCategoryTap,
     this.onCategoryHistory,
     this.emptyText = 'No spending this month',
+    this.emptyRing = false,
   });
 
   @override
@@ -263,6 +269,45 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
   Widget build(BuildContext context) {
     final data = widget.data;
     final total = data.fold(0.0, (s, e) => s + e.value);
+    final theme = Theme.of(context);
+    if (total <= 0 && widget.emptyRing) {
+      return Column(
+        children: [
+          SizedBox(
+            height: 180,
+            child: CustomPaint(
+              size: Size.infinite,
+              painter: _DonutPainter(
+                // One closed ring: the painter trims 0.03 off each sweep
+                // for the gap between slices, so this one adds it back.
+                slices: [
+                  (
+                    id: '',
+                    color: theme.colorScheme.surfaceContainerHigh,
+                    start: 0,
+                    sweep: 2 * math.pi + 0.03,
+                  ),
+                ],
+                selected: null,
+                lift: 0,
+                centerLabel: fmtMoneyCompact(0),
+                centerStyle: theme.textTheme.titleMedium!.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+                subStyle: theme.textTheme.bodySmall!,
+                textScaler: MediaQuery.textScalerOf(context),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            widget.emptyText,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall,
+          ),
+        ],
+      );
+    }
     if (total <= 0) {
       return SizedBox(
         height: 160,
@@ -270,7 +315,6 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
       );
     }
     final colors = _colorsFor(data);
-    final theme = Theme.of(context);
     return Column(
       children: [
         SizedBox(
@@ -316,7 +360,10 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
         LayoutBuilder(
           builder: (context, constraints) {
             const gap = 16.0;
-            final columns = constraints.maxWidth >= 280 ? 2 : 1;
+            // The 280dp threshold grows with the text: at 1.3x on a 320dp
+            // phone two columns broke "Education" mid-word.
+            final scale = MediaQuery.textScalerOf(context).scale(1);
+            final columns = constraints.maxWidth >= 280 * scale ? 2 : 1;
             final width = columns == 1
                 ? constraints.maxWidth
                 : (constraints.maxWidth - gap) / 2;

@@ -2494,6 +2494,7 @@ class FinanceProvider extends ChangeNotifier {
     required double limit,
     required BudgetMode mode,
     required Set<String> categoryIds,
+    String? iconKey,
   }) async {
     final id = 'bud_${DateTime.now().microsecondsSinceEpoch}';
     _budgets.add(
@@ -2503,6 +2504,7 @@ class FinanceProvider extends ChangeNotifier {
         limit: limit,
         mode: mode,
         categoryIds: {...categoryIds},
+        iconKey: iconKey,
       ),
     );
     notifyListeners();
@@ -5331,7 +5333,8 @@ class FinanceProvider extends ChangeNotifier {
     // v21: accounts may carry `linkedByHand` (keys typed in by hand).
     // v22: reminders may carry `onDate` (a one-time reminder).
     // v23: transactions may carry `unseen`.
-    'version': 23,
+    // v24: budgets may carry `icon`.
+    'version': 24,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),

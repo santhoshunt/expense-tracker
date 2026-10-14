@@ -2,10 +2,11 @@
 /// alerts can land on the same id (a shared id replaces the earlier note in
 /// the shade, or cancels the scheduled recap).
 ///
-/// `NotificationService.reviewNotificationId` (93000) and
-/// `NotificationService.recapNotificationId` (97000) stay declared in
-/// notification_service.dart; [review] and [recap] here must equal them, and
-/// test/notification_ids_test.dart checks that they do.
+/// `NotificationService.reviewNotificationId` (93000),
+/// `NotificationService.recapNotificationId` (97000) and
+/// `NotificationService.weeklyDigestNotificationId` (98000) stay declared in
+/// notification_service.dart; [review], [recap] and [weeklyDigest] here must
+/// equal them, and the tests check that they do.
 ///
 /// Hashed ids mask the hash (`& 0x7fffffff`) rather than call abs(): abs()
 /// of the minimum int is still negative.
@@ -33,6 +34,10 @@ abstract final class NotificationIds {
   /// The scheduled monthly recap (NotificationService.scheduleRecap).
   static const recap = 97000;
 
+  /// The scheduled Monday digest note
+  /// (NotificationService.scheduleWeeklyDigest).
+  static const weeklyDigest = 98000;
+
   /// Unusual spending alerts, one per category (UnusualSpendMonitor).
   static const unusualStart = 200000;
   static const unusualEnd = 299999;
@@ -52,6 +57,7 @@ abstract final class NotificationIds {
     (start: recurringStart, end: recurringEnd, owner: 'Upcoming recurring'),
     (start: reminderStart, end: reminderEnd, owner: 'Reminders'),
     (start: recap, end: recap, owner: 'Monthly recap'),
+    (start: weeklyDigest, end: weeklyDigest, owner: 'Weekly digest'),
     (start: unusualStart, end: unusualEnd, owner: 'Unusual spending'),
     (start: customBudgetStart, end: customBudgetEnd, owner: 'Custom budgets'),
   ];

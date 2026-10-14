@@ -119,8 +119,8 @@ void main() {
       for (final label in [
         'This page',
         'Year view',
-        'Export month report (PDF)',
-        'Customise this page',
+        'Month report (PDF)',
+        'Customise page',
         'App',
         'Cockpit',
         'People',
@@ -141,7 +141,7 @@ void main() {
       );
       await openMenu(tester);
       expect(find.text('Month view'), findsOneWidget);
-      expect(find.text('Export year report (PDF)'), findsOneWidget);
+      expect(find.text('Year report (PDF)'), findsOneWidget);
     });
 
     testWidgets('About Year view opens the tip', (tester) async {

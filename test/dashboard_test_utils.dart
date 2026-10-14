@@ -37,11 +37,13 @@ Future<void> tapMenuItem(WidgetTester tester, String label) async {
 Future<void> toggleYearView(WidgetTester tester) async {
   await tester.tap(find.byTooltip('More'));
   await tester.pumpAndSettle();
-  final toYear = find.widgetWithText(ListTile, 'Year view');
+  Finder row(String label) => find.ancestor(
+    of: find.text(label),
+    matching: find.byWidgetPredicate((w) => w is PopupMenuItem),
+  );
+  final toYear = row('Year view');
   await tester.tap(
-    toYear.evaluate().isNotEmpty
-        ? toYear.last
-        : find.widgetWithText(ListTile, 'Month view').last,
+    toYear.evaluate().isNotEmpty ? toYear.last : row('Month view').last,
   );
   await tester.pumpAndSettle();
 }

@@ -112,7 +112,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
         ),
         PageMenuAction(
           icon: Icons.picture_as_pdf_outlined,
-          label: 'Export statement (PDF)',
+          label: 'Statement (PDF)',
           // The PDF report Settings, Backup makes.
           onTap: () =>
               exportPdfWithRange(context, context.read<FinanceProvider>()),

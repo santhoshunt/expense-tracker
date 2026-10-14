@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/semantics.dart' show CustomSemanticsAction;
+import 'package:intl/intl.dart' show DateFormat;
 import 'package:provider/provider.dart';
 
 import '../models/account.dart';
@@ -27,6 +28,7 @@ import '../services/spend_history.dart';
 import '../services/safe_to_spend.dart';
 import '../services/subscriptions.dart';
 import '../services/upcoming_items.dart';
+import '../services/weekly_digest.dart';
 import '../services/year_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
@@ -52,11 +54,13 @@ import '../widgets/category_donut_chart.dart';
 import '../widgets/comparison_chart_sheet.dart';
 import '../widgets/monthly_bar_chart.dart';
 import '../widgets/monthly_recap_card.dart';
+import '../widgets/recap_sheet.dart';
 import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/show_all_list.dart';
 import '../widgets/spend_comparison_cards.dart';
 import '../widgets/spend_history_sheet.dart';
 import '../widgets/tag_editor_dialog.dart';
+import '../widgets/weekly_digest_sheet.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
 import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
@@ -744,12 +748,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return null;
   }
 
-  /// The icon in a budget's ring: its category's for a one-category "Only
-  /// these" budget, a generic one for several or "All except".
-  static IconData _budgetIcon(SpendBudget b) =>
-      b.mode == BudgetMode.include && b.categoryIds.length == 1
-      ? categoryById(b.categoryIds.single, fallbackType: TxType.expense).icon
-      : Icons.category_outlined;
+  /// The icon in a budget's ring: the one picked for it, else its
+  /// category's for a one-category "Only these" budget, a generic one for
+  /// several or "All except" ([budgetIcon]).
+  static IconData _budgetIcon(SpendBudget b) => budgetIcon(b);
 
   @override
   void initState() {
@@ -761,7 +763,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
       showRecap: _showMonthCard,
       showSection: _showSection,
       showCategoryHistory: _showAlertedCategory,
+      showWeeklyDigest: _showWeeklyDigest,
     );
+  }
+
+  /// The weekly digest sheet on [week]: from the This week row, the ⋮
+  /// entry and the Monday note. After the frame, so a tap that switched
+  /// the tab opens it over the settled page.
+  void _showWeeklyDigest(DateTime week) {
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showWeeklyDigestSheet(
+        context,
+        week: week,
+        hits: _recurring(context.read<FinanceProvider>()),
+        onOpenTransactions: widget.onOpenTransactions,
+      );
+    });
+    // A post-frame callback alone waits for a frame nothing has asked for.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   /// Where an unusual spending alert lands: [id]'s history sheet to the
@@ -1036,22 +1057,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
               },
               child: IconButton(
                 tooltip: 'About Year view',
+                // Compact (40dp), so the row keeps the menu's 44dp height.
+                visualDensity: VisualDensity.compact,
                 icon: const Icon(Icons.info_outline, size: 20),
                 onPressed: () => openInfoTip(anchor, _yearTip),
               ),
             ),
           ),
         ),
+        // In every view, unlike the This week row: the menu is the way in
+        // when the row is hidden or another month is shown.
+        PageMenuAction(
+          icon: Icons.calendar_view_week,
+          label: 'Weekly digest',
+          onTap: () => _showWeeklyDigest(weekStartOf(weekClock())),
+        ),
+        // Any day of the month: the Overview card shows only on the 1st to
+        // the 7th. Named for the newest past month with data; left out
+        // until there is one.
+        // recapClock, as the sheet reads it, so both name the same month.
+        if (recapMonths(finance.monthsWithData, recapClock()) case [
+          final newest,
+          ...,
+        ])
+          PageMenuAction(
+            icon: Icons.history,
+            label: '${DateFormat('MMMM').format(newest)} recap',
+            onTap: () => showRecapSheet(
+              context,
+              month: newest,
+              onViewCategory: widget.onViewCategory,
+              onViewMerchant: widget.onViewMerchant,
+              onViewBudget: widget.onViewBudget,
+              onViewSpending: _viewSpending,
+            ),
+          ),
         PageMenuAction(
           icon: Icons.picture_as_pdf_outlined,
-          label: _yearMode
-              ? 'Export year report (PDF)'
-              : 'Export month report (PDF)',
+          label: _yearMode ? 'Year report (PDF)' : 'Month report (PDF)',
           onTap: () => _exportPdf(context, finance),
         ),
         PageMenuAction(
           icon: Icons.dashboard_customize_outlined,
-          label: 'Customise this page',
+          label: 'Customise page',
           onTap: () => goCockpitDashboard(context, page),
         ),
       ]);
@@ -1273,6 +1321,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // Overview never folds: each section is today's card, self-hiding as
       // before; only its place and whether it shows are the user's.
       final sections = <DashboardSection, _DashSection>{
+        DashboardSection.week: (
+          visible: true,
+          title: null,
+          summary: null,
+          tip: null,
+          body: () => [
+            // This week so far, by the recap's rule: Month view on today's
+            // month only, since under March's totals it would read as
+            // March's. Hidden on an empty ledger.
+            Builder(
+              key: const ValueKey('presence-week'),
+              builder: (context) {
+                final today = weekClock();
+                final showing =
+                    !_yearMode &&
+                    _month == DateTime(today.year, today.month) &&
+                    finance.firstTransactionDate != null;
+                return AnimatedPresence(
+                  visible: showing,
+                  child: !showing
+                      ? const SizedBox.shrink()
+                      : _WeekRow(
+                          digest: buildWeekDigest(
+                            finance,
+                            weekStartOf(today),
+                            now: today,
+                          ),
+                          onTap: () => _showWeeklyDigest(weekStartOf(today)),
+                        ),
+                );
+              },
+            ),
+          ],
+        ),
         DashboardSection.monthlyBudget: (
           visible: true,
           title: null,
@@ -2295,6 +2377,84 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// "This week": the week's spending so far against the usual week, one
+/// slim row under the balance card, opening the weekly digest.
+class _WeekRow extends StatelessWidget {
+  final WeekDigest digest;
+  final VoidCallback onTap;
+  const _WeekRow({required this.digest, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final usual = digest.usual;
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpace.gap),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.card),
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpace.card,
+                vertical: 8,
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.calendar_view_week,
+                    size: 20,
+                    color: scheme.primary,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text('This week', style: text.titleSmall)),
+                  const SizedBox(width: 8),
+                  // A cap, as the Owed card's total: a loose flex child
+                  // would leave a gap before the chevron.
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 180),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            fmtMoneyTidy(digest.spent),
+                            style: text.titleSmall?.copyWith(
+                              color: moneyColor(context, type: TxType.expense),
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        if (usual != null)
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              'usual ${fmtMoneyTidy(usual)}',
+                              style: text.bodySmall?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

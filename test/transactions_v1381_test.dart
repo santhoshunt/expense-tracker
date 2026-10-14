@@ -492,8 +492,9 @@ void main() {
     expect(find.text('1 new ·'), findsOneWidget);
   });
 
-  testWidgets('the ⋮ menu gets Review imports, Select transactions and '
-      'Export CSV', (tester) async {
+  testWidgets('the ⋮ menu gets Review imports, Select and Export CSV', (
+    tester,
+  ) async {
     // Tall: both review cards, the selection bar and the list together
     // outgrow the default 600dp test height.
     tester.view.physicalSize = const Size(1600, 2400);
@@ -508,11 +509,7 @@ void main() {
     List<String> labels() => [
       for (final a in menu.actionsFor(kHomeTabTransactions)) a.label,
     ];
-    expect(labels(), [
-      'Review imports (4)',
-      'Select transactions',
-      'Export CSV',
-    ]);
+    expect(labels(), ['Review imports (4)', 'Select', 'Export CSV']);
 
     // Review imports opens a folded review card.
     await s.toggleSection('pending_review');
@@ -522,7 +519,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(s.isSectionCollapsed('pending_review'), isFalse);
 
-    // Select transactions enters selection mode with nothing picked.
+    // Select enters selection mode with nothing picked.
     expect(find.byTooltip('Clear selection'), findsNothing);
     menu.actionsFor(kHomeTabTransactions)[1].onTap();
     await tester.pumpAndSettle();
@@ -537,6 +534,6 @@ void main() {
       await p.deleteTransaction(t.id);
     }
     await tester.pumpAndSettle();
-    expect(labels(), ['Select transactions', 'Export CSV']);
+    expect(labels(), ['Select', 'Export CSV']);
   });
 }

@@ -45,6 +45,16 @@ class FakeNotifications implements NotificationService {
   Future<void> cancelRecap() async {}
 
   @override
+  Future<void> scheduleWeeklyDigest(
+    DateTime when,
+    DateTime week,
+    String weekLabel,
+  ) async {}
+
+  @override
+  Future<void> cancelWeeklyDigest() async {}
+
+  @override
   Future<void> showReview(int count) async {}
 
   @override

@@ -995,8 +995,8 @@ void main() {
     // The scope switch and the PDF export are in the app bar's ⋯ menu.
     await tester.tap(find.byTooltip('More'));
     await tester.pumpAndSettle();
-    expect(find.text('Export month report (PDF)'), findsOneWidget);
-    expect(find.text('Export year report (PDF)'), findsNothing);
+    expect(find.text('Month report (PDF)'), findsOneWidget);
+    expect(find.text('Year report (PDF)'), findsNothing);
     await tester.tap(find.text('Year view'));
     await tester.pumpAndSettle();
     expect(
@@ -1031,7 +1031,7 @@ void main() {
     // the month-only sections return.
     await tester.tap(find.byTooltip('More'));
     await tester.pumpAndSettle();
-    expect(find.text('Export year report (PDF)'), findsOneWidget);
+    expect(find.text('Year report (PDF)'), findsOneWidget);
     await tester.tap(find.text('Month view'));
     await tester.pumpAndSettle();
     // The selector is the app bar title, never scrolled away.

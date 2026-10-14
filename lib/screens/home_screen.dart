@@ -23,6 +23,7 @@ import '../services/sms_import_service.dart';
 import '../services/sms_source.dart';
 import '../services/unusual_spend_monitor.dart';
 import '../services/upcoming_monitor.dart';
+import '../services/weekly_digest.dart';
 import '../services/update_downloader.dart';
 import '../services/update_installer.dart';
 import '../services/update_service.dart';
@@ -190,6 +191,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     BackgroundImportScheduler.runImportHandler = _runBackgroundImport;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scheduleRecap();
+      _scheduleWeeklyDigest();
       _autoImport();
       _ensureNotificationPermission();
       // Add it for me reminders record what came due while it was shut.
@@ -227,6 +229,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _settings = context.read<SettingsProvider>();
     _settings!.addListener(_syncBudgetWidgets);
     _settings!.addListener(_applyBackgroundImport);
+    // The Weekly digest switch books or cancels the note at once.
+    _settings!.addListener(_scheduleWeeklyDigest);
   }
 
   /// "On launch" must include WARM launches: Android keeps the process in
@@ -239,8 +243,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
-    // A process kept alive across midnight on the 1st must rebook.
+    // A process kept alive across midnight on the 1st must rebook, and one
+    // kept alive past Monday 09:00 likewise for the digest.
     _scheduleRecap();
+    _scheduleWeeklyDigest();
     // An action that arrived during the switch back waits for resumed.
     _scheduleLaunchAction();
     _checkForUpdate();
@@ -333,13 +339,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Budget alerts are on by default, so the Settings toggle (the other
   /// place permission is requested) may never be touched — ask on launch
-  /// when a cap is active, or when unusual spending alerts (on by default,
-  /// no budget needed) are. No-op once granted or permanently denied.
+  /// when a cap is active, or when unusual spending alerts or the weekly
+  /// digest note (both on by default, no budget needed) are. No-op once
+  /// granted or permanently denied.
   Future<void> _ensureNotificationPermission() async {
     if (!mounted) return;
     final settings = context.read<SettingsProvider>();
     final budgetAlerts = settings.budgetAlerts && settings.monthlyBudget > 0;
-    if (!budgetAlerts && !settings.unusualAlerts) return;
+    if (!budgetAlerts && !settings.unusualAlerts && !settings.weeklyDigest) {
+      return;
+    }
     await NotificationService.instance.requestPermission();
     // A pending alert may have been waiting on the permission.
     _checkBudget();
@@ -407,6 +416,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => AppNav.instance.showCategoryHistory(h.categoryId, h.month),
         );
+      // The Monday note: the digest of the week it was about, however late
+      // the tap.
+      case LaunchAction.openWeeklyDigest:
+        final week = LaunchActions.instance.takeWeek();
+        if (week == null) break;
+        setState(() => _showTab(kHomeTabDashboard));
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => AppNav.instance.showWeeklyDigest(week),
+        );
       case LaunchAction.openToday:
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day);
@@ -450,6 +468,45 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  /// The digest booking last sent to the plugin, switch included, as
+  /// [_bookedRecap].
+  String? _bookedWeekly;
+
+  /// Books the Monday note that last week's digest is ready (see
+  /// [weeklyDigestBooking]), or cancels it while Cockpit's Weekly digest
+  /// switch is off. Runs where [_scheduleRecap] runs, and on settings
+  /// changes so the switch applies without a restart.
+  Future<void> _scheduleWeeklyDigest() async {
+    if (!mounted) return;
+    final on = context.read<SettingsProvider>().weeklyDigest;
+    final booking = on
+        ? weeklyDigestBooking(
+            DateTime.now(),
+            hasData:
+                context.read<FinanceProvider>().firstTransactionDate != null,
+          )
+        : null;
+    final key = booking == null
+        ? 'none|$on'
+        : '${booking.when}|${booking.week}|$on';
+    if (key == _bookedWeekly) return;
+    _bookedWeekly = key;
+    try {
+      if (booking != null) {
+        await NotificationService.instance.scheduleWeeklyDigest(
+          booking.when,
+          booking.week,
+          weekRangeLabel(booking.week),
+        );
+      } else {
+        await NotificationService.instance.cancelWeeklyDigest();
+      }
+    } catch (e) {
+      _bookedWeekly = null;
+      debugPrint('Weekly digest scheduling failed: $e');
+    }
+  }
+
   @override
   void dispose() {
     LaunchActions.instance.pending.removeListener(_scheduleLaunchAction);
@@ -459,6 +516,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _finance?.removeListener(_checkBudget);
     _settings?.removeListener(_syncBudgetWidgets);
     _settings?.removeListener(_applyBackgroundImport);
+    _settings?.removeListener(_scheduleWeeklyDigest);
     if (BackgroundImportScheduler.runImportHandler == _runBackgroundImport) {
       BackgroundImportScheduler.runImportHandler = null;
     }
@@ -485,8 +543,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context.read<FinanceProvider>().pendingCount,
       allowPost: false,
     );
-    // A month's first confirmed row books its recap note.
+    // A month's first confirmed row books its recap note, and the first
+    // row ever the digest note.
     _scheduleRecap();
+    _scheduleWeeklyDigest();
   }
 
   /// The mode last handed to the native scheduler, so settings changes

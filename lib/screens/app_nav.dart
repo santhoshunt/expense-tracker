@@ -142,6 +142,7 @@ class AppNav {
   VoidCallback? _showRecap;
   void Function(DashboardSection section)? _showSection;
   void Function(String categoryId, DateTime month)? _showCategoryHistory;
+  void Function(DateTime week)? _showWeeklyDigest;
 
   void attachHome(
     Object owner, {
@@ -185,11 +186,13 @@ class AppNav {
     required void Function(DashboardSection section) showSection,
     required void Function(String categoryId, DateTime month)
     showCategoryHistory,
+    required void Function(DateTime week) showWeeklyDigest,
   }) {
     _dashboardOwner = owner;
     _showRecap = showRecap;
     _showSection = showSection;
     _showCategoryHistory = showCategoryHistory;
+    _showWeeklyDigest = showWeeklyDigest;
   }
 
   void detachDashboard(Object owner) {
@@ -198,6 +201,7 @@ class AppNav {
     _showRecap = null;
     _showSection = null;
     _showCategoryHistory = null;
+    _showWeeklyDigest = null;
   }
 
   /// The Dashboard's recap on the Overview, or after the recap week this
@@ -216,6 +220,11 @@ class AppNav {
   /// alone: callers switch the home tab themselves.
   void showCategoryHistory(String categoryId, DateTime month) =>
       _showCategoryHistory?.call(categoryId, month);
+
+  /// The weekly digest sheet over the Dashboard, on the week starting
+  /// [week] (where the Monday note lands). Leaves open routes alone:
+  /// callers switch the home tab themselves.
+  void showWeeklyDigest(DateTime week) => _showWeeklyDigest?.call(week);
 
   void _toRoot(BuildContext context) =>
       Navigator.of(context).popUntil((r) => r.isFirst);

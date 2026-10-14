@@ -7,7 +7,6 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/spend_budget.dart';
-import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/app_theme.dart';
@@ -185,9 +184,7 @@ List<Map<String, dynamic>> buildWidgetSnapshot(
 /// cap and for budgets that span several categories.
 const String kWalletWidgetIcon = 'wallet';
 
-/// [b]'s ring icon: its one category's icon when it counts exactly one
-/// category, else the wallet.
+/// [b]'s ring icon: the icon picked for it, else its one category's icon
+/// when it counts exactly one category, else the wallet.
 String budgetWidgetIcon(SpendBudget b) =>
-    b.mode == BudgetMode.include && b.categoryIds.length == 1
-    ? categoryById(b.categoryIds.single).iconKey
-    : kWalletWidgetIcon;
+    budgetIconKey(b, fallback: kWalletWidgetIcon);

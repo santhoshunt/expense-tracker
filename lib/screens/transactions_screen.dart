@@ -244,7 +244,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// Ids of transactions picked in multi-select mode; non-empty = selecting.
   final Set<String> _selected = {};
 
-  /// Selection mode entered from the ⋮ menu's Select transactions, before
+  /// Selection mode entered from the ⋮ menu's Select, before
   /// any row is picked. Cleared by build once a row is picked, so from
   /// then on an empty selection ends the mode as before.
   bool _selectMode = false;
@@ -527,7 +527,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           ),
         PageMenuAction(
           icon: Icons.checklist,
-          label: 'Select transactions',
+          label: 'Select',
           onTap: _enterSelectMode,
         ),
         PageMenuAction(

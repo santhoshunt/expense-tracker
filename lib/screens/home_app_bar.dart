@@ -84,6 +84,11 @@ class HomeMenu extends StatelessWidget {
 
   const HomeMenu({super.key, required this.tab});
 
+  /// One 44dp row. The height is a minimum, so the row grows with large
+  /// text. The menu sizes itself to its widest row's own width, rounded up
+  /// to Flutter's 56dp menu width step, so it follows its longest label.
+  /// A row with [trailing] stretches its label to fill the menu, which puts
+  /// the trailing at the right edge.
   static PopupMenuItem<VoidCallback> _item(
     IconData icon,
     String label,
@@ -91,11 +96,26 @@ class HomeMenu extends StatelessWidget {
     Widget? trailing,
   }) => PopupMenuItem(
     value: onTap,
-    child: ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: Icon(icon),
-      title: Text(label),
-      trailing: trailing,
+    height: 44,
+    padding: const EdgeInsets.symmetric(horizontal: 12),
+    child: Builder(
+      builder: (context) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // The muted icon colour the ListTile rows had.
+          Icon(
+            icon,
+            size: 20,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 12),
+          Flexible(
+            fit: trailing == null ? FlexFit.loose : FlexFit.tight,
+            child: Text(label),
+          ),
+          if (trailing != null) ...[const SizedBox(width: 8), trailing],
+        ],
+      ),
     ),
   );
 

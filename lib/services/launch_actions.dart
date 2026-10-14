@@ -25,6 +25,10 @@ enum LaunchAction {
 
   /// The Recent widget: the Transactions tab.
   openTransactions,
+
+  /// The Monday note: the weekly digest sheet, on the week
+  /// [LaunchActions.takeWeek] hands over.
+  openWeeklyDigest,
 }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
@@ -52,6 +56,17 @@ class LaunchActions {
     final h = _history;
     _history = null;
     return h;
+  }
+
+  /// The Monday an [LaunchAction.openWeeklyDigest] is about. Set before
+  /// [pending], as [_history] is.
+  DateTime? _week;
+
+  /// The week for a pending [LaunchAction.openWeeklyDigest], once.
+  DateTime? takeWeek() {
+    final w = _week;
+    _week = null;
+    return w;
   }
 
   bool _initialised = false;
@@ -111,13 +126,20 @@ class LaunchActions {
   }
 
   /// Maps [payload] to its action. An unusual spending alert's category and
-  /// month are also held for [takeHistory].
+  /// month are also held for [takeHistory], and a digest note's week for
+  /// [takeWeek].
   LaunchAction? _fromPayload(String? payload) {
     if (payload != null && payload.startsWith(kUnusualPayloadPrefix)) {
       final h = parseUnusualPayload(payload);
       if (h == null) return null;
       _history = h;
       return LaunchAction.openCategoryHistory;
+    }
+    if (payload != null && payload.startsWith(kWeeklyPayloadPrefix)) {
+      final week = parseWeeklyPayload(payload);
+      if (week == null) return null;
+      _week = week;
+      return LaunchAction.openWeeklyDigest;
     }
     return switch (payload) {
       kRecapPayload => LaunchAction.openRecap,
@@ -130,6 +152,7 @@ class LaunchActions {
   void resetForTest() {
     _initialised = false;
     _history = null;
+    _week = null;
     pending.value = null;
   }
 }
@@ -156,6 +179,34 @@ String unusualPayload(String categoryId, DateTime month) =>
     categoryId: m.group(3)!,
     month: DateTime(int.parse(m.group(1)!), month),
   );
+}
+
+/// Payload prefix on the weekly digest note, followed by the Monday of the
+/// week it covers: `weekly:2026-10-12`. A tap days later still opens that
+/// week.
+const String kWeeklyPayloadPrefix = 'weekly:';
+
+/// [kWeeklyPayloadPrefix]'s payload for the week starting [week].
+String weeklyPayload(DateTime week) =>
+    '$kWeeklyPayloadPrefix${week.year}-'
+    '${week.month.toString().padLeft(2, '0')}-'
+    '${week.day.toString().padLeft(2, '0')}';
+
+/// The Monday in a [weeklyPayload]; null when malformed, not a real date
+/// (2026-02-30 would roll into March) or not a Monday.
+DateTime? parseWeeklyPayload(String payload) {
+  if (!payload.startsWith(kWeeklyPayloadPrefix)) return null;
+  final rest = payload.substring(kWeeklyPayloadPrefix.length);
+  final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(rest);
+  if (m == null) return null;
+  final year = int.parse(m.group(1)!);
+  final month = int.parse(m.group(2)!);
+  final day = int.parse(m.group(3)!);
+  final week = DateTime(year, month, day);
+  if (week.year != year || week.month != month || week.day != day) {
+    return null;
+  }
+  return week.weekday == DateTime.monday ? week : null;
 }
 
 /// Payload on the monthly recap notification.
