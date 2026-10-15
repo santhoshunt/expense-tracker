@@ -928,8 +928,9 @@ class _BudgetSectionState extends State<_BudgetSection>
                     '₹1,000 more. The usual month is the middle of up to 6 '
                     'whole months, so a category needs 2 whole months since '
                     'its first spend. '
-                    'Checks run when the app opens and when transactions '
-                    "change. Tapping an alert opens the category's history.",
+                    'Checks run when the app opens, when transactions '
+                    'change and about every 6 hours with the app closed. '
+                    "Tapping an alert opens the category's history.",
               ),
               child: SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -984,7 +985,8 @@ class _BudgetSectionState extends State<_BudgetSection>
                     'Card bills notify once billed and unpaid, from 5 days '
                     'before the due date. Detected recurring payments and '
                     'your reminders notify from 2 days before. Each notifies '
-                    'once per due month, when you open the app.',
+                    'once per due month. Checks run when the app opens and '
+                    'about every 6 hours with it closed.',
                 link: InfoLink(
                   prompt: 'A bill the app cannot detect?',
                   label: 'Add a reminder',

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
@@ -8,6 +9,8 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/background_import.dart';
 import 'package:expense_tracker/services/launch_actions.dart';
 import 'package:expense_tracker/services/sms_import_service.dart';
+
+import 'upcoming_monitor_test.dart' show FakeNotifications;
 
 class CountingImport extends SmsImportService {
   int drains = 0;
@@ -35,7 +38,8 @@ class CountingImport extends SmsImportService {
 }
 
 /// Background runs follow the Auto-import setting: an SMS wakes only Every
-/// SMS, the 6-hour check only Daily and Weekly.
+/// SMS, the 6-hour check imports only for Daily and Weekly. Every run
+/// checks the alerts.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -153,5 +157,93 @@ void main() {
       notify: false,
     );
     expect(finance.transactions, isNotEmpty);
+  });
+
+  group('alerts with the app shut (v1.39.1)', () {
+    /// A card billed ₹5,000 due today, with Auto-import Off: no import
+    /// runs, but the check must.
+    Future<(FinanceProvider, SettingsProvider)> dueCard() async {
+      final finance = FinanceProvider();
+      await finance.load();
+      final settings = SettingsProvider();
+      await settings.load();
+      await settings.setAutoImport(AutoImportFrequency.off);
+      final id = await finance.addAccount(
+        name: 'Test Card',
+        type: AccountType.creditCard,
+      );
+      await finance.setManualBalance(id, 5000);
+      await finance.setCardCycle(id, dueDay: DateTime.now().day);
+      return (finance, settings);
+    }
+
+    test('a periodic run notifies a bill due today', () async {
+      final (finance, settings) = await dueCard();
+      final notes = FakeNotifications();
+      final import = CountingImport();
+      await runBackgroundImport(
+        finance,
+        settings,
+        BackgroundTrigger.periodic,
+        import: import,
+        notify: false,
+        notifications: notes,
+      );
+      expect(import.runs, isEmpty, reason: 'Off imports nothing');
+      expect(notes.shown, hasLength(1));
+      expect(notes.shown.single.$2, contains('bill due today'));
+
+      // A later run, or the app opening, does not repeat it.
+      await runBackgroundImport(
+        finance,
+        settings,
+        BackgroundTrigger.periodic,
+        import: import,
+        notify: false,
+        notifications: notes,
+      );
+      expect(notes.shown, hasLength(1));
+    });
+
+    test('a run that pushes spending over the monthly budget alerts', () async {
+      final finance = FinanceProvider();
+      await finance.load();
+      final settings = SettingsProvider();
+      await settings.load();
+      await settings.setMonthlyBudget(1000);
+      final now = DateTime.now();
+      await finance.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 1500,
+        note: 'test dinner',
+        date: DateTime(now.year, now.month, now.day),
+      );
+      final notes = FakeNotifications();
+      await runBackgroundImport(
+        finance,
+        settings,
+        BackgroundTrigger.periodic,
+        import: CountingImport(),
+        notify: false,
+        notifications: notes,
+      );
+      expect(notes.shown, isNotEmpty);
+    });
+
+    test("the app's own engine runs its own checks instead", () async {
+      final (finance, settings) = await dueCard();
+      final notes = FakeNotifications();
+      await runBackgroundImport(
+        finance,
+        settings,
+        BackgroundTrigger.periodic,
+        import: CountingImport(),
+        notify: false,
+        checkAlerts: false,
+        notifications: notes,
+      );
+      expect(notes.shown, isEmpty);
+    });
   });
 }

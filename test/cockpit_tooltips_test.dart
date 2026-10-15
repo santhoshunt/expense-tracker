@@ -286,7 +286,9 @@ void main() {
     await expectTip(tester, 'Due day', 'Days 29 to 31 fall');
     await expectTip(tester, 'Category', 'Sets the icon and colour');
     expect(
-      find.textContaining('notifies from 2 days before, when you open the app'),
+      find.textContaining(
+        'notifies from 2 days before, checked when you open the app',
+      ),
       findsOneWidget,
     );
   });

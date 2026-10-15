@@ -587,9 +587,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         import: _smsImport,
         notify: !front,
         postReminders: false,
+        checkAlerts: false,
       );
       // Reminder entries in this engine get their toast and Remove.
       unawaited(_postDueReminders());
+      // This engine's own monitors: a quiet periodic run changes no data,
+      // so the ledger listener would not run them, and a bill can come
+      // due while the app sits in the background.
+      _checkBudget();
       final imported = result.imported;
       if (mounted && front && imported > 0) {
         final waiting = (finance.pendingCount - pendingBefore).clamp(

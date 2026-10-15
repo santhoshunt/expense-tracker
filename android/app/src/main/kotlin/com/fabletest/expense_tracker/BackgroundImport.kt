@@ -19,9 +19,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * SMS import with the app closed. The Auto-import setting drives it
- * ([configure]): Every SMS switches on [SmsArrivalReceiver], Daily and
- * Weekly book a 6-hour periodic check, and each run is a [SmsImportWorker].
+ * SMS import and alert checks with the app closed. The Auto-import setting
+ * drives it ([configure]): Every SMS switches on [SmsArrivalReceiver], a
+ * 6-hour periodic check is always booked (it imports only for Daily and
+ * Weekly), and each run is a [SmsImportWorker].
  *
  * The Dart ledger (FinanceProvider) rewrites the whole store from memory,
  * so only one engine may hold it at a time. A run therefore goes to the
@@ -80,17 +81,18 @@ object BackgroundImport {
 
     fun configure(context: Context, mode: String?) {
         val wm = WorkManager.getInstance(context)
-        if (mode == "daily" || mode == "weekly") {
-            wm.enqueueUniquePeriodicWork(
-                PERIODIC_WORK,
-                ExistingPeriodicWorkPolicy.KEEP,
-                PeriodicWorkRequest.Builder(SmsImportWorker::class.java, 6, TimeUnit.HOURS)
-                    .setInputData(trigger("periodic"))
-                    .build()
-            )
-        } else {
-            wm.cancelUniqueWork(PERIODIC_WORK)
-        }
+        // Booked whatever the mode: besides Daily and Weekly's import, each
+        // run checks bills, budgets and unusual spending, which come due
+        // with the app shut. Until v1.39.1 only Daily and Weekly booked it,
+        // so those alerts waited for the app to open. Dart decides per run
+        // whether to import (runBackgroundImport).
+        wm.enqueueUniquePeriodicWork(
+            PERIODIC_WORK,
+            ExistingPeriodicWorkPolicy.KEEP,
+            PeriodicWorkRequest.Builder(SmsImportWorker::class.java, 6, TimeUnit.HOURS)
+                .setInputData(trigger("periodic"))
+                .build()
+        )
         val everySms = mode == "everySms"
         if (!everySms) {
             wm.cancelUniqueWork(NOW_WORK)

@@ -325,7 +325,8 @@ Future<void> showReminderEditor(
                               'expense on the due day when you open the app '
                               'or a background import runs.'
                         : 'Shows in Upcoming a week ahead, and notifies from '
-                              '2 days before, when you open the app. A bank SMS '
+                              '2 days before, checked when you open the app '
+                              'and about every 6 hours. A bank SMS '
                               'for this amount near the due day marks it paid; '
                               'otherwise mark it paid from the Upcoming card.',
                     style: Theme.of(ctx).textTheme.bodySmall,

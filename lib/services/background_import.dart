@@ -3,10 +3,13 @@ import 'package:flutter/services.dart';
 
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import 'budget_monitor.dart';
 import 'budget_widget_service.dart';
 import 'home_widgets_service.dart';
 import 'notification_service.dart';
 import 'sms_import_service.dart';
+import 'unusual_spend_monitor.dart';
+import 'upcoming_monitor.dart';
 
 /// What woke the background import (SmsImportWorker.kt).
 enum BackgroundTrigger {
@@ -136,6 +139,8 @@ Future<BackgroundImportResult> runBackgroundImport(
   bool syncWidgets = false,
   bool notify = true,
   bool postReminders = true,
+  bool checkAlerts = true,
+  NotificationService? notifications,
 }) async {
   var imported = 0;
   // Of [imported], the rows that wait in review rather than counted at once.
@@ -185,7 +190,50 @@ Future<BackgroundImportResult> runBackgroundImport(
     // away until then, and rows that counted at once ask for no review.
     await ReviewNotifier.sync(finance.pendingCount, allowPost: toReview > 0);
   }
+  // Bills come due and imports push budgets over with the app shut: until
+  // v1.39.1 these alerts waited for the next open. Each monitor remembers
+  // what it sent, so opening the app later never repeats one. The app's
+  // own engine passes [checkAlerts] false and runs its own monitors.
+  if (checkAlerts && finance.loadWarnings.isEmpty) {
+    await runAlertChecks(finance, settings, notifications: notifications);
+  }
   return (imported: imported, ok: ok);
+}
+
+/// Budget, unusual spending and payment-due checks, for an engine with no
+/// Home screen to run them. One failing never stops the others.
+/// [notifications] is the tests' stand-in for the plugin.
+Future<void> runAlertChecks(
+  FinanceProvider finance,
+  SettingsProvider settings, {
+  NotificationService? notifications,
+}) async {
+  final checks = <(String, Future<void> Function())>[
+    (
+      'Budget',
+      () =>
+          BudgetMonitor(notifications: notifications).check(finance, settings),
+    ),
+    (
+      'Unusual spending',
+      () => UnusualSpendMonitor(
+        notifications: notifications,
+      ).check(finance, settings),
+    ),
+    (
+      'Upcoming',
+      () => UpcomingMonitor(
+        notifications: notifications,
+      ).check(finance, settings),
+    ),
+  ];
+  for (final (name, run) in checks) {
+    try {
+      await run();
+    } catch (e) {
+      debugPrint('Background $name check failed: $e');
+    }
+  }
 }
 
 /// What one background import did.

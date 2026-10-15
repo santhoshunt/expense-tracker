@@ -273,6 +273,17 @@ object WidgetKit {
         "cash", "money", "savings", "invest", "work" -> R.drawable.widget_ic_income
         "transfer" -> R.drawable.widget_ic_transfer
         "wallet" -> R.drawable.widget_ic_wallet
+        // Pickable as budget icons since v1.39.0; until v1.39.1 these fell
+        // to the generic glyph.
+        "child" -> R.drawable.widget_ic_child
+        "pets" -> R.drawable.widget_ic_pets
+        "fitness" -> R.drawable.widget_ic_fitness
+        "tools" -> R.drawable.widget_ic_tools
+        "heart" -> R.drawable.widget_ic_heart
+        "star" -> R.drawable.widget_ic_star
+        "book" -> R.drawable.widget_ic_book
+        "school" -> R.drawable.widget_ic_school
+        "group" -> R.drawable.widget_ic_group
         else -> R.drawable.widget_ic_category
     }
 
