@@ -80,6 +80,14 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
   /// Completes when the app is back in front; see [_whenResumed].
   Completer<void>? _resumed;
 
+  /// A link on the sheet failed to open. Said on the sheet itself: the
+  /// app-level toast would draw under it.
+  bool _linkFailed = false;
+
+  void _onLinkFail() {
+    if (mounted) setState(() => _linkFailed = true);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -255,9 +263,17 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
             child: LinkPill(
               label: 'Release page',
               external: true,
-              onTap: () => openWebLink(context, _picked.pageUrl),
+              onTap: () =>
+                  openWebLink(context, _picked.pageUrl, onFail: _onLinkFail),
             ),
           ),
+          if (_linkFailed) ...[
+            const SizedBox(height: 4),
+            Text(
+              "Couldn't open the link.",
+              style: theme.textTheme.bodySmall?.copyWith(color: scheme.error),
+            ),
+          ],
           const SizedBox(height: 12),
           Text(
             'Before installing, the app checks',
@@ -333,7 +349,11 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
             // Lined up with the version label: the radio and its gap take
             // 56dp; with no radio the label starts at the edge.
             padding: EdgeInsets.fromLTRB(only ? 0 : 56, 0, 8, 8),
-            child: LinkifiedText(o.notes, style: muted),
+            child: LinkifiedText(
+              o.notes,
+              style: muted,
+              onLinkFail: _onLinkFail,
+            ),
           ),
       ],
     );

@@ -189,13 +189,15 @@ WeekDigest buildWeekDigest(
 }
 
 /// The week's dates as the note names them: "12 to 18 Oct", or
-/// "28 Sep to 4 Oct" across a month end.
-String weekRangeLabel(DateTime week) {
+/// "28 Sep to 4 Oct" across a month end. [withWeekday] names the days too,
+/// as the digest sheet does: "Mon 12 to Sun 18 Oct".
+String weekRangeLabel(DateTime week, {bool withWeekday = false}) {
   final start = weekStartOf(week);
   final end = DateTime(start.year, start.month, start.day + 6);
-  final dMmm = DateFormat('d MMM');
+  final day = withWeekday ? 'EEE d' : 'd';
+  final dMmm = DateFormat('$day MMM');
   final from = start.month == end.month
-      ? DateFormat('d').format(start)
+      ? DateFormat(day).format(start)
       : dMmm.format(start);
   return '$from to ${dMmm.format(end)}';
 }

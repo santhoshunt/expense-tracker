@@ -2240,7 +2240,7 @@ class FinanceProvider extends ChangeNotifier {
     required Color color,
     bool isTransfer = false,
   }) async {
-    final id = 'cat_${DateTime.now().microsecondsSinceEpoch}';
+    final id = 'cat_${DateTime.now().microsecondsSinceEpoch}_${_idSeq++}';
     setCustomCategories([
       ...customCategories,
       TxCategory(
@@ -2449,7 +2449,7 @@ class FinanceProvider extends ChangeNotifier {
   bool isGroupable(TxCategory c) => c.type == TxType.expense || c.isTransfer;
 
   Future<String> addGroup({required String label, required Color color}) async {
-    final id = 'grp_${DateTime.now().microsecondsSinceEpoch}';
+    final id = 'grp_${DateTime.now().microsecondsSinceEpoch}_${_idSeq++}';
     _groups.add(CategoryGroup(id: id, label: label.trim(), color: color));
     notifyListeners();
     await _persist(groups: true);
@@ -2496,7 +2496,7 @@ class FinanceProvider extends ChangeNotifier {
     required Set<String> categoryIds,
     String? iconKey,
   }) async {
-    final id = 'bud_${DateTime.now().microsecondsSinceEpoch}';
+    final id = 'bud_${DateTime.now().microsecondsSinceEpoch}_${_idSeq++}';
     _budgets.add(
       SpendBudget(
         id: id,
@@ -3276,8 +3276,10 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Whether [a] holds bank numbers that no transaction uses any more, as
   /// the 1.28 re-key could leave an account whose rows all moved away. Its
-  /// set balance still counts in net balance. An account made by hand with
-  /// no linked number, a wallet and a closed account never qualify.
+  /// set balance stays on its own tile but no longer counts in the totals
+  /// behind net balance, since the rows that moved carry that money to
+  /// their new account. An account made by hand with no linked number, a
+  /// wallet and a closed account never qualify.
   /// Numbers linked by hand don't count: that account is waiting for its
   /// first alert.
   bool isOrphanedAccount(Account a) {
@@ -3547,29 +3549,45 @@ class FinanceProvider extends ChangeNotifier {
   /// credit limit. Surfaced in the balance breakdown so the headline figure
   /// isn't silently optimistic.
   int get cardsMissingLimit => _accounts
-      .where((a) => !a.isClosed && a.isCard && accountOutstanding(a) == null)
+      .where(
+        (a) =>
+            !a.isClosed &&
+            a.isCard &&
+            !isOrphanedAccount(a) &&
+            accountOutstanding(a) == null,
+      )
       .length;
 
   // Closed accounts are skipped from every total below: a matured FD's last
   // stated value must not keep inflating the figures the user reads as
-  // "money I have now".
+  // "money I have now". Emptied accounts ([isOrphanedAccount]) are skipped
+  // too: their rows moved to another account, so a set balance left on
+  // them would count the same money twice.
 
   /// Sum of liquid bank-account balances (bank-stated where available).
   /// Savings/asset accounts are excluded — they are not spendable cash.
   double get bankBalanceTotal => _accounts
-      .where((a) => !a.isClosed && a.type == AccountType.bank)
+      .where(
+        (a) =>
+            !a.isClosed && a.type == AccountType.bank && !isOrphanedAccount(a),
+      )
       .fold(0.0, (s, a) => s + accountBalance(a));
 
   /// Sum of savings/asset account values (RD, FD, stocks, gold…). Tracked
   /// separately because it is not liquid.
   double get savingsBalanceTotal => _accounts
-      .where((a) => !a.isClosed && a.type == AccountType.savings)
+      .where(
+        (a) =>
+            !a.isClosed &&
+            a.type == AccountType.savings &&
+            !isOrphanedAccount(a),
+      )
       .fold(0.0, (s, a) => s + accountBalance(a));
 
   /// Sum of credit-card outstanding amounts (0 where unknown — see
   /// [cardsMissingLimit], which counts what this is silently omitting).
   double get cardOutstandingTotal => _accounts
-      .where((a) => !a.isClosed && a.isCard)
+      .where((a) => !a.isClosed && a.isCard && !isOrphanedAccount(a))
       .fold(0.0, (s, a) => s + (accountOutstanding(a) ?? 0));
 
   /// Liquid money on hand: bank balances minus card outstanding. Savings/
@@ -5334,7 +5352,8 @@ class FinanceProvider extends ChangeNotifier {
     // v22: reminders may carry `onDate` (a one-time reminder).
     // v23: transactions may carry `unseen`.
     // v24: budgets may carry `icon`.
-    'version': 24,
+    // v25: reminders and subscription pins may carry cycle `halfYearly`.
+    'version': 25,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),

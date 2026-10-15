@@ -79,12 +79,6 @@ DateTime _statementBefore(int day, DateTime due) {
   );
 }
 
-String _inDays(int days) => days == 0
-    ? 'today'
-    : days == 1
-    ? 'tomorrow'
-    : 'in $days days';
-
 /// The one-line story of the shown cycle, shared by the dashboard Upcoming
 /// row, its actions sheet and the account tile's bill line. Dates are only
 /// as compact as the data allows: the statement date appears when the
@@ -100,7 +94,7 @@ String cardBillSubtitle(CardBillStatus s) {
     case CardBillPhase.notBilled:
       return 'Bill generates ${fmtDateCompact(stmt!)} · due $due';
     case CardBillPhase.billed:
-      final when = _inDays(s.daysUntil);
+      final when = fmtInDays(s.daysUntil);
       return stmt == null
           ? 'Due $due · $when'
           : 'Billed ${fmtDateCompact(stmt)} · due $due · $when';

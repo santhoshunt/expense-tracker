@@ -431,6 +431,25 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 }
 
+/// What an emptied account ([FinanceProvider.isOrphanedAccount]) says, on
+/// the open card and in the closed card's info mark. The middle sentence
+/// only when a set figure stopped counting: a card's is what it owes, and
+/// a savings account's never counted in net balance.
+String _orphanedHint(Account a) {
+  final figure = a.manualBalance == null
+      ? null
+      : a.isCard
+      ? 'set outstanding'
+      : a.type == AccountType.bank
+      ? 'set balance'
+      : null;
+  return [
+    'No transactions use this account.',
+    if (figure != null) 'Its $figure no longer counts in net balance.',
+    'Merge it into the account that has its transactions, or delete it.',
+  ].join(' ');
+}
+
 /// One account: collapsed to its name and one figure (the balance, or what
 /// a card owes) until tapped; open, today's full details and a way into its
 /// transactions. Which cards are open is remembered ([SettingsProvider]).
@@ -557,7 +576,7 @@ class _AccountCard extends StatelessWidget {
                         Padding(
                           padding: const EdgeInsets.only(right: 4),
                           child: Tooltip(
-                            message: 'No transactions use this account',
+                            message: _orphanedHint(account),
                             child: Icon(
                               Icons.info_outline,
                               size: 16,
@@ -582,25 +601,12 @@ class _AccountCard extends StatelessWidget {
                           _CardFigures(account: account, onView: onView)
                         else
                           _BankBalance(account: account),
-                        // An account the 1.28 re-key emptied keeps its set
-                        // balance in net balance: say so, and offer the two
+                        // An account the 1.28 re-key emptied no longer
+                        // counts in net balance: say so, and offer the two
                         // ways out.
                         if (orphaned) ...[
                           const SizedBox(height: 10),
-                          Text(
-                            [
-                              'No transactions use this account.',
-                              // Only what a figure set by hand still adds to
-                              // net balance; savings sit outside it.
-                              if (account.manualBalance != null)
-                                if (account.isCard)
-                                  'Its set outstanding still counts in net '
-                                      'balance.'
-                                else if (account.type == AccountType.bank)
-                                  'Its set balance still counts in net balance.',
-                            ].join(' '),
-                            style: muted,
-                          ),
+                          Text(_orphanedHint(account), style: muted),
                           Wrap(
                             spacing: 8,
                             children: [

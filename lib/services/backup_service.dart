@@ -187,6 +187,8 @@ class BackupService {
     'countIn',
     // A wallet row the user counts as spending.
     'walletCounted',
+    // An imported row the user has not opened yet (Tx.unseen).
+    'unseen',
   ];
 
   /// A split's people as one CSV cell:
@@ -350,6 +352,7 @@ class BackupService {
           _csvEscape(t.repaidBy ?? ''),
           _csvEscape(t.countIn?.toIso8601String() ?? ''),
           t.walletCounted.toString(),
+          t.unseen.toString(),
         ].join(','),
       );
     }
@@ -489,6 +492,8 @@ class BackupService {
     final repaidByCol = col('repaidby');
     final countInCol = col('countin');
     final walletCountedCol = col('walletcounted');
+    // Older files lack the column; their rows read as seen.
+    final unseenCol = col('unseen');
 
     String cell(List<String> r, int? c) {
       final v = c == null || c >= r.length ? '' : r[c].trim();
@@ -543,6 +548,7 @@ class BackupService {
       final myShare = parsedShare != null && parsedShare.isFinite
           ? parsedShare
           : null;
+      final pending = cell(r, pendingCol).toLowerCase() == 'true';
       final tx = Tx(
         id: id,
         type: type,
@@ -555,7 +561,7 @@ class BackupService {
         date: date,
         sender: cell(r, senderCol),
         externalRef: ref.isEmpty ? null : ref,
-        pending: cell(r, pendingCol).toLowerCase() == 'true',
+        pending: pending,
         suspectedSpam: cell(r, suspectedSpamCol).toLowerCase() == 'true',
         userCategorized: cell(r, userCategorizedCol).toLowerCase() == 'true',
         source:
@@ -578,6 +584,8 @@ class BackupService {
           date,
         ),
         walletCounted: cell(r, walletCountedCol).toLowerCase() == 'true',
+        // A pending row is never unseen: the flag marks confirmed imports.
+        unseen: !pending && cell(r, unseenCol).toLowerCase() == 'true',
       );
       // CSVs written before the smsBody column existed kept the raw SMS in
       // the note, so that note has to be moved. Files with either the

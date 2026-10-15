@@ -112,8 +112,14 @@ String _trimUrl(String raw) {
   return url;
 }
 
-/// Opens [url] in the browser, or says so when it can't.
-Future<void> openWebLink(BuildContext context, String url) async {
+/// Opens [url] in the browser, or says so when it can't. With [onFail] the
+/// caller says so instead of the toast: the app-level toast draws under a
+/// bottom sheet, where it would go unseen.
+Future<void> openWebLink(
+  BuildContext context,
+  String url, {
+  VoidCallback? onFail,
+}) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
   final uri = Uri.tryParse(url);
   final opened =
@@ -122,7 +128,10 @@ Future<void> openWebLink(BuildContext context, String url) async {
         uri,
         mode: LaunchMode.externalApplication,
       ).catchError((_) => false);
-  if (!opened && messenger != null) {
+  if (opened) return;
+  if (onFail != null) {
+    onFail();
+  } else if (messenger != null) {
     showAppToastOn(
       messenger,
       "Couldn't open the link.",
@@ -133,11 +142,13 @@ Future<void> openWebLink(BuildContext context, String url) async {
 
 /// [text] with each web address drawn as a [LinkPill] that opens it in the
 /// browser. Punctuation that ends a sentence stays out of the address.
+/// [onLinkFail] goes to [openWebLink] as its `onFail`.
 class LinkifiedText extends StatelessWidget {
   final String text;
   final TextStyle? style;
+  final VoidCallback? onLinkFail;
 
-  const LinkifiedText(this.text, {super.key, this.style});
+  const LinkifiedText(this.text, {super.key, this.style, this.onLinkFail});
 
   @override
   Widget build(BuildContext context) {
@@ -159,7 +170,7 @@ class LinkifiedText extends StatelessWidget {
                 label: linkPillLabel(url),
                 external: true,
                 fullUrl: url,
-                onTap: () => openWebLink(context, url),
+                onTap: () => openWebLink(context, url, onFail: onLinkFail),
               ),
             ),
           ),

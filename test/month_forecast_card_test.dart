@@ -220,7 +220,14 @@ void main() {
       AccountsScreen(onViewAccount: (_) {}),
     );
     // Collapsed, a mark on the numbered account only, not Cash.
-    expect(find.byTooltip('No transactions use this account'), findsOneWidget);
+    expect(
+      find.byTooltip(
+        'No transactions use this account. Its set balance no longer counts '
+        'in net balance. Merge it into the account that has its '
+        'transactions, or delete it.',
+      ),
+      findsOneWidget,
+    );
     await tester.tap(find.text('Old HDFC'));
     await tester.pumpAndSettle();
     expect(

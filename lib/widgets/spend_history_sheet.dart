@@ -9,6 +9,7 @@ import '../services/spend_comparison.dart' show kUsualWindowMonths;
 import '../services/spend_history.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
+import 'figure_tile.dart';
 import 'monthly_bar_chart.dart';
 import 'rename_merchant_dialog.dart';
 
@@ -133,7 +134,7 @@ Future<void> showSpendHistorySheet(
                 const SizedBox(height: 16),
                 _TileRow(
                   tiles: [
-                    _Tile(
+                    FigureTile(
                       title: 'Usual month',
                       value: usual == null ? null : fmtMoney(usual),
                       none: 'Not enough months yet',
@@ -141,7 +142,7 @@ Future<void> showSpendHistorySheet(
                       // to today's date, so its figure can differ.
                       note: 'Middle of up to $kUsualWindowMonths whole months',
                     ),
-                    _Tile(
+                    FigureTile(
                       title: 'Biggest',
                       value: biggestMonth == null ? null : fmtMoney(h.biggest),
                       none: 'None yet',
@@ -150,10 +151,10 @@ Future<void> showSpendHistorySheet(
                           : mmmYyyy.format(biggestMonth),
                     ),
                     if (yearView)
-                      _Tile(title: 'Year total', value: fmtMoney(h.total))
+                      FigureTile(title: 'Year total', value: fmtMoney(h.total))
                     else
                       // The shown month, which is not always this one.
-                      _Tile(
+                      FigureTile(
                         title: h.anchorRunning
                             ? 'This month so far'
                             : 'In ${DateFormat('MMMM').format(h.anchor)}',
@@ -251,62 +252,6 @@ class _TileRow extends StatelessWidget {
           ],
         );
       },
-    );
-  }
-}
-
-/// One figure on a plain surface card, in the default text colours.
-class _Tile extends StatelessWidget {
-  final String title;
-
-  /// The figure; null shows [none] instead.
-  final String? value;
-  final String? none;
-  final String? note;
-
-  const _Tile({required this.title, this.value, this.none, this.note});
-
-  @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    final muted = text.bodySmall?.copyWith(
-      color: Theme.of(context).colorScheme.onSurfaceVariant,
-    );
-    final value = this.value;
-    final note = this.note;
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(title, style: muted),
-            const SizedBox(height: 4),
-            if (value != null)
-              // FittedBox, not Flexible: a long figure shrinks rather than
-              // breaking mid-number (transaction-tile pattern).
-              FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  value,
-                  maxLines: 1,
-                  style: text.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              )
-            else
-              Text(none ?? '', style: text.bodyMedium),
-            if (note != null) ...[
-              const SizedBox(height: 2),
-              Text(note, style: muted),
-            ],
-          ],
-        ),
-      ),
     );
   }
 }

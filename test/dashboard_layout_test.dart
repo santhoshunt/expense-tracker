@@ -64,15 +64,54 @@ void main() {
       final l = DashboardPageLayout.fromJson(DashboardPage.overview, {
         'order': ['upcoming', 'monthlyBudget', 'recap', 'budgets', 'owed'],
       });
-      // 1.39 adds the This week row, back in at the top.
+      // 1.39 adds the This week row, back in at the top, and 1.40 Big
+      // bills ahead right after Upcoming.
       expect(l.order, [
         DashboardSection.week,
         DashboardSection.upcoming,
+        DashboardSection.bigBills,
         DashboardSection.monthlyBudget,
         DashboardSection.forecast,
         DashboardSection.recap,
         DashboardSection.budgets,
         DashboardSection.owed,
+      ]);
+    });
+
+    test('defaults put Big bills ahead after Upcoming, not between the '
+        'monthly budget and the forecast', () {
+      final order = DashboardSection.of(DashboardPage.overview);
+      expect(
+        order.indexOf(DashboardSection.bigBills),
+        order.indexOf(DashboardSection.upcoming) + 1,
+      );
+      expect(
+        order.indexOf(DashboardSection.forecast),
+        order.indexOf(DashboardSection.monthlyBudget) + 1,
+      );
+    });
+
+    test('a 1.39 Overview order gains Big bills ahead after Upcoming', () {
+      final l = DashboardPageLayout.fromJson(DashboardPage.overview, {
+        'order': [
+          'monthlyBudget',
+          'forecast',
+          'owed',
+          'upcoming',
+          'week',
+          'recap',
+          'budgets',
+        ],
+      });
+      expect(l.order, [
+        DashboardSection.monthlyBudget,
+        DashboardSection.forecast,
+        DashboardSection.owed,
+        DashboardSection.upcoming,
+        DashboardSection.bigBills,
+        DashboardSection.week,
+        DashboardSection.recap,
+        DashboardSection.budgets,
       ]);
     });
 

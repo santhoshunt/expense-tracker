@@ -54,12 +54,6 @@ class UpcomingMonitor {
   static String reminderDueKey(String reminderId, DateTime due) =>
       'reminder_due_fired_${reminderId}_${_ym(due)}';
 
-  static String _inDays(int days) => days == 0
-      ? 'today'
-      : days == 1
-      ? 'tomorrow'
-      : 'in $days days';
-
   Future<void> check(FinanceProvider finance, SettingsProvider settings) async {
     if (_busy) {
       _rerunRequested = true;
@@ -105,7 +99,7 @@ class UpcomingMonitor {
           key: cardDueKey(a.id, s.due),
           // 94000 to 94999; every range is listed in NotificationIds.
           id: NotificationIds.cardBill(a.id),
-          title: '${a.name} bill due ${_inDays(s.daysUntil)}',
+          title: '${a.name} bill due ${fmtInDays(s.daysUntil)}',
           body: '${fmtMoney(out)} due on ${fmtDate(s.due)}',
         ));
       }
@@ -133,7 +127,7 @@ class UpcomingMonitor {
           body: days < 0
               ? '~${fmtMoney(h.expectedAmount)} was expected on '
                     '${fmtDate(h.nextDue)}'
-              : '~${fmtMoney(h.expectedAmount)} expected ${_inDays(days)} '
+              : '~${fmtMoney(h.expectedAmount)} expected ${fmtInDays(days)} '
                     '(${fmtDate(h.nextDue)})',
         ));
       }
@@ -147,7 +141,7 @@ class UpcomingMonitor {
         final amount = r.expectedAmount;
         final when = days < 0
             ? 'was due on ${fmtDate(due)}'
-            : 'due ${_inDays(days)} (${fmtDate(due)})';
+            : 'due ${fmtInDays(days)} (${fmtDate(due)})';
         checks.add((
           key: reminderDueKey(r.id, due),
           id: NotificationIds.reminder(r.id),

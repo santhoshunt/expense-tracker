@@ -16,6 +16,9 @@ enum DashboardSection {
   forecast(DashboardPage.overview, 'Month-end forecast', true),
   recap(DashboardPage.overview, "Last month's recap", true),
   upcoming(DashboardPage.overview, 'Upcoming', true),
+  // After Upcoming, never between the monthly budget and the forecast:
+  // those two merge into one card only when next to each other.
+  bigBills(DashboardPage.overview, 'Big bills ahead', true),
   budgets(DashboardPage.overview, 'Budgets', true),
   owed(DashboardPage.overview, 'Who owes you', true),
   // Trends

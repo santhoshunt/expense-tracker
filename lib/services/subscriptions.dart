@@ -83,7 +83,8 @@ SubscriptionSummary buildSubscriptions(
     final cycle = h.cycle;
     final item = SubscriptionItem(
       hit: h,
-      // A marked plan charges exactly its cycle: 12, 4 or 1 payment a year.
+      // A marked plan charges exactly its cycle: 12, 4, 2 or 1 payment a
+      // year.
       // Detection only finds monthly patterns (a 25 to 35-day median gap)
       // and the row reads "monthly", so a detected plan is 12 payments,
       // not 365 days over its average gap.

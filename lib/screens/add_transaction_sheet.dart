@@ -9,7 +9,6 @@ import '../providers/settings_provider.dart';
 import '../services/recurring_detector.dart';
 import '../services/subscriptions.dart';
 import '../utils/format.dart';
-import '../widgets/cycle_label.dart';
 import '../widgets/date_time_picker.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
@@ -413,19 +412,25 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       ),
       if (on) ...[
         const SizedBox(height: 4),
-        SegmentedButton<SubscriptionCycle>(
-          showSelectedIcon: false,
-          segments: [
+        // Chips that wrap, as the reminder editor's Repeats: with four
+        // cycles a one-row segmented button shrank each name to its own
+        // size at 320dp.
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          children: [
             for (final c in SubscriptionCycle.values)
-              ButtonSegment(value: c, label: cycleLabel(c.label)),
+              ChoiceChip(
+                label: Text(c.label),
+                selected: c == cycle,
+                onSelected: (_) => setState(() {
+                  _subTouched = true;
+                  _subTouchedKey = key;
+                  _subOn = true;
+                  _subCycle = c;
+                }),
+              ),
           ],
-          selected: {cycle},
-          onSelectionChanged: (s) => setState(() {
-            _subTouched = true;
-            _subTouchedKey = key;
-            _subOn = true;
-            _subCycle = s.first;
-          }),
         ),
       ],
       const SizedBox(height: 16),
@@ -1415,16 +1420,21 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                                     label: Text(label),
                                     tip: InfoTip(
                                       title: label,
-                                      // The owner's wording for spending; on a
-                                      // credit, the income side of it.
+                                      // Both say which way cashback and a
+                                      // bank top-up go, so they agree.
                                       message: _kind == _EntryKind.income
-                                          ? 'Turn on to count this wallet '
-                                                'credit as income, e.g. '
-                                                'cashback or a gift card.'
+                                          ? 'Turn on for money that came '
+                                                'from outside your accounts, '
+                                                'such as cashback or a gift '
+                                                'card. Leave off for a top-up '
+                                                'from your bank.'
                                           : 'Turn on when this wallet money '
-                                                "wasn't counted on the way "
-                                                'in, e.g. cashback or a gift '
-                                                'card.',
+                                                'came from cashback, a gift '
+                                                'card or rewards. Leave off '
+                                                'when it was a bank top-up: '
+                                                'that already counted as '
+                                                'spending when it left the '
+                                                'bank.',
                                     ),
                                   ),
                                   trailing: Semantics(

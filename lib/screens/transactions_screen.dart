@@ -2522,19 +2522,27 @@ class _BulkSubscriptionSheet extends StatelessWidget {
               style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                for (final (i, c) in SubscriptionCycle.values.indexed) ...[
-                  if (i > 0) const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton.tonal(
-                      onPressed: () => Navigator.pop(context, c),
-                      child: cycleLabel(c.label),
+            // Two rows of two: four across shrank each name to its own size
+            // at 320dp.
+            for (final (r, row) in [
+              SubscriptionCycle.values.take(2).toList(),
+              SubscriptionCycle.values.skip(2).toList(),
+            ].indexed) ...[
+              if (r > 0) const SizedBox(height: 8),
+              Row(
+                children: [
+                  for (final (i, c) in row.indexed) ...[
+                    if (i > 0) const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.tonal(
+                        onPressed: () => Navigator.pop(context, c),
+                        child: cycleLabel(c.label),
+                      ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
-            ),
+              ),
+            ],
           ],
         ),
       ),

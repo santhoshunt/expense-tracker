@@ -16,6 +16,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
+import '../services/big_bills.dart';
 import '../services/card_bill.dart';
 import '../services/comparison_series.dart';
 import '../services/merchant_stats.dart';
@@ -38,6 +39,7 @@ import '../utils/format.dart';
 import '../utils/money_colors.dart';
 import '../widgets/animated_fold.dart';
 import '../widgets/balance_breakdown.dart';
+import '../widgets/big_bills_sheet.dart';
 import '../widgets/budget_detail_sheet.dart';
 import '../widgets/budget_dialog.dart';
 import '../widgets/dashboard_fold.dart';
@@ -1191,9 +1193,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     children: [
                       Icon(Icons.auto_awesome, size: 20, color: scheme.primary),
                       const SizedBox(width: 8),
-                      Text(
-                        'Get started',
-                        style: Theme.of(context).textTheme.titleMedium,
+                      // Flexible: at 320dp and large text the row ran
+                      // 2.5px over.
+                      Flexible(
+                        child: Text(
+                          'Get started',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                       ),
                     ],
                   ),
@@ -1456,6 +1462,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
             // Card bills coming due + detected recurring payments. Not
             // month-scoped: it is about the days ahead whatever month is picked.
             _UpcomingCard(finance: finance, hits: _recurring(finance)),
+          ],
+        ),
+        DashboardSection.bigBills: (
+          visible: true,
+          title: null,
+          summary: null,
+          tip: null,
+          body: () => [
+            // Quarterly, half-yearly and yearly bills spread over the year.
+            // About the months ahead like Upcoming, so the Year view keeps
+            // it too. Hidden while there are none.
+            Builder(
+              key: const ValueKey('presence-big-bills'),
+              builder: (context) {
+                context.select<SettingsProvider, String>(
+                  (s) => hiddenListKey(s.hiddenUpcoming),
+                );
+                final now = DateTime.now();
+                final patterns = _patterns(finance, now);
+                final plan = buildBigBillsPlan(
+                  finance,
+                  patterns: patterns,
+                  hidden: context.read<SettingsProvider>().hiddenUpcoming,
+                  now: now,
+                );
+                return AnimatedPresence(
+                  visible: !plan.isEmpty,
+                  child: plan.isEmpty
+                      ? const SizedBox.shrink()
+                      : _BigBillsCard(
+                          plan: plan,
+                          onTap: () =>
+                              showBigBillsSheet(context, patterns: patterns),
+                        ),
+                );
+              },
+            ),
           ],
         ),
         DashboardSection.budgets: (
@@ -2108,10 +2151,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
             title: 'Subscriptions',
             message:
                 'Monthly payments found in the last year, plus any you '
-                'marked as monthly, quarterly or yearly. Only active ones '
-                'count: a payment more than $kSubscriptionGraceDays days late '
-                'counts as stopped. The monthly figure spreads quarterly and '
-                'yearly ones across the year.',
+                'marked as monthly, quarterly, half-yearly or yearly. Only '
+                'active ones count: a payment more than '
+                '$kSubscriptionGraceDays days late counts as stopped. The '
+                'monthly figure spreads the longer cycles across the year.',
           ),
           body: () {
             final n = subs.active.length;
@@ -2530,6 +2573,111 @@ class _OwedCard extends StatelessWidget {
   }
 }
 
+/// "Big bills ahead": the monthly figure to set aside for quarterly,
+/// half-yearly and yearly bills, a bar per month for the next 12 and the
+/// next two bills. The whole card opens the sheet listing every bill.
+class _BigBillsCard extends StatelessWidget {
+  final BigBillsPlan plan;
+  final VoidCallback onTap;
+  const _BigBillsCard({required this.plan, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
+    final next = plan.bills.take(2).toList();
+    final more = plan.bills.length - next.length;
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpace.gap),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SectionLabel(
+            'Big bills ahead',
+            tip: InfoTip(
+              title: 'Big bills ahead',
+              message:
+                  'Quarterly, half-yearly and yearly bills, from your '
+                  'reminders with an amount and the subscriptions you '
+                  'marked. The monthly figure is each bill\'s yearly cost '
+                  'spread over 12 months. Safe to spend and the forecast '
+                  'still count a bill in full in the month it falls due.',
+            ),
+          ),
+          Card(
+            margin: EdgeInsets.zero,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(AppRadius.card),
+              onTap: onTap,
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpace.card),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    BigBillsHeadline(plan: plan),
+                    const SizedBox(height: 12),
+                    BigBillsStrip(plan: plan),
+                    const SizedBox(height: 12),
+                    for (final b in next)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(
+                          children: [
+                            // The date on its own line: in one cut text a
+                            // long-named bill lost it.
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    b.label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  Text(fmtDateCompact(b.nextDue), style: muted),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            // A long figure shrinks rather than pushing the
+                            // name off the row.
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 120),
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  fmtMoneyTidy(b.amount),
+                                  maxLines: 1,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: moneyColor(
+                                      context,
+                                      type: TxType.expense,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (more > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text('+$more more', style: muted),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// "Upcoming": card bills coming due plus detected monthly payments,
 /// soonest first. Renders nothing (zero height) when there is nothing to
 /// show, so the sections around it keep their spacing.
@@ -2541,12 +2689,6 @@ class _UpcomingCard extends StatelessWidget {
   /// One duration for the fold, the chevron flip and the count fade, so the
   /// three movements read as a single gesture.
   static const _foldDuration = Duration(milliseconds: 250);
-
-  static String _inDays(int days) => days == 0
-      ? 'today'
-      : days == 1
-      ? 'tomorrow'
-      : 'in $days days';
 
   @override
   Widget build(BuildContext context) {
@@ -2598,7 +2740,7 @@ class _UpcomingCard extends StatelessWidget {
             label: u.label,
             sub: u.days < 0
                 ? 'Overdue · expected ${fmtDateCompact(u.due)}'
-                : 'Expected ${fmtDateCompact(u.due)} · ${_inDays(u.days)}',
+                : 'Expected ${fmtDateCompact(u.due)} · ${fmtInDays(u.days)}',
             amount: u.amount,
             type: u.type,
             transfer: isTransferCategory(u.categoryId!),
@@ -2617,7 +2759,7 @@ class _UpcomingCard extends StatelessWidget {
             label: u.label,
             sub: u.days < 0
                 ? 'Overdue · was due ${fmtDateCompact(u.due)}'
-                : 'Due ${fmtDateCompact(u.due)} · ${_inDays(u.days)}',
+                : 'Due ${fmtDateCompact(u.due)} · ${fmtInDays(u.days)}',
             amount: u.amount,
             type: u.type,
             transfer: isTransferCategory(u.categoryId!),

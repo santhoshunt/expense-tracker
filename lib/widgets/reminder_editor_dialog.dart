@@ -238,16 +238,15 @@ Future<void> showReminderEditor(
                       label: repeats == SubscriptionCycle.yearly
                           ? 'Due month'
                           : 'Due months',
-                      value: repeats == SubscriptionCycle.yearly
-                          ? month
-                          : (month - 1) % 3 + 1,
+                      // Yearly lists 12 months, half-yearly 6 pairs and
+                      // quarterly 3 groups, each by its first month.
+                      value: (month - 1) % repeats.months + 1,
                       items: [
-                        if (repeats == SubscriptionCycle.yearly)
-                          for (var m = 1; m <= 12; m++)
-                            PickerItem(value: m, label: reminderMonthName(m))
-                        else
-                          for (var m = 1; m <= 3; m++)
-                            PickerItem(value: m, label: quarterMonthsLabel(m)),
+                        for (var m = 1; m <= repeats.months; m++)
+                          PickerItem(
+                            value: m,
+                            label: cycleMonthsLabel(m, repeats),
+                          ),
                       ],
                       onChanged: (v) {
                         if (v != null) setState(() => month = v);
@@ -354,15 +353,16 @@ Future<void> showReminderEditor(
                             ? repeats
                             : SubscriptionCycle.yearly;
                         final saveDay = onceDay?.day ?? day;
-                        // Quarterly keeps the picked months' first one;
-                        // monthly stores the current month, unused.
+                        // Quarterly and half-yearly keep the picked months'
+                        // first one; monthly stores the current month,
+                        // unused.
                         final anchor =
                             onceDay?.month ??
                             switch (repeats) {
                               SubscriptionCycle.monthly => DateTime.now().month,
-                              SubscriptionCycle.quarterly =>
-                                (month - 1) % 3 + 1,
-                              SubscriptionCycle.yearly => month,
+                              // The picked month's place in its cycle, the
+                              // rule the Due month(s) dropdown shows.
+                              _ => (month - 1) % repeats.months + 1,
                             };
                         final account = autoAdd ? accountId : null;
                         if (existing == null) {
@@ -425,6 +425,7 @@ enum _Repeat {
   once('Once', null),
   monthly('Monthly', SubscriptionCycle.monthly),
   quarterly('Quarterly', SubscriptionCycle.quarterly),
+  halfYearly('Half-yearly', SubscriptionCycle.halfYearly),
   yearly('Yearly', SubscriptionCycle.yearly);
 
   final String label;

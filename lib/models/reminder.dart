@@ -28,8 +28,8 @@ class Reminder {
   final SubscriptionCycle cycle;
 
   /// A month (1..12) an occurrence falls in: with a quarterly [cycle] the
-  /// months three apart from it, with a yearly one this month only.
-  /// Ignored for monthly.
+  /// months three apart from it, with a half-yearly one the months six
+  /// apart, with a yearly one this month only. Ignored for monthly.
   final int anchorMonth;
 
   /// Adds the expense on each due day instead of waiting to be marked paid.

@@ -133,7 +133,7 @@ bool reminderOccurrenceDone(Reminder r, DateTime due) {
 }
 
 /// Whether the current period's occurrence (this month's for monthly, the
-/// latest quarter or year month otherwise) is marked paid.
+/// latest quarter, half-year or year month otherwise) is marked paid.
 bool reminderPaidThisPeriod(Reminder r, DateTime now) {
   final once = reminderOnceDate(r);
   final due =
@@ -175,7 +175,7 @@ List<DateTime> reminderDueDatesBetween(Reminder r, DateTime from, DateTime to) {
 }
 
 /// "Once, 23 Oct 2026", "Monthly, day 5", "Quarterly, day 5 of Jan, Apr,
-/// Jul, Oct" or "Yearly, 5 Mar".
+/// Jul, Oct", "Half-yearly, day 5 of Jan and Jul" or "Yearly, 5 Mar".
 String reminderCycleLabel(Reminder r) {
   final once = reminderOnceDate(r);
   if (once != null) {
@@ -186,16 +186,22 @@ String reminderCycleLabel(Reminder r) {
 
 String _repeatingLabel(Reminder r) => switch (r.cycle) {
   SubscriptionCycle.monthly => 'Monthly, day ${r.dayOfMonth}',
-  SubscriptionCycle.quarterly =>
-    'Quarterly, day ${r.dayOfMonth} of ${quarterMonthsLabel(r.anchorMonth)}',
+  SubscriptionCycle.quarterly || SubscriptionCycle.halfYearly =>
+    '${r.cycle.label}, day ${r.dayOfMonth} of '
+        '${cycleMonthsLabel(r.anchorMonth, r.cycle)}',
   SubscriptionCycle.yearly =>
     'Yearly, ${r.dayOfMonth} ${reminderMonthName(r.anchorMonth)}',
 };
 
-/// The four months a quarterly reminder anchored on [anchorMonth] falls
-/// in, in calendar order: "Jan, Apr, Jul, Oct".
-String quarterMonthsLabel(int anchorMonth) {
-  final months = [for (var k = 0; k < 4; k++) (anchorMonth - 1 + 3 * k) % 12]
-    ..sort();
-  return months.map((m) => _monthNames[m]).join(', ');
+/// Every month a [cycle] anchored on [anchorMonth] falls in, in calendar
+/// order: "Jan, Apr, Jul, Oct" for quarterly, "Jan and Jul" for
+/// half-yearly, "Mar" for yearly and all twelve for monthly.
+String cycleMonthsLabel(int anchorMonth, SubscriptionCycle cycle) {
+  final count = 12 ~/ cycle.months;
+  final months = [
+    for (var k = 0; k < count; k++) (anchorMonth - 1 + cycle.months * k) % 12,
+  ]..sort();
+  final names = [for (final m in months) _monthNames[m]];
+  if (names.length == 2) return '${names[0]} and ${names[1]}';
+  return names.join(', ');
 }

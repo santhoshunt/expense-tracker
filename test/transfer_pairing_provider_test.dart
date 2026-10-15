@@ -287,7 +287,7 @@ void main() {
     // pairId was appended last in its release; tags came after it.
     expect(
       csv.split('\r\n').first,
-      endsWith(',pairId,tags,people,repaidBy,countIn,walletCounted'),
+      endsWith(',pairId,tags,people,repaidBy,countIn,walletCounted,unseen'),
     );
     final rows = BackupService.txsFromCsv(csv);
     expect(rows.where((t) => t.pairId == pairId), hasLength(2));

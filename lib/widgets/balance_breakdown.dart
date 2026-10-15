@@ -100,8 +100,11 @@ Future<void> showBalanceBreakdownSheet(
                         onTap: () {
                           final missing = [
                             for (final a in finance.accounts)
+                              // As cardsMissingLimit: an emptied card
+                              // counts in no total, so it needs no limit.
                               if (!a.isClosed &&
                                   a.isCard &&
+                                  !finance.isOrphanedAccount(a) &&
                                   finance.accountOutstanding(a) == null)
                                 a,
                           ];

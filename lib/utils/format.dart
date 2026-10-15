@@ -119,6 +119,14 @@ String fmtCountIn(DateTime d) {
 
 final DateFormat _weekdayDayMonth = DateFormat('EEE d MMM');
 
+/// A due date [days] ahead as words: "today", "tomorrow", "in 5 days".
+/// Callers say "Overdue" themselves for a negative count.
+String fmtInDays(int days) => days == 0
+    ? 'today'
+    : days == 1
+    ? 'tomorrow'
+    : 'in $days days';
+
 /// Inclusive day range, collapsing whatever the two ends share:
 /// "3 – 9 Aug 2026", "12 Jun – 3 Aug 2026", "20 Dec 2025 – 4 Jan 2026".
 String fmtDateRange(DateTimeRange r) {

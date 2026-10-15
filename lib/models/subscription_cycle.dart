@@ -1,9 +1,10 @@
 /// How often a subscription the user marked by hand repeats. The automatic
-/// detector only finds monthly patterns; a mark also covers quarterly and
-/// yearly plans.
+/// detector only finds monthly patterns; a mark also covers quarterly,
+/// half-yearly and yearly plans.
 enum SubscriptionCycle {
   monthly('Monthly', 1, 30),
   quarterly('Quarterly', 3, 91),
+  halfYearly('Half-yearly', 6, 182),
   yearly('Yearly', 12, 365);
 
   final String label;

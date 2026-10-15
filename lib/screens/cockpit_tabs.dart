@@ -8,6 +8,7 @@ import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/big_bills.dart' show reminderIsBigBill;
 import '../services/notification_service.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
@@ -254,7 +255,8 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
                 'Payments the app spotted repeating (3 or more to the same '
                 'merchant about a month apart, from SMS or your notes), and '
                 'merchants you marked as a subscription in a transaction or '
-                'from the selection bar, monthly, quarterly or yearly. A '
+                'from the selection bar, monthly, quarterly, half-yearly or '
+                'yearly. A '
                 'yearly cost is the usual amount over a year. "Up" means the '
                 'last payment was more than the one before. A payment more '
                 'than a week past its date moves to Stopped. Hiding one here '
@@ -487,7 +489,9 @@ class _SubscriptionTile extends StatelessWidget {
                 ListTile(
                   leading: const Icon(Icons.autorenew),
                   title: const Text('Change cycle'),
-                  subtitle: const Text('Monthly, quarterly or yearly'),
+                  subtitle: const Text(
+                    'Monthly, quarterly, half-yearly or yearly',
+                  ),
                   onTap: () => Navigator.pop(ctx, 'cycle'),
                 ),
                 ListTile(
@@ -1237,6 +1241,17 @@ class _RemindersSection extends StatelessWidget {
                       onPressed: () => _delete(context, r),
                     ),
                   ],
+                ),
+              ),
+            if (finance.reminders.any(reminderIsBigBill))
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Text(
+                  'Quarterly, half-yearly and yearly reminders with an amount '
+                  'also show in Big bills ahead on the Overview.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
           ],
