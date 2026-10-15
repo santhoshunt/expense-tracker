@@ -578,9 +578,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         : finance.budgets.where((b) => _budgetFilter.contains(b.id)).toList();
     final r = _rangeFilter;
     return all.where((t) {
-      if (_accountId != null &&
-          finance.accountForKey(t.acctKey)?.id != _accountId) {
-        return false;
+      // A bank lists its linked debit cards' rows too, the rows its balance
+      // runs over; a card lists its own.
+      if (_accountId != null) {
+        final owner = finance.accountForKey(t.acctKey);
+        if (owner?.id != _accountId &&
+            finance.linkedAccountOf(owner)?.id != _accountId) {
+          return false;
+        }
       }
       // The month a row counts in: a dashboard tap-through lists what its
       // total counted.

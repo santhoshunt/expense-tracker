@@ -766,7 +766,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
       showSection: _showSection,
       showCategoryHistory: _showAlertedCategory,
       showWeeklyDigest: _showWeeklyDigest,
+      showBigBills: _showBigBills,
     );
+  }
+
+  /// The Big bills ahead sheet, as the Overview card opens it: from the Big
+  /// bills widgets. After the frame, as [_showWeeklyDigest] is.
+  void _showBigBills() {
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showBigBillsSheet(
+        context,
+        patterns: _patterns(context.read<FinanceProvider>(), DateTime.now()),
+      );
+    });
+    // A post-frame callback alone waits for a frame nothing has asked for.
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   /// The weekly digest sheet on [week]: from the This week row, the ⋮

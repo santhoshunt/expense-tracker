@@ -380,7 +380,8 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
 
       expect(find.text('BANKS', skipOffstage: false), findsOneWidget);
-      expect(find.text('CREDIT CARDS', skipOffstage: false), findsOneWidget);
+      // Credit and debit cards share one section since 1.41.
+      expect(find.text('CARDS', skipOffstage: false), findsOneWidget);
       expect(
         find.text('SAVINGS & ASSETS', skipOffstage: false),
         findsOneWidget,

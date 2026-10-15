@@ -36,7 +36,7 @@ class BigBill {
   });
 
   /// What it costs over a year: 4, 2 or 1 payments.
-  double get yearly => amount * 12 / cycle.months;
+  double get yearly => cycle.yearlyCost(amount);
 
   /// Its even share of a month, the yearly cost over 12.
   double get monthly => yearly / 12;

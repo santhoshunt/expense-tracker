@@ -188,6 +188,53 @@ WeekDigest buildWeekDigest(
   return digest;
 }
 
+/// The usual week of [weekStart]'s week cut to 1 to 7 days, Monday first:
+/// entry `k - 1` is the [WeekDigest.usual] [buildWeekDigest] gives when
+/// `k` days are shown. The This week widget reads the entry for the day it
+/// draws, so it stays right through the week without the app. One pass over
+/// FinanceProvider.countedTransactions; [buildWeekDigest]'s memo is not
+/// touched. Every entry is null under 2 weeks of history.
+List<double?> usualWeekByDay(FinanceProvider finance, DateTime weekStart) {
+  final start = weekStartOf(weekStart);
+  final earliest = DateTime(
+    start.year,
+    start.month,
+    start.day - 7 * kUsualWeeks,
+  );
+  // Each earlier week's money out, day by day.
+  final earlier = <DateTime, List<double>>{};
+  for (final t in finance.countedTransactions) {
+    if (isTransferCategory(t.categoryId) || t.type != TxType.expense) {
+      continue;
+    }
+    final d = t.effectiveDate;
+    final week = weekStartOf(d);
+    if (week.isBefore(earliest) || !week.isBefore(start)) continue;
+    final days = earlier.putIfAbsent(week, () => List<double>.filled(7, 0));
+    days[d.weekday - 1] += t.spendAmount;
+  }
+
+  // Weeks from the one holding the first row on; quiet weeks count as 0,
+  // as buildWeekDigest counts them.
+  final weeks = <List<double>>[];
+  final first = finance.firstTransactionDate;
+  if (first != null) {
+    final firstWeek = weekStartOf(first);
+    for (var k = 1; k <= kUsualWeeks; k++) {
+      final w = DateTime(start.year, start.month, start.day - 7 * k);
+      if (w.isBefore(firstWeek)) break;
+      weeks.add(earlier[w] ?? List<double>.filled(7, 0));
+    }
+  }
+  if (weeks.length < 2) return List<double?>.filled(7, null);
+  return [
+    for (var shown = 1; shown <= 7; shown++)
+      median([
+        for (final days in weeks) days.take(shown).fold(0.0, (s, v) => s + v),
+      ]),
+  ];
+}
+
 /// The week's dates as the note names them: "12 to 18 Oct", or
 /// "28 Sep to 4 Oct" across a month end. [withWeekday] names the days too,
 /// as the digest sheet does: "Mon 12 to Sun 18 Oct".

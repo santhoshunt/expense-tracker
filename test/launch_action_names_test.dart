@@ -17,4 +17,14 @@ void main() {
     );
     expect(LaunchActions.fromName('open_budgets'), LaunchAction.openBudgets);
   });
+
+  test('the v1.41.0 widgets name their actions', () {
+    // Big bills opens its sheet; This week the digest on the current week,
+    // not the Monday note's action, which needs a week handed over.
+    expect(LaunchActions.fromName('open_big_bills'), LaunchAction.openBigBills);
+    expect(
+      LaunchActions.fromName('open_weekly_digest'),
+      LaunchAction.openThisWeek,
+    );
+  });
 }

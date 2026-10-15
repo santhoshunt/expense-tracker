@@ -33,6 +33,10 @@ class ParsedTxn {
   /// Whether the account fragment named a card (vs a bank account).
   final bool isCard;
 
+  /// Whether the account fragment named a debit card ("Debit Card XX5678"):
+  /// a new key then makes a Debit card account.
+  final bool isDebitCard;
+
   const ParsedTxn({
     required this.type,
     required this.amount,
@@ -46,6 +50,7 @@ class ParsedTxn {
     this.acctKey,
     this.balanceAfter,
     this.isCard = false,
+    this.isDebitCard = false,
   });
 }
 
@@ -454,6 +459,14 @@ class SmsTxnParser {
   /// fragments are skipped; if the body names no fragment of the sender's
   /// own, the transaction simply gets no account key.
   static (String?, bool) accountKeyOf(String sender, String body) {
+    final (key, isCard, _) = accountKeyAndKindOf(sender, body);
+    return (key, isCard);
+  }
+
+  /// [accountKeyOf] plus whether the fragment named a debit card
+  /// ("Debit Card XX5678"): (key, isCard, isDebitCard). A bare masked
+  /// number or an "a/c" fragment is never a debit card.
+  static (String?, bool, bool) accountKeyAndKindOf(String sender, String body) {
     final senderCode = bankCodeOf(sender);
     for (final m in _acctKeyRe.allMatches(body)) {
       // The bank name sits directly before the fragment keyword
@@ -471,8 +484,9 @@ class SmsTxnParser {
       // account's real cash from netWorth and flagged a bogus
       // "missing credit limit".
       final keyword = m.group(1)?.toLowerCase();
-      final isCard = keyword != null && !keyword.contains('debit');
-      return ('$senderCode:${m.group(2)!}', isCard);
+      final isDebit = keyword != null && keyword.contains('debit');
+      final isCard = keyword != null && !isDebit;
+      return ('$senderCode:${m.group(2)!}', isCard, isDebit);
     }
     final debited = _expenseVerbRe.hasMatch(body);
     final bare =
@@ -480,8 +494,8 @@ class SmsTxnParser {
         (debited
             ? _bareMaskFromRe.firstMatch(body)
             : _bareMaskToRe.firstMatch(body));
-    if (bare != null) return ('$senderCode:${bare.group(1)!}', false);
-    return (null, false);
+    if (bare != null) return ('$senderCode:${bare.group(1)!}', false, false);
+    return (null, false, false);
   }
 
   /// The pre-foreign-check keying: first fragment + sender's bank code,
@@ -771,7 +785,7 @@ class SmsTxnParser {
     } else {
       categoryId = type == TxType.expense ? 'other_expense' : 'other_income';
     }
-    final (acctKey, isCard) = accountKeyOf(sender, body);
+    final (acctKey, isCard, isDebitCard) = accountKeyAndKindOf(sender, body);
 
     return ParsedTxn(
       type: type,
@@ -786,6 +800,7 @@ class SmsTxnParser {
       acctKey: acctKey,
       balanceAfter: balanceAfterOf(body),
       isCard: isCard,
+      isDebitCard: isDebitCard,
     );
   }
 

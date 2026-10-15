@@ -84,7 +84,7 @@ void main() {
       );
       await p.updateBudget(p.budgets.single.copyWith(iconKey: 'cafe'));
       final data = p.exportData();
-      expect(data['version'], 25);
+      expect(data['version'], 26);
       final budgets = data['budgets'] as List;
       expect((budgets.single as Map)['icon'], 'cafe');
       expect(p.budgets.single.id, id);

@@ -66,6 +66,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
     null => 'All',
     AccountType.bank => 'Banks',
     AccountType.creditCard => 'Cards',
+    // Never a chip of its own: debit cards list under Cards.
+    AccountType.debitCard => 'Debit cards',
     AccountType.savings => 'Savings',
     AccountType.wallet => 'Wallets',
   };
@@ -168,9 +170,15 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
     final net = finance.netWorth;
     // The accounts the net figure is made of: savings and asset accounts
-    // are left out of it, so they are left out of the count too.
+    // are left out of it, so they are left out of the count too. An
+    // unlinked debit card counts like a bank; a linked one is its bank's.
     final netAccounts = finance.openAccounts
-        .where((a) => a.type == AccountType.bank || a.isCard)
+        .where(
+          (a) =>
+              a.type == AccountType.bank ||
+              a.isCard ||
+              (a.isDebitCard && finance.linkedAccountOf(a) == null),
+        )
         .length;
 
     return Column(
@@ -328,9 +336,17 @@ class _AccountsScreenState extends State<AccountsScreen> {
     ColorScheme scheme,
     AccountType? t,
   ) {
-    bool visible(Account a) => t == null || a.type == t;
-    final accounts = finance.openAccounts.where(visible).toList();
-    final closed = finance.closedAccounts.where(visible).toList();
+    // The Cards page lists credit cards, then debit cards.
+    bool visible(Account a) =>
+        t == null ||
+        a.type == t ||
+        (t == AccountType.creditCard && a.isDebitCard);
+    List<Account> debitLast(Iterable<Account> list) => [
+      ...list.where((a) => !a.isDebitCard),
+      ...list.where((a) => a.isDebitCard),
+    ];
+    final accounts = debitLast(finance.openAccounts.where(visible));
+    final closed = debitLast(finance.closedAccounts.where(visible));
     // Transparent ColoredBox: the empty state is shrink-wrapped, and a
     // PageView only receives drags that hit its subtree — blank regions
     // need an opaque hit-test surface or a swipe there would die.
@@ -365,19 +381,24 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 ];
                 final items = <Widget>[
                   if (t == null) ...[
-                    for (final (type, header) in const [
-                      (AccountType.bank, 'Banks'),
-                      (AccountType.creditCard, 'Credit cards'),
-                      (AccountType.savings, 'Savings & assets'),
+                    // Cards: credit cards, then debit cards, in one run.
+                    for (final (types, header) in const [
+                      ([AccountType.bank], 'Banks'),
+                      (
+                        [AccountType.creditCard, AccountType.debitCard],
+                        'Cards',
+                      ),
+                      ([AccountType.savings], 'Savings & assets'),
                     ]) ...[
-                      if (accounts.any((a) => a.type == type)) ...[
+                      if (accounts.any((a) => types.contains(a.type))) ...[
                         UppercaseSectionHeader(
                           header,
                           color: scheme.onSurfaceVariant,
                         ),
                         ..._cardRun([
-                          for (final a in accounts)
-                            if (a.type == type) a,
+                          for (final type in types)
+                            for (final a in accounts)
+                              if (a.type == type) a,
                         ]),
                       ],
                     ],
@@ -434,13 +455,15 @@ class _AccountsScreenState extends State<AccountsScreen> {
 /// What an emptied account ([FinanceProvider.isOrphanedAccount]) says, on
 /// the open card and in the closed card's info mark. The middle sentence
 /// only when a set figure stopped counting: a card's is what it owes, and
-/// a savings account's never counted in net balance.
-String _orphanedHint(Account a) {
+/// a savings account's never counted in net balance. [drawsFrom] is a debit
+/// card's live link ([FinanceProvider.linkedAccountOf]), so a card whose
+/// bank was closed reads as unlinked here, as it does in the totals.
+String _orphanedHint(Account a, {Account? drawsFrom}) {
   final figure = a.manualBalance == null
       ? null
       : a.isCard
       ? 'set outstanding'
-      : a.type == AccountType.bank
+      : a.type == AccountType.bank || (a.isDebitCard && drawsFrom == null)
       ? 'set balance'
       : null;
   return [
@@ -477,10 +500,18 @@ class _AccountCard extends StatelessWidget {
     );
     final scheme = Theme.of(context).colorScheme;
     final isCard = account.isCard;
-    final txCount = finance.transactionCountForAccount(account.id);
+    // A linked debit card has no balance of its own: its money is its
+    // bank's. Unlinked, it shows its own balance, as a bank does.
+    final drawsFrom = finance.linkedAccountOf(account);
+    // A bank's count takes in its linked debit cards' rows, as its balance
+    // and View transactions do.
+    final txCount = finance.balanceTransactionCount(account);
     final orphaned = finance.isOrphanedAccount(account);
+    final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
     final String figure;
-    if (isCard) {
+    if (drawsFrom != null) {
+      figure = '${fmtMoney(finance.accountSpentThisMonth(account))} this month';
+    } else if (isCard) {
       final owed = finance.accountOutstanding(account);
       // No figure: name the same blocker the open card explains.
       figure = owed != null
@@ -492,7 +523,6 @@ class _AccountCard extends StatelessWidget {
     } else {
       figure = fmtMoney(finance.accountBalance(account));
     }
-    final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
 
     return Padding(
       padding: EdgeInsets.fromLTRB(16, first ? 6 : 0, 16, last ? 6 : 0),
@@ -560,12 +590,46 @@ class _AccountCard extends StatelessWidget {
                               FittedBox(
                                 fit: BoxFit.scaleDown,
                                 alignment: Alignment.centerLeft,
-                                child: Text(
-                                  figure,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
+                                // Cards share one section, so a debit card
+                                // says what it is; its month's spend is
+                                // money out, in red.
+                                child: account.isDebitCard
+                                    ? Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            'Debit card · ',
+                                            style: TextStyle(
+                                              color: scheme.onSurfaceVariant,
+                                            ),
+                                          ),
+                                          Text(
+                                            figure,
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              // ₹0 stays plain: nothing went
+                                              // out to colour.
+                                              color:
+                                                  drawsFrom != null &&
+                                                      finance.accountSpentThisMonth(
+                                                            account,
+                                                          ) >
+                                                          0
+                                                  ? moneyColor(
+                                                      context,
+                                                      type: TxType.expense,
+                                                    )
+                                                  : null,
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : Text(
+                                        figure,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
                               ),
                           ],
                         ),
@@ -576,7 +640,10 @@ class _AccountCard extends StatelessWidget {
                         Padding(
                           padding: const EdgeInsets.only(right: 4),
                           child: Tooltip(
-                            message: _orphanedHint(account),
+                            message: _orphanedHint(
+                              account,
+                              drawsFrom: drawsFrom,
+                            ),
                             child: Icon(
                               Icons.info_outline,
                               size: 16,
@@ -599,14 +666,41 @@ class _AccountCard extends StatelessWidget {
                         const SizedBox(height: 14),
                         if (isCard)
                           _CardFigures(account: account, onView: onView)
-                        else
+                        else if (drawsFrom != null)
+                          _DebitCardFigures(
+                            account: account,
+                            bank: drawsFrom,
+                            onView: onView,
+                          )
+                        else ...[
+                          if (account.isDebitCard) ...[
+                            Text(
+                              'Not linked to a bank account. Its balance '
+                              'counts on its own.',
+                              style: muted,
+                            ),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                onPressed: () =>
+                                    pickDrawsFromFlow(context, account),
+                                icon: const Icon(Icons.add_link, size: 18),
+                                label: const Text('Link'),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                          ],
                           _BankBalance(account: account),
+                        ],
                         // An account the 1.28 re-key emptied no longer
                         // counts in net balance: say so, and offer the two
                         // ways out.
                         if (orphaned) ...[
                           const SizedBox(height: 10),
-                          Text(_orphanedHint(account), style: muted),
+                          Text(
+                            _orphanedHint(account, drawsFrom: drawsFrom),
+                            style: muted,
+                          ),
                           Wrap(
                             spacing: 8,
                             children: [
@@ -776,6 +870,15 @@ class _BankBalance extends StatelessWidget {
           provenance,
           style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
         ),
+        // The debit cards whose spends this balance takes in.
+        if (account.type == AccountType.bank)
+          if (finance.linkedCardsOf(account) case final cards
+              when cards.isNotEmpty)
+            Text(
+              'Includes debit card${cards.length == 1 ? '' : 's'} '
+              '${cards.map(_cardNumberLabel).join(', ')}',
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+            ),
         if (account.type == AccountType.savings &&
             (account.goalAmount ?? 0) > 0)
           _GoalProgress(account: account),
@@ -1394,6 +1497,140 @@ class _CardFigures extends StatelessWidget {
   }
 }
 
+/// A debit card's number as the bank tile names it: "••5678" from its first
+/// SMS number, else its name.
+String _cardNumberLabel(Account card) {
+  final keys = [
+    for (final k in card.keys)
+      if (!k.startsWith('manual:') && k.contains(':')) k,
+  ]..sort();
+  return keys.isEmpty ? card.displayName : '••${keys.first.split(':').last}';
+}
+
+/// "Which account does it draw from?": the open bank accounts, then "Not
+/// linked yet". Null when dismissed; a null value means not linked.
+Future<PickerResult<String>?> pickDrawsFrom(
+  BuildContext context,
+  Account card,
+) {
+  final banks = context.read<FinanceProvider>().openAccounts.where(
+    (a) => a.type == AccountType.bank && a.id != card.id,
+  );
+  return showPickerSheet<String>(
+    context: context,
+    title: 'Which account does it draw from?',
+    items: [
+      for (final b in banks)
+        PickerItem(
+          value: b.id,
+          label: b.displayName,
+          leading: Icon(b.icon, size: 20),
+        ),
+      const PickerItem(
+        value: null,
+        label: 'Not linked yet',
+        leading: Icon(Icons.link_off, size: 20),
+      ),
+    ],
+    // The live link: one to a closed bank shows nothing picked.
+    selected: context.read<FinanceProvider>().linkedAccountOf(card)?.id,
+  );
+}
+
+/// Picks the bank [card] draws from and links it; dismissing changes
+/// nothing.
+Future<void> pickDrawsFromFlow(BuildContext context, Account card) async {
+  final finance = context.read<FinanceProvider>();
+  final picked = await pickDrawsFrom(context, card);
+  if (picked == null) return;
+  await finance.linkDebitCard(card.id, picked.value);
+}
+
+/// A linked debit card's open tile: the bank it draws from, what it spent
+/// this month, and its numbers. No balance: its money is the bank's.
+class _DebitCardFigures extends StatelessWidget {
+  final Account account;
+  final Account bank;
+  final void Function(String accountId) onView;
+  const _DebitCardFigures({
+    required this.account,
+    required this.bank,
+    required this.onView,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.watch<FinanceProvider>();
+    final scheme = Theme.of(context).colorScheme;
+    final spent = finance.accountSpentThisMonth(account);
+    final numbers = [
+      for (final k in account.keys)
+        if (!k.startsWith('manual:')) k.replaceFirst(':', ' ••'),
+    ]..sort();
+    final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Draws from ${bank.displayName}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: scheme.onSurface),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: () => pickDrawsFromFlow(context, account),
+              child: const Text('Change'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        InfoLabel(
+          // The label muted, the figure red: it is money out.
+          label: Text.rich(
+            TextSpan(
+              text: 'Spent this month ',
+              children: [
+                TextSpan(
+                  text: fmtMoney(spent),
+                  style: TextStyle(
+                    // ₹0 stays plain, as on the folded tile.
+                    color: spent > 0
+                        ? moneyColor(context, type: TxType.expense)
+                        : null,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            style: muted,
+          ),
+          tip: InfoTip(
+            title: 'Spent this month',
+            message:
+                'Spending on this card in the current calendar month. '
+                'Transfers are left out. It also counts in the spend of '
+                'the bank it draws from.',
+            link: InfoLink(
+              prompt: 'See what makes it up?',
+              label: "This card's transactions",
+              onTap: (_) => onView(account.id),
+            ),
+          ),
+        ),
+        if (numbers.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text('Card ${numbers.join(', ')}', style: muted),
+        ],
+      ],
+    );
+  }
+}
+
 class _AccountMenu extends StatelessWidget {
   final Account account;
   const _AccountMenu({required this.account});
@@ -1427,6 +1664,8 @@ class _AccountMenu extends StatelessWidget {
             showWalletDetailsDialog(context, account);
           case 'type':
             _toggleType(context);
+          case 'draws':
+            pickDrawsFromFlow(context, account);
           case 'kind':
             _setKind(context);
           case 'goal':
@@ -1485,12 +1724,17 @@ class _AccountMenu extends StatelessWidget {
                   value: 'cycle',
                   child: Text('Statement & due dates…'),
                 ),
-              PopupMenuItem(
-                value: 'balance',
-                child: Text(
-                  account.isCard ? 'Set outstanding…' : 'Set balance…',
+              if (account.isDebitCard)
+                const PopupMenuItem(value: 'draws', child: Text('Draws from…')),
+              // A linked debit card has no balance of its own to set.
+              if (context.read<FinanceProvider>().linkedAccountOf(account) ==
+                  null)
+                PopupMenuItem(
+                  value: 'balance',
+                  child: Text(
+                    account.isCard ? 'Set outstanding…' : 'Set balance…',
+                  ),
                 ),
-              ),
               // A rule between editing the account and ending it: Merge,
               // Close and Delete each make it go away.
               const PopupMenuDivider(),
@@ -1684,6 +1928,14 @@ class _AccountMenu extends StatelessWidget {
     );
     final t = result?.value;
     if (t == null || t == account.type || !context.mounted) return;
+    // A debit card draws from a bank account: ask which. Dismissing the
+    // picker leaves the type as it was.
+    String? link;
+    if (t == AccountType.debitCard) {
+      final picked = await pickDrawsFrom(context, account);
+      if (picked == null || !context.mounted) return;
+      link = picked.value;
+    }
     // Crossing the wallet line changes what counts: say how much first.
     if (t == AccountType.wallet || account.isWallet) {
       final toWallet = t == AccountType.wallet;
@@ -1698,10 +1950,16 @@ class _AccountMenu extends StatelessWidget {
                 (toWallet || !r.walletCounted),
           )
           .length;
-      // Only banks and cards make up net balance; savings stay out anyway.
+      // Only banks, credit cards and unlinked debit cards make up net
+      // balance; savings stay out anyway.
       final netType = toWallet ? account.type : t;
+      final unlinked = toWallet
+          ? finance.linkedAccountOf(account) == null
+          : link == null;
       final netMoves =
-          netType == AccountType.bank || netType == AccountType.creditCard;
+          netType == AccountType.bank ||
+          netType == AccountType.creditCard ||
+          (netType == AccountType.debitCard && unlinked);
       final net = !netMoves
           ? ''
           : toWallet
@@ -1753,7 +2011,11 @@ class _AccountMenu extends StatelessWidget {
     // The navigator's context, not this menu's: changing the type can move
     // the card off this page (the last Savings account) and unmount it.
     final navContext = Navigator.of(context).context;
-    final changed = await finance.setAccountType(account.id, t);
+    final changed = await finance.setAccountType(
+      account.id,
+      t,
+      linkedAccountId: link,
+    );
     if (!changed || !navContext.mounted) return;
     if (t == AccountType.wallet) {
       final updated = finance.accountById(account.id);
@@ -2195,8 +2457,13 @@ Future<void> showAddAccountDialog(
   final serviceCtrl = TextEditingController();
   final pointValueCtrl = TextEditingController();
   final balanceCtrl = TextEditingController();
-  // A page's own empty state opens on its own type.
-  var type = initialType ?? AccountType.bank;
+  // A page's own empty state opens on its own type. No Debit card segment:
+  // a debit card arrives from its alerts or through Change type.
+  var type = initialType == null || initialType == AccountType.debitCard
+      ? AccountType.bank
+      : initialType;
+  // Shown in the dialog when Create fails, so it can't hide behind it.
+  String? saveError;
   var kindIcon = 'savings';
   var holdsPoints = false;
   String? key;
@@ -2254,17 +2521,18 @@ Future<void> showAddAccountDialog(
                     ),
                     segments: [
                       for (final t in AccountType.values)
-                        ButtonSegment(
-                          value: t,
-                          tooltip: t.label,
-                          label: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              t == AccountType.creditCard ? 'Card' : t.label,
-                              maxLines: 1,
+                        if (t != AccountType.debitCard)
+                          ButtonSegment(
+                            value: t,
+                            tooltip: t.label,
+                            label: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Text(
+                                t == AccountType.creditCard ? 'Card' : t.label,
+                                maxLines: 1,
+                              ),
                             ),
                           ),
-                        ),
                     ],
                     selected: {type},
                     onSelectionChanged: (s) => setState(() => type = s.first),
@@ -2382,6 +2650,17 @@ Future<void> showAddAccountDialog(
                       },
                     ),
                   ],
+                  // Above the actions, inside the dialog: a toast would sit
+                  // behind it.
+                  if (saveError != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      saveError!,
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(ctx).colorScheme.error,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -2397,14 +2676,18 @@ Future<void> showAddAccountDialog(
                     nameCtrl.text.trim().isEmpty || saving || !walletReady
                     ? null
                     : () async {
-                        setState(() => saving = true);
+                        setState(() {
+                          saving = true;
+                          saveError = null;
+                        });
                         final name = nameCtrl.text.trim();
                         final finance = ctx.read<FinanceProvider>();
                         final navigator = Navigator.of(ctx);
                         final messenger = ScaffoldMessenger.of(context);
                         final kind = kindCtrl.text.trim();
                         // A throw used to leave the dialog open forever with no
-                        // message — surface it and keep the dialog for a retry.
+                        // message. Say so in the dialog and keep it for a
+                        // retry.
                         try {
                           final id = await finance.addAccount(
                             name: name,
@@ -2440,13 +2723,14 @@ Future<void> showAddAccountDialog(
                             }
                           }
                           navigator.pop();
-                        } catch (e) {
-                          setState(() => saving = false);
-                          showAppToastOn(
-                            messenger,
-                            'Could not create account: $e',
-                            tone: AppToastTone.error,
-                          );
+                        } catch (_) {
+                          if (!ctx.mounted) return;
+                          setState(() {
+                            saving = false;
+                            saveError =
+                                "Couldn't create the account. "
+                                'Try again.';
+                          });
                         }
                       },
                 child: const Text('Create'),

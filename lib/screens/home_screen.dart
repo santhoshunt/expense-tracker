@@ -425,6 +425,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => AppNav.instance.showWeeklyDigest(week),
         );
+      case LaunchAction.openBigBills:
+        setState(() => _showTab(kHomeTabDashboard));
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => AppNav.instance.showBigBills(),
+        );
+      // The This week widget: the digest of the week the tap lands in.
+      case LaunchAction.openThisWeek:
+        setState(() => _showTab(kHomeTabDashboard));
+        WidgetsBinding.instance.addPostFrameCallback(
+          // weekClock, as the This week row and the sheet read it.
+          (_) => AppNav.instance.showWeeklyDigest(weekStartOf(weekClock())),
+        );
       case LaunchAction.openToday:
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day);

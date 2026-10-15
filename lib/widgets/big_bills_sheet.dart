@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' show DateFormat;
 import 'package:provider/provider.dart';
 
+import '../models/reminder.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
@@ -45,30 +46,32 @@ Future<void> showBigBillsSheet(
         final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
         final out = moneyColor(ctx, type: TxType.expense);
 
+        // The reminder a bill came from; null for a marked subscription, or
+        // when the reminder has gone.
+        Reminder? reminderFor(BigBill b) {
+          final id = b.reminderId;
+          if (id == null) return null;
+          for (final r in finance.reminders) {
+            if (r.id == id) return r;
+          }
+          return null;
+        }
+
         // Closes the sheet first; the next screen opens on the context that
         // opened it, which is still mounted.
         void open(BigBill b) {
           Navigator.pop(ctx);
-          final id = b.reminderId;
-          if (id == null) {
+          if (b.reminderId == null) {
             goCockpitSubscriptions(context);
             return;
           }
-          for (final r in finance.reminders) {
-            if (r.id == id) {
-              showReminderEditor(context, existing: r);
-              return;
-            }
+          if (reminderFor(b) case final r?) {
+            showReminderEditor(context, existing: r);
           }
         }
 
         String detail(BigBill b) {
-          final id = b.reminderId;
-          if (id != null) {
-            for (final r in finance.reminders) {
-              if (r.id == id) return reminderCycleLabel(r);
-            }
-          }
+          if (reminderFor(b) case final r?) return reminderCycleLabel(r);
           return '${b.cycle.label} · next ${fmtDate(b.nextDue)}';
         }
 

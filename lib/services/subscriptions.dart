@@ -88,8 +88,7 @@ SubscriptionSummary buildSubscriptions(
       // Detection only finds monthly patterns (a 25 to 35-day median gap)
       // and the row reads "monthly", so a detected plan is 12 payments,
       // not 365 days over its average gap.
-      yearly:
-          h.expectedAmount * 12 / (cycle ?? SubscriptionCycle.monthly).months,
+      yearly: (cycle ?? SubscriptionCycle.monthly).yearlyCost(h.expectedAmount),
       priceRise: _priceRise(h),
     );
     if (isHidden) {

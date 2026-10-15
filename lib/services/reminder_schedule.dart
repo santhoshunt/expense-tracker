@@ -197,7 +197,7 @@ String _repeatingLabel(Reminder r) => switch (r.cycle) {
 /// order: "Jan, Apr, Jul, Oct" for quarterly, "Jan and Jul" for
 /// half-yearly, "Mar" for yearly and all twelve for monthly.
 String cycleMonthsLabel(int anchorMonth, SubscriptionCycle cycle) {
-  final count = 12 ~/ cycle.months;
+  final count = cycle.paymentsPerYear;
   final months = [
     for (var k = 0; k < count; k++) (anchorMonth - 1 + cycle.months * k) % 12,
   ]..sort();

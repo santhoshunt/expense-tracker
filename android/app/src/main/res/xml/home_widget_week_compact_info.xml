@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This week (compact, 4x1). updatePeriodMillis: a 30-minute redraw from
+     the stored snapshot (Android's floor), so the usual week moves to each
+     new day and a new Monday starts at zero without the app running. No
+     configure step. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/home_widget_week_compact_description"
+    android:initialLayout="@layout/home_widget_week_compact"
+    android:minWidth="250dp"
+    android:minHeight="40dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:previewLayout="@layout/home_widget_week_compact_preview"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

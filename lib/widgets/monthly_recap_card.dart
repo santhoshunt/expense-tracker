@@ -10,6 +10,7 @@ import '../utils/format.dart';
 import '../utils/money_colors.dart';
 import '../utils/text_scale.dart';
 import 'dashboard_fold.dart';
+import 'delta_note.dart';
 import 'info_tip.dart';
 import 'status_dot.dart';
 
@@ -20,58 +21,6 @@ const String kPaceTipMessage =
     'measured against a whole one. Budgets show here once '
     'they reach 80% of their limit. For the first $kRecapDays days, '
     'last month\'s recap shows on the Overview instead.';
-
-/// Colour for a spending change: red for more, green for less, blue for
-/// about the same. Same rule as the comparison cards.
-Color _deltaTone(BuildContext context, SpendCompare c) => c.negligible
-    ? AppColors.of(context).blue
-    : c.delta > 0
-    ? Theme.of(context).colorScheme.error
-    : AppColors.of(context).green;
-
-/// A change against another month: a trend arrow in [_deltaTone], then
-/// [text] in the plain text colour. Amounts are never coloured; the arrow
-/// carries the colour, as on the comparison cards.
-class _DeltaNote extends StatelessWidget {
-  final String text;
-  final SpendCompare compare;
-  final TextStyle? style;
-
-  const _DeltaNote({
-    required this.text,
-    required this.compare,
-    required this.style,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(
-          compare.negligible
-              ? Icons.drag_handle
-              : compare.delta > 0
-              ? Icons.trending_up
-              : Icons.trending_down,
-          size: 14,
-          color: _deltaTone(context, compare),
-        ),
-        const SizedBox(width: 4),
-        Flexible(
-          child: Text(
-            text,
-            maxLines: 2,
-            style: style?.copyWith(
-              color: Theme.of(context).colorScheme.onSurface,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
 
 /// Last month's recap, shown on the Overview for the first [kRecapDays]
 /// days: spent and saved, then the top categories, the biggest merchant
@@ -323,11 +272,11 @@ class MonthPaceCard extends StatelessWidget {
               ),
               if (prev.state == CompareState.ok) ...[
                 const SizedBox(height: 8),
-                _DeltaNote(
+                DeltaNote(
                   text: prev.negligible
                       ? 'About the same as $prevShort by this day'
                       : '${deltaPhrase(prev)} than $prevShort by this day',
-                  compare: prev,
+                  delta: prev.delta,
                   style: text.bodySmall?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ],
@@ -567,7 +516,7 @@ class _Stat extends StatelessWidget {
         ),
         if (note case final note?)
           if (noteCompare case final compare?)
-            _DeltaNote(text: note, compare: compare, style: text.labelSmall)
+            DeltaNote(text: note, delta: compare.delta, style: text.labelSmall)
           else
             Text(note, style: text.labelSmall, maxLines: 2),
       ],

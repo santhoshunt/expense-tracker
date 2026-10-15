@@ -12,10 +12,17 @@ enum SubscriptionCycle {
   /// Calendar months from one payment to the next.
   final int months;
 
-  /// The same gap in days, for cost per year and per month.
+  /// The same gap in days: the interval a marked plan reports. Costs come
+  /// from [paymentsPerYear], not from this.
   final int approxDays;
 
   const SubscriptionCycle(this.label, this.months, this.approxDays);
+
+  /// Payments in a year: 12, 4, 2 or 1.
+  int get paymentsPerYear => 12 ~/ months;
+
+  /// What a payment of [amount] costs over a year.
+  double yearlyCost(double amount) => amount * paymentsPerYear;
 
   /// The payment after one made on [last]: the same day [months] later,
   /// or that month's last day when it is shorter (31 Jan monthly → 28 Feb).

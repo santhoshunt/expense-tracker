@@ -13,7 +13,6 @@ import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/section_header.dart';
-import '../widgets/undo_snackbar.dart';
 
 /// Category & group management — the Categories tab in the Cockpit.
 ///
@@ -594,6 +593,8 @@ Future<void> showCategoryDialog(
   // double-tap (both presses see the pre-add state), and Create awaits the
   // writes before popping — a second tap minted a duplicate category.
   var saving = false;
+  // A failed save, said inside the dialog: a toast would draw behind it.
+  String? saveError;
   // Transfer options start open when editing a transfer.
   var transferOpen = isTransfer;
 
@@ -651,228 +652,265 @@ Future<void> showCategoryDialog(
           final groupable = type == TxType.expense || isTransfer;
           return AlertDialog(
             title: Text(existing == null ? 'New category' : 'Edit category'),
-            content: SingleChildScrollView(
-              // Top padding so the field's floating "Name" label isn't
-              // clipped by the scroll viewport's edge.
-              padding: const EdgeInsets.only(top: 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Top-aligned: a duplicate-name error grows the field
-                  // downward, and the circle stays beside the name.
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // The category as it will look; the icon grid and the
-                      // colours open from it in one sheet.
-                      _pickerTarget(
-                        Semantics(
-                          button: true,
-                          label: 'Icon and colour',
-                          // excludeSemantics drops the InkWell's own tap
-                          // action too, so it is exposed here for screen
-                          // readers.
-                          onTap: () => pickLook(ctx, setState),
-                          excludeSemantics: true,
-                          child: InkWell(
-                            customBorder: const CircleBorder(),
-                            onTap: () => pickLook(ctx, setState),
-                            child: Container(
-                              width: 40,
-                              height: 40,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: color.withValues(alpha: 0.2),
-                                border: Border.all(color: color, width: 1.5),
-                              ),
-                              child: Icon(
-                                icon,
-                                size: 20,
-                                color: categoryGlyphColor(ctx, color),
+            // The save error sits under the scrolling fields, so it stays in
+            // view at large text instead of scrolling away.
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Flexible(
+                  child: SingleChildScrollView(
+                    // Top padding so the field's floating "Name" label isn't
+                    // clipped by the scroll viewport's edge.
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        // Top-aligned: a duplicate-name error grows the field
+                        // downward, and the circle stays beside the name.
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // The category as it will look; the icon grid and the
+                            // colours open from it in one sheet.
+                            _pickerTarget(
+                              Semantics(
+                                button: true,
+                                label: 'Icon and colour',
+                                // excludeSemantics drops the InkWell's own tap
+                                // action too, so it is exposed here for screen
+                                // readers.
+                                onTap: () => pickLook(ctx, setState),
+                                excludeSemantics: true,
+                                child: InkWell(
+                                  customBorder: const CircleBorder(),
+                                  onTap: () => pickLook(ctx, setState),
+                                  child: Container(
+                                    width: 40,
+                                    height: 40,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: color.withValues(alpha: 0.2),
+                                      border: Border.all(
+                                        color: color,
+                                        width: 1.5,
+                                      ),
+                                    ),
+                                    child: Icon(
+                                      icon,
+                                      size: 20,
+                                      color: categoryGlyphColor(ctx, color),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Builder(
+                                builder: (ctx) {
+                                  // Two categories named "Home" are
+                                  // indistinguishable in every dropdown, so the
+                                  // duplicate is rejected up front.
+                                  final name = labelCtrl.text
+                                      .trim()
+                                      .toLowerCase();
+                                  final duplicate =
+                                      name.isNotEmpty &&
+                                      allCategories.any(
+                                        (c) =>
+                                            c.id != existing?.id &&
+                                            c.label.trim().toLowerCase() ==
+                                                name,
+                                      );
+                                  return TextField(
+                                    controller: labelCtrl,
+                                    autofocus: existing == null,
+                                    textCapitalization:
+                                        TextCapitalization.sentences,
+                                    onChanged: (_) => setState(() {}),
+                                    decoration: InputDecoration(
+                                      labelText: 'Name',
+                                      hintText: 'e.g. Home',
+                                      errorText: duplicate
+                                          ? 'A category with this name already '
+                                                'exists'
+                                          : null,
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                        // Only while creating: an existing category's circle
+                        // already shows its own icon and colour.
+                        if (existing == null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              'Tap the circle to pick an icon and colour',
+                              style: Theme.of(ctx).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      ctx,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
                           ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Builder(
-                          builder: (ctx) {
-                            // Two categories named "Home" are
-                            // indistinguishable in every dropdown, so the
-                            // duplicate is rejected up front.
-                            final name = labelCtrl.text.trim().toLowerCase();
-                            final duplicate =
-                                name.isNotEmpty &&
-                                allCategories.any(
-                                  (c) =>
-                                      c.id != existing?.id &&
-                                      c.label.trim().toLowerCase() == name,
-                                );
-                            return TextField(
-                              controller: labelCtrl,
-                              autofocus: existing == null,
-                              textCapitalization: TextCapitalization.sentences,
-                              onChanged: (_) => setState(() {}),
-                              decoration: InputDecoration(
-                                labelText: 'Name',
-                                hintText: 'e.g. Home',
-                                errorText: duplicate
-                                    ? 'A category with this name already '
-                                          'exists'
-                                    : null,
+                        const SizedBox(height: 16),
+                        // Direction and transfer-ness are editable for everything
+                        // except two kinds. The fallback "Other" categories are
+                        // the app's hard-coded remap targets. Repaid to me
+                        // must stay a money-in transfer so repayments never count
+                        // as income.
+                        if (isFallback)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Text(
+                              isRepaid
+                                  ? 'Repaid to me always stays a money-in '
+                                        'transfer, so repayments never count as '
+                                        'income.'
+                                  : 'Direction is fixed for the fallback "Other" '
+                                        'categories.',
+                              style: Theme.of(ctx).textTheme.bodySmall,
+                            ),
+                          ),
+                        if (!isFallback) ...[
+                          // No selected checkmark and single-line scale-down labels:
+                          // "Money out" + icon + check wrapped in the narrow dialog.
+                          Row(
+                            children: [
+                              Expanded(
+                                child: SegmentedButton<TxType>(
+                                  showSelectedIcon: false,
+                                  segments: [
+                                    ButtonSegment(
+                                      value: TxType.expense,
+                                      label: FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        child: Text(
+                                          isTransfer ? 'Money out' : 'Expense',
+                                          maxLines: 1,
+                                        ),
+                                      ),
+                                      icon: const Icon(
+                                        Icons.arrow_upward,
+                                        size: 16,
+                                      ),
+                                    ),
+                                    ButtonSegment(
+                                      value: TxType.income,
+                                      label: FittedBox(
+                                        fit: BoxFit.scaleDown,
+                                        child: Text(
+                                          isTransfer ? 'Money in' : 'Income',
+                                          maxLines: 1,
+                                        ),
+                                      ),
+                                      icon: const Icon(
+                                        Icons.arrow_downward,
+                                        size: 16,
+                                      ),
+                                    ),
+                                  ],
+                                  selected: {type},
+                                  onSelectionChanged: (s) =>
+                                      setState(() => type = s.first),
+                                ),
                               ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  // Only while creating: an existing category's circle
-                  // already shows its own icon and colour.
-                  if (existing == null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        'Tap the circle to pick an icon and colour',
-                        style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 16),
-                  // Direction and transfer-ness are editable for everything
-                  // except the fallback "Other" categories — those are the
-                  // app's hard-coded remap targets — and Repaid to me, which
-                  // must stay a money-in transfer so repayments never count
-                  // as income.
-                  if (isFallback)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text(
-                        isRepaid
-                            ? 'Repaid to me always stays a money-in '
-                                  'transfer, so repayments never count as '
-                                  'income.'
-                            : 'Direction is fixed for the fallback "Other" '
-                                  'categories.',
-                        style: Theme.of(ctx).textTheme.bodySmall,
-                      ),
-                    ),
-                  if (!isFallback) ...[
-                    // No selected checkmark and single-line scale-down labels:
-                    // "Money out" + icon + check wrapped in the narrow dialog.
-                    Row(
-                      children: [
-                        Expanded(
-                          child: SegmentedButton<TxType>(
-                            showSelectedIcon: false,
-                            segments: [
-                              ButtonSegment(
-                                value: TxType.expense,
-                                label: FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: Text(
-                                    isTransfer ? 'Money out' : 'Expense',
-                                    maxLines: 1,
-                                  ),
-                                ),
-                                icon: const Icon(Icons.arrow_upward, size: 16),
-                              ),
-                              ButtonSegment(
-                                value: TxType.income,
-                                label: FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: Text(
-                                    isTransfer ? 'Money in' : 'Income',
-                                    maxLines: 1,
-                                  ),
-                                ),
-                                icon: const Icon(
-                                  Icons.arrow_downward,
-                                  size: 16,
-                                ),
+                              const InfoTip(
+                                title: 'Direction',
+                                message:
+                                    'Changing direction re-types every transaction '
+                                    'in this category. Switching a category that '
+                                    'is not a transfer to income also removes it '
+                                    'from its group and budgets.',
                               ),
                             ],
-                            selected: {type},
-                            onSelectionChanged: (s) =>
-                                setState(() => type = s.first),
-                          ),
-                        ),
-                        const InfoTip(
-                          title: 'Direction',
-                          message:
-                              'Changing direction re-types every transaction '
-                              'in this category. Switching a category that '
-                              'is not a transfer to income also removes it '
-                              'from its group and budgets.',
-                        ),
-                      ],
-                    ),
-                  ],
-                  if (groupable && finance.groups.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    AppDropdownField<String>(
-                      label: 'Group',
-                      value: groupId,
-                      items: [
-                        const PickerItem(value: null, label: 'None (Other)'),
-                        for (final g in finance.groups)
-                          PickerItem(
-                            value: g.id,
-                            label: g.label,
-                            leading: Icon(
-                              Icons.workspaces_outlined,
-                              size: 18,
-                              color: g.color,
-                            ),
-                          ),
-                      ],
-                      onChanged: (v) => setState(() => groupId = v),
-                    ),
-                  ],
-                  // Most categories are plain spending or income; the switch
-                  // waits behind an expander, open on a transfer.
-                  if (!isFallback) ...[
-                    const SizedBox(height: 4),
-                    DialogExpander(
-                      title: 'Transfer options',
-                      open: transferOpen,
-                      onToggle: () =>
-                          setState(() => transferOpen = !transferOpen),
-                      // Tip beside the tile, not in it: SwitchListTile
-                      // merges its children's semantics and would swallow
-                      // the tip.
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('Transfer'),
-                              subtitle: Text(
-                                'Moves money, not income or spending',
-                                style: Theme.of(ctx).textTheme.bodySmall,
-                              ),
-                              value: isTransfer,
-                              onChanged: (v) => setState(() => isTransfer = v),
-                            ),
-                          ),
-                          const InfoTip(
-                            title: 'Transfer',
-                            message:
-                                'Transfers are left out of income, spending, '
-                                'the monthly cap and "All except" budgets. '
-                                'Money-out transfers still count in a budget '
-                                'that picks them under "Only these", and in '
-                                "their group's total.",
                           ),
                         ],
+                        if (groupable && finance.groups.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          AppDropdownField<String>(
+                            label: 'Group',
+                            value: groupId,
+                            items: [
+                              const PickerItem(
+                                value: null,
+                                label: 'None (Other)',
+                              ),
+                              for (final g in finance.groups)
+                                PickerItem(
+                                  value: g.id,
+                                  label: g.label,
+                                  leading: Icon(
+                                    Icons.workspaces_outlined,
+                                    size: 18,
+                                    color: g.color,
+                                  ),
+                                ),
+                            ],
+                            onChanged: (v) => setState(() => groupId = v),
+                          ),
+                        ],
+                        // Most categories are plain spending or income; the switch
+                        // waits behind an expander, open on a transfer.
+                        if (!isFallback) ...[
+                          const SizedBox(height: 4),
+                          DialogExpander(
+                            title: 'Transfer options',
+                            open: transferOpen,
+                            onToggle: () =>
+                                setState(() => transferOpen = !transferOpen),
+                            // Tip beside the tile, not in it: SwitchListTile
+                            // merges its children's semantics and would swallow
+                            // the tip.
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: SwitchListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    title: const Text('Transfer'),
+                                    subtitle: Text(
+                                      'Moves money, not income or spending',
+                                      style: Theme.of(ctx).textTheme.bodySmall,
+                                    ),
+                                    value: isTransfer,
+                                    onChanged: (v) =>
+                                        setState(() => isTransfer = v),
+                                  ),
+                                ),
+                                const InfoTip(
+                                  title: 'Transfer',
+                                  message:
+                                      'Transfers are left out of income, spending, '
+                                      'the monthly cap and "All except" budgets. '
+                                      'Money-out transfers still count in a budget '
+                                      'that picks them under "Only these", and in '
+                                      "their group's total.",
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+                if (saveError case final error?)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Text(
+                      error,
+                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(ctx).colorScheme.error,
                       ),
                     ),
-                  ],
-                ],
-              ),
+                  ),
+              ],
             ),
             actions: [
               if (isBuiltIn && finance.isBuiltinOverridden(existing.id))
@@ -928,12 +966,14 @@ Future<void> showCategoryDialog(
                         )
                     ? null
                     : () async {
-                        setState(() => saving = true);
+                        setState(() {
+                          saving = true;
+                          saveError = null;
+                        });
                         final label = labelCtrl.text.trim();
                         // Await the saves BEFORE popping: a failure used to close
                         // the dialog anyway and vanish without a message.
                         final navigator = Navigator.of(ctx);
-                        final messenger = ScaffoldMessenger.of(context);
                         try {
                           final effectiveGroupable =
                               type == TxType.expense || isTransfer;
@@ -989,13 +1029,15 @@ Future<void> showCategoryDialog(
                             }
                           }
                           navigator.pop();
-                        } catch (e) {
-                          setState(() => saving = false);
-                          showAppToastOn(
-                            messenger,
-                            'Could not save category: $e',
-                            tone: AppToastTone.error,
-                          );
+                        } catch (_) {
+                          // No raw exception text: it means nothing to the
+                          // user, and the fields are still there to retry.
+                          if (!ctx.mounted) return;
+                          setState(() {
+                            saving = false;
+                            saveError =
+                                "Couldn't save the category. Try again.";
+                          });
                         }
                       },
                 child: Text(existing == null ? 'Create' : 'Save'),

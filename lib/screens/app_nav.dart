@@ -143,6 +143,7 @@ class AppNav {
   void Function(DashboardSection section)? _showSection;
   void Function(String categoryId, DateTime month)? _showCategoryHistory;
   void Function(DateTime week)? _showWeeklyDigest;
+  VoidCallback? _showBigBills;
 
   void attachHome(
     Object owner, {
@@ -187,12 +188,14 @@ class AppNav {
     required void Function(String categoryId, DateTime month)
     showCategoryHistory,
     required void Function(DateTime week) showWeeklyDigest,
+    required VoidCallback showBigBills,
   }) {
     _dashboardOwner = owner;
     _showRecap = showRecap;
     _showSection = showSection;
     _showCategoryHistory = showCategoryHistory;
     _showWeeklyDigest = showWeeklyDigest;
+    _showBigBills = showBigBills;
   }
 
   void detachDashboard(Object owner) {
@@ -202,6 +205,7 @@ class AppNav {
     _showSection = null;
     _showCategoryHistory = null;
     _showWeeklyDigest = null;
+    _showBigBills = null;
   }
 
   /// The Dashboard's recap on the Overview, or after the recap week this
@@ -225,6 +229,11 @@ class AppNav {
   /// [week] (where the Monday note lands). Leaves open routes alone:
   /// callers switch the home tab themselves.
   void showWeeklyDigest(DateTime week) => _showWeeklyDigest?.call(week);
+
+  /// The Big bills ahead sheet over the Dashboard (where the Big bills
+  /// widgets land). Leaves open routes alone: callers switch the home tab
+  /// themselves.
+  void showBigBills() => _showBigBills?.call();
 
   void _toRoot(BuildContext context) =>
       Navigator.of(context).popUntil((r) => r.isFirst);

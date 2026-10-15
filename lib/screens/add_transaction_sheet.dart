@@ -9,6 +9,7 @@ import '../providers/settings_provider.dart';
 import '../services/recurring_detector.dart';
 import '../services/subscriptions.dart';
 import '../utils/format.dart';
+import '../utils/haptics.dart';
 import '../widgets/date_time_picker.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
@@ -32,11 +33,16 @@ class TxPrefill {
 /// new row's id after an add, and null otherwise (edit, delete, dismiss).
 /// [income] starts a new entry on Income with that side's usual first
 /// category (the Quick actions widget's "+ Income").
+///
+/// [onUndoable] takes the Undo offer after a delete or Unpair in place of
+/// the app-level toast: a host sheet that stays open (the weekly digest)
+/// shows it on itself, where the toast would draw underneath.
 Future<String?> showAddTransactionSheet(
   BuildContext context, {
   Tx? existing,
   TxPrefill? prefill,
   bool income = false,
+  void Function(String message, IconData icon, VoidCallback undo)? onUndoable,
 }) {
   // Opening a row that counted at once clears its "new" marker.
   if (existing != null && existing.unseen) {
@@ -57,6 +63,7 @@ Future<String?> showAddTransactionSheet(
         existing: existing,
         prefill: prefill,
         income: income,
+        onUndoable: onUndoable,
       ),
     ),
   );
@@ -87,7 +94,17 @@ class _AddTransactionForm extends StatefulWidget {
   final Tx? existing;
   final TxPrefill? prefill;
   final bool income;
-  const _AddTransactionForm({this.existing, this.prefill, this.income = false});
+
+  /// See [showAddTransactionSheet].
+  final void Function(String message, IconData icon, VoidCallback undo)?
+  onUndoable;
+
+  const _AddTransactionForm({
+    this.existing,
+    this.prefill,
+    this.income = false,
+    this.onUndoable,
+  });
 
   @override
   State<_AddTransactionForm> createState() => _AddTransactionFormState();
@@ -692,17 +709,36 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     // put both the row and the partner's link back.
     final partner = await finance.deleteTransaction(tx.id);
     if (!mounted) return;
-    // Immediate delete + Undo instead of a confirmation dialog — the
-    // snackbar rides the app-level messenger, so it outlives this sheet.
-    showUndoSnackBar(
-      context,
+    // Immediate delete + Undo instead of a confirmation dialog. The offer
+    // goes to the app-level messenger or the host sheet, so it outlives
+    // this sheet.
+    _offerUndo(
       'Deleted ${tx.category.label} · ${fmtMoney(tx.amount)}',
       () =>
           finance.restoreEditedTransactions([tx, ?partner], reAddMissing: true),
       icon: Icons.delete_outline,
-      tone: AppToastTone.removal,
     );
     navigator.pop();
+  }
+
+  /// Offers Undo for a delete or Unpair: to [_AddTransactionForm.onUndoable]
+  /// when the host takes it, else on the app-level toast.
+  void _offerUndo(String message, VoidCallback undo, {required IconData icon}) {
+    final host = widget.onUndoable;
+    if (host == null) {
+      showUndoSnackBar(
+        context,
+        message,
+        undo,
+        icon: icon,
+        tone: AppToastTone.removal,
+      );
+      return;
+    }
+    // showUndoSnackBar gives every removal its thud; this path keeps it.
+    Haptics.thud();
+    // The icon names what is undone: a bin for a delete, a link for Unpair.
+    host(message, icon, undo);
   }
 
   /// "Paired transfer" line for a row linked to its other leg, with Unpair.
@@ -752,12 +788,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
               await finance.unpair(pairId);
               if (!context.mounted) return;
               // Categories stay as they are (transfer); Undo re-links.
-              showUndoSnackBar(
-                context,
+              _offerUndo(
                 'Unpaired',
                 b == null ? () {} : () => finance.pairTransactions(a, b),
                 icon: Icons.link_off,
-                tone: AppToastTone.removal,
               );
               navigator.pop();
             },

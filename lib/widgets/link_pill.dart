@@ -114,11 +114,13 @@ String _trimUrl(String raw) {
 
 /// Opens [url] in the browser, or says so when it can't. With [onFail] the
 /// caller says so instead of the toast: the app-level toast draws under a
-/// bottom sheet, where it would go unseen.
+/// bottom sheet, where it would go unseen. [onOpened] runs after a launch
+/// that worked, so a caller can take back its earlier failure line.
 Future<void> openWebLink(
   BuildContext context,
   String url, {
   VoidCallback? onFail,
+  VoidCallback? onOpened,
 }) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
   final uri = Uri.tryParse(url);
@@ -128,7 +130,10 @@ Future<void> openWebLink(
         uri,
         mode: LaunchMode.externalApplication,
       ).catchError((_) => false);
-  if (opened) return;
+  if (opened) {
+    onOpened?.call();
+    return;
+  }
   if (onFail != null) {
     onFail();
   } else if (messenger != null) {
@@ -142,13 +147,21 @@ Future<void> openWebLink(
 
 /// [text] with each web address drawn as a [LinkPill] that opens it in the
 /// browser. Punctuation that ends a sentence stays out of the address.
-/// [onLinkFail] goes to [openWebLink] as its `onFail`.
+/// [onLinkFail] goes to [openWebLink] as its `onFail`, and [onLinkOpened]
+/// as its `onOpened`.
 class LinkifiedText extends StatelessWidget {
   final String text;
   final TextStyle? style;
   final VoidCallback? onLinkFail;
+  final VoidCallback? onLinkOpened;
 
-  const LinkifiedText(this.text, {super.key, this.style, this.onLinkFail});
+  const LinkifiedText(
+    this.text, {
+    super.key,
+    this.style,
+    this.onLinkFail,
+    this.onLinkOpened,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -170,7 +183,12 @@ class LinkifiedText extends StatelessWidget {
                 label: linkPillLabel(url),
                 external: true,
                 fullUrl: url,
-                onTap: () => openWebLink(context, url, onFail: onLinkFail),
+                onTap: () => openWebLink(
+                  context,
+                  url,
+                  onFail: onLinkFail,
+                  onOpened: onLinkOpened,
+                ),
               ),
             ),
           ),

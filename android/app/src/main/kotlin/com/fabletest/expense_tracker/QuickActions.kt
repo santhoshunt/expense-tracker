@@ -27,6 +27,10 @@ object QuickActions {
     const val OPEN_TODAY = "open_today"
     const val OPEN_BREAKDOWN = "open_breakdown"
     const val OPEN_TRANSACTIONS = "open_transactions"
+    const val OPEN_BIG_BILLS = "open_big_bills"
+
+    /** The This week widgets: the digest on the current week. */
+    const val OPEN_WEEKLY_DIGEST = "open_weekly_digest"
 
     /** Opens the enabled launcher entry with [action].
      *
@@ -57,7 +61,7 @@ object QuickActions {
         return when (val action = intent.getStringExtra(EXTRA)) {
             ADD_EXPENSE, ADD_INCOME, IMPORT_SMS, OPEN_BUDGET, OPEN_BUDGETS,
             OPEN_PACE, OPEN_UPCOMING, OPEN_TODAY, OPEN_BREAKDOWN,
-            OPEN_TRANSACTIONS -> action
+            OPEN_TRANSACTIONS, OPEN_BIG_BILLS, OPEN_WEEKLY_DIGEST -> action
             else -> null
         }
     }

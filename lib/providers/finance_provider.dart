@@ -161,6 +161,13 @@ class _Derived {
   /// Row id to [FinanceProvider.merchantLabelFor], null included.
   final Map<String, String?> merchantLabels = {};
   Map<String, List<Tx>>? byAccount;
+
+  /// [byAccount] with each linked debit card's rows also on its bank, in
+  /// [ordered] order: the rows a bank's balance runs over.
+  Map<String, List<Tx>>? byBalanceAccount;
+
+  /// Bank id to the ids of the debit cards linked to it, sorted.
+  Map<String, List<String>>? cardLinks;
   Map<String, Account>? accountById;
 
   /// Confirmed transactions bucketed by `year*12 + month`, in [ordered]
@@ -267,6 +274,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _remindersKey = 'reminders_v1';
   static const _remindersEarlyRescanKey = 'reminders_early_rescan_v1';
   static const _importsAutoCountedKey = 'imports_auto_counted_v1';
+  static const _debitCardsDetectedKey = 'debit_cards_detected_v1';
 
   final List<Tx> _transactions = [];
   final List<ClassifierRule> _rules = [];
@@ -1457,6 +1465,18 @@ class FinanceProvider extends ChangeNotifier {
       // A save that failed leaves the rows counted in memory only: try
       // again on the next launch.
       if (!_persistFailed) await prefs.setBool(_importsAutoCountedKey, true);
+    }
+    // Once, on the first launch of 1.41.0: Bank accounts that only ever had
+    // debit card alerts become debit cards ([_detectDebitCards]). Not when
+    // the ledger or the accounts failed to load: the flag would make a
+    // reading of the wrong data final.
+    if (!(prefs.getBool(_debitCardsDetectedKey) ?? false) &&
+        !_loadWarnings.contains('transactions') &&
+        !_loadWarnings.contains('accounts')) {
+      if (_detectDebitCards()) await _persist(accounts: true);
+      // A save that failed leaves the change in memory only: try again on
+      // the next launch.
+      if (!_persistFailed) await prefs.setBool(_debitCardsDetectedKey, true);
     }
     // Colours of tags no row carries any more: the Undo that could bring
     // such a tag back does not outlive the app session.
@@ -3159,19 +3179,149 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Creates an account owning [key] if none does yet. Card-ness only sets the
   /// type at creation — an existing account keeps whatever the user set.
-  void _ensureAccount(String key, {required bool isCard}) {
+  ///
+  /// A debit-card key ([isDebitCard]) makes a Debit card. With [autoLink] it
+  /// draws from the one open bank account on the same bank code
+  /// ([_soleBankFor]); with none or several it stays unlinked and its tile
+  /// asks.
+  void _ensureAccount(
+    String key, {
+    required bool isCard,
+    bool isDebitCard = false,
+    bool autoLink = true,
+  }) {
     if (_keyIndex.containsKey(key)) return;
     final parts = key.split(':');
     final bankCode = parts.first;
     final last4 = parts.length > 1 ? parts.last : '';
+    final debit = !isCard && isDebitCard;
     final acc = Account(
       id: _newAccountId(),
       name: Account.defaultName(bankCode, last4),
-      type: isCard ? AccountType.creditCard : AccountType.bank,
+      type: isCard
+          ? AccountType.creditCard
+          : debit
+          ? AccountType.debitCard
+          : AccountType.bank,
       keys: {key},
+      linkedAccountId: debit && autoLink ? _soleBankFor({bankCode}) : null,
     );
     _accounts.add(acc);
     _keyIndex[key] = acc.id;
+  }
+
+  /// The id of the one open bank account holding a number on a bank code in
+  /// [codes] that is not emptied, or null when none or several do (or
+  /// [codes] names more than one bank). [excluding] leaves accounts out.
+  /// Reads the ledger itself, not the derived caches: it runs mid-import
+  /// and mid-load, while those may predate the rows just added.
+  String? _soleBankFor(Set<String> codes, {Set<String> excluding = const {}}) {
+    if (codes.length != 1) return null;
+    final code = codes.single;
+    String? found;
+    for (final b in _accounts) {
+      if (b.type != AccountType.bank ||
+          b.isClosed ||
+          excluding.contains(b.id) ||
+          !b.keys.any((k) => k.split(':').first == code) ||
+          _emptiedNow(b)) {
+        continue;
+      }
+      if (found != null) return null;
+      found = b.id;
+    }
+    return found;
+  }
+
+  /// [isOrphanedAccount] read from the ledger directly, pending rows
+  /// included: SMS numbers, and no row on them or on its linked cards.
+  bool _emptiedNow(Account b) {
+    if (!b.keys.any(
+      (k) => !k.startsWith('manual:') && !b.linkedByHand.contains(k),
+    )) {
+      return false;
+    }
+    final keys = {
+      ...b.keys,
+      for (final c in _accounts)
+        if (c.isDebitCard && c.linkedAccountId == b.id) ...c.keys,
+    };
+    return !_transactions.any(
+      (t) => t.acctKey != null && keys.contains(t.acctKey),
+    );
+  }
+
+  /// The one-time 1.41.0 pass: a Bank account whose numbers all came from
+  /// SMS, and whose every SMS row with a stored body names a debit card on
+  /// that row's number, becomes a Debit card. It draws from the one open
+  /// bank account on its bank code ([_soleBankFor]), but only when none of
+  /// its rows has a twin on that bank (same type and amount within 3
+  /// minutes): a card alert and an account alert already in the ledger for
+  /// one spend would lower the bank twice, so such a card stays unlinked
+  /// and its tile asks. Rows are never changed. True when an account did.
+  bool _detectDebitCards() {
+    final rowsByKey = <String, List<Tx>>{};
+    for (final t in _transactions) {
+      final k = t.acctKey;
+      if (k != null) (rowsByKey[k] ??= []).add(t);
+    }
+    final converting = <String>{};
+    for (final a in _accounts) {
+      if (a.type != AccountType.bank || a.isClosed || a.keys.isEmpty) continue;
+      if (a.keys.any(
+        (k) => k.startsWith('manual:') || a.linkedByHand.contains(k),
+      )) {
+        continue;
+      }
+      var debitRows = 0;
+      var other = false;
+      for (final k in a.keys) {
+        for (final t in rowsByKey[k] ?? const <Tx>[]) {
+          if (t.source != TxSource.sms || t.smsText.isEmpty) continue;
+          final (key, _, debit) = SmsTxnParser.accountKeyAndKindOf(
+            t.sender,
+            t.smsText,
+          );
+          if (debit && key == k) {
+            debitRows++;
+          } else {
+            other = true;
+            break;
+          }
+        }
+        if (other) break;
+      }
+      if (!other && debitRows > 0) converting.add(a.id);
+    }
+    if (converting.isEmpty) return false;
+    for (var i = 0; i < _accounts.length; i++) {
+      final card = _accounts[i];
+      if (!converting.contains(card.id)) continue;
+      final bankId = _soleBankFor({
+        for (final k in card.keys) k.split(':').first,
+      }, excluding: converting);
+      var link = bankId;
+      if (bankId != null) {
+        final bank = _accounts.firstWhere((b) => b.id == bankId);
+        final bankRows = [for (final k in bank.keys) ...?rowsByKey[k]];
+        final twinned = card.keys.any(
+          (k) => (rowsByKey[k] ?? const <Tx>[]).any(
+            (t) => bankRows.any(
+              (b) =>
+                  b.type == t.type &&
+                  b.amount == t.amount &&
+                  b.date.difference(t.date).abs() <= const Duration(minutes: 3),
+            ),
+          ),
+        );
+        if (twinned) link = null;
+      }
+      _accounts[i] = card.copyWith(
+        type: AccountType.debitCard,
+        linkedAccountId: link,
+      );
+    }
+    return true;
   }
 
   /// A number linked by hand that an alert has now arrived on is an SMS
@@ -3210,11 +3360,12 @@ class FinanceProvider extends ChangeNotifier {
     return true;
   }
 
-  /// Card/bank hints from a v9 backup's `acctKinds` map, set by [importData]
-  /// for the duration of its `_ensureAccountsForTransactions` call. Backups
-  /// carry no SMS bodies, so this is the only card-ness evidence a restored
-  /// orphan key has.
-  Map<String, bool> _acctKindHints = const {};
+  /// Card/bank/debit hints from a v9 backup's `acctKinds` map (`'card'`,
+  /// `'bank'`, or since v26 `'debit'`), set by [importData] for the duration
+  /// of its `_ensureAccountsForTransactions` call. Backups carry no SMS
+  /// bodies, so this is the only card-ness evidence a restored orphan key
+  /// has.
+  Map<String, String> _acctKindHints = const {};
 
   /// Auto-creates accounts for any transaction whose acctKey no account owns
   /// yet — used after imports (a v1 backup or CSV may carry keys but no
@@ -3228,8 +3379,19 @@ class FinanceProvider extends ChangeNotifier {
       // that minted them" — auto-creating from one (e.g. rows arriving via
       // CSV) produces a junk account literally named "manual ••17583…".
       if (key.startsWith('manual:')) continue;
-      final (_, derivedCard) = SmsTxnParser.accountKeyOf(t.sender, t.smsText);
-      _ensureAccount(key, isCard: _acctKindHints[key] ?? derivedCard);
+      final hint = _acctKindHints[key];
+      final (_, derivedCard, derivedDebit) = SmsTxnParser.accountKeyAndKindOf(
+        t.sender,
+        t.smsText,
+      );
+      // A restored debit card comes back unlinked: which bank it drew from
+      // went with its account.
+      _ensureAccount(
+        key,
+        isCard: hint == null ? derivedCard : hint == 'card',
+        isDebitCard: hint == null ? derivedDebit : hint == 'debit',
+        autoLink: false,
+      );
     }
   }
 
@@ -3274,6 +3436,69 @@ class FinanceProvider extends ChangeNotifier {
   int transactionCountForAccount(String accountId) =>
       _byAccount[accountId]?.length ?? 0;
 
+  /// The bank [a] draws from: set only for a debit card whose
+  /// [Account.linkedAccountId] names another open bank account. A link to a
+  /// closed, deleted or non-bank account is inert, so the card counts on its
+  /// own until relinked. The one rule the figures, totals, the orphan rule,
+  /// the Transactions filter and the duplicate check all ask.
+  Account? linkedAccountOf(Account? a) {
+    if (a == null || !a.isDebitCard) return null;
+    final id = a.linkedAccountId;
+    if (id == null || id == a.id) return null;
+    final bank = _accountsById[id];
+    if (bank == null || bank.type != AccountType.bank || bank.isClosed) {
+      return null;
+    }
+    return bank;
+  }
+
+  /// Bank id to its linked debit cards' ids ([linkedAccountOf]), in
+  /// account order.
+  Map<String, List<String>> get _cardLinks => _d.cardLinks ??= () {
+    final map = <String, List<String>>{};
+    for (final a in _accounts) {
+      final bank = linkedAccountOf(a);
+      if (bank != null) (map[bank.id] ??= []).add(a.id);
+    }
+    return map;
+  }();
+
+  /// The debit cards whose spends come out of [bank] ([linkedAccountOf]).
+  List<Account> linkedCardsOf(Account bank) => [
+    for (final id in _cardLinks[bank.id] ?? const <String>[])
+      ?_accountsById[id],
+  ];
+
+  /// [_byAccount] with every linked debit card's rows on its bank instead,
+  /// in ledger order (`_ordered`'s date, then insertion index), so a
+  /// same-minute tie picks the anchor the ledger order would.
+  Map<String, List<Tx>> get _byBalanceAccount => _d.byBalanceAccount ??= () {
+    final links = _cardLinks;
+    if (links.isEmpty) return _byAccount;
+    final bankOfCard = <String, String>{
+      for (final e in links.entries)
+        for (final card in e.value) card: e.key,
+    };
+    final map = <String, List<Tx>>{};
+    for (final (t, _) in _ordered) {
+      final id = _keyIndex[t.acctKey];
+      if (id == null) continue;
+      (map[bankOfCard[id] ?? id] ??= []).add(t);
+    }
+    return map;
+  }();
+
+  /// The confirmed rows [a]'s balance runs over, oldest first: a bank's own
+  /// plus its linked debit cards' rows; a linked card's own rows only.
+  List<Tx> _balanceRows(Account a) =>
+      (linkedAccountOf(a) != null ? _byAccount : _byBalanceAccount)[a.id] ??
+      const <Tx>[];
+
+  /// How many confirmed rows [a]'s balance runs over: [transactionCountForAccount]
+  /// plus, for a bank, its linked debit cards' rows. What the Transactions
+  /// filter by the bank lists.
+  int balanceTransactionCount(Account a) => _balanceRows(a).length;
+
   /// Whether [a] holds bank numbers that no transaction uses any more, as
   /// the 1.28 re-key could leave an account whose rows all moved away. Its
   /// set balance stays on its own tile but no longer counts in the totals
@@ -3282,6 +3507,8 @@ class FinanceProvider extends ChangeNotifier {
   /// wallet and a closed account never qualify.
   /// Numbers linked by hand don't count: that account is waiting for its
   /// first alert.
+  /// A bank's linked debit cards' rows count as its own, so a bank fed only
+  /// through its card is never emptied.
   bool isOrphanedAccount(Account a) {
     if (a.isWallet || a.isClosed) return false;
     if (!a.keys.any(
@@ -3289,9 +3516,10 @@ class FinanceProvider extends ChangeNotifier {
     )) {
       return false;
     }
-    if (transactionCountForAccount(a.id) > 0) return false;
+    if (_balanceRows(a).isNotEmpty) return false;
+    final keys = {...a.keys, for (final card in linkedCardsOf(a)) ...card.keys};
     return !pendingTransactions.any(
-      (t) => t.acctKey != null && a.keys.contains(t.acctKey),
+      (t) => t.acctKey != null && keys.contains(t.acctKey),
     );
   }
 
@@ -3305,9 +3533,14 @@ class FinanceProvider extends ChangeNotifier {
   /// Cache key carries the calendar month: the figures embed "spent this
   /// month", and an app left open across midnight on the 1st would otherwise
   /// keep serving the old month's number until some mutation notified.
+  /// The key carries the debit cards linked to the account too, whose rows
+  /// a bank's figures include. Every link change notifies, which drops the
+  /// whole cache anyway; the links in the key keep a stale entry from ever
+  /// being served if one didn't.
   _AccountFigures _figures(Account account) {
     final now = DateTime.now();
-    final key = '${account.id}|${now.year * 12 + now.month}';
+    final cards = _cardLinks[account.id]?.join(',') ?? '';
+    final key = '${account.id}|${now.year * 12 + now.month}|$cards';
     return _d.accountFigures[key] ??= _computeFigures(account);
   }
 
@@ -3316,7 +3549,10 @@ class FinanceProvider extends ChangeNotifier {
     // creditLimit/manualBalance off a caller's (possibly stale) copy would let
     // the first caller's values be served to everyone else this cycle.
     final acc = _accountsById[account.id] ?? account;
-    final all = _byAccount[acc.id] ?? const <Tx>[];
+    // A bank's rows include its linked debit cards' ([_balanceRows]): their
+    // spends left this bank, and the Avl Bal in a card alert is this bank's
+    // balance, so it anchors here like any other.
+    final all = _balanceRows(acc);
     final now = DateTime.now();
     final monthStart = DateTime(now.year, now.month);
     final monthEnd = DateTime(now.year, now.month + 1);
@@ -3566,10 +3802,15 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Sum of liquid bank-account balances (bank-stated where available).
   /// Savings/asset accounts are excluded — they are not spendable cash.
+  /// A linked debit card adds nothing: its rows are in its bank's balance
+  /// already. An unlinked one counts like a bank, so no money disappears.
   double get bankBalanceTotal => _accounts
       .where(
         (a) =>
-            !a.isClosed && a.type == AccountType.bank && !isOrphanedAccount(a),
+            !a.isClosed &&
+            (a.type == AccountType.bank ||
+                (a.isDebitCard && linkedAccountOf(a) == null)) &&
+            !isOrphanedAccount(a),
       )
       .fold(0.0, (s, a) => s + accountBalance(a));
 
@@ -3606,7 +3847,8 @@ class FinanceProvider extends ChangeNotifier {
   /// falls back to the ledger, as with no accounts at all.
   bool get hasNetAccounts => _accounts.any((a) => !a.isWallet);
 
-  /// This-month spend on the account (expenses only).
+  /// This-month spend on the account (expenses only). A bank's includes its
+  /// linked debit cards' spends, as its balance does; a card's is its own.
   double accountSpentThisMonth(Account account) =>
       _figures(account).spentThisMonth;
 
@@ -3774,13 +4016,26 @@ class FinanceProvider extends ChangeNotifier {
   /// Crossing the wallet line clears "Count as spending" on the account's
   /// rows, so an old setting can't come back from an earlier stint as a
   /// wallet. Leaving it, a wallet takes its "Service · login" as its name.
-  Future<bool> setAccountType(String id, AccountType type) async {
+  ///
+  /// To Debit card, [linkedAccountId] is the bank it draws from (null = not
+  /// linked yet; one [linkDebitCard] would refuse is dropped). Away from
+  /// Debit card the link clears; a bank that stops being one unlinks the
+  /// cards drawing from it.
+  Future<bool> setAccountType(
+    String id,
+    AccountType type, {
+    String? linkedAccountId,
+  }) async {
     final i = _accounts.indexWhere((a) => a.id == id);
     if (i == -1) return false;
     final before = _accounts[i];
     if (type == AccountType.wallet && !canBecomeWallet(before)) return false;
     final crossing = before.isWallet != (type == AccountType.wallet);
     final leaving = before.isWallet && crossing;
+    final toDebit = type == AccountType.debitCard;
+    final link = toDebit && _canLinkTo(id, linkedAccountId)
+        ? linkedAccountId
+        : null;
     // Leaving, the service moves into the name and the wallet fields go,
     // so a later return to Wallet can't read "Amazon Pay · Amazon Pay · me".
     _accounts[i] = before.copyWith(
@@ -3789,7 +4044,12 @@ class FinanceProvider extends ChangeNotifier {
       clearService: leaving,
       holdsPoints: leaving ? false : null,
       clearPointValue: leaving,
+      linkedAccountId: link,
+      clearLinkedAccountId: link == null,
     );
+    if (before.type == AccountType.bank && type != AccountType.bank) {
+      _unlinkCardsOf(id);
+    }
     var txChanged = false;
     if (crossing) {
       for (var j = 0; j < _transactions.length; j++) {
@@ -3819,6 +4079,61 @@ class FinanceProvider extends ChangeNotifier {
             a.keys.contains(t.acctKey) &&
             (t.pairId != null || isTransferCategory(t.categoryId)),
       );
+
+  /// Whether [cardId] may draw from [bankId]: null (no link) always; else
+  /// another open bank account.
+  bool _canLinkTo(String cardId, String? bankId) {
+    if (bankId == null) return true;
+    if (bankId == cardId) return false;
+    final bank = _accounts.where((a) => a.id == bankId).firstOrNull;
+    return bank != null && bank.type == AccountType.bank && !bank.isClosed;
+  }
+
+  /// Clears the link on every debit card drawing from [bankId]. The caller
+  /// notifies and persists.
+  bool _unlinkCardsOf(String bankId) {
+    var changed = false;
+    for (var j = 0; j < _accounts.length; j++) {
+      if (_accounts[j].linkedAccountId == bankId) {
+        _accounts[j] = _accounts[j].copyWith(clearLinkedAccountId: true);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /// Clears every link that names no account any more, names its own
+  /// account, or sits on an account that is not a debit card (an imported
+  /// or hand-edited backup). The caller notifies and persists.
+  bool _sanitizeAccountLinks() {
+    final ids = {for (final a in _accounts) a.id};
+    var changed = false;
+    for (var j = 0; j < _accounts.length; j++) {
+      final a = _accounts[j];
+      final link = a.linkedAccountId;
+      if (link == null) continue;
+      if (a.isDebitCard && link != a.id && ids.contains(link)) continue;
+      _accounts[j] = a.copyWith(clearLinkedAccountId: true);
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// Links debit card [cardId] to the bank account it draws from, or
+  /// unlinks it with a null [bankId]. False, changing nothing, when
+  /// [cardId] is not a debit card or [bankId] is not another open bank.
+  Future<bool> linkDebitCard(String cardId, String? bankId) async {
+    final i = _accounts.indexWhere((a) => a.id == cardId);
+    if (i == -1 || !_accounts[i].isDebitCard) return false;
+    if (!_canLinkTo(cardId, bankId)) return false;
+    _accounts[i] = _accounts[i].copyWith(
+      linkedAccountId: bankId,
+      clearLinkedAccountId: bankId == null,
+    );
+    notifyListeners();
+    await _persist(accounts: true);
+    return true;
+  }
 
   Future<void> setCreditLimit(String id, double? limit) async {
     final i = _accounts.indexWhere((a) => a.id == id);
@@ -4009,6 +4324,20 @@ class FinanceProvider extends ChangeNotifier {
       },
     );
     _accounts.removeAt(si);
+    // Debit cards drawing from the source draw from the target now when it
+    // is a bank. Otherwise (a bank merged into a card, savings or its own
+    // card) they drop the link: kept, it would wake again if that account
+    // later became a bank.
+    final targetIsBank = _accounts.any(
+      (a) => a.id == targetId && a.type == AccountType.bank,
+    );
+    for (var j = 0; j < _accounts.length; j++) {
+      final a = _accounts[j];
+      if (a.linkedAccountId != sourceId) continue;
+      _accounts[j] = targetIsBank && a.id != targetId
+          ? a.copyWith(linkedAccountId: targetId)
+          : a.copyWith(clearLinkedAccountId: true);
+    }
     _rebuildKeyIndex();
     notifyListeners();
     await _persist(accounts: true);
@@ -4019,6 +4348,8 @@ class FinanceProvider extends ChangeNotifier {
   Future<void> deleteAccount(String id) async {
     final gone = _accounts.where((a) => a.id == id).firstOrNull;
     _accounts.removeWhere((a) => a.id == id);
+    // Its debit cards count on their own until linked again.
+    _unlinkCardsOf(id);
     _rebuildKeyIndex();
     // A deleted wallet's rows are unassigned now: their "Count as spending"
     // means nothing, and must not come back if one lands on a wallet again.
@@ -4763,6 +5094,35 @@ class FinanceProvider extends ChangeNotifier {
     String fuzzyKeyOf(TxType type, double amount, String sender) =>
         '${type.name}|$amount|'
         '${bankOf[sender] ??= SmsTxnParser.dedupBankOf(sender)}';
+    // One exception to "two account keys, two payments": a linked debit
+    // card's key and its bank's keys are one account. Many banks send a
+    // card alert ("Debit Card XX5678 used") and an account alert ("debited
+    // from a/c XX1234") for one spend, and both would lower the bank's
+    // balance. Card against card stays two payments: two cards on one bank
+    // can make two real ones. A debit card this batch creates links by
+    // [_soleBankFor] as [_ensureAccount] will, so it joins the maps on its
+    // first alert below.
+    final linkedCardBank = <String, String>{};
+    final cardLinkedBank = <String, String>{};
+    for (final a in _accounts) {
+      final bank = linkedAccountOf(a);
+      if (bank == null) continue;
+      for (final k in a.keys) {
+        linkedCardBank[k] = bank.id;
+      }
+      for (final k in bank.keys) {
+        cardLinkedBank[k] = bank.id;
+      }
+    }
+    bool sameAccount(String a, String b) {
+      if (a == b) return true;
+      final cardSide = linkedCardBank[a] ?? linkedCardBank[b];
+      return cardSide != null &&
+          (linkedCardBank[a] == null) != (linkedCardBank[b] == null) &&
+          (cardLinkedBank[a] ?? linkedCardBank[a]) ==
+              (cardLinkedBank[b] ?? linkedCardBank[b]);
+    }
+
     int nearIndex(
       List<({DateTime date, String? acct})>? rows,
       DateTime at,
@@ -4771,7 +5131,7 @@ class FinanceProvider extends ChangeNotifier {
         rows?.indexWhere(
           (r) =>
               r.date.difference(at).abs() <= const Duration(minutes: 3) &&
-              (acct == null || r.acct == null || r.acct == acct),
+              (acct == null || r.acct == null || sameAccount(r.acct!, acct)),
         ) ??
         -1;
     void remember(
@@ -4816,6 +5176,21 @@ class FinanceProvider extends ChangeNotifier {
         continue;
       }
 
+      // A new debit card key: the bank it is about to draw from.
+      final newCard = p.acctKey;
+      if (newCard != null &&
+          p.isDebitCard &&
+          !p.isCard &&
+          !_keyIndex.containsKey(newCard) &&
+          !linkedCardBank.containsKey(newCard)) {
+        final bankId = _soleBankFor({newCard.split(':').first});
+        if (bankId != null) {
+          linkedCardBank[newCard] = bankId;
+          for (final k in _accounts.firstWhere((a) => a.id == bankId).keys) {
+            cardLinkedBank[k] = bankId;
+          }
+        }
+      }
       final key = fuzzyKeyOf(p.type, p.amount, p.sender);
       final bool isDuplicate;
       if (p.ref != null) {
@@ -4824,11 +5199,33 @@ class FinanceProvider extends ChangeNotifier {
         } else {
           final twins = fuzzyDatesNoRef[key];
           final i = nearIndex(twins, p.date, p.acctKey);
-          isDuplicate = i != -1;
           // Paired: that ref-less copy is spent, and the ref now known.
-          if (isDuplicate) {
+          if (i != -1) {
             twins!.removeAt(i);
             refKeys.add('${p.type.name}|${p.ref}');
+            isDuplicate = true;
+          } else {
+            // The other alert for one spend on a linked debit card: the
+            // card's ref-less inbox alert, then the account's with a UPI ref
+            // (or the other way round). The rule above only pairs a ref'd
+            // copy with a notification's, so it would import both and lower
+            // the bank twice. Only across the card and its bank's keys, one
+            // to one, so a second real payment still imports.
+            final rows = fuzzyDates[key];
+            final at = p.acctKey;
+            final j = at == null
+                ? -1
+                : rows?.indexWhere(
+                        (r) =>
+                            r.acct != null &&
+                            r.acct != at &&
+                            sameAccount(r.acct!, at) &&
+                            r.date.difference(p.date).abs() <=
+                                const Duration(minutes: 3),
+                      ) ??
+                      -1;
+            if (j != -1) rows!.removeAt(j);
+            isDuplicate = j != -1;
           }
         }
       } else {
@@ -4880,7 +5277,11 @@ class FinanceProvider extends ChangeNotifier {
         ),
       );
       if (p.acctKey != null) {
-        _ensureAccount(p.acctKey!, isCard: p.isCard);
+        _ensureAccount(
+          p.acctKey!,
+          isCard: p.isCard,
+          isDebitCard: p.isDebitCard,
+        );
         _alertArrivedOn(p.acctKey!);
       }
       // The new row must block later duplicates in this same batch, exactly
@@ -5353,12 +5754,15 @@ class FinanceProvider extends ChangeNotifier {
     // v23: transactions may carry `unseen`.
     // v24: budgets may carry `icon`.
     // v25: reminders and subscription pins may carry cycle `halfYearly`.
-    'version': 25,
+    // v26: accounts may be type `debitCard` and carry `linkedAccountId`;
+    // `acctKinds` may hold `'debit'`.
+    'version': 26,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
     'accounts': _accounts.map((a) => a.toJson()).toList(),
-    // v9 addition: card/bank kind per SMS-derived account key. Bodies are
+    // v9 addition: card/bank (v26: or debit) kind per SMS-derived account
+    // key. Bodies are
     // stripped from the export, so a restore can no longer derive card-ness
     // from the SMS — without this, an orphaned card key (account deleted
     // pre-export) would re-materialise as a BANK account and its
@@ -5399,16 +5803,27 @@ class FinanceProvider extends ChangeNotifier {
         continue;
       }
       final owner = accountForKey(key);
-      final bool isCard;
+      final String kind;
       if (owner != null) {
-        isCard = owner.type == AccountType.creditCard;
+        kind = switch (owner.type) {
+          AccountType.creditCard => 'card',
+          AccountType.debitCard => 'debit',
+          _ => 'bank',
+        };
       } else if (t.smsText.isNotEmpty) {
-        final (_, derived) = SmsTxnParser.accountKeyOf(t.sender, t.smsText);
-        isCard = derived;
+        final (_, card, debit) = SmsTxnParser.accountKeyAndKindOf(
+          t.sender,
+          t.smsText,
+        );
+        kind = card
+            ? 'card'
+            : debit
+            ? 'debit'
+            : 'bank';
       } else {
         continue;
       }
-      kinds[key] = isCard ? 'card' : 'bank';
+      kinds[key] = kind;
     }
     return kinds;
   }
@@ -5565,11 +5980,11 @@ class FinanceProvider extends ChangeNotifier {
     // v9 addition: card/bank hints for SMS-derived account keys (bodies are
     // stripped, so this is the only card-ness evidence a restore has).
     final rawKinds = data['acctKinds'];
-    final kindHints = <String, bool>{
+    final kindHints = <String, String>{
       if (rawKinds is Map)
         for (final e in rawKinds.entries)
-          if (e.value == 'card' || e.value == 'bank')
-            '${e.key}': e.value == 'card',
+          if (e.value == 'card' || e.value == 'bank' || e.value == 'debit')
+            '${e.key}': e.value as String,
     };
 
     // Drop assignment entries whose group doesn't exist after the import —
@@ -5660,6 +6075,7 @@ class FinanceProvider extends ChangeNotifier {
       sanitizeTail(_transactions.length);
       _clearOrphanPairs();
       final remindersSanitized = _sanitizeReminders();
+      _sanitizeAccountLinks();
       _rebuildKeyIndex();
       _acctKindHints = kindHints;
       _ensureAccountsForTransactions();
@@ -5828,7 +6244,14 @@ class FinanceProvider extends ChangeNotifier {
     };
     var assignmentsChanged = false;
     _transactions.addAll(newTxs);
-    _accounts.addAll(newAccounts);
+    // A debit card drawing from an imported bank that folded into a device
+    // account draws from that account, as reminders follow it above.
+    _accounts.addAll([
+      for (final a in newAccounts)
+        foldedInto.containsKey(a.linkedAccountId)
+            ? a.copyWith(linkedAccountId: foldedInto[a.linkedAccountId])
+            : a,
+    ]);
     if (newCategories.isNotEmpty) {
       setCustomCategories([...customCategories, ...newCategories]);
     }
@@ -5891,6 +6314,7 @@ class FinanceProvider extends ChangeNotifier {
       sanitizeTail(newTxs.length);
       _clearOrphanPairs();
       _sanitizeReminders();
+      _sanitizeAccountLinks();
       _rebuildKeyIndex();
       _acctKindHints = kindHints;
       _ensureAccountsForTransactions();

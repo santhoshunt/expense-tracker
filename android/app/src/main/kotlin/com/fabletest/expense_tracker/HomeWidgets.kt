@@ -9,6 +9,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.View
@@ -20,7 +21,8 @@ import kotlin.math.abs
 
 /**
  * The Month pace, Upcoming, Today and Add, Spending split, Budgets
- * list, Recent and Quick actions widgets. Pure display, like
+ * list, Recent, Quick actions, Big bills and This week widgets (the last
+ * two in a 4x2 and a compact 4x1 size). Pure display, like
  * [BudgetWidgetProvider]: the Dart side writes the snapshots
  * (`flutter.home_widget_data_v1`, home_widgets_service.dart, and the budget
  * one for Budgets list) and this draws them. The snapshot carries dates
@@ -60,6 +62,10 @@ object HomeWidgets {
         BudgetsListWidgetProvider::class.java,
         RecentWidgetProvider::class.java,
         QuickActionsWidgetProvider::class.java,
+        BigBillsWidgetProvider::class.java,
+        BigBillsCompactWidgetProvider::class.java,
+        ThisWeekWidgetProvider::class.java,
+        ThisWeekCompactWidgetProvider::class.java,
     )
 
     private fun today(): Long = LocalDate.now().toEpochDay()
@@ -101,12 +107,22 @@ object HomeWidgets {
                     ({ _, h, _ -> recent(context, h, id, data, theme) })
                 QuickActionsWidgetProvider::class.java.name ->
                     ({ w, _, _ -> actions(context, w, id, theme) })
+                BigBillsWidgetProvider::class.java.name ->
+                    ({ w, h, b -> bigBills(context, w, h, b, id, data, theme) })
+                BigBillsCompactWidgetProvider::class.java.name ->
+                    ({ _, h, _ -> bigBillsCompact(context, h, id, data, theme) })
+                ThisWeekWidgetProvider::class.java.name ->
+                    ({ w, h, b -> thisWeek(context, w, h, b, id, data, theme) })
+                ThisWeekCompactWidgetProvider::class.java.name ->
+                    ({ w, h, b -> thisWeekCompact(context, w, h, b, id, data, theme) })
                 else -> return
             }
             // The fallbacks are the smallest a launcher gives: 4 columns of
             // about 62dp, and one row of 48dp or two of 110dp.
             val oneRow = provider == TodayAddWidgetProvider::class.java.name ||
-                provider == QuickActionsWidgetProvider::class.java.name
+                provider == QuickActionsWidgetProvider::class.java.name ||
+                provider == BigBillsCompactWidgetProvider::class.java.name ||
+                provider == ThisWeekCompactWidgetProvider::class.java.name
             WidgetKit.update(context, manager, id, 250, if (oneRow) 48 else 110, build)
         } catch (_: Exception) {
             // Drawn again on the next data change or 30-minute redraw.
@@ -828,6 +844,405 @@ object HomeWidgets {
         )
         return views
     }
+
+    // --- Big bills and This week --------------------------------------------
+
+    /** Days a bill stays listed past its date: the app's grace days
+     * (kSubscriptionGraceDays). */
+    private const val BILL_GRACE_DAYS = 7L
+
+    /** Monday first, as the app's week runs. */
+    private val dayInitials = List(7) {
+        java.time.DayOfWeek.of(it + 1)
+            .getDisplayName(java.time.format.TextStyle.NARROW, Locale.ENGLISH)
+    }
+
+    /** [text] in place of the body. */
+    private fun showEmpty(views: RemoteViews, text: String) {
+        views.setViewVisibility(R.id.hw_body, View.GONE)
+        views.setViewVisibility(R.id.hw_empty, View.VISIBLE)
+        views.setTextViewText(R.id.hw_empty, text)
+    }
+
+    private fun showBody(views: RemoteViews) {
+        views.setViewVisibility(R.id.hw_body, View.VISIBLE)
+        views.setViewVisibility(R.id.hw_empty, View.GONE)
+    }
+
+    /** "Today", "Tomorrow" or the date, for a bill due on epoch [day]. */
+    private fun dueName(day: Long, dateLabel: String): String = when (day - today()) {
+        0L -> "Today"
+        1L -> "Tomorrow"
+        else -> dateLabel
+    }
+
+    /** The first of the snapshot's next bills not past its grace days, so
+     * a bill paid late drops off on the day the widget draws. */
+    private fun nextBill(bills: JSONObject): JSONObject? {
+        val next = bills.optJSONArray("next") ?: return null
+        val today = today()
+        for (i in 0 until next.length()) {
+            val o = next.optJSONObject(i) ?: continue
+            if (o.optLong("dueDay", today) - today >= -BILL_GRACE_DAYS) return o
+        }
+        return null
+    }
+
+    private fun bigBillsEmpty(context: Context, data: JSONObject?): String =
+        if (data == null) context.getString(R.string.home_widget_empty)
+        else "No quarterly, half-yearly or yearly bills yet."
+
+    /** The 12 months from this one. A snapshot from an earlier month is
+     * shifted along, so the strip moves on with the month; the months past
+     * its end are null and draw as stubs. */
+    private fun billsByMonth(bills: JSONObject): List<Double?> {
+        val now = LocalDate.now()
+        val key = now.year * 12 + now.monthValue
+        // A plain number, as Month pace compares it.
+        val shift = (key - bills.optInt("monthKey", key)).coerceAtLeast(0)
+        val months = bills.optJSONArray("months")
+        return List(12) { i ->
+            val k = i + shift
+            if (months != null && k < months.length()) months.optDouble(k, 0.0) else null
+        }
+    }
+
+    /** The initials of the 12 months from this one, from today's date. */
+    private fun monthInitials(): List<String> {
+        val now = LocalDate.now()
+        return List(12) {
+            now.plusMonths(it.toLong()).month
+                .getDisplayName(java.time.format.TextStyle.NARROW, Locale.ENGLISH)
+        }
+    }
+
+    private fun bigBills(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        bitmaps: WidgetKit.Bitmaps,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_big_bills, theme, id, QuickActions.OPEN_BIG_BILLS
+        )
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_side, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val bills = data?.optJSONObject("bigBills")
+        if (bills == null) {
+            showEmpty(views, bigBillsEmpty(context, data))
+            return views
+        }
+        showBody(views)
+        views.setTextViewText(R.id.hw_side, "${bills.optString("yearlyLabel")} a year")
+        // The figure and the 24dp strip 4dp under it always show; the next
+        // bill (2dp under the strip) when the height has room for it, and
+        // the title row when it has room for that as well, so large text
+        // never clips.
+        val room = heightDp - 2 * PAD_V
+        val core = WidgetKit.lineDp(context, 18f) + 4 + 24
+        val nextDp = 2 + WidgetKit.lineDp(context, 13f)
+        val next = nextBill(bills)
+        val showNext = next != null && core + nextDp <= room
+        val showTitle =
+            core + WidgetKit.lineDp(context, 12f) + (if (showNext) nextDp else 0f) <= room
+        views.setViewVisibility(R.id.hw_head, if (showTitle) View.VISIBLE else View.GONE)
+        // A target, not money spent: plain, as the app's headline prints
+        // it. Without the title row the line says what it is for.
+        views.setTextViewText(
+            R.id.hw_amount,
+            WidgetKit.Line()
+                .add(bills.optString("monthlyLabel"), theme.text, bold = true)
+                .add(
+                    if (showTitle) " a month" else " a month for big bills",
+                    theme.textSecondary
+                )
+                .build()
+        )
+        // One strip per width: both orientations share it where the widths
+        // match. Without bitmaps (the fallback update) it stays empty.
+        bitmaps.get("strip:$widthDp") {
+            strip(context, widthDp, billsByMonth(bills), monthInitials(), 0, theme)
+        }?.let { views.setImageViewBitmap(R.id.hw_strip, it) }
+        views.setViewVisibility(R.id.hw_next_row, if (showNext) View.VISIBLE else View.GONE)
+        if (next != null) {
+            views.setTextViewText(
+                R.id.hw_next,
+                WidgetKit.Line()
+                    .add("Next: ", theme.textSecondary)
+                    .add(next.optString("label"), theme.text)
+                    .add(
+                        " · ${dueName(next.optLong("dueDay"), next.optString("dueLabel"))}",
+                        theme.textSecondary
+                    )
+                    .build()
+            )
+            // The bill's amount in the money-out red, as the app's card has it.
+            views.setTextViewText(R.id.hw_next_amt, next.optString("amountLabel"))
+            views.setTextColor(R.id.hw_next_amt, theme.over)
+        }
+        return views
+    }
+
+    private fun bigBillsCompact(
+        context: Context,
+        heightDp: Int,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_big_bills_compact, theme, id,
+            QuickActions.OPEN_BIG_BILLS
+        )
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val bills = data?.optJSONObject("bigBills")
+        if (bills == null) {
+            showEmpty(views, bigBillsEmpty(context, data))
+            return views
+        }
+        showBody(views)
+        views.setTextViewText(
+            R.id.hw_title,
+            WidgetKit.Line()
+                .add(bills.optString("monthlyLabel"), theme.text, bold = true)
+                .add(" a month for big bills", theme.textSecondary)
+                .build()
+        )
+        // Both lines inside the 4dp padding, or the figure alone: a one-row
+        // cell with large text has room for one line.
+        val twoLines = WidgetKit.lineDp(context, 14f) + WidgetKit.lineDp(context, 12f)
+        views.setViewVisibility(R.id.hw_sub, if (twoLines <= heightDp - 8) View.VISIBLE else View.GONE)
+        val next = nextBill(bills)
+        val sub = WidgetKit.Line()
+        if (next == null) {
+            sub.add("${bills.optString("yearlyLabel")} a year", theme.textSecondary)
+        } else {
+            sub.add("Next: ", theme.textSecondary)
+            sub.add(next.optString("label"), theme.text)
+            sub.add(
+                " · ${dueName(next.optLong("dueDay"), next.optString("dueLabel"))} · ",
+                theme.textSecondary
+            )
+            sub.add(next.optString("amountLabel"), theme.over, bold = true)
+        }
+        views.setTextViewText(R.id.hw_sub, sub.build())
+        return views
+    }
+
+    /** The week block as of today. Once its week is over (a new Monday the
+     * app has not seen), nothing is spent and the bars are empty. [usual]
+     * is the usual week cut to today, null under 2 weeks of history. */
+    private class WeekView(
+        val spent: Double,
+        val spentLabel: String,
+        val byDay: List<Double>,
+        val usual: Double?,
+        val toReview: Int,
+        val today: Int,
+    )
+
+    private fun weekView(week: JSONObject): WeekView {
+        val now = LocalDate.now()
+        val day = now.dayOfWeek.value - 1
+        val monday = now.minusDays(day.toLong()).toEpochDay()
+        val fresh = week.optLong("weekStart", -1) == monday
+        val byDay = week.optJSONArray("byDay")
+        // isNull, not optDouble: no usual week yet is not a usual of ₹0.
+        val usual = week.optJSONArray("usualByDay")
+        return WeekView(
+            spent = if (fresh) week.optDouble("spent", 0.0) else 0.0,
+            spentLabel = if (fresh) week.optString("spentLabel") else "₹0",
+            byDay = List(7) { i ->
+                if (fresh && i <= day && byDay != null) byDay.optDouble(i, 0.0) else 0.0
+            },
+            usual = if (usual == null || day >= usual.length() || usual.isNull(day)) null
+            else usual.optDouble(day),
+            toReview = if (fresh) week.optInt("toReview", 0) else 0,
+            today = day,
+        )
+    }
+
+    /** The empty line, or null when there is a week to show: nothing spent
+     * and no usual week to compare against leaves nothing to draw. */
+    private fun weekEmpty(context: Context, w: WeekView?): String? = when {
+        w == null -> context.getString(R.string.home_widget_empty)
+        w.spent < 0.5 && w.usual == null -> "Nothing spent this week."
+        else -> null
+    }
+
+    private fun thisWeek(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        bitmaps: WidgetKit.Bitmaps,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_week, theme, id, QuickActions.OPEN_WEEKLY_DIGEST
+        )
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_side, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val w = data?.optJSONObject("week")?.let { weekView(it) }
+        val empty = weekEmpty(context, w)
+        if (w == null || empty != null) {
+            showEmpty(views, empty ?: context.getString(R.string.home_widget_empty))
+            return views
+        }
+        showBody(views)
+        val usual = w.usual
+        views.setViewVisibility(R.id.hw_side, if (usual != null) View.VISIBLE else View.GONE)
+        if (usual != null) views.setTextViewText(R.id.hw_side, "usual ${WidgetKit.rupees(usual)}")
+        // As Big bills: the figure and the strip always, then the gap line,
+        // then the title row, as the height allows.
+        val room = heightDp - 2 * PAD_V
+        val core = WidgetKit.lineDp(context, 18f) + 4 + 24
+        val subDp = 2 + WidgetKit.lineDp(context, 13f)
+        val showSub = core + subDp <= room
+        val showTitle =
+            core + WidgetKit.lineDp(context, 12f) + (if (showSub) subDp else 0f) <= room
+        views.setViewVisibility(R.id.hw_head, if (showTitle) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.hw_sub, if (showSub) View.VISIBLE else View.GONE)
+        // Money out in the expense red; nothing spent is a plain ₹0.
+        val amount = WidgetKit.Line()
+        if (w.spent >= 0.5) {
+            amount.add(w.spentLabel, theme.over, bold = true)
+        } else {
+            amount.add("₹0", theme.text, bold = true)
+        }
+        amount.add(if (showTitle) " spent so far" else " spent this week", theme.textSecondary)
+        views.setTextViewText(R.id.hw_amount, amount.build())
+        bitmaps.get("week:$widthDp") {
+            strip(context, widthDp, w.byDay, dayInitials, w.today, theme)
+        }?.let { views.setImageViewBitmap(R.id.hw_strip, it) }
+        // The app's ₹1 cut-off for "about the same".
+        val sub = WidgetKit.Line()
+        when {
+            usual == null -> sub.add("No usual week yet", theme.textSecondary)
+            abs(w.spent - usual) < 1 -> sub.add("About the same as usual", theme.text)
+            w.spent > usual ->
+                sub.add("${WidgetKit.rupees(w.spent - usual)} more than usual", theme.text)
+            else -> sub.add("${WidgetKit.rupees(usual - w.spent)} less than usual", theme.text)
+        }
+        if (w.toReview > 0) {
+            sub.add(" · ", theme.textSecondary)
+            sub.add("${w.toReview} to review", theme.accentText, bold = true)
+        }
+        views.setTextViewText(R.id.hw_sub, sub.build())
+        return views
+    }
+
+    private fun thisWeekCompact(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        bitmaps: WidgetKit.Bitmaps,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_week_compact, theme, id,
+            QuickActions.OPEN_WEEKLY_DIGEST
+        )
+        views.setTextColor(R.id.hw_side, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val w = data?.optJSONObject("week")?.let { weekView(it) }
+        val empty = weekEmpty(context, w)
+        if (w == null || empty != null) {
+            showEmpty(views, empty ?: context.getString(R.string.home_widget_empty))
+            return views
+        }
+        showBody(views)
+        val title = WidgetKit.Line().add("This week ", theme.textSecondary)
+        if (w.spent >= 0.5) {
+            title.add(w.spentLabel, theme.over, bold = true)
+        } else {
+            title.add("₹0", theme.text, bold = true)
+        }
+        views.setTextViewText(R.id.hw_title, title.build())
+        val usual = w.usual
+        views.setViewVisibility(R.id.hw_side, if (usual != null) View.VISIBLE else View.GONE)
+        if (usual != null) views.setTextViewText(R.id.hw_side, "usual ${WidgetKit.rupees(usual)}")
+        // The bar under the line when both fit inside the 4dp padding: a
+        // one-row cell with large text shows the line alone. No usual week,
+        // nothing to fill against.
+        val fits = WidgetKit.lineDp(context, 14f) + 2 + 14 <= heightDp - 8
+        views.setViewVisibility(
+            R.id.hw_bar,
+            if (usual != null && fits) View.VISIBLE else View.GONE
+        )
+        if (usual != null && fits) {
+            val over = w.spent - usual >= 1
+            val fill = when {
+                usual > 0 -> (w.spent / usual).coerceIn(0.0, 1.0)
+                w.spent >= 0.5 -> 1.0
+                else -> 0.0
+            }
+            // Month pace's bar, without its tick: full and red once past usual.
+            bitmaps.get("weekbar:$widthDp") {
+                paceBar(context, widthDp, fill, null, if (over) theme.over else theme.accent, theme)
+            }?.let { views.setImageViewBitmap(R.id.hw_bar, it) }
+        }
+        return views
+    }
+
+    /** One bar per entry of [values], scaled to the largest, in the
+     * money-out red; an entry with nothing (zero or null) is a 2dp stub on
+     * the track. [labels] sit under the bars, the one at [bold] in bold.
+     * Drawn at the width the strip has, 24dp tall, at most 2 pixels per dp
+     * and 1200 pixels wide, as [paceBar] is. */
+    private fun strip(
+        context: Context,
+        widgetW: Int,
+        values: List<Double?>,
+        labels: List<String>,
+        bold: Int,
+        theme: WidgetTheme,
+    ): Bitmap {
+        val density = minOf(context.resources.displayMetrics.density, 2f)
+        val w = ((widgetW - 2 * PAD_H) * density).toInt().coerceIn(64, 1200)
+        val h = (24 * density).toInt().coerceAtLeast(16)
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = theme.textSecondary
+            textAlign = Paint.Align.CENTER
+            textSize = 9 * density
+        }
+        // The labels take the bottom 11dp; the bars stand on the line above.
+        val floor = h - 11 * density
+        val n = values.size
+        val gap = 4 * density
+        val barW = (w - gap * (n - 1)) / n
+        val largest = values.maxOf { it ?: 0.0 }
+        val r = minOf(2 * density, barW / 2)
+        for (i in 0 until n) {
+            val x = i * (barW + gap)
+            val v = values[i] ?: 0.0
+            if (v > 0 && largest > 0) {
+                // A small amount stays visible beside a big one.
+                val barH = (floor * (v / largest).coerceIn(0.06, 1.0)).toFloat()
+                paint.color = theme.over
+                canvas.drawRoundRect(RectF(x, floor - barH, x + barW, floor), r, r, paint)
+            } else {
+                paint.color = theme.track
+                canvas.drawRect(x, floor - 2 * density, x + barW, floor, paint)
+            }
+            text.typeface = if (i == bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            labels.getOrNull(i)?.let {
+                canvas.drawText(it, x + barW / 2, h - text.descent(), text)
+            }
+        }
+        return bmp
+    }
 }
 
 /** Month pace (4x2): spent so far against the cap or a usual month. */
@@ -851,6 +1266,19 @@ class RecentWidgetProvider : HomeWidgetProviderBase()
 
 /** Quick actions (4x1): Expense, Income and Import SMS buttons. */
 class QuickActionsWidgetProvider : HomeWidgetProviderBase()
+
+/** Big bills (4x2): the monthly figure to set aside for quarterly,
+ * half-yearly and yearly bills, a 12-month strip and the next bill. */
+class BigBillsWidgetProvider : HomeWidgetProviderBase()
+
+/** Big bills (compact, 4x1): the monthly figure and the next bill. */
+class BigBillsCompactWidgetProvider : HomeWidgetProviderBase()
+
+/** This week (4x2): spent so far against the usual week, a bar per day. */
+class ThisWeekWidgetProvider : HomeWidgetProviderBase()
+
+/** This week (compact, 4x1): spent so far against usual, as one bar. */
+class ThisWeekCompactWidgetProvider : HomeWidgetProviderBase()
 
 /** One picker entry per subclass; [HomeWidgets.render] picks the layout. */
 abstract class HomeWidgetProviderBase : AppWidgetProvider() {

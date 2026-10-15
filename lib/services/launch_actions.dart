@@ -29,6 +29,12 @@ enum LaunchAction {
   /// The Monday note: the weekly digest sheet, on the week
   /// [LaunchActions.takeWeek] hands over.
   openWeeklyDigest,
+
+  /// The Big bills widgets: the Big bills ahead sheet.
+  openBigBills,
+
+  /// The This week widgets: the weekly digest sheet on the current week.
+  openThisWeek,
 }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
@@ -83,6 +89,9 @@ class LaunchActions {
     'open_breakdown' => LaunchAction.openBreakdown,
     'add_income' => LaunchAction.addIncome,
     'open_transactions' => LaunchAction.openTransactions,
+    'open_big_bills' => LaunchAction.openBigBills,
+    // The widget names no week: it always opens the current one.
+    'open_weekly_digest' => LaunchAction.openThisWeek,
     _ => null,
   };
 

@@ -974,12 +974,17 @@ class BackupService {
                         : [
                             for (final k in a.keys) k.replaceFirst(':', ' ••'),
                           ].join(', '),
-                    a.isCard
-                        ? switch (finance.accountOutstanding(a)) {
-                            null => 'owed —',
-                            final o => '${_money.format(o)} owed',
-                          }
-                        : _money.format(finance.accountBalance(a)),
+                    // A linked debit card's money is its bank's balance,
+                    // and stays out of the bank total below.
+                    if (finance.linkedAccountOf(a) case final bank?)
+                      'via ${bank.displayName}'
+                    else if (a.isCard)
+                      switch (finance.accountOutstanding(a)) {
+                        null => 'owed —',
+                        final o => '${_money.format(o)} owed',
+                      }
+                    else
+                      _money.format(finance.accountBalance(a)),
                   ],
               ],
             ),

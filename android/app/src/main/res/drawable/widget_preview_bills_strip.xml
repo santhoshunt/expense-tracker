@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Picker preview only: the Big bills 12-month strip, a tall month among
+     smaller ones and grey stubs where nothing falls due. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="24dp"
+    android:viewportWidth="200"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF7CA3"
+        android:pathData="M0,18h13v6h-13z M17,0h13v24h-13z M51,18h13v6h-13z M85,21h13v3h-13z M102,18h13v6h-13z M153,18h13v6h-13z" />
+    <path
+        android:fillColor="#3B3F4F"
+        android:pathData="M34,22h13v2h-13z M68,22h13v2h-13z M119,22h13v2h-13z M136,22h13v2h-13z M170,22h13v2h-13z M187,22h13v2h-13z" />
+</vector>

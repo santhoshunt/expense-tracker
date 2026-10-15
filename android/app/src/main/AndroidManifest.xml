@@ -212,7 +212,8 @@
             </intent-filter>
         </activity>
         <!-- Month pace, Upcoming, Today and Add, Spending split,
-             Budgets list, Recent and Quick actions widgets (HomeWidgets.kt):
+             Budgets list, Recent, Quick actions, Big bills and This week
+             widgets, the last two in two sizes each (HomeWidgets.kt):
              no configure step; Budgets list reads the budget snapshot, the
              rest one shared snapshot. -->
         <receiver
@@ -291,6 +292,50 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/home_widget_actions_info"/>
+        </receiver>
+        <receiver
+            android:name=".BigBillsWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_big_bills_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_big_bills_info"/>
+        </receiver>
+        <receiver
+            android:name=".BigBillsCompactWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_big_bills_compact_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_big_bills_compact_info"/>
+        </receiver>
+        <receiver
+            android:name=".ThisWeekWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_week_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_week_info"/>
+        </receiver>
+        <receiver
+            android:name=".ThisWeekCompactWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_week_compact_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_week_compact_info"/>
         </receiver>
         <!-- Background SMS import (BackgroundImport.kt). Off in the manifest;
              switched on only while Auto-import is Every SMS. Only the system

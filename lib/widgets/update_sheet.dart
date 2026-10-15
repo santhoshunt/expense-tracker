@@ -81,11 +81,16 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
   Completer<void>? _resumed;
 
   /// A link on the sheet failed to open. Said on the sheet itself: the
-  /// app-level toast would draw under it.
+  /// app-level toast would draw under it. A later link that opens takes
+  /// the line back.
   bool _linkFailed = false;
 
   void _onLinkFail() {
     if (mounted) setState(() => _linkFailed = true);
+  }
+
+  void _onLinkOpened() {
+    if (mounted && _linkFailed) setState(() => _linkFailed = false);
   }
 
   @override
@@ -263,8 +268,12 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
             child: LinkPill(
               label: 'Release page',
               external: true,
-              onTap: () =>
-                  openWebLink(context, _picked.pageUrl, onFail: _onLinkFail),
+              onTap: () => openWebLink(
+                context,
+                _picked.pageUrl,
+                onFail: _onLinkFail,
+                onOpened: _onLinkOpened,
+              ),
             ),
           ),
           if (_linkFailed) ...[
@@ -353,6 +362,7 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
               o.notes,
               style: muted,
               onLinkFail: _onLinkFail,
+              onLinkOpened: _onLinkOpened,
             ),
           ),
       ],

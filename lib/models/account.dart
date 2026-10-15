@@ -11,6 +11,12 @@ enum AccountType {
   bank('Bank'),
   creditCard('Credit card'),
 
+  /// A debit card that draws from a bank account ([Account.linkedAccountId]).
+  /// Its rows stay its own, but its spends and the Avl Bal in its alerts
+  /// move the linked bank's balance, so net balance counts the money once.
+  /// Unlinked, it counts like a bank.
+  debitCard('Debit card'),
+
   /// Any savings/asset instrument — RD, FD, stocks, mutual funds, gold,
   /// property, crypto… The user names the kind ([Account.kind]) and picks an
   /// icon; deposits/purchases are "To savings" transactions and the current
@@ -29,6 +35,7 @@ enum AccountType {
   IconData get icon => switch (this) {
     bank => Icons.account_balance_outlined,
     creditCard => Icons.credit_card,
+    debitCard => Icons.payment,
     savings => Icons.savings_outlined,
     wallet => Icons.account_balance_wallet_outlined,
   };
@@ -119,6 +126,11 @@ class Account {
   /// Points wallets only: ₹ per point.
   final double? pointValue;
 
+  /// Debit cards only: the id of the bank account the card draws from.
+  /// Null = not linked yet. A link to a closed, deleted or non-bank account
+  /// is inert ([FinanceProvider.linkedAccountOf]).
+  final String? linkedAccountId;
+
   Account({
     required this.id,
     required this.name,
@@ -138,9 +150,13 @@ class Account {
     this.service,
     this.holdsPoints = false,
     this.pointValue,
+    this.linkedAccountId,
   });
 
+  /// Credit cards only: debit cards have no limit, outstanding or bill.
   bool get isCard => type == AccountType.creditCard;
+
+  bool get isDebitCard => type == AccountType.debitCard;
 
   bool get isWallet => type == AccountType.wallet;
 
@@ -201,6 +217,8 @@ class Account {
     bool? holdsPoints,
     double? pointValue,
     bool clearPointValue = false,
+    String? linkedAccountId,
+    bool clearLinkedAccountId = false,
   }) => Account(
     id: id,
     name: name ?? this.name,
@@ -228,6 +246,9 @@ class Account {
     service: clearService ? null : (service ?? this.service),
     holdsPoints: holdsPoints ?? this.holdsPoints,
     pointValue: clearPointValue ? null : (pointValue ?? this.pointValue),
+    linkedAccountId: clearLinkedAccountId
+        ? null
+        : (linkedAccountId ?? this.linkedAccountId),
   );
 
   Map<String, dynamic> toJson() => {
@@ -250,6 +271,7 @@ class Account {
     if (service != null) 'service': service,
     if (holdsPoints) 'holdsPoints': true,
     if (pointValue != null) 'pointValue': pointValue,
+    if (linkedAccountId != null) 'linkedAccountId': linkedAccountId,
   };
 
   factory Account.fromJson(Map<String, dynamic> json) {
@@ -293,6 +315,9 @@ class Account {
         final num v when v.isFinite && v > 0 => v.toDouble(),
         _ => null,
       },
+      linkedAccountId: json['linkedAccountId'] is String
+          ? json['linkedAccountId'] as String
+          : null,
     );
   }
 

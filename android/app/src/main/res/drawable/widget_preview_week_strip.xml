@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Picker preview only: This week's day bars, Monday to Wednesday spent
+     and grey stubs for the days still ahead. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="196dp"
+    android:height="24dp"
+    android:viewportWidth="196"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF7CA3"
+        android:pathData="M0,14h22v10h-22z M29,0h22v24h-22z M58,10h22v14h-22z" />
+    <path
+        android:fillColor="#3B3F4F"
+        android:pathData="M87,22h22v2h-22z M116,22h22v2h-22z M145,22h22v2h-22z M174,22h22v2h-22z" />
+</vector>

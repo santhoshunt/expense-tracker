@@ -9,11 +9,13 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/format.dart';
+import 'big_bills.dart';
 import 'budget_widget_service.dart';
 import 'recurring_detector.dart';
 import 'safe_to_spend.dart';
 import 'spend_comparison.dart';
 import 'upcoming_items.dart';
+import 'weekly_digest.dart';
 
 /// Upcoming rows the widget carries; it shows the first three still due.
 const int kUpcomingWidgetRows = 5;
@@ -25,8 +27,8 @@ int epochDay(DateTime d) =>
     DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch ~/
     Duration.millisecondsPerDay;
 
-/// Feeds the Month pace, Upcoming, Today and Add, Spending split and
-/// Recent widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart
+/// Feeds the Month pace, Upcoming, Today and Add, Spending split, Recent,
+/// Big bills and This week widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart
 /// computes and native draws; the snapshot carries dates and a usual-by-day
 /// curve so the widgets stay right across midnight without the app running.
 class HomeWidgetsService {
@@ -115,17 +117,26 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
     hidden: settings.hiddenUpcoming,
     now: now,
   );
+  // Every live pattern: safe to spend sets aside the whole month's bills,
+  // and Big bills spreads the quarterly, half-yearly and yearly ones.
+  final allPatterns =
+      patterns ??
+      detectRecurringPatterns(
+        finance.countedTransactions,
+        now: now,
+        alias: finance.merchantAlias,
+        pinned: finance.subscriptionPins,
+      );
   final safe = computeSafeToSpend(
     finance,
     cap: cap,
-    patterns:
-        patterns ??
-        detectRecurringPatterns(
-          finance.countedTransactions,
-          now: now,
-          alias: finance.merchantAlias,
-          pinned: finance.subscriptionPins,
-        ),
+    patterns: allPatterns,
+    hidden: settings.hiddenUpcoming,
+    now: now,
+  );
+  final bigBills = buildBigBillsPlan(
+    finance,
+    patterns: allPatterns,
     hidden: settings.hiddenUpcoming,
     now: now,
   );
@@ -176,6 +187,50 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
             _safeLabel(safe, safe.allowanceOn(d) ?? 0),
         ],
       },
+    // Left out with no big bills: the widget shows its empty line.
+    if (!bigBills.isEmpty) 'bigBills': _bigBills(bigBills, month),
+    'week': _week(finance, now),
+  };
+}
+
+/// The Big bills widgets' block. [month]'s key dates the 12-month strip,
+/// so a widget drawn in a later month shifts it without the app.
+Map<String, dynamic> _bigBills(BigBillsPlan plan, DateTime month) => {
+  'monthKey': month.year * 12 + month.month,
+  'monthly': plan.monthly,
+  'monthlyLabel': fmtMoneyTidy(plan.monthly),
+  'yearlyLabel': fmtMoneyTidy(plan.yearly),
+  'months': [for (final m in plan.months) m.due],
+  'next': [
+    for (final b in plan.bills.take(2))
+      {
+        'label': b.label,
+        'amountLabel': fmtMoneyTidy(b.amount),
+        'dueDay': epochDay(b.nextDue),
+        'dueLabel': DateFormat('d MMM').format(b.nextDue),
+        'icon': categoryById(
+          b.categoryId,
+          fallbackType: TxType.expense,
+        ).iconKey,
+      },
+  ],
+  'count': plan.bills.length,
+};
+
+/// The This week widgets' block: the current week's spend day by day, and
+/// the usual week cut to each weekday, so the widget compares against the
+/// day it draws. Its `weekStart` tells a widget drawn after Sunday that
+/// the figures are last week's.
+Map<String, dynamic> _week(FinanceProvider finance, DateTime now) {
+  final start = weekStartOf(now);
+  final d = buildWeekDigest(finance, start, now: now);
+  return {
+    'weekStart': epochDay(start),
+    'spent': d.spent,
+    'spentLabel': fmtMoneyTidy(d.spent),
+    'byDay': d.byDay,
+    'usualByDay': usualWeekByDay(finance, start),
+    'toReview': d.toReview,
   };
 }
 

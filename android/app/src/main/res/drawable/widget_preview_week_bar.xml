@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Picker preview only: the compact This week bar about 85% along, spent
+     against a usual week. No tick: the compact bar draws none. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="200dp"
+    android:height="14dp"
+    android:viewportWidth="200"
+    android:viewportHeight="14">
+    <path
+        android:fillColor="#3B3F4F"
+        android:pathData="M4,3h192a4,4 0,0 1,0 8h-192a4,4 0,0 1,0 -8z" />
+    <path
+        android:fillColor="#4A90E2"
+        android:pathData="M4,3h162a4,4 0,0 1,0 8h-162a4,4 0,0 1,0 -8z" />
+</vector>

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
@@ -9,12 +11,14 @@ import '../screens/add_transaction_sheet.dart';
 import '../screens/app_nav.dart';
 import '../screens/transactions_screen.dart' show TxFilterRequest;
 import '../services/recurring_detector.dart' show RecurringHit;
+import '../services/spend_comparison.dart' show negligibleDelta;
 import '../services/upcoming_items.dart';
 import '../services/weekly_digest.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
 import '../utils/money_colors.dart';
+import 'delta_note.dart';
 import 'figure_tile.dart';
 
 /// Last week (or any week) at a glance: spent against the usual week, a
@@ -34,6 +38,32 @@ Future<void> showWeeklyDigestSheet(
   void Function(TxFilterRequest request)? onOpenTransactions,
 }) {
   var shown = weekStartOf(week);
+  // The Undo bar for a delete or Unpair made from the digest, and its
+  // timer. Kept out here: the sheet runs its builder again on a drag.
+  final undoBar = ValueNotifier<_UndoOffer?>(null);
+  Timer? undoTimer;
+  void offerUndo(String message, IconData icon, VoidCallback undo) {
+    undoTimer?.cancel();
+    var fired = false;
+    late final _UndoOffer offer;
+    offer = _UndoOffer(message, icon, () {
+      // The button can be tapped again before the bar is gone.
+      if (fired) return;
+      fired = true;
+      undoTimer?.cancel();
+      if (identical(undoBar.value, offer)) undoBar.value = null;
+      undo();
+    });
+    undoBar.value = offer;
+    // As long as the app-level Undo toast stays up; with a screen reader
+    // on it stays until replaced or the sheet closes, as the toast's
+    // persist does, so Undo can still be reached.
+    if (MediaQuery.maybeOf(context)?.accessibleNavigation ?? false) return;
+    undoTimer = Timer(const Duration(seconds: 5), () {
+      if (identical(undoBar.value, offer)) undoBar.value = null;
+    });
+  }
+
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
@@ -95,7 +125,8 @@ Future<void> showWeeklyDigestSheet(
         } else {
           final diff = d.spent - usual;
           final usualText = fmtMoneyTidy(usual);
-          compareLine = diff.abs() < 0.5
+          // Under a rupee is the same, as the recap's = mark has it.
+          compareLine = negligibleDelta(diff)
               ? 'The same as your usual week$soFar ($usualText)'
               : diff > 0
               ? '${fmtMoneyTidy(diff)} more than your usual week$soFar '
@@ -123,319 +154,404 @@ Future<void> showWeeklyDigestSheet(
           child: child,
         );
 
+        // The Undo bar sits under the scrolling body, at the bottom of the
+        // sheet, so it shows wherever the list is scrolled.
         return SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(0, 0, 0, 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                pad(
-                  Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(0, 0, 0, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      IconButton(
-                        tooltip: 'Previous week',
-                        icon: const Icon(Icons.chevron_left),
-                        onPressed: week.isAfter(firstWeek)
-                            ? () => step(-1)
-                            : null,
-                      ),
-                      Expanded(
-                        child: Column(
+                      pad(
+                        Row(
                           children: [
-                            Text(
-                              _weekTitle(week, now),
-                              style: text.titleLarge,
-                              textAlign: TextAlign.center,
+                            IconButton(
+                              tooltip: 'Previous week',
+                              icon: const Icon(Icons.chevron_left),
+                              onPressed: week.isAfter(firstWeek)
+                                  ? () => step(-1)
+                                  : null,
                             ),
-                            const SizedBox(height: 2),
-                            Text(
-                              weekRangeLabel(week, withWeekday: true),
-                              style: muted,
-                              textAlign: TextAlign.center,
+                            Expanded(
+                              child: Column(
+                                children: [
+                                  Text(
+                                    _weekTitle(week, now),
+                                    style: text.titleLarge,
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    weekRangeLabel(week, withWeekday: true),
+                                    style: muted,
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Next week',
+                              icon: const Icon(Icons.chevron_right),
+                              onPressed: week.isBefore(current)
+                                  ? () => step(1)
+                                  : null,
                             ),
                           ],
                         ),
                       ),
-                      IconButton(
-                        tooltip: 'Next week',
-                        icon: const Icon(Icons.chevron_right),
-                        onPressed: week.isBefore(current)
-                            ? () => step(1)
-                            : null,
+                      const SizedBox(height: 16),
+                      pad(
+                        Text(
+                          isCurrent ? 'Spent so far' : 'Spent',
+                          style: muted,
+                        ),
                       ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-                pad(Text(isCurrent ? 'Spent so far' : 'Spent', style: muted)),
-                pad(
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      fmtMoney(d.spent),
-                      style: text.headlineSmall?.copyWith(
-                        color: out,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                pad(
-                  _CompareLine(
-                    text: compareLine,
-                    diff: usual == null ? null : d.spent - usual,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                pad(
-                  IntrinsicHeight(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        if (!settings.hideIncome) ...[
-                          Expanded(
-                            child: FigureTile(
-                              title: 'In',
-                              value: fmtMoney(d.income),
-                              color: moneyColor(ctx, type: TxType.income),
+                      pad(
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            fmtMoney(d.spent),
+                            style: text.headlineSmall?.copyWith(
+                              color: out,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                          const SizedBox(width: 8),
-                        ],
-                        Expanded(
-                          child: FigureTile(
-                            title: 'Transactions',
-                            value: '${d.count}',
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      // No usual week, no change to mark: the line stays plain.
+                      pad(
+                        usual == null
+                            ? Text(compareLine, style: muted)
+                            : DeltaNote(
+                                text: compareLine,
+                                delta: d.spent - usual,
+                                style: text.bodySmall,
+                                // The digest's line runs longer than the
+                                // recap's: let it wrap at large text.
+                                maxLines: null,
+                              ),
+                      ),
+                      const SizedBox(height: 12),
+                      pad(
+                        IntrinsicHeight(
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (!settings.hideIncome) ...[
+                                Expanded(
+                                  child: FigureTile(
+                                    title: 'In',
+                                    value: fmtMoney(d.income),
+                                    color: moneyColor(ctx, type: TxType.income),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              Expanded(
+                                child: FigureTile(
+                                  title: 'Transactions',
+                                  value: '${d.count}',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      if (d.spent <= 0)
+                        pad(
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Text(
+                              // "that week" once stepped back from this one.
+                              d.count == 0
+                                  ? 'No transactions ${isCurrent ? 'this' : 'that'} week'
+                                  : 'Nothing spent ${isCurrent ? 'this' : 'that'} week',
+                              style: text.bodyMedium?.copyWith(
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        )
+                      else ...[
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: _DayBars(
+                            digest: d,
+                            color: out,
+                            onDay: onOpenTransactions == null
+                                ? null
+                                : (day) => open(
+                                    TxFilterRequest(
+                                      range: DateTimeRange(
+                                        start: day,
+                                        end: day,
+                                      ),
+                                      rangeCounted: true,
+                                    ),
+                                  )?.call(),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        pad(_Heading('Top categories')),
+                        for (final e in d.topCategories)
+                          pad(
+                            _Row(
+                              leading: Icon(
+                                e.key.icon,
+                                size: 20,
+                                color: categoryGlyphColor(ctx, e.key.color),
+                              ),
+                              label: e.key.label,
+                              amount: fmtMoney(e.value),
+                              amountColor: out,
+                              onTap: open(
+                                TxFilterRequest(
+                                  categoryId: e.key.id,
+                                  type: TxType.expense,
+                                  range: range,
+                                  rangeCounted: true,
+                                ),
+                              ),
+                            ),
+                          ),
+                        const SizedBox(height: 12),
+                        pad(_Heading('Biggest payments')),
+                        for (final t in d.biggest)
+                          pad(
+                            _Row(
+                              leading: Icon(
+                                categoryById(
+                                  t.categoryId,
+                                  fallbackType: TxType.expense,
+                                ).icon,
+                                size: 20,
+                                color: categoryGlyphColor(
+                                  ctx,
+                                  categoryById(
+                                    t.categoryId,
+                                    fallbackType: TxType.expense,
+                                  ).color,
+                                ),
+                              ),
+                              // The category on top, the merchant and day under
+                              // it: one joined line wrapped "· Mon" onto a line of
+                              // its own at 320dp.
+                              label: categoryById(
+                                t.categoryId,
+                                fallbackType: TxType.expense,
+                              ).label,
+                              sub: [
+                                ?finance.merchantLabelFor(t),
+                                DateFormat('EEE').format(t.effectiveDate),
+                              ].join(' · '),
+                              amount: fmtMoney(t.spendAmount),
+                              amountColor: out,
+                              // Over the digest, which shows an edit at once. A
+                              // delete's Undo shows on the digest, which stays
+                              // open; the app-level toast would draw under it.
+                              onTap: () => showAddTransactionSheet(
+                                ctx,
+                                existing: t,
+                                onUndoable: offerUndo,
+                              ),
+                            ),
+                          ),
+                      ],
+                      if (due.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        pad(_Heading('Due in the next 7 days')),
+                        for (final u in due)
+                          pad(
+                            _Row(
+                              leading: Icon(
+                                u.kind == UpcomingKind.cardBill
+                                    ? Icons.credit_card
+                                    : categoryById(
+                                        u.categoryId!,
+                                        fallbackType: u.type,
+                                      ).icon,
+                                size: 20,
+                                color: u.kind == UpcomingKind.cardBill
+                                    ? scheme.onSurfaceVariant
+                                    : categoryGlyphColor(
+                                        ctx,
+                                        categoryById(
+                                          u.categoryId!,
+                                          fallbackType: u.type,
+                                        ).color,
+                                      ),
+                              ),
+                              label: u.label,
+                              sub: u.days < 0
+                                  ? 'Overdue'
+                                  : 'Due ${fmtInDays(u.days)}',
+                              amount: u.amount == null
+                                  ? ''
+                                  : fmtMoney(u.amount!),
+                              // As the Upcoming card colours them: a card bill and a
+                              // transfer move your own money, so they stay plain.
+                              amountColor: moneyColor(
+                                ctx,
+                                type: u.type,
+                                transfer:
+                                    u.kind == UpcomingKind.cardBill ||
+                                    (u.categoryId != null &&
+                                        isTransferCategory(u.categoryId!)),
+                              ),
+                            ),
+                          ),
+                      ],
+                      if (d.toReview > 0) ...[
+                        const SizedBox(height: 12),
+                        pad(
+                          Card(
+                            margin: EdgeInsets.zero,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                AppSpace.card,
+                                4,
+                                4,
+                                4,
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.inbox_outlined,
+                                    size: 20,
+                                    color: scheme.onSurfaceVariant,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      d.toReview == 1
+                                          ? '1 import to review'
+                                          : '${d.toReview} imports to review',
+                                      style: text.bodyMedium,
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      Navigator.pop(ctx);
+                                      AppNav.instance.openHomeTab(
+                                        context,
+                                        kHomeTabTransactions,
+                                      );
+                                    },
+                                    child: const Text('Review'),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ],
-                    ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 16),
-                if (d.spent <= 0)
-                  pad(
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Text(
-                        // "that week" once stepped back from this one.
-                        d.count == 0
-                            ? 'No transactions ${isCurrent ? 'this' : 'that'} week'
-                            : 'Nothing spent ${isCurrent ? 'this' : 'that'} week',
-                        style: text.bodyMedium?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  )
-                else ...[
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: _DayBars(
-                      digest: d,
-                      color: out,
-                      onDay: onOpenTransactions == null
-                          ? null
-                          : (day) => open(
-                              TxFilterRequest(
-                                range: DateTimeRange(start: day, end: day),
-                                rangeCounted: true,
-                              ),
-                            )?.call(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  pad(_Heading('Top categories')),
-                  for (final e in d.topCategories)
-                    pad(
-                      _Row(
-                        leading: Icon(
-                          e.key.icon,
-                          size: 20,
-                          color: categoryGlyphColor(ctx, e.key.color),
-                        ),
-                        label: e.key.label,
-                        amount: fmtMoney(e.value),
-                        amountColor: out,
-                        onTap: open(
-                          TxFilterRequest(
-                            categoryId: e.key.id,
-                            type: TxType.expense,
-                            range: range,
-                            rangeCounted: true,
-                          ),
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  pad(_Heading('Biggest payments')),
-                  for (final t in d.biggest)
-                    pad(
-                      _Row(
-                        leading: Icon(
-                          categoryById(
-                            t.categoryId,
-                            fallbackType: TxType.expense,
-                          ).icon,
-                          size: 20,
-                          color: categoryGlyphColor(
-                            ctx,
-                            categoryById(
-                              t.categoryId,
-                              fallbackType: TxType.expense,
-                            ).color,
-                          ),
-                        ),
-                        // The category on top, the merchant and day under
-                        // it: one joined line wrapped "· Mon" onto a line of
-                        // its own at 320dp.
-                        label: categoryById(
-                          t.categoryId,
-                          fallbackType: TxType.expense,
-                        ).label,
-                        sub: [
-                          ?finance.merchantLabelFor(t),
-                          DateFormat('EEE').format(t.effectiveDate),
-                        ].join(' · '),
-                        amount: fmtMoney(t.spendAmount),
-                        amountColor: out,
-                        // Over the digest, which shows an edit at once.
-                        onTap: () => showAddTransactionSheet(ctx, existing: t),
-                      ),
-                    ),
-                ],
-                if (due.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  pad(_Heading('Due in the next 7 days')),
-                  for (final u in due)
-                    pad(
-                      _Row(
-                        leading: Icon(
-                          u.kind == UpcomingKind.cardBill
-                              ? Icons.credit_card
-                              : categoryById(
-                                  u.categoryId!,
-                                  fallbackType: u.type,
-                                ).icon,
-                          size: 20,
-                          color: u.kind == UpcomingKind.cardBill
-                              ? scheme.onSurfaceVariant
-                              : categoryGlyphColor(
-                                  ctx,
-                                  categoryById(
-                                    u.categoryId!,
-                                    fallbackType: u.type,
-                                  ).color,
-                                ),
-                        ),
-                        label: u.label,
-                        sub: u.days < 0
-                            ? 'Overdue'
-                            : 'Due ${fmtInDays(u.days)}',
-                        amount: u.amount == null ? '' : fmtMoney(u.amount!),
-                        // As the Upcoming card colours them: a card bill and a
-                        // transfer move your own money, so they stay plain.
-                        amountColor: moneyColor(
-                          ctx,
-                          type: u.type,
-                          transfer:
-                              u.kind == UpcomingKind.cardBill ||
-                              (u.categoryId != null &&
-                                  isTransferCategory(u.categoryId!)),
-                        ),
-                      ),
-                    ),
-                ],
-                if (d.toReview > 0) ...[
-                  const SizedBox(height: 12),
-                  pad(
-                    Card(
-                      margin: EdgeInsets.zero,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(
-                          AppSpace.card,
-                          4,
-                          4,
-                          4,
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.inbox_outlined,
-                              size: 20,
-                              color: scheme.onSurfaceVariant,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Text(
-                                d.toReview == 1
-                                    ? '1 import to review'
-                                    : '${d.toReview} imports to review',
-                                style: text.bodyMedium,
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: () {
-                                Navigator.pop(ctx);
-                                AppNav.instance.openHomeTab(
-                                  context,
-                                  kHomeTabTransactions,
-                                );
-                              },
-                              child: const Text('Review'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
+              ),
+              ValueListenableBuilder<_UndoOffer?>(
+                valueListenable: undoBar,
+                builder: (_, offer, _) =>
+                    offer == null ? const SizedBox.shrink() : _UndoBar(offer),
+              ),
+            ],
           ),
         );
       },
     ),
-  );
+    // The notifier is left to the garbage collector: the sheet's widgets can
+    // still listen to it during the closing animation.
+  ).whenComplete(() => undoTimer?.cancel());
+}
+
+/// A delete's or Unpair's Undo offer on the digest: the toast's message,
+/// the icon naming what is undone, and the action.
+class _UndoOffer {
+  final String message;
+  final IconData icon;
+  final VoidCallback undo;
+  const _UndoOffer(this.message, this.icon, this.undo);
+}
+
+/// The Undo offer drawn on the digest itself, as the app's removal toast
+/// looks: the snackbar theme's pill, a bin on a rose tint, the message and
+/// Undo.
+class _UndoBar extends StatelessWidget {
+  final _UndoOffer offer;
+  const _UndoBar(this.offer);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final bar = theme.snackBarTheme;
+    return Semantics(
+      liveRegion: true,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        child: Material(
+          color: bar.backgroundColor ?? scheme.surfaceContainerHigh,
+          shape:
+              bar.shape ??
+              RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadius.button),
+              ),
+          elevation: bar.elevation ?? 6,
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(16, 4, 4, 4),
+            child: Row(
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    color: scheme.error.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(offer.icon, size: 16, color: scheme.error),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    offer.message,
+                    // Outside a SnackBar the theme's text style is not
+                    // inherited, so it is set here.
+                    style:
+                        bar.contentTextStyle ??
+                        theme.textTheme.bodyMedium?.copyWith(
+                          color: scheme.onSurface,
+                        ),
+                  ),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: bar.actionTextColor ?? scheme.primary,
+                    minimumSize: const Size(48, 48),
+                  ),
+                  onPressed: offer.undo,
+                  child: const Text('Undo'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// "Week of 12 Oct", with the year when it is not this one.
 String _weekTitle(DateTime week, DateTime now) =>
     'Week of ${DateFormat(week.year == now.year ? 'd MMM' : 'd MMM yyyy').format(week)}';
-
-/// The line under the spent figure. The arrow carries the colour, red for
-/// more and green for less; the text stays plain, as on the recap card.
-class _CompareLine extends StatelessWidget {
-  final String text;
-  final double? diff;
-  const _CompareLine({required this.text, required this.diff});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final style = Theme.of(context).textTheme.bodySmall;
-    final diff = this.diff;
-    if (diff == null || diff.abs() < 0.5) {
-      return Text(text, style: style?.copyWith(color: scheme.onSurfaceVariant));
-    }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(
-          diff > 0 ? Icons.trending_up : Icons.trending_down,
-          size: 16,
-          color: diff > 0 ? scheme.error : AppColors.of(context).green,
-        ),
-        const SizedBox(width: 4),
-        Expanded(
-          child: Text(text, style: style?.copyWith(color: scheme.onSurface)),
-        ),
-      ],
-    );
-  }
-}
 
 /// Monday to Sunday, one bar each on one scale. A day after today draws
 /// no bar and takes no tap.
