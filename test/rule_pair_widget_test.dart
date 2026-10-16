@@ -116,8 +116,8 @@ void main() {
   Finder inDialog(Finder f) =>
       find.descendant(of: find.byType(AlertDialog), matching: f);
 
-  testWidgets('New rule reads conditions, then category, then a closed '
-      'expander for the other direction', (tester) async {
+  testWidgets('New rule reads category, then the Add box, then a closed '
+      'expander for the other direction, then the conditions', (tester) async {
     final p = FinanceProvider();
     await p.load();
     await tester.pumpWidget(app(p));
@@ -127,12 +127,12 @@ void main() {
 
     double top(Finder f) => tester.getTopLeft(f).dy;
     final condition = inDialog(find.byType(TextField)).first;
-    final orContains = find.text('Or contains…');
-    final classifyAs = find.text('Then classify as');
+    final classifyAs = find.text('Classify as');
     final expander = find.text('Money in goes to another category');
-    expect(top(condition), lessThan(top(orContains)));
-    expect(top(orContains), lessThan(top(classifyAs)));
-    expect(top(classifyAs), lessThan(top(expander)));
+    final conditions = find.text('If the SMS contains any of (0)');
+    expect(top(classifyAs), lessThan(top(condition)));
+    expect(top(condition), lessThan(top(expander)));
+    expect(top(expander), lessThan(top(conditions)));
     // The old always-on paragraph and doubled helper are gone.
     expect(find.textContaining('Add another condition'), findsNothing);
     expect(find.textContaining('Rules only fire'), findsNothing);
@@ -156,10 +156,7 @@ void main() {
     // '|' would split the condition; the error names the button instead.
     await tester.enterText(condition, 'amma|appa');
     await tester.pump();
-    expect(
-      find.text('Remove "|". Use "Or contains…" instead.'),
-      findsOneWidget,
-    );
+    expect(find.text('Remove "|". Add each word on its own.'), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
 
@@ -173,7 +170,7 @@ void main() {
     expect(find.text('Money out goes to another category'), findsOneWidget);
   });
 
-  testWidgets('Or contains adds a focused field under the others', (
+  testWidgets('Add turns the box into a chip and keeps it focused', (
     tester,
   ) async {
     final p = FinanceProvider();
@@ -182,22 +179,21 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('New rule'));
     await tester.pumpAndSettle();
-    await tester.enterText(inDialog(find.byType(TextField)).first, 'amma');
+    final box = inDialog(find.byType(TextField)).first;
+    await tester.enterText(box, 'amma');
+    await tester.pump();
 
-    await tester.tap(find.text('Or contains…'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Add'));
     await tester.pumpAndSettle();
-    final fields = inDialog(find.byType(TextField));
-    expect(fields, findsNWidgets(2));
-    // The first keeps its text; the new one sits below it, focused.
-    expect(tester.widget<TextField>(fields.first).controller!.text, 'amma');
-    expect(
-      tester.getTopLeft(fields.at(1)).dy,
-      greaterThan(tester.getTopLeft(fields.first).dy),
-    );
-    expect(find.text('or contains…'), findsOneWidget);
-    expect(tester.widget<TextField>(fields.at(1)).focusNode!.hasFocus, isTrue);
+    // One field still: the word moved into a chip and the box is empty,
+    // focused for the next one.
+    expect(inDialog(find.byType(TextField)), findsOneWidget);
+    expect(inDialog(find.byType(InputChip)), findsOneWidget);
+    expect(tester.widget<TextField>(box).controller!.text, isEmpty);
+    expect(tester.widget<TextField>(box).focusNode!.hasFocus, isTrue);
+    expect(find.text('If the SMS contains any of (1)'), findsOneWidget);
 
-    await tester.enterText(fields.at(1), 'appa');
+    await tester.enterText(box, 'appa');
     await tester.tap(find.text('Create'));
     await tester.pumpAndSettle();
     expect(p.rules.where((r) => !r.isBuiltIn).single.pattern, 'amma | appa');

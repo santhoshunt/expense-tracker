@@ -121,7 +121,7 @@ void main() {
     );
     await expectTip(
       tester,
-      'Then classify as',
+      'Classify as',
       'Saving applies the rule to past SMS rows',
     );
   });

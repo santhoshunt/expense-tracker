@@ -146,12 +146,21 @@ void main() {
     await tester.pumpWidget(app(p, const Scaffold(body: Text('home'))));
     final home = tester.element(find.text('home'));
 
+    /// Back to the hub under the group page, then Back to home.
+    Future<void> backHome() async {
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(AppBar, 'Cockpit'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.text('home'), findsOneWidget);
+    }
+
     AppNav.instance.openCockpit(home, kCockpitTabReminders);
     await tester.pumpAndSettle();
     expect(find.text('Plan'), findsOneWidget);
     expect(selectedTab(tester), 'Reminders');
-    await tester.pageBack();
-    await tester.pumpAndSettle();
+    await backHome();
 
     // Organise now holds Categories and Tags: the tab bar opens on the
     // requested one, with its add button.
@@ -160,8 +169,7 @@ void main() {
     expect(find.text('Organise'), findsOneWidget);
     expect(selectedTab(tester), 'Categories');
     expect(find.text('New category'), findsOneWidget);
-    await tester.pageBack();
-    await tester.pumpAndSettle();
+    await backHome();
 
     AppNav.instance.openCockpit(home, kCockpitTabSubscriptions);
     await tester.pumpAndSettle();

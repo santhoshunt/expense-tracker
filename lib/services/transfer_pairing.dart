@@ -1,5 +1,6 @@
 import '../models/account.dart';
 import '../models/transaction.dart';
+import 'refund_matching.dart';
 
 /// Transfer pairing: recognising the two SMS legs of one own-account move
 /// (bank debit + savings/card credit) so they can be linked and both booked
@@ -67,7 +68,7 @@ PairKind? pairKindFor({required Account? send, required Account? recv}) {
 /// Candidate pairs among [rows]: one expense and one income of the same
 /// amount, dated within [kPairDateWindow], on different accounts (at least
 /// one known), neither already paired nor spam nor a split bill or a
-/// repayment from a friend, at least one still pending
+/// repayment from a friend nor a refund, at least one still pending
 /// (the review queue is where the suggestion renders), the sending account
 /// not a card, and not previously dismissed. Greedy by date distance so each
 /// row appears in at most one suggestion.
@@ -82,6 +83,12 @@ List<PairSuggestion> suggestTransferPairs(
     // A split bill and a friend's repayment are not own-account moves, and
     // pairing would wipe their people and payer.
     if (t.isSplit || t.categoryId == kRepaidToMeCategoryId) continue;
+    // A refund pays back a purchase; the same amount reaching another
+    // account is not the other leg of a move.
+    if (t.type == TxType.income &&
+        (t.refundOf != null || isRefundWorded(t.smsText))) {
+      continue;
+    }
     (byAmount[(t.amount * 100).round()] ??= []).add(t);
   }
   final candidates = <(int distance, PairSuggestion s)>[];

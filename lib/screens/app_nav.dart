@@ -268,14 +268,31 @@ class AppNav {
 
   /// Cockpit tab [tab] (a kCockpitTab* id): switches in place when
   /// already on the Cockpit group page that holds it, otherwise opens that
-  /// group's page on the tab (over the hub or another group's page).
+  /// group's page on the tab. From another group's page it goes over that
+  /// page; from outside the Cockpit the hub goes in first, without a
+  /// transition of its own, so Back from the group page lands on the hub.
   void openCockpit(BuildContext context, int tab) {
     final scope = CockpitScope.maybeOf(context);
     if (scope != null && scope.show(tab)) return;
-    Navigator.of(context).push(
+    final navigator = Navigator.of(context);
+    if (scope == null) {
+      navigator.push(
+        _InstantPageRoute(builder: (_) => const ClassifiersScreen()),
+      );
+    }
+    navigator.push(
       MaterialPageRoute(builder: (_) => ClassifiersScreen(initialTab: tab)),
     );
   }
+}
+
+/// A page that appears at once, under the page pushed right after it, so
+/// only that page's transition shows. Back from it still animates.
+class _InstantPageRoute<T> extends MaterialPageRoute<T> {
+  _InstantPageRoute({required super.builder});
+
+  @override
+  Duration get transitionDuration => Duration.zero;
 }
 
 // Link targets for tooltips (InfoLink.onTap). Top-level so links can be

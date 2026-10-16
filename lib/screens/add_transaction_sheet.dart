@@ -7,6 +7,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/recurring_detector.dart';
+import '../services/refund_matching.dart';
 import '../services/subscriptions.dart';
 import '../utils/format.dart';
 import '../utils/haptics.dart';
@@ -16,6 +17,7 @@ import '../widgets/motion.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/undo_snackbar.dart';
+import 'classifiers_screen.dart' show showRuleDialog;
 
 /// What a new entry starts with, for callers that already know (the People
 /// page's "Record repayment"). The kind follows the category.
@@ -137,6 +139,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   late final TextEditingController _noteCtrl;
   late final TextEditingController _senderCtrl;
 
+  /// The read-only Original SMS, held so its selection can become a rule.
+  late final TextEditingController _smsCtrl;
+
   /// Group split: whether the user fronted this bill for a group. Only the
   /// share in [_shareCtrl] counts as their spend; the remainder is tracked
   /// as Paid for Others. Expense entries only.
@@ -189,7 +194,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   /// The form's state as one comparable string, captured once after
   /// initState fills the fields — pop guards compare against it to know
   /// whether closing the sheet would discard anything the user typed.
-  late final String _initialFingerprint;
+  /// Taken again when Link to a purchase changes the row under a clean
+  /// sheet, so the change it made does not count as typed.
+  late String _initialFingerprint;
 
   String _fingerprint() => [
     _kind.name,
@@ -285,6 +292,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     }
     _noteCtrl = TextEditingController(text: e?.note ?? '');
     _senderCtrl = TextEditingController(text: e?.sender ?? '');
+    _smsCtrl = TextEditingController(text: e?.smsBody ?? '');
     _isSplit = e?.myShare != null;
     _tags = [...?e?.tags];
     _shareCtrl = TextEditingController(
@@ -329,6 +337,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _amountCtrl.dispose();
     _noteCtrl.dispose();
     _senderCtrl.dispose();
+    _smsCtrl.dispose();
     _shareCtrl.dispose();
     _fromCtrl.dispose();
     for (final p in _people) {
@@ -637,11 +646,23 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     final tags = pendingTagsOf(_tags, _tagCtrl);
     setState(() => _busy = true);
     String? newId;
+    // Opening, reading and saving a row still in review is a review: the
+    // save confirms it.
+    final confirms = isEditing && widget.existing!.pending;
+    // A refund link made or undone in this sheet after it opened; the
+    // snapshot the sheet started from does not have it.
+    final refundOf = isEditing
+        ? (_live(finance) ?? widget.existing!).refundOf
+        : null;
 
     try {
       if (isEditing) {
         await finance.updateTransaction(
           widget.existing!.copyWith(
+            pending: confirms ? false : null,
+            // A refund turned into an expense refunds nothing.
+            refundOf: _type == TxType.expense ? null : refundOf,
+            clearRefundOf: _type == TxType.expense || refundOf == null,
             type: _type,
             categoryId: _categoryId,
             amount: amount,
@@ -694,6 +715,16 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       if (mounted) setState(() => _busy = false);
       rethrow;
     }
+    if (confirms && mounted) {
+      // Without the "new" marker opening the sheet cleared, as on delete.
+      final before = widget.existing!.copyWith(unseen: false);
+      _offerUndo(
+        'Saved and confirmed',
+        () => finance.restoreEditedTransactions([before]),
+        icon: Icons.done_all,
+        tone: AppToastTone.success,
+      );
+    }
     navigator.pop(newId);
   }
 
@@ -721,22 +752,22 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     navigator.pop();
   }
 
-  /// Offers Undo for a delete or Unpair: to [_AddTransactionForm.onUndoable]
-  /// when the host takes it, else on the app-level toast.
-  void _offerUndo(String message, VoidCallback undo, {required IconData icon}) {
+  /// Offers Undo for a delete, Unpair, Unlink, a link or a confirming save:
+  /// to [_AddTransactionForm.onUndoable] when the host takes it, else on
+  /// the app-level toast.
+  void _offerUndo(
+    String message,
+    VoidCallback undo, {
+    required IconData icon,
+    AppToastTone tone = AppToastTone.removal,
+  }) {
     final host = widget.onUndoable;
     if (host == null) {
-      showUndoSnackBar(
-        context,
-        message,
-        undo,
-        icon: icon,
-        tone: AppToastTone.removal,
-      );
+      showUndoSnackBar(context, message, undo, icon: icon, tone: tone);
       return;
     }
     // showUndoSnackBar gives every removal its thud; this path keeps it.
-    Haptics.thud();
+    if (tone == AppToastTone.removal) Haptics.thud();
     // The icon names what is undone: a bin for a delete, a link for Unpair.
     host(message, icon, undo);
   }
@@ -799,6 +830,270 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           ),
         ],
       ),
+    );
+  }
+
+  /// The edited row as the ledger holds it now: Link to a purchase changes
+  /// it after the sheet opened. Null once it is gone.
+  Tx? _live(FinanceProvider finance) {
+    final id = widget.existing!.id;
+    return finance.transactions.where((t) => t.id == id).firstOrNull ??
+        finance.pendingTransactions.where((t) => t.id == id).firstOrNull;
+  }
+
+  /// An outlined box like [_pairedBanner]'s: [lines] under an [icon], the
+  /// first in the text colour and the rest muted unless [muteTail] is off,
+  /// with an optional [action] button.
+  Widget _refundBox(
+    BuildContext context, {
+    required IconData icon,
+    required List<String> lines,
+    bool muteTail = true,
+    Widget? action,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    final small = Theme.of(context).textTheme.bodySmall;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: EdgeInsets.fromLTRB(12, 8, action == null ? 12 : 4, 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final (i, line) in lines.indexed)
+                  Text(
+                    line,
+                    style: i > 0 && muteTail
+                        ? small?.copyWith(color: scheme.onSurfaceVariant)
+                        : small,
+                  ),
+              ],
+            ),
+          ),
+          ?action,
+        ],
+      ),
+    );
+  }
+
+  /// The refund side of the edited row: what a refund is linked to (or
+  /// that its link broke), with Unlink; a purchase's refunds; or, on an
+  /// income row linked to nothing, Link to a purchase.
+  List<Widget> _refundBanners(BuildContext context) {
+    // watch: Link to a purchase changes the row while the sheet is open.
+    final finance = context.watch<FinanceProvider>();
+    final tx = _live(finance);
+    if (tx == null) return const [];
+    // First: a refund that became a transfer still shows its broken link.
+    if (tx.type == TxType.income && tx.refundOf != null) {
+      final unlink = TextButton(
+        style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+        onPressed: () async {
+          final before = tx;
+          await finance.unlinkRefund(tx.id);
+          if (!context.mounted) return;
+          // The sheet stays open: the banner turns into Link to a purchase,
+          // and closing still goes through the unsaved-changes guard.
+          // Putting the row back re-links it, a link that broke included.
+          _offerUndo(
+            'Unlinked',
+            () => finance.restoreEditedTransactions([before]),
+            icon: Icons.link_off,
+          );
+        },
+        child: const Text('Unlink'),
+      );
+      final purchase = finance.isLinkedRefund(tx)
+          ? finance.refundPurchaseOf(tx)
+          : null;
+      if (purchase != null) {
+        final merchant =
+            finance.merchantLabelFor(purchase) ?? purchase.category.label;
+        return [
+          _refundBox(
+            context,
+            icon: Icons.link,
+            lines: [
+              'Refund for $merchant',
+              '−${fmtMoney(purchase.amount)} · '
+                  '${fmtDateCompact(purchase.date)}',
+            ],
+            action: unlink,
+          ),
+        ];
+      }
+      // A row still in review, or a wallet row left uncounted, is not
+      // broken: its link holds once it is confirmed and counted.
+      if (finance.refundLinkBroken(tx)) {
+        return [
+          _refundBox(
+            context,
+            icon: Icons.link_off,
+            lines: const ['Not linked: the purchase changed'],
+            action: unlink,
+          ),
+        ];
+      }
+      return const [];
+    }
+    if (tx.pairId != null || isTransferCategory(tx.categoryId)) {
+      return const [];
+    }
+    if (tx.type == TxType.expense) {
+      final refunds = finance.refundsOf(tx);
+      if (refunds.isEmpty) return const [];
+      return [
+        _refundBox(
+          context,
+          icon: Icons.undo,
+          muteTail: false,
+          lines: [
+            for (final r in refunds)
+              'Refunded ${fmtMoney(r.amount)} · ${fmtDateCompact(r.date)}',
+          ],
+        ),
+      ];
+    }
+    // A repayment from a friend is not a refund.
+    if (tx.categoryId == kRepaidToMeCategoryId) return const [];
+    return [
+      Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: TextButton.icon(
+          onPressed: _busy ? null : () => _linkToPurchase(finance, tx),
+          icon: const Icon(Icons.add_link, size: 18),
+          label: const Text('Link to a purchase'),
+        ),
+      ),
+      const SizedBox(height: 8),
+    ];
+  }
+
+  /// Picks the purchase [refund] gives money back for and links it: the
+  /// likely ones first ([refundCandidatesFor]), else every expense from
+  /// the [kRefundWindowDays] before it with enough left to refund.
+  Future<void> _linkToPurchase(FinanceProvider finance, Tx refund) async {
+    final likely = [
+      for (final c in refundCandidatesFor(
+        refund,
+        finance.transactions,
+        remainingOf: finance.refundableLeftOf,
+        counts: finance.countsInTotals,
+      ))
+        c.purchase,
+    ];
+    bool inWindow(Tx p) {
+      final gap = refundDayGap(p, refund);
+      return gap >= 0 && gap <= kRefundWindowDays;
+    }
+
+    // transactions is newest first already.
+    final purchases = likely.isNotEmpty
+        ? likely
+        : [
+            for (final p in finance.transactions)
+              if (p.type == TxType.expense &&
+                  !isTransferCategory(p.categoryId) &&
+                  p.myShare == null &&
+                  finance.countsInTotals(p) &&
+                  inWindow(p) &&
+                  finance.refundableLeftOf(p) >= refund.amount - 0.005)
+                p,
+          ];
+    if (purchases.isEmpty) {
+      showAppToast(
+        context,
+        'No purchase of ${fmtMoney(refund.amount)} or more in the '
+        '$kRefundWindowDays days before it',
+      );
+      return;
+    }
+    final picked = await showPickerSheet<String>(
+      context: context,
+      title: 'Link to a purchase',
+      subtitle: 'The refund comes off its spend',
+      items: [
+        for (final p in purchases)
+          PickerItem(
+            value: p.id,
+            label:
+                '${finance.merchantLabelFor(p) ?? p.category.label} · '
+                '${fmtMoney(p.amount)} · ${fmtDateCompact(p.date)}',
+            leading: Icon(p.category.icon, color: p.category.color, size: 20),
+          ),
+      ],
+    );
+    final purchaseId = picked?.value;
+    if (purchaseId == null || !mounted) return;
+    final clean = _fingerprint() == _initialFingerprint;
+    // A confirmed refund the one-time pass offered leaves its list on Link;
+    // Undo puts it back, as on the review card. Only one that was on it: a
+    // row linked by hand never joins.
+    final wasInReview = finance.refundReviewIds.contains(refund.id);
+    final linked = await finance.linkRefund(refund.id, purchaseId);
+    if (!mounted) return;
+    if (!linked) {
+      showAppToast(
+        context,
+        "Couldn't link: the purchase has changed",
+        tone: AppToastTone.error,
+      );
+      return;
+    }
+    // Linking counts a wallet refund; the switch follows, so a save keeps
+    // it counted.
+    setState(() {
+      _walletCounted = _live(finance)?.walletCounted ?? _walletCounted;
+      if (clean) _initialFingerprint = _fingerprint();
+    });
+    _offerUndo(
+      'Linked as a refund',
+      () {
+        finance.restoreEditedTransactions([refund]);
+        if (wasInReview) finance.restoreRefundReviewId(refund.id);
+      },
+      icon: Icons.link,
+      tone: AppToastTone.change,
+    );
+  }
+
+  /// The Original SMS's selection toolbar: the usual buttons, plus Make
+  /// rule once the selection holds at least 3 characters besides spaces.
+  /// The rule dialog opens over this sheet and returns to it.
+  Widget _smsContextMenu(BuildContext context, EditableTextState field) {
+    final value = field.textEditingValue;
+    final selection = value.selection;
+    final selected = selection.isValid && !selection.isCollapsed
+        ? selection.textInside(value.text)
+        : '';
+    final canMakeRule = selected.replaceAll(RegExp(r'\s'), '').length >= 3;
+    return AdaptiveTextSelectionToolbar.buttonItems(
+      anchors: field.contextMenuAnchors,
+      // Make rule first: the toolbar folds what does not fit into its ⋮
+      // menu, and Copy, Select all, Share and the rest come after it.
+      buttonItems: [
+        if (canMakeRule)
+          ContextMenuButtonItem(
+            label: 'Make rule',
+            onPressed: () {
+              field.hideToolbar();
+              showRuleDialog(
+                this.context,
+                patternSuggestion: selected.trim(),
+                categorySuggestion: _categoryId,
+              );
+            },
+          ),
+        ...field.contextMenuButtonItems,
+      ],
     );
   }
 
@@ -1152,7 +1447,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                 ),
                 const SizedBox(height: 16),
                 // Save lives at the top when editing: at the bottom it sat 8px
-                // above Delete — a mis-tap hazard when confirming SMS imports.
+                // above Delete, a mis-tap hazard, since saving an SMS import
+                // still in review also confirms it.
                 if (isEditing) ...[
                   FilledButton(
                     onPressed: _busy ? null : _save,
@@ -1164,6 +1460,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   const SizedBox(height: 16),
                   if (widget.existing!.pairId != null)
                     _pairedBanner(context, widget.existing!),
+                  ..._refundBanners(context),
                 ],
                 // No per-segment icons and no selected checkmark: three
                 // segments wide, icon + label + check made "Expense" wrap onto
@@ -1379,7 +1676,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     widget.existing!.source == TxSource.sms &&
                     widget.existing!.smsBody.isNotEmpty) ...[
                   TextFormField(
-                    initialValue: widget.existing!.smsBody,
+                    controller: _smsCtrl,
                     readOnly: true,
                     minLines: 1,
                     maxLines: 4,
@@ -1387,6 +1684,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     decoration: const InputDecoration(
                       labelText: 'Original SMS',
                     ),
+                    contextMenuBuilder: _smsContextMenu,
                   ),
                   const SizedBox(height: 16),
                 ],

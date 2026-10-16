@@ -121,9 +121,7 @@ void main() {
 
   testWidgets('the sheet opens over an open page, which stays', (tester) async {
     await pumpHome(tester);
-    await tester.tap(find.byTooltip('More'));
-    await settle(tester);
-    await tester.tap(find.text('Settings').last);
+    await tester.tap(find.byTooltip('Settings'));
     await settle(tester);
     expect(find.text('Appearance'), findsOneWidget);
 

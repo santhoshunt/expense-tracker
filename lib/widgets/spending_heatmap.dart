@@ -312,10 +312,16 @@ class SpendingHeatmap extends StatelessWidget {
                     // single −₹500 row doesn't add up (same annotation as the
                     // main transaction tile).
                     // Left out when it would repeat the title (no note).
+                    // A refunded purchase counts net in the header, likewise.
                     subtitle: t.isSplit
                         ? Text(
                             '${t.category.label} · your share '
                             '${fmtMoney(t.myShare!)}',
+                          )
+                        : finance.refundedFor(t) > 0
+                        ? Text(
+                            '${t.category.label} · '
+                            '${fmtMoney(finance.refundedFor(t))} refunded',
                           )
                         : t.note.isEmpty
                         ? null

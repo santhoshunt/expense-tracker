@@ -14,6 +14,7 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
 import '../services/recurring_detector.dart';
+import '../services/refund_matching.dart';
 import '../services/transfer_pairing.dart';
 import '../widgets/animated_fold.dart';
 import '../utils/app_theme.dart';
@@ -329,6 +330,39 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       );
     }
     return _pairs;
+  }
+
+  /// "Looks like a refund" suggestions, memoised the same way: for income
+  /// rows in review, and for confirmed ones the one-time refund pass left
+  /// to look at ([FinanceProvider.refundReviewIds]).
+  Object? _refundRev;
+  int _refundDismissedCount = -1;
+  List<RefundSuggestion> _refunds = const [];
+
+  List<RefundSuggestion> _refundSuggestions(
+    FinanceProvider finance,
+    List<Tx> pending,
+  ) {
+    final dismissed = context.read<SettingsProvider>().dismissedPairSuggestions;
+    if (!identical(_refundRev, finance.revision) ||
+        _refundDismissedCount != dismissed.length) {
+      _refundRev = finance.revision;
+      _refundDismissedCount = dismissed.length;
+      final reviewIds = finance.refundReviewIds;
+      bool open(Tx t) =>
+          t.type == TxType.income &&
+          t.refundOf == null &&
+          t.pairId == null &&
+          !isTransferCategory(t.categoryId);
+      _refunds = finance.refundSuggestions([
+        for (final t in pending)
+          if (open(t)) t,
+        if (reviewIds.isNotEmpty)
+          for (final t in finance.transactions)
+            if (reviewIds.contains(t.id) && open(t)) t,
+      ], dismissed);
+    }
+    return _refunds;
   }
 
   Object? _pipelineRevision;
@@ -1035,9 +1069,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     context.select<SettingsProvider, int>(
       (s) => s.dismissedPairSuggestions.length,
     );
-    final suggestions = pending.isEmpty
+    final pairs = pending.isEmpty
         ? const <PairSuggestion>[]
         : _pairSuggestions(finance, allPending, allConfirmed);
+    final refunds = pending.isEmpty && finance.refundReviewIds.isEmpty
+        ? const <RefundSuggestion>[]
+        : _refundSuggestions(finance, pending);
+    // Refunds already counted, offered for a link: they keep the review
+    // card up with no import waiting, and count in its title.
+    final pastRefunds = refunds.where((s) => !s.refund.pending).length;
+    // Up to three suggestions, transfers first. A row already in a shown
+    // transfer is not offered as a refund too.
+    final shownPairs = pairs.take(3).toList();
+    final paired = {
+      for (final s in shownPairs) ...[s.out.id, s.incoming.id],
+    };
+    final shownRefunds = refunds
+        .where((s) => !paired.contains(s.refund.id))
+        .take(3 - shownPairs.length)
+        .toList();
+    final showReview = pending.isNotEmpty || pastRefunds > 0;
 
     final hasFilterChips =
         activeAccount != null ||
@@ -1082,12 +1133,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   ),
                   AnimatedPresence(
                     key: const ValueKey('pending-card'),
-                    visible: pending.isNotEmpty,
-                    child: pending.isEmpty
+                    visible: showReview,
+                    child: !showReview
                         ? const SizedBox.shrink()
                         : _PendingReviewCard(
                             pending: pending,
-                            suggestions: suggestions,
+                            suggestions: shownPairs,
+                            refundSuggestions: shownRefunds,
+                            pastRefunds: pastRefunds,
                           ),
                   ),
                 ],
@@ -2207,9 +2260,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                   },
                                 ),
                                 ChoiceChip(
+                                  // The range the sheet opened with keeps
+                                  // its year name, as on the filter chip.
                                   label: Text(
                                     range == null
                                         ? 'Custom range…'
+                                        : identical(range, _rangeFilter) &&
+                                              _rangeLabel != null
+                                        ? _rangeLabel!
                                         : fmtDateRange(range!),
                                   ),
                                   avatar: const Icon(
@@ -3067,14 +3125,16 @@ double _monthHeaderRowHeight(BuildContext context) =>
 /// The income and spend totals of [txs] as the list headers show them.
 /// Own-account transfers are audit entries: the totals mirror the
 /// dashboard's income/expense figures, which exclude them, and leave out
-/// uncounted wallet rows the same way.
+/// uncounted wallet rows the same way. A linked refund is not income: it
+/// comes off its purchase's spend instead.
 (double, double) _listTotals(List<Tx> txs, FinanceProvider finance) {
   final income = txs
       .where(
         (t) =>
             t.type == TxType.income &&
             !isTransferCategory(t.categoryId) &&
-            finance.countsInTotals(t),
+            finance.countsInTotals(t) &&
+            !finance.isLinkedRefund(t),
       )
       .fold(0.0, (s, t) => s + t.amount);
   final expense = txs
@@ -3084,9 +3144,10 @@ double _monthHeaderRowHeight(BuildContext context) =>
             !isTransferCategory(t.categoryId) &&
             finance.countsInTotals(t),
       )
-      // spendAmount: group splits count only the user's own share here,
-      // matching the dashboard's Spent card.
-      .fold(0.0, (s, t) => s + t.spendAmount);
+      // netSpendOf: group splits count only the user's own share here,
+      // less any refund linked to the row, matching the dashboard's Spent
+      // card.
+      .fold(0.0, (s, t) => s + finance.netSpendOf(t));
   return (income, expense);
 }
 
@@ -3558,14 +3619,25 @@ class _CardBottomClip extends CustomClipper<Path> {
 }
 
 /// Review queue for regular SMS imports: confirm/discard each, or the batch.
+/// Also holds the refunds already counted that look like they belong to a
+/// purchase.
 class _PendingReviewCard extends StatelessWidget {
   final List<Tx> pending;
 
-  /// "Looks like a transfer" rows, rendered above the batch actions.
+  /// "Looks like a transfer" cards, shown above the list. At most three
+  /// together with [refundSuggestions].
   final List<PairSuggestion> suggestions;
+
+  /// "Looks like a refund" cards, after the transfers.
+  final List<RefundSuggestion> refundSuggestions;
+
+  /// Refund suggestions for confirmed rows, which count in the title.
+  final int pastRefunds;
   const _PendingReviewCard({
     required this.pending,
     this.suggestions = const [],
+    this.refundSuggestions = const [],
+    this.pastRefunds = 0,
   });
 
   // Bulk and effectively irreversible (rows join the ledger with no batch
@@ -3641,6 +3713,16 @@ class _PendingReviewCard extends StatelessWidget {
     final collapsed = context.watch<SettingsProvider>().isSectionCollapsed(
       'pending_review',
     );
+    // A row shown in a suggestion card above leaves the list: it would
+    // otherwise show twice.
+    final inCards = {
+      for (final s in suggestions) ...[s.out.id, s.incoming.id],
+      for (final s in refundSuggestions) ...[s.refund.id, s.purchase.id],
+    };
+    final rows = [
+      for (final t in pending)
+        if (!inCards.contains(t.id)) t,
+    ];
     // The plain card fill: tinted, every line on it was text on a colour.
     return Card(
       margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
@@ -3673,7 +3755,8 @@ class _PendingReviewCard extends StatelessWidget {
                         child: _FoldTitle(
                           collapsed: collapsed,
                           label: Text(
-                            'Imported from SMS · ${pending.length} to review',
+                            'Imported from SMS · '
+                            '${pending.length + pastRefunds} to review',
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
                           tip: const InfoTip(
@@ -3716,51 +3799,61 @@ class _PendingReviewCard extends StatelessWidget {
                 // Two legs of one own-account move arrive as an expense and
                 // an income; pairing books both as transfers so neither
                 // inflates Spent or Income.
-                for (final s in suggestions.take(3))
+                for (final s in suggestions)
                   _TransferSuggestionRow(suggestion: s),
+                // A refund linked to its purchase takes that spend down
+                // instead of counting as income.
+                for (final s in refundSuggestions)
+                  _RefundSuggestionRow(suggestion: s),
+                if (rows.isNotEmpty)
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 200),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      // Explicit: otherwise the list absorbs the extend-body
+                      // safe-area insets as phantom top/bottom padding.
+                      padding: EdgeInsets.zero,
+                      itemCount: rows.length,
+                      itemBuilder: (context, i) => _PendingRow(tx: rows[i]),
+                    ),
+                  ),
                 // Bulk actions live inside the fold: a collapsed card can't
                 // fire them, and the wrapped title above keeps its room.
-                // Compact everywhere: two review cards + toolbar + list must
-                // fit short viewports without overflowing the tab Column.
-                // An OverflowBar: at 320dp with large text the two buttons
+                // Under the list, so the rows come first. Compact
+                // everywhere: two review cards + toolbar + list must fit
+                // short viewports without overflowing the tab Column. An
+                // OverflowBar: at 320dp with large text the two buttons
                 // stack, right-aligned, instead of running off the card.
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: OverflowBar(
-                    alignment: MainAxisAlignment.end,
-                    overflowAlignment: OverflowBarAlignment.end,
-                    children: [
-                      // Plain text: the dialog's red button carries the
-                      // warning.
-                      TextButton(
-                        style: TextButton.styleFrom(
-                          foregroundColor: scheme.onSurface,
-                          visualDensity: VisualDensity.compact,
+                if (pending.isNotEmpty)
+                  Padding(
+                    key: const ValueKey('review-bulk-actions'),
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: OverflowBar(
+                      alignment: MainAxisAlignment.end,
+                      overflowAlignment: OverflowBarAlignment.end,
+                      children: [
+                        // Plain text: the dialog's red button carries the
+                        // warning.
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            foregroundColor: scheme.onSurface,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          onPressed: () => _discardAll(context),
+                          child: const Text('Discard all'),
                         ),
-                        onPressed: () => _discardAll(context),
-                        child: const Text('Discard all'),
-                      ),
-                      TextButton(
-                        style: TextButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          onPressed: () => _confirmAll(context),
+                          child: const Text('Confirm all'),
                         ),
-                        onPressed: () => _confirmAll(context),
-                        child: const Text('Confirm all'),
-                      ),
-                    ],
-                  ),
-                ),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 200),
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    // Explicit: otherwise the list absorbs the extend-body
-                    // safe-area insets as phantom top/bottom padding.
-                    padding: EdgeInsets.zero,
-                    itemCount: pending.length,
-                    itemBuilder: (context, i) => _PendingRow(tx: pending[i]),
-                  ),
-                ),
+                      ],
+                    ),
+                  )
+                else
+                  const SizedBox(height: 8),
               ],
             ),
           ),
@@ -3770,57 +3863,238 @@ class _PendingReviewCard extends StatelessWidget {
   }
 }
 
+/// A suggestion side's account: its name, else the SMS sender.
+String _side(FinanceProvider finance, Tx t) =>
+    finance.accountForKey(t.acctKey)?.name ??
+    (t.sender.isNotEmpty ? t.sender : 'Unknown account');
+
 /// One "Looks like a transfer" suggestion: pair the two legs, or dismiss
 /// the guess for good.
 class _TransferSuggestionRow extends StatelessWidget {
   final PairSuggestion suggestion;
   const _TransferSuggestionRow({required this.suggestion});
 
-  static String _side(FinanceProvider finance, Tx t) =>
-      finance.accountForKey(t.acctKey)?.name ??
-      (t.sender.isNotEmpty ? t.sender : 'Unknown account');
-
   @override
   Widget build(BuildContext context) {
     final finance = context.read<FinanceProvider>();
-    final scheme = Theme.of(context).colorScheme;
     final s = suggestion;
     final kindLabel = switch (s.kind) {
       PairKind.cardPayment => 'card payment',
       PairKind.savings => 'savings deposit',
       PairKind.transfer => 'transfer',
     };
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(AppSpace.card, 4, 8, 0),
+    return _SuggestionCard(
+      icon: Icons.sync_alt,
+      kind: 'Looks like a $kindLabel',
+      sides: [
+        (label: _side(finance, s.out), tx: s.out),
+        (label: _side(finance, s.incoming), tx: s.incoming),
+      ],
+      dismissLabel: 'Not a transfer',
+      onDismiss: () {
+        final settings = context.read<SettingsProvider>();
+        final key = s.key;
+        // The toast goes up before the dismissal notifies: this card
+        // leaves the tree once it does.
+        showUndoSnackBar(
+          context,
+          'Marked not a $kindLabel',
+          () => settings.restorePairSuggestion(key),
+          icon: Icons.link_off,
+        );
+        settings.dismissPairSuggestion(key);
+      },
+      acceptLabel: 'Pair',
+      onAccept: () async {
+        // Taken first: the paired rows leave the queue, and this card
+        // with them, before the save completes.
+        final messenger = ScaffoldMessenger.of(context);
+        final pairId = await finance.pairTransactions(s.out.id, s.incoming.id);
+        if (pairId == null) return;
+        _undoToastOn(
+          messenger,
+          'Paired as $kindLabel',
+          () => finance.unpair(pairId),
+        );
+      },
+    );
+  }
+}
+
+/// [showUndoSnackBar] on a messenger taken before an await, for a card
+/// that may have left the tree by then.
+void _undoToastOn(
+  ScaffoldMessengerState messenger,
+  String message,
+  VoidCallback undo,
+) => showAppToastOn(
+  messenger,
+  message,
+  tone: AppToastTone.change,
+  icon: Icons.link,
+  actionLabel: 'Undo',
+  onAction: undo,
+  duration: const Duration(seconds: 5),
+);
+
+/// One "Looks like a refund" suggestion: link the refund to the purchase
+/// it gives money back for, or dismiss the guess for good.
+class _RefundSuggestionRow extends StatelessWidget {
+  final RefundSuggestion suggestion;
+  const _RefundSuggestionRow({required this.suggestion});
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.read<FinanceProvider>();
+    final s = suggestion;
+    return _SuggestionCard(
+      icon: Icons.undo,
+      kind: 'Looks like a refund',
+      sides: [
+        (
+          label:
+              finance.merchantLabelFor(s.purchase) ?? s.purchase.category.label,
+          tx: s.purchase,
+        ),
+        (label: _side(finance, s.refund), tx: s.refund),
+      ],
+      dismissLabel: 'Not a refund',
+      onDismiss: () {
+        final settings = context.read<SettingsProvider>();
+        final key = s.key;
+        final refundId = s.refund.id;
+        final past = !s.refund.pending;
+        // As Not a transfer: the toast first, then the dismissal.
+        showUndoSnackBar(context, 'Marked not a refund', () {
+          settings.restorePairSuggestion(key);
+          if (past) finance.restoreRefundReviewId(refundId);
+        }, icon: Icons.link_off);
+        settings.dismissPairSuggestion(key);
+        // A counted refund the one-time pass offered stops being looked at.
+        if (past) finance.dropRefundReviewId(refundId);
+      },
+      acceptLabel: 'Link',
+      onAccept: () async {
+        // Taken first: a linked refund leaves the queue, and this card
+        // with it, before the save completes.
+        final messenger = ScaffoldMessenger.of(context);
+        final before = s.refund;
+        final linked = await finance.linkRefund(before.id, s.purchase.id);
+        if (!linked) return;
+        // Putting the row back as it was also returns a refund that was
+        // in review to the queue, which unlinking alone would not; a past
+        // refund goes back on the one-time pass's list.
+        _undoToastOn(messenger, 'Linked as a refund', () {
+          finance.restoreEditedTransactions([before]);
+          if (!before.pending) finance.restoreRefundReviewId(before.id);
+        });
+      },
+    );
+  }
+}
+
+/// A suggestion as its own outlined card inside the review card: what the
+/// match looks like, one line per side (its account or merchant and date
+/// on the left, its signed amount on the right), then dismiss and accept.
+class _SuggestionCard extends StatelessWidget {
+  final IconData icon;
+  final String kind;
+  final List<({String label, Tx tx})> sides;
+  final String dismissLabel;
+  final VoidCallback onDismiss;
+  final String acceptLabel;
+  final VoidCallback onAccept;
+
+  const _SuggestionCard({
+    required this.icon,
+    required this.kind,
+    required this.sides,
+    required this.dismissLabel,
+    required this.onDismiss,
+    required this.acceptLabel,
+    required this.onAccept,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(AppSpace.card, 4, AppSpace.card, 4),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadius.control),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              Icon(Icons.sync_alt, size: 18, color: scheme.primary),
+              Icon(icon, size: 18, color: scheme.primary),
               const SizedBox(width: 8),
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Looks like a $kindLabel · ${fmtMoney(s.out.amount)}',
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Text(
-                      '${_side(finance, s.out)} → ${_side(finance, s.incoming)}'
-                      ' · ${fmtDateCompact(s.out.date)}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
+                child: Text(
+                  kind,
+                  style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
             ],
           ),
+          const SizedBox(height: 4),
+          for (final side in sides)
+            Padding(
+              padding: const EdgeInsets.only(top: 2, right: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Two lines before a long account name is cut.
+                  Expanded(
+                    flex: 3,
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(text: side.label),
+                          // The day alone: with the time the line wrapped
+                          // at 360dp, and the two sides are hours apart.
+                          TextSpan(
+                            text:
+                                ' · ${fmtDateCompact(DateUtils.dateOnly(side.tx.date))}',
+                            style: muted,
+                          ),
+                        ],
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: text.bodySmall,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // At most 2/5 of the line: a large figure at a large
+                  // text scale shrinks rather than push the name out.
+                  Flexible(
+                    flex: 2,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: Text(
+                        '${side.tx.type == TxType.income ? '+' : '−'}'
+                        '${fmtMoneyTidy(side.tx.amount)}',
+                        style: text.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: moneyColor(
+                            context,
+                            type: side.tx.type,
+                            transfer: isTransferCategory(side.tx.categoryId),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           // Stacks, right-aligned, when the two buttons do not fit side by
           // side (320dp with large text).
           OverflowBar(
@@ -3831,39 +4105,15 @@ class _TransferSuggestionRow extends StatelessWidget {
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
                 ),
-                onPressed: () {
-                  final settings = context.read<SettingsProvider>();
-                  final key = s.key;
-                  // The toast goes up before the dismissal notifies: this
-                  // row leaves the tree once it does.
-                  showUndoSnackBar(
-                    context,
-                    'Marked not a $kindLabel',
-                    () => settings.restorePairSuggestion(key),
-                    icon: Icons.link_off,
-                  );
-                  settings.dismissPairSuggestion(key);
-                },
-                child: const Text('Not a transfer'),
+                onPressed: onDismiss,
+                child: Text(dismissLabel),
               ),
               FilledButton.tonal(
                 style: FilledButton.styleFrom(
                   visualDensity: VisualDensity.compact,
                 ),
-                onPressed: () async {
-                  final pairId = await finance.pairTransactions(
-                    s.out.id,
-                    s.incoming.id,
-                  );
-                  if (pairId == null || !context.mounted) return;
-                  showUndoSnackBar(
-                    context,
-                    'Paired as $kindLabel',
-                    () => finance.unpair(pairId),
-                    icon: Icons.link,
-                  );
-                },
-                child: const Text('Pair'),
+                onPressed: onAccept,
+                child: Text(acceptLabel),
               ),
             ],
           ),
@@ -3988,8 +4238,9 @@ class _PendingRow extends StatelessWidget {
   const _PendingRow({required this.tx, this.spam = false});
 
   /// "Food & Dining · Swiggy": what the row would count as, and where. The
-  /// category alone when the row names no merchant, as on the Cockpit's
-  /// Review tab.
+  /// category alone when the row names no merchant. The Cockpit's Review
+  /// tab titles its rows the same way, though it lists confirmed rows,
+  /// not these.
   static String titleOf(Tx tx, FinanceProvider finance) {
     final merchant = merchantLabelOrNull(tx, alias: finance.merchantAlias);
     return merchant == null

@@ -108,10 +108,11 @@ void main() {
         findsOneWidget,
       );
       expect(find.byTooltip('Cockpit'), findsNothing);
-      expect(find.byTooltip('Settings'), findsNothing);
+      // Settings is its own button beside the ⋯.
+      expect(find.byTooltip('Settings'), findsOneWidget);
     });
 
-    testWidgets('⋯ holds the page entries, then Cockpit, People, Settings', (
+    testWidgets('⋯ holds the page entries, then Cockpit and People', (
       tester,
     ) async {
       await pumpHome(tester);
@@ -124,10 +125,10 @@ void main() {
         'App',
         'Cockpit',
         'People',
-        'Settings',
       ]) {
         expect(find.text(label), findsWidgets, reason: label);
       }
+      expect(find.text('Settings'), findsNothing);
       expect(find.byTooltip('About Year view'), findsOneWidget);
       await tester.tap(find.text('Year view'));
       await settle(tester);
@@ -161,9 +162,12 @@ void main() {
       await openMenu(tester);
       expect(find.text('Export CSV'), findsOneWidget);
       expect(find.text('Cockpit'), findsOneWidget);
-      expect(find.text('Settings'), findsOneWidget);
+      expect(find.text('Settings'), findsNothing);
       expect(find.text('Year view'), findsNothing);
-      await tester.tap(find.text('Settings'));
+      // Close the menu; Settings is the bar's own button.
+      await tester.tapAt(const Offset(5, 5));
+      await settle(tester);
+      await tester.tap(find.byTooltip('Settings'));
       await settle(tester);
       expect(find.text('Appearance'), findsOneWidget);
     });

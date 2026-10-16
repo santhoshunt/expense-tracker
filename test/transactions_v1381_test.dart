@@ -407,7 +407,11 @@ void main() {
     tester,
   ) async {
     final p = await queue();
-    await tester.pumpWidget(screen(p, await settings()));
+    final s = await settings();
+    // The no-merchant row is a transfer leg: it shows in the list once the
+    // suggestion holding it is dismissed.
+    await s.dismissPairSuggestion('q-in|q-out');
+    await tester.pumpWidget(screen(p, s));
     await tester.pumpAndSettle();
 
     final card = find.byKey(const ValueKey('pending-card'));
@@ -426,6 +430,8 @@ void main() {
 
     final suggestion = find.textContaining('Looks like a transfer');
     expect(suggestion, findsOneWidget);
+    await tester.ensureVisible(find.text('Not a transfer'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Not a transfer'));
     await tester.pumpAndSettle();
     expect(suggestion, findsNothing);
@@ -456,8 +462,9 @@ void main() {
     }
 
     expect(amountColor('AX-PROMOS'), scheme.onSurface);
-    // An ordinary review row keeps its money colour.
-    expect(amountColor('VM-DEMOCC'), isNot(scheme.onSurface));
+    // An ordinary review row keeps its money colour. The food row: the
+    // transfer legs sit in their suggestion card, not the list.
+    expect(amountColor('VM-DEMOBK'), isNot(scheme.onSurface));
   });
 
   testWidgets('Mark all seen clears the new markers, and Undo restores them', (

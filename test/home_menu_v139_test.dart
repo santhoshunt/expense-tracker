@@ -91,32 +91,32 @@ void main() {
   testWidgets('rows are at least 44dp and under 56dp', (tester) async {
     await openMenu(tester, shortActions());
     final all = rows().evaluate().toList();
-    // Year, Select, then Cockpit, People and Settings.
-    expect(all, hasLength(5));
+    // Year, Select, then Cockpit and People.
+    expect(all, hasLength(4));
     for (final e in all) {
       final h = tester.getSize(find.byWidget(e.widget)).height;
       expect(h, greaterThanOrEqualTo(44));
       expect(h, lessThan(56));
     }
     // A row without a trailing is the 44dp minimum at normal text.
-    expect(tester.getSize(row('Settings')).height, 44);
+    expect(tester.getSize(row('People')).height, 44);
   });
 
   testWidgets('short labels make a menu narrower than 280dp', (tester) async {
     await openMenu(tester, shortActions());
-    expect(tester.getSize(row('Settings')).width, lessThan(280));
+    expect(tester.getSize(row('People')).width, lessThan(280));
   });
 
   testWidgets('a longer label widens the menu to fit it', (tester) async {
     await openMenu(tester, shortActions());
-    final short = tester.getSize(row('Settings')).width;
+    final short = tester.getSize(row('People')).width;
     await tester.tapAt(const Offset(5, 880));
     await tester.pumpAndSettle();
     await openMenu(tester, [
       ...shortActions(),
       PageMenuAction(icon: Icons.add, label: 'Balance sheet', onTap: () {}),
     ]);
-    expect(tester.getSize(row('Settings')).width, greaterThan(short));
+    expect(tester.getSize(row('People')).width, greaterThan(short));
   });
 
   testWidgets('the trailing sits at the right edge and has its own tap', (
@@ -152,7 +152,7 @@ void main() {
 
   testWidgets('rows grow with large text', (tester) async {
     await openMenu(tester, shortActions(), textScale: 3);
-    expect(tester.getSize(row('Settings')).height, greaterThan(44));
+    expect(tester.getSize(row('People')).height, greaterThan(44));
     expect(tester.takeException(), isNull);
   });
 }

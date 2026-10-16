@@ -231,6 +231,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _settings!.addListener(_applyBackgroundImport);
     // The Weekly digest switch books or cancels the note at once.
     _settings!.addListener(_scheduleWeeklyDigest);
+    _unusualWasOn = _settings!.unusualAlerts;
+    _settings!.addListener(_onUnusualSwitch);
   }
 
   /// "On launch" must include WARM launches: Android keeps the process in
@@ -529,6 +531,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _settings?.removeListener(_syncBudgetWidgets);
     _settings?.removeListener(_applyBackgroundImport);
     _settings?.removeListener(_scheduleWeeklyDigest);
+    _settings?.removeListener(_onUnusualSwitch);
     if (BackgroundImportScheduler.runImportHandler == _runBackgroundImport) {
       BackgroundImportScheduler.runImportHandler = null;
     }
@@ -663,9 +666,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     );
   }
 
+  /// The Unusual spending switch as last seen, so [_onUnusualSwitch] acts
+  /// only when it turns on.
+  bool _unusualWasOn = false;
+
+  /// Turning Unusual spending on checks at once: a month already past the
+  /// line would otherwise wait for the next ledger change or resume.
+  void _onUnusualSwitch() {
+    if (!mounted) return;
+    final on = context.read<SettingsProvider>().unusualAlerts;
+    final turnedOn = on && !_unusualWasOn;
+    _unusualWasOn = on;
+    if (turnedOn) _checkUnusual();
+  }
+
   /// The unusual spending alert. Also on resume: a process kept alive into
-  /// a new month, or a switch turned on in Cockpit, has nothing else to
-  /// wake it until the ledger changes.
+  /// a new month has nothing else to wake it until the ledger changes.
   void _checkUnusual() {
     if (!mounted) return;
     _unusualMonitor
@@ -1017,8 +1033,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   onPressed: _importing ? null : _importFromSms,
                 ),
-              // The shown tab's own entries, then Cockpit, People and
-              // Settings.
+              const SettingsButton(),
+              // The shown tab's own entries, then Cockpit and People.
               HomeMenu(tab: _index),
             ],
           ),

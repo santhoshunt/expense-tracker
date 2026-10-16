@@ -190,7 +190,8 @@ void main() {
       final bills = (await snapshot(p))['bigBills'] as Map;
       expect(bills['monthKey'], 2026 * 12 + 10);
       // 12,000 + 1,200 + 4 x 3,000 a year, over 12.
-      expect(bills['monthly'], 2100);
+      // Only labels: HomeWidgets.kt never read the raw figure.
+      expect(bills.containsKey('monthly'), isFalse);
       expect(bills['monthlyLabel'], '₹2,100');
       expect(bills['yearlyLabel'], '₹25,200');
       // October to September.
@@ -208,7 +209,7 @@ void main() {
         0,
         0,
       ]);
-      expect(bills['count'], 3);
+      expect(bills.containsKey('count'), isFalse);
       final next = bills['next'] as List;
       expect(next, hasLength(2));
       expect(
@@ -219,7 +220,7 @@ void main() {
       expect(first['amountLabel'], '₹3,000');
       expect(first['dueDay'], epochDay(DateTime(2026, 10, 25)));
       expect(first['dueLabel'], '25 Oct');
-      expect(first['icon'], categoryById('bills').iconKey);
+      expect(first.containsKey('icon'), isFalse);
     });
 
     test('is left out with no big bills', () async {

@@ -75,9 +75,27 @@ class DashboardMonthTitle extends StatelessWidget {
   }
 }
 
+/// The app bar's Settings button, just before the ⋮ menu on every tab.
+class SettingsButton extends StatelessWidget {
+  const SettingsButton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Settings',
+      icon: const Icon(Icons.settings_outlined),
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SettingsScreen()),
+      ),
+    );
+  }
+}
+
 /// The app bar's ⋮, the same two sections on every tab: "This page", the
 /// entries the shown [tab] publishes through [AppNav.pageMenu], then "App":
-/// Cockpit, People and Settings. A tab with no entries shows App alone.
+/// Cockpit and People. A tab with no entries shows App alone. Settings is
+/// its own button beside it ([SettingsButton]).
 class HomeMenu extends StatelessWidget {
   /// The shown home tab (a kHomeTab* index).
   final int tab;
@@ -146,14 +164,6 @@ class HomeMenu extends StatelessWidget {
             ),
           ),
           _item(Icons.people_outline, 'People', () => goPeople(context)),
-          _item(
-            Icons.settings_outlined,
-            'Settings',
-            () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
-          ),
         ];
       },
     );

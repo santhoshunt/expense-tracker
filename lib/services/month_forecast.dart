@@ -176,6 +176,8 @@ MonthForecast? computeMonthForecast(
   };
   final billKeys = <String, double?>{for (final k in keys) k: pinnedUsual[k]};
   final reminders = finance.reminders;
+  // Summed by FinanceProvider.netSpendOf: a linked refund comes off its
+  // purchase's day.
   bool everyday(Tx t) =>
       t.type == TxType.expense &&
       !isTransferCategory(t.categoryId) &&
@@ -193,7 +195,9 @@ MonthForecast? computeMonthForecast(
     if (days <= 0) continue;
     var sum = 0.0;
     for (final t in finance.confirmedInMonth(m)) {
-      if (t.effectiveDate.day > now.day && everyday(t)) sum += t.spendAmount;
+      if (t.effectiveDate.day > now.day && everyday(t)) {
+        sum += finance.netSpendOf(t);
+      }
     }
     perDayUsual.add(sum / days);
   }
@@ -214,7 +218,7 @@ MonthForecast? computeMonthForecast(
       var sum = 0.0;
       for (final t in finance.confirmedInMonth(month)) {
         if (t.effectiveDate.day <= now.day && everyday(t)) {
-          sum += t.spendAmount;
+          sum += finance.netSpendOf(t);
         }
       }
       basis = EverydayBasis.pace;

@@ -1035,7 +1035,8 @@ object HomeWidgets {
 
     /** The week block as of today. Once its week is over (a new Monday the
      * app has not seen), nothing is spent and the bars are empty. [usual]
-     * is the usual week cut to today, null under 2 weeks of history. */
+     * is the usual week cut to today, null under 2 weeks of history or once
+     * the block's week is over: last week's usual is not this week's. */
     private class WeekView(
         val spent: Double,
         val spentLabel: String,
@@ -1059,7 +1060,7 @@ object HomeWidgets {
             byDay = List(7) { i ->
                 if (fresh && i <= day && byDay != null) byDay.optDouble(i, 0.0) else 0.0
             },
-            usual = if (usual == null || day >= usual.length() || usual.isNull(day)) null
+            usual = if (!fresh || usual == null || day >= usual.length() || usual.isNull(day)) null
             else usual.optDouble(day),
             toReview = if (fresh) week.optInt("toReview", 0) else 0,
             today = day,

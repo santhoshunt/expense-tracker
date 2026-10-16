@@ -197,7 +197,6 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
 /// so a widget drawn in a later month shifts it without the app.
 Map<String, dynamic> _bigBills(BigBillsPlan plan, DateTime month) => {
   'monthKey': month.year * 12 + month.month,
-  'monthly': plan.monthly,
   'monthlyLabel': fmtMoneyTidy(plan.monthly),
   'yearlyLabel': fmtMoneyTidy(plan.yearly),
   'months': [for (final m in plan.months) m.due],
@@ -208,13 +207,8 @@ Map<String, dynamic> _bigBills(BigBillsPlan plan, DateTime month) => {
         'amountLabel': fmtMoneyTidy(b.amount),
         'dueDay': epochDay(b.nextDue),
         'dueLabel': DateFormat('d MMM').format(b.nextDue),
-        'icon': categoryById(
-          b.categoryId,
-          fallbackType: TxType.expense,
-        ).iconKey,
       },
   ],
-  'count': plan.bills.length,
 };
 
 /// The This week widgets' block: the current week's spend day by day, and
@@ -239,7 +233,7 @@ const int kRecentWidgetRows = 4;
 
 /// How a widget colours an amount (the snapshot's `kind`): 'in' green,
 /// 'out' red, and 'neutral' plain for money that is neither income nor
-/// spend: a transfer, or a row left out of the totals.
+/// spend: a transfer, a row left out of the totals, or a linked refund.
 String _kindOf(TxType type, {required bool neutral}) => neutral
     ? 'neutral'
     : type == TxType.income
@@ -286,8 +280,11 @@ Map<String, dynamic> _recentRow(
   Tx t,
   bool hideIncome,
 ) {
+  // A linked refund is neither income nor spend: it cancels its purchase.
   final neutral =
-      isTransferCategory(t.categoryId) || !finance.countsInTotals(t);
+      isTransferCategory(t.categoryId) ||
+      !finance.countsInTotals(t) ||
+      finance.isLinkedRefund(t);
   final kind = _kindOf(t.type, neutral: neutral);
   final midnight = t.date.hour == 0 && t.date.minute == 0;
   return {

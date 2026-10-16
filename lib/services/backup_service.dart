@@ -189,6 +189,8 @@ class BackupService {
     'walletCounted',
     // An imported row the user has not opened yet (Tx.unseen).
     'unseen',
+    // The id of the purchase a refund is linked to (Tx.refundOf).
+    'refundOf',
   ];
 
   /// A split's people as one CSV cell:
@@ -353,6 +355,7 @@ class BackupService {
           _csvEscape(t.countIn?.toIso8601String() ?? ''),
           t.walletCounted.toString(),
           t.unseen.toString(),
+          _csvEscape(t.refundOf ?? ''),
         ].join(','),
       );
     }
@@ -494,6 +497,8 @@ class BackupService {
     final walletCountedCol = col('walletcounted');
     // Older files lack the column; their rows read as seen.
     final unseenCol = col('unseen');
+    // Older files lack the column; their rows link to no purchase.
+    final refundOfCol = col('refundof');
 
     String cell(List<String> r, int? c) {
       final v = c == null || c >= r.length ? '' : r[c].trim();
@@ -586,6 +591,12 @@ class BackupService {
         walletCounted: cell(r, walletCountedCol).toLowerCase() == 'true',
         // A pending row is never unseen: the flag marks confirmed imports.
         unseen: !pending && cell(r, unseenCol).toLowerCase() == 'true',
+        // Kept as written, even when no row has the id: the provider's
+        // validity rules decide whether the link counts.
+        refundOf: switch (cell(r, refundOfCol)) {
+          '' => null,
+          final p => p,
+        },
       );
       // CSVs written before the smsBody column existed kept the raw SMS in
       // the note, so that note has to be moved. Files with either the
@@ -771,12 +782,14 @@ class BackupService {
     final double sumSavings;
     if (range != null) {
       // countsInTotals: an uncounted wallet row is in no total, as in-app.
+      // A linked refund is not income; it comes off its purchase instead.
       sumIncome = txs
           .where(
             (t) =>
                 t.type == TxType.income &&
                 !isTransferCategory(t.categoryId) &&
-                finance.countsInTotals(t),
+                finance.countsInTotals(t) &&
+                !finance.isLinkedRefund(t),
           )
           .fold(0.0, (s, t) => s + t.amount);
       sumExpense = txs
@@ -786,7 +799,7 @@ class BackupService {
                 !isTransferCategory(t.categoryId) &&
                 finance.countsInTotals(t),
           )
-          .fold(0.0, (s, t) => s + t.spendAmount);
+          .fold(0.0, (s, t) => s + finance.netSpendOf(t));
       sumSavings = txs
           .where(
             (t) =>
@@ -832,8 +845,12 @@ class BackupService {
           !isTransferCategory(t.categoryId) &&
           finance.countsInTotals(t),
     )) {
-      // Group splits contribute only the user's own share, like the totals.
-      catTotals[t.categoryId] = (catTotals[t.categoryId] ?? 0) + t.spendAmount;
+      // Group splits contribute only the user's own share, less linked
+      // refunds, like the totals. A purchase refunded in full adds no ₹0
+      // category row, as in-app.
+      final spend = finance.netSpendOf(t);
+      if (spend == 0 && finance.refundedFor(t) > 0) continue;
+      catTotals[t.categoryId] = (catTotals[t.categoryId] ?? 0) + spend;
     }
     final catEntries = catTotals.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
@@ -1089,8 +1106,8 @@ class BackupService {
                   pw.Text(
                     // Transfers excluded — these mirror the app's own month
                     // header figures; transfer rows stay in the table below.
-                    'in ${_money.format(byMonth[month]!.where((t) => t.type == TxType.income && !isTransferCategory(t.categoryId) && finance.countsInTotals(t)).fold(0.0, (s, t) => s + t.amount))}'
-                    '   out ${_money.format(byMonth[month]!.where((t) => t.type == TxType.expense && !isTransferCategory(t.categoryId) && finance.countsInTotals(t)).fold(0.0, (s, t) => s + t.spendAmount))}',
+                    'in ${_money.format(byMonth[month]!.where((t) => t.type == TxType.income && !isTransferCategory(t.categoryId) && finance.countsInTotals(t) && !finance.isLinkedRefund(t)).fold(0.0, (s, t) => s + t.amount))}'
+                    '   out ${_money.format(byMonth[month]!.where((t) => t.type == TxType.expense && !isTransferCategory(t.categoryId) && finance.countsInTotals(t)).fold(0.0, (s, t) => s + finance.netSpendOf(t)))}',
                     style: const pw.TextStyle(
                       fontSize: 8,
                       color: PdfColors.grey700,

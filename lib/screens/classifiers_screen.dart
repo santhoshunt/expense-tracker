@@ -399,7 +399,7 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
               icon: Icons.add,
               label: 'New rule',
               extended: _fabExtended,
-              onPressed: () => _showRuleDialog(context),
+              onPressed: () => showRuleDialog(context),
             ),
             kCockpitTabImport => GlassButton(
               icon: Icons.add,
@@ -545,7 +545,7 @@ class _RulesTabState extends State<_RulesTab> {
                 'entirely. They are never imported.',
             // Same words as the floating button on this tab.
             actionLabel: 'New rule',
-            onAction: () => _showRuleDialog(context),
+            onAction: () => showRuleDialog(context),
           ),
         ),
       );
@@ -814,7 +814,7 @@ class _RuleTile extends StatelessWidget {
     return ListTile(
       onTap: selectionMode
           ? onToggleSelect
-          : () => _showRuleDialog(context, existing: rule, sibling: sib),
+          : () => showRuleDialog(context, existing: rule, sibling: sib),
       onLongPress: onToggleSelect,
       selected: selected,
       selectedColor: accentTextColor(context),
@@ -1223,7 +1223,7 @@ class _TransactionsTabState extends State<_TransactionsTab> {
   /// Opens the rule dialog from the row's message, set to its new category.
   Future<void> _makeRule(Tx tx) {
     setState(() => _ruleOfferId = null);
-    return _showRuleDialog(
+    return showRuleDialog(
       context,
       patternSuggestion: _rulePatternFor(tx),
       categorySuggestion: tx.categoryId,
@@ -1527,7 +1527,7 @@ class _ClassificationTile extends StatelessWidget {
   /// Long-press shortcut: opens the rule dialog with the transaction body
   /// pre-filled as the pattern, making it easy to codify a manual correction.
   Future<void> _showRuleFromTransaction(BuildContext context) =>
-      _showRuleDialog(context, patternSuggestion: _rulePatternFor(tx));
+      showRuleDialog(context, patternSuggestion: _rulePatternFor(tx));
 }
 
 // ── Shared dialog helpers ─────────────────────────────────────────────────────
@@ -1841,24 +1841,46 @@ List<PickerItem<String?>> _oppositeDirectionItems(TxType type) => [
       ),
 ];
 
-Future<void> _showRuleDialog(
+/// The New rule / Edit rule dialog. [patternSuggestion] and
+/// [categorySuggestion] prefill a new rule; the edit sheet's Make rule
+/// passes the selected SMS text and the row's category.
+Future<void> showRuleDialog(
   BuildContext context, {
   ClassifierRule? existing,
   ClassifierRule? sibling,
   String? patternSuggestion,
   String? categorySuggestion,
 }) async {
-  // One controller per OR-condition. `allCtrls` only grows: DisposeScope
-  // reads the list at dispose time, so removed rows still get disposed. It
-  // also holds the focus nodes of conditions added in the dialog.
-  final seeds = existing?.patterns ?? [patternSuggestion ?? ''];
-  final ctrls = [
-    for (final s in (seeds.isEmpty ? [''] : seeds))
-      TextEditingController(text: s),
-  ];
-  final allCtrls = List<ChangeNotifier>.of(ctrls);
-  // Focus nodes of the conditions added with "Or contains…".
-  final focusNodes = <TextEditingController, FocusNode>{};
+  // The OR-conditions, shown as chips in the order they match. An existing
+  // rule's patterns load as they are, duplicates included, so saving it
+  // unchanged writes the same pattern back.
+  final conditions = <String>[...?existing?.patterns];
+  // The Add box. An SMS suggestion (Make rule) lands here rather than as a
+  // chip: it can run 5-6 lines, and the user trims it before adding. Save
+  // counts text left here, so Make rule then Save still works in one step.
+  final addCtrl = TextEditingController(
+    text: existing == null ? (patternSuggestion ?? '') : '',
+  );
+  final addFocus = FocusNode();
+  // Ignores case, after the same whitespace collapse save applies.
+  bool isDuplicate(String text) {
+    final key = _collapseSpaces(text).toLowerCase();
+    return conditions.any((c) => _collapseSpaces(c).toLowerCase() == key);
+  }
+
+  // Add and the keyboard's done key: chip the box, clear it, and keep focus
+  // there for the next word. A duplicate just clears the box, since the
+  // condition is already in the list.
+  void addWord(StateSetter setState) {
+    final text = _collapseSpaces(addCtrl.text);
+    if (text.isEmpty || addCtrl.text.contains('|')) return;
+    setState(() {
+      if (!isDuplicate(text)) conditions.add(text);
+      addCtrl.clear();
+    });
+    addFocus.requestFocus();
+  }
+
   var categoryId = existing?.categoryId ?? categorySuggestion ?? 'food';
   // The opposite-direction twin (a second ordinary rule sharing the
   // pattern): pre-filled when editing a rule that already has one.
@@ -1896,7 +1918,7 @@ Future<void> _showRuleDialog(
   await showDialog(
     context: context,
     builder: (ctx) => DisposeScope(
-      disposables: allCtrls,
+      disposables: [addCtrl, addFocus],
       child: StatefulBuilder(
         builder: (ctx, setState) => AlertDialog(
           title: Text(
@@ -1906,9 +1928,16 @@ Future<void> _showRuleDialog(
                 ? 'Edit rule'
                 : 'Edit rule pair',
           ),
+          // Narrower side margins than the 40dp default, as in New account:
+          // the condition chips get a third more room per line on a small
+          // phone.
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 24,
+          ),
           // Scrollable: autofocused field + keyboard on a small screen. Top
           // padding keeps the first field's floating label from clipping.
-          // UnfocusOnScroll: dragging the dialog while a condition field is
+          // UnfocusOnScroll: dragging the dialog while a text field is
           // focused left its selection handle floating over the title —
           // handles render in an overlay the scroll viewport doesn't clip.
           content: UnfocusOnScroll(
@@ -1918,99 +1947,15 @@ Future<void> _showRuleDialog(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Conditions first, the way the sentence reads: "If the
-                  // SMS contains ... then classify as ...".
-                  for (var i = 0; i < ctrls.length; i++) ...[
-                    if (i > 0) const SizedBox(height: 8),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            // Keyed by controller: removeAt(i) shifts later
-                            // rows across positional element slots — without
-                            // keys, focus jumps and a different row silently
-                            // resizes.
-                            key: ObjectKey(ctrls[i]),
-                            controller: ctrls[i],
-                            // The first field on open; one added later has
-                            // its own node, focused by the add button.
-                            focusNode: focusNodes[ctrls[i]],
-                            autofocus: i == 0,
-                            // Prefills from an SMS can run 5–6 display lines —
-                            // wrap instead of scrolling invisibly in one line.
-                            minLines: i == 0 ? 2 : 1,
-                            maxLines: 6,
-                            onChanged: (_) => setState(() {}),
-                            decoration: InputDecoration(
-                              labelText: i == 0
-                                  ? 'If the SMS contains…'
-                                  : 'or contains…',
-                              // '|' is the stored OR separator — typed here it
-                              // would silently split into extra conditions.
-                              errorText: ctrls[i].text.contains('|')
-                                  ? 'Remove "|". Use "Or contains…" instead.'
-                                  : null,
-                              suffixIcon: i == 0
-                                  ? const InfoTip(
-                                      title: 'If the SMS contains…',
-                                      message:
-                                          'Matches whole words in the SMS '
-                                          'text, ignoring case: "RD Ac" '
-                                          'matches "RD Ac 1234" but not '
-                                          '"card account". Apart from spam '
-                                          'rules, a rule fires only when the '
-                                          'message moves money in its '
-                                          "category's direction. Transactions "
-                                          'added by hand are never matched.',
-                                    )
-                                  : null,
-                            ),
-                          ),
-                        ),
-                        if (ctrls.length > 1)
-                          IconButton(
-                            tooltip: 'Remove condition',
-                            icon: const Icon(Icons.close, size: 20),
-                            onPressed: () => setState(() => ctrls.removeAt(i)),
-                          ),
-                      ],
-                    ),
-                  ],
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('Or contains…'),
-                      // Appended under the others, right above this button.
-                      // The rows are keyed by controller, so the existing
-                      // fields keep their text. Focused after the frame that
-                      // builds it: autofocus is ignored while another field
-                      // holds focus, and focusing scrolls it into view.
-                      onPressed: () {
-                        final c = TextEditingController();
-                        final node = FocusNode();
-                        allCtrls
-                          ..add(c)
-                          ..add(node);
-                        focusNodes[c] = node;
-                        setState(() => ctrls.add(c));
-                        // Only while its field is mounted: the dialog may
-                        // close before the frame lands.
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          if (node.context != null) node.requestFocus();
-                        });
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  // The field already has a suffix (the arrow), so the tip
-                  // trails it like the conditions' remove button.
+                  // The category and the Add box first: with 10 or more
+                  // conditions they used to sit below the whole list. The
+                  // field already has a suffix (the arrow), so the tip
+                  // trails it.
                   Row(
                     children: [
                       Expanded(
                         child: AppDropdownField<String>(
-                          label: 'Then classify as',
+                          label: 'Classify as',
                           value: categoryId,
                           items: [..._categoryPickerItems(ctx)],
                           onChanged: (v) {
@@ -2033,7 +1978,7 @@ Future<void> _showRuleDialog(
                         ),
                       ),
                       const InfoTip(
-                        title: 'Then classify as',
+                        title: 'Classify as',
                         message:
                             'Saving applies the rule to past SMS rows right '
                             'away, except rows you categorised by hand. '
@@ -2042,6 +1987,16 @@ Future<void> _showRuleDialog(
                             'still marked new, are deleted after you confirm.',
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 12),
+                  _RuleAddBox(
+                    controller: addCtrl,
+                    focusNode: addFocus,
+                    // A new rule types straight away; on an edit the
+                    // keyboard would only shrink the dialog over the chips.
+                    autofocus: existing == null,
+                    onChanged: () => setState(() {}),
+                    onAdd: () => addWord(setState),
                   ),
                   // Rules only fire for alerts moving money in the category's
                   // direction (the matcher skips the rest), so one keyword
@@ -2096,6 +2051,55 @@ Future<void> _showRuleDialog(
                       ),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  // The conditions last: the list can grow long, and nothing
+                  // else in the dialog sits below it.
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'If the SMS contains any of (${conditions.length})',
+                          style: Theme.of(ctx).textTheme.labelLarge?.copyWith(
+                            color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                      const InfoTip(
+                        title: 'If the SMS contains…',
+                        message:
+                            'Matches whole words in the SMS text, ignoring '
+                            'case: "RD Ac" matches "RD Ac 1234" but not '
+                            '"card account". Apart from spam rules, a rule '
+                            'fires only when the message moves money in its '
+                            "category's direction. Transactions added by "
+                            'hand are never matched.',
+                      ),
+                    ],
+                  ),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (var i = 0; i < conditions.length; i++)
+                        _ConditionChip(
+                          text: conditions[i],
+                          onRemove: () =>
+                              setState(() => conditions.removeAt(i)),
+                          onEdit: () async {
+                            final edited = await _editConditionDialog(
+                              ctx,
+                              conditions[i],
+                              others: [
+                                for (var j = 0; j < conditions.length; j++)
+                                  if (j != i) conditions[j],
+                              ],
+                            );
+                            if (edited == null || !ctx.mounted) return;
+                            setState(() => conditions[i] = edited);
+                          },
+                        ),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -2105,12 +2109,12 @@ Future<void> _showRuleDialog(
               onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
-            // Disabled while every condition is empty instead of a silent
-            // no-op.
+            // Disabled while there is no condition, chipped or typed,
+            // instead of a silent no-op.
             FilledButton(
               onPressed:
-                  ctrls.every((c) => c.text.trim().isEmpty) ||
-                      ctrls.any((c) => c.text.contains('|'))
+                  (conditions.isEmpty && addCtrl.text.trim().isEmpty) ||
+                      addCtrl.text.contains('|')
                   ? null
                   : () async {
                       // Rules match single-line SMS text — collapse stray
@@ -2120,15 +2124,23 @@ Future<void> _showRuleDialog(
                       // so a literal '|' inside a condition (common in UPI
                       // alerts) must be neutralised or it silently splits
                       // into extra, broader conditions the user never wrote.
-                      final pattern = ctrls
-                          .map(
-                            (c) => c.text
-                                .replaceAll('|', ' ')
-                                .replaceAll(RegExp(r'\s+'), ' ')
-                                .trim(),
-                          )
-                          .where((s) => s.isNotEmpty)
-                          .join(' | ');
+                      // Text left in the Add box counts as one more
+                      // condition, unless it repeats a chip.
+                      final pattern =
+                          [
+                                ...conditions,
+                                if (addCtrl.text.trim().isNotEmpty &&
+                                    !isDuplicate(addCtrl.text))
+                                  addCtrl.text,
+                              ]
+                              .map(
+                                (c) => c
+                                    .replaceAll('|', ' ')
+                                    .replaceAll(RegExp(r'\s+'), ' ')
+                                    .trim(),
+                              )
+                              .where((s) => s.isNotEmpty)
+                              .join(' | ');
                       final finance = ctx.read<FinanceProvider>();
                       final messenger = ScaffoldMessenger.of(context);
                       // Warn BEFORE touching the queue: spam rules delete
@@ -2237,6 +2249,194 @@ Future<void> _showRuleDialog(
             ),
           ],
         ),
+      ),
+    ),
+  );
+}
+
+/// Runs of whitespace as one space, trimmed: rules match single-line SMS
+/// text, so a condition is stored the way it can match.
+String _collapseSpaces(String s) => s.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+/// The rule dialog's Add box: a field and its Add button. Past
+/// [kLargeTextScale] the button drops under the field, which keeps the
+/// field wide enough to read on a narrow dialog.
+class _RuleAddBox extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool autofocus;
+  final VoidCallback onChanged;
+  final VoidCallback onAdd;
+
+  const _RuleAddBox({
+    required this.controller,
+    required this.focusNode,
+    required this.autofocus,
+    required this.onChanged,
+    required this.onAdd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final text = controller.text;
+    final field = TextField(
+      controller: controller,
+      focusNode: focusNode,
+      autofocus: autofocus,
+      // An SMS suggestion can run 5-6 lines: four show it for trimming,
+      // the rest scrolls.
+      minLines: 1,
+      maxLines: 4,
+      // Done, not newline: the keyboard key adds the word. A multi-line
+      // field defaults to the multiline keyboard, whose Enter key many
+      // Android keyboards keep as a newline whatever the action says, so the
+      // type is plain text; wrapping still comes from maxLines. With
+      // onEditingComplete set, done no longer drops focus, so the next word
+      // goes straight in.
+      keyboardType: TextInputType.text,
+      textInputAction: TextInputAction.done,
+      onChanged: (_) => onChanged(),
+      onEditingComplete: onAdd,
+      decoration: InputDecoration(
+        labelText: 'Add a word…',
+        // '|' is the stored OR separator: typed here it would silently
+        // split into extra conditions.
+        errorText: text.contains('|')
+            ? 'Remove "|". Add each word on its own.'
+            : null,
+      ),
+    );
+    final button = FilledButton.tonal(
+      onPressed: text.trim().isEmpty || text.contains('|') ? null : onAdd,
+      child: const Text('Add'),
+    );
+    if (isLargeTextScale(context)) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          field,
+          const SizedBox(height: 8),
+          Align(alignment: Alignment.centerRight, child: button),
+        ],
+      );
+    }
+    return Row(
+      // Top, not centre: an error line under the field would push a
+      // centred button down off the field.
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: field),
+        const SizedBox(width: 8),
+        Padding(padding: const EdgeInsets.only(top: 8), child: button),
+      ],
+    );
+  }
+}
+
+/// One condition in the rule dialog: tap to edit, the cross to remove. One
+/// line at most 220 wide, or the dialog's width when that is less, so a
+/// long phrase ends in an ellipsis instead of taking rows of its own.
+class _ConditionChip extends StatelessWidget {
+  final String text;
+  final VoidCallback onEdit;
+  final VoidCallback onRemove;
+
+  const _ConditionChip({
+    required this.text,
+    required this.onEdit,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    // Wrap hands each child its full width, and ConstrainedBox keeps the
+    // tighter of the two; the chip then shrinks its label to fit.
+    constraints: const BoxConstraints(maxWidth: 220),
+    child: InputChip(
+      label: Text(
+        text,
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
+      ),
+      // Compact and with trimmed padding, so 15 conditions take a few lines
+      // rather than a screen. The cross gets a 20dp box instead of the
+      // chip's full height, which made it as wide as a short word; its tap
+      // area is that box plus the label's right padding.
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding: const EdgeInsets.fromLTRB(2, 4, 2, 4),
+      labelPadding: const EdgeInsets.only(left: 6, right: 4),
+      deleteIconBoxConstraints: const BoxConstraints.tightFor(
+        width: 20,
+        height: 20,
+      ),
+      deleteIcon: const Icon(Icons.close, size: 18),
+      deleteButtonTooltipMessage: 'Remove condition',
+      onDeleted: onRemove,
+      onPressed: onEdit,
+    ),
+  );
+}
+
+/// Edits one condition of the rule dialog. Returns the new text with its
+/// whitespace collapsed, or null on Cancel. [others] are the remaining
+/// conditions, for the duplicate check.
+Future<String?> _editConditionDialog(
+  BuildContext context,
+  String initial, {
+  required List<String> others,
+}) {
+  final ctrl = TextEditingController(text: initial);
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => DisposeScope(
+      disposables: [ctrl],
+      child: StatefulBuilder(
+        builder: (ctx, setState) {
+          final text = _collapseSpaces(ctrl.text);
+          final key = text.toLowerCase();
+          // Same '|' rule as the Add box; a repeat of another condition
+          // would only store it twice.
+          final error = ctrl.text.contains('|')
+              ? 'Remove "|". Add each word on its own.'
+              : others.any((o) => _collapseSpaces(o).toLowerCase() == key)
+              ? 'Already a condition.'
+              : null;
+          return AlertDialog(
+            title: const Text('Edit condition'),
+            // Top padding keeps the field's floating label from clipping.
+            content: SingleChildScrollView(
+              padding: const EdgeInsets.only(top: 8),
+              child: TextField(
+                controller: ctrl,
+                autofocus: true,
+                minLines: 1,
+                maxLines: 4,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: 'If the SMS contains…',
+                  errorText: error,
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              // Disabled while empty: clearing a condition is the cross's
+              // job.
+              FilledButton(
+                onPressed: text.isEmpty || error != null
+                    ? null
+                    : () => Navigator.pop(ctx, text),
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
       ),
     ),
   );

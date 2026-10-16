@@ -212,12 +212,45 @@ class TransactionTile extends StatelessWidget {
     final counted = context.select<FinanceProvider, bool>(
       (f) => f.countsInTotals(tx),
     );
+    // A refund linked to its purchase: the purchase's date, merchant and
+    // category label. Null otherwise, a refund whose link no longer holds
+    // included.
+    final refundFor = context
+        .select<
+          FinanceProvider,
+          ({DateTime date, String? merchant, String category})?
+        >((f) {
+          if (!f.isLinkedRefund(tx)) return null;
+          final p = f.refundPurchaseOf(tx);
+          return p == null
+              ? null
+              : (
+                  date: p.date,
+                  merchant: f.merchantLabelFor(p),
+                  category: p.category.label,
+                );
+        });
+    // A purchase with refunds linked to it: how much came back and when
+    // the latest did.
+    final refunded = tx.type == TxType.expense
+        ? context.select<FinanceProvider, ({double sum, DateTime last})?>((f) {
+            final refunds = f.refundsOf(tx);
+            if (refunds.isEmpty) return null;
+            return (
+              sum: f.refundedFor(tx),
+              last: refunds
+                  .map((r) => r.date)
+                  .reduce((a, b) => a.isAfter(b) ? a : b),
+            );
+          })
+        : null;
     // Money in green, money out red; a transfer plain, as it is neither,
-    // and an uncounted row muted.
+    // and an uncounted row muted. A linked refund is plain too: it is not
+    // income, it takes its purchase's spend down.
     final amountColor = moneyColor(
       context,
       type: tx.type,
-      transfer: isTransferCategory(tx.categoryId),
+      transfer: isTransferCategory(tx.categoryId) || refundFor != null,
       counted: counted,
     );
 
@@ -225,16 +258,42 @@ class TransactionTile extends StatelessWidget {
     // every imported row and just repeated what the account view already
     // knows. Second line: the user's note (when present) with the date after
     // it; the full sender/SMS detail stays available in the edit sheet.
-    final title = cat.label;
+    // A linked refund leads with what it refunds instead: the merchant of
+    // either row, else the purchase's category, always after "Refund · ".
+    final refundMerchant =
+        refundFor?.merchant ??
+        (refundFor == null
+            ? null
+            : context.select<FinanceProvider, String?>(
+                (f) => f.merchantLabelFor(tx),
+              ));
+    final title = refundFor == null
+        ? cat.label
+        : 'Refund · ${refundMerchant ?? refundFor.category}';
     var note = tx.note.isEmpty ? null : tx.note.split('\n').first;
     // An SMS row without a note names its merchant there instead (the
     // user's alias when there is one). An alert with no merchant in it
-    // leaves the slot empty rather than show a generic "Payment".
-    if (note == null && tx.source == TxSource.sms && tx.smsText.isNotEmpty) {
+    // leaves the slot empty rather than show a generic "Payment". Not on a
+    // linked refund, whose title names the merchant already.
+    if (note == null &&
+        refundFor == null &&
+        tx.source == TxSource.sms &&
+        tx.smsText.isNotEmpty) {
       note = context.select<FinanceProvider, String?>(
         (f) => f.merchantLabelFor(tx),
       );
     }
+    // The refund line under the note: "₹500 refunded · 4 Oct" on the
+    // purchase, "For 25 Sep purchase" on the refund. Days only: the time
+    // would crowd the line.
+    String day(DateTime d) => fmtDateCompact(DateTime(d.year, d.month, d.day));
+    final String? refundLine = refundFor != null
+        ? 'For ${day(refundFor.date)} purchase'
+        : refunded == null
+        ? null
+        : refunded.sum >= tx.amount - 0.005
+        ? 'Refunded in full · ${day(refunded.last)}'
+        : '${fmtMoney(refunded.sum)} refunded · ${day(refunded.last)}';
     // Compact (no year): the list already groups under month headers, and
     // the full form crowded the note off the line at large font scales.
     // Under a day header only the time is new, and a midnight row has none.
@@ -389,7 +448,9 @@ class TransactionTile extends StatelessWidget {
                           size: glyphSize,
                         )
                       : Icon(
-                          cat.icon,
+                          // A linked refund shows the undo glyph its review
+                          // card used, not its income category's.
+                          refundFor != null ? Icons.undo : cat.icon,
                           key: const ValueKey(false),
                           color: categoryGlyphColor(context, cat.color),
                           size: glyphSize,
@@ -439,6 +500,15 @@ class TransactionTile extends StatelessWidget {
                       const SizedBox(height: 2),
                       noteLine,
                     ],
+                    // A refund and its purchase name each other, on a
+                    // line of their own like Counts in below.
+                    if (refundLine != null)
+                      Text(
+                        refundLine,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: lineStyle,
+                      ),
                     // Why a wallet purchase isn't in the totals; its
                     // own line, like Counts in below.
                     if (!counted)

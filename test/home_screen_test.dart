@@ -48,11 +48,9 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
   }
 
-  /// Settings sits in the app bar's ⋯ menu (tooltip 'More').
+  /// Settings is the app bar's own button, beside the ⋯ menu.
   Future<void> openSettings(WidgetTester tester) async {
-    await tester.tap(find.byTooltip('More'));
-    await pumpThrough(tester);
-    await tester.tap(find.text('Settings').last);
+    await tester.tap(find.byTooltip('Settings'));
     await pumpThrough(tester);
   }
 
@@ -63,10 +61,9 @@ void main() {
     await p.load();
     await tester.pumpWidget(app(p));
 
-    // The old data menu is gone; Settings is an entry in the ⋯ menu, not a
-    // bar button of its own.
+    // The old data menu is gone; Settings is a bar button beside the ⋯.
     expect(find.byTooltip('More options'), findsNothing);
-    expect(find.byTooltip('Settings'), findsNothing);
+    expect(find.byTooltip('Settings'), findsOneWidget);
     expect(find.byTooltip('More'), findsOneWidget);
 
     await openSettings(tester);
@@ -567,6 +564,9 @@ void main() {
     expect(tester.getSize(pendingFold).height, greaterThan(50));
 
     // Discard all: dialog → queue emptied (spam untouched) → Undo restores.
+    // It sits under the list, which may be below the cards' capped area.
+    await tester.ensureVisible(find.text('Discard all'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Discard all'));
     await tester.pumpAndSettle();
     expect(find.text('Discard all 2 imports?'), findsOneWidget);
@@ -678,7 +678,8 @@ void main() {
     await tester.pumpWidget(app(p));
 
     expect(find.byIcon(Icons.sms_outlined), findsNothing);
-    // The ⋯ menu that holds Settings is platform-independent and stays.
+    // Settings and the ⋯ menu are platform-independent and stay.
+    expect(find.byTooltip('Settings'), findsOneWidget);
     expect(find.byTooltip('More'), findsOneWidget);
 
     debugDefaultTargetPlatformOverride = null;

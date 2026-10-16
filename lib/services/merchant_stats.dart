@@ -13,7 +13,9 @@ class MerchantSpend {
   /// Display name from the newest row in the bucket.
   final String label;
 
-  /// Sum of [Tx.spendAmount] (own share for splits).
+  /// Sum of [Tx.spendAmount] (own share for splits), or of the `spendOf`
+  /// [topMerchants] was given (FinanceProvider.netSpendOf, less linked
+  /// refunds).
   final double total;
 
   /// Number of payments.
@@ -27,12 +29,15 @@ class MerchantSpend {
   });
 }
 
-/// The [limit] biggest expense merchants in [month], largest first.
+/// The [limit] biggest expense merchants in [month], largest first. Each
+/// row adds [spendOf] (FinanceProvider.netSpendOf in the app, so a linked
+/// refund comes off its purchase), or [Tx.spendAmount] without one.
 List<MerchantSpend> topMerchants(
   List<Tx> txs, {
   required DateTime month,
   int limit = 6,
   MerchantAliasLookup? alias,
+  double Function(Tx)? spendOf,
 }) {
   final start = DateTime(month.year, month.month);
   final end = DateTime(month.year, month.month + 1);
@@ -45,9 +50,12 @@ List<MerchantSpend> topMerchants(
     // The month the row counts in, like the month totals.
     final d = t.effectiveDate;
     if (d.isBefore(start) || !d.isBefore(end)) continue;
+    final spend = spendOf?.call(t) ?? t.spendAmount;
+    // Refunded in full: no ₹0 merchant or payment, as in the month totals.
+    if (spend == 0 && t.spendAmount > 0) continue;
     final key = recurringKeyOf(t);
     if (key == null) continue;
-    totals[key] = (totals[key] ?? 0) + t.spendAmount;
+    totals[key] = (totals[key] ?? 0) + spend;
     counts[key] = (counts[key] ?? 0) + 1;
     final seen = newest[key];
     if (seen == null || t.date.isAfter(seen.date)) newest[key] = t;

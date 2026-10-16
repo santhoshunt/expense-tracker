@@ -352,7 +352,8 @@ Future<void> showWeeklyDigestSheet(
                                 ?finance.merchantLabelFor(t),
                                 DateFormat('EEE').format(t.effectiveDate),
                               ].join(' · '),
-                              amount: fmtMoney(t.spendAmount),
+                              // Net of linked refunds, as the week's figures.
+                              amount: fmtMoney(finance.netSpendOf(t)),
                               amountColor: out,
                               // Over the digest, which shows an edit at once. A
                               // delete's Undo shows on the digest, which stays

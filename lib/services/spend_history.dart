@@ -157,7 +157,8 @@ SpendHistory buildSpendHistory(
       if (t.type != TxType.expense) continue;
       if (recurringKeyOf(t) != merchantKey) continue;
       final k = _monthKey(t.effectiveDate);
-      buckets[k] = (buckets[k] ?? 0) + t.spendAmount;
+      // Less linked refunds, in the purchase's month, as the totals.
+      buckets[k] = (buckets[k] ?? 0) + finance.netSpendOf(t);
       rows[k] = (rows[k] ?? 0) + 1;
       if (firstSpend == null || k < firstSpend) firstSpend = k;
     }

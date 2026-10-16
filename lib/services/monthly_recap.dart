@@ -96,6 +96,7 @@ MonthlyRecap? buildMonthlyRecap(
     month: month,
     limit: 1,
     alias: finance.merchantAlias,
+    spendOf: finance.netSpendOf,
   );
   return MonthlyRecap(
     month: month,

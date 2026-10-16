@@ -633,6 +633,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         // Every merchant: the card shows five and folds the rest.
         limit: 1 << 20,
         alias: finance.merchantAlias,
+        spendOf: finance.netSpendOf,
       );
     }
     return _merchants;

@@ -16,6 +16,7 @@ import '../models/transaction.dart';
 import '../services/budget.dart';
 import '../services/import_health.dart' show kImportHealthKey;
 import '../services/recurring_detector.dart';
+import '../services/refund_matching.dart';
 import '../services/reminder_schedule.dart';
 import '../services/sms_parser.dart';
 import '../services/transfer_pairing.dart';
@@ -209,6 +210,27 @@ class _Derived {
   List<PersonBalance>? people;
   Map<String, double>? billOwed;
   List<String>? knownPeople;
+
+  /// The valid refund links ([FinanceProvider.isLinkedRefund]): every
+  /// period figure reads these, so they are worked out once per change.
+  _RefundLinks? refunds;
+
+  /// [FinanceProvider.refundReviewIds], filtered to rows still waiting.
+  Set<String>? refundReview;
+}
+
+/// The refund links that hold, from one pass over the confirmed rows.
+class _RefundLinks {
+  /// Refund row id to the purchase it validly refunds.
+  final Map<String, Tx> purchaseOf;
+
+  /// Purchase id to the total of its valid refunds.
+  final Map<String, double> refunded;
+
+  /// Purchase id to its valid refunds, oldest first.
+  final Map<String, List<Tx>> refundsOf;
+
+  const _RefundLinks(this.purchaseOf, this.refunded, this.refundsOf);
 }
 
 /// One person's share on one split bill, and how much of it is still to
@@ -275,6 +297,8 @@ class FinanceProvider extends ChangeNotifier {
   static const _remindersEarlyRescanKey = 'reminders_early_rescan_v1';
   static const _importsAutoCountedKey = 'imports_auto_counted_v1';
   static const _debitCardsDetectedKey = 'debit_cards_detected_v1';
+  static const _refundsLinkedKey = 'refunds_linked_v1';
+  static const _refundSuggestIdsKey = 'refund_suggest_ids_v1';
 
   final List<Tx> _transactions = [];
   final List<ClassifierRule> _rules = [];
@@ -571,6 +595,9 @@ class FinanceProvider extends ChangeNotifier {
         continue; // byCategory stays transfer-free — income/expense untouched
       }
       if (t.type == TxType.income) {
+        // A linked refund is not income: it takes its purchase's spend
+        // down instead ([netSpendOf]), in the purchase's own period.
+        if (isLinkedRefund(t)) continue;
         income += t.amount;
       } else {
         // Group splits: only the user's own share is spend; the fronted
@@ -582,9 +609,13 @@ class FinanceProvider extends ChangeNotifier {
         // budget with the Paid for Others chip used to show ₹375 "spent"
         // while its tap-through list (countsTowardBudget, which can only
         // test the row's real category) came back empty.
-        expense += t.spendAmount;
-        byCategory[t.categoryId] =
-            (byCategory[t.categoryId] ?? 0) + t.spendAmount;
+        final spend = netSpendOf(t);
+        // A purchase refunded in full adds no zero bucket: the category
+        // lists and charts would show a ₹0 row for it.
+        if (spend > 0 || refundedFor(t) == 0) {
+          expense += spend;
+          byCategory[t.categoryId] = (byCategory[t.categoryId] ?? 0) + spend;
+        }
         final fronted = t.frontedAmount;
         if (fronted > 0) {
           transferOut += fronted;
@@ -664,14 +695,18 @@ class FinanceProvider extends ChangeNotifier {
           !countsInTotals(t)) {
         continue;
       }
+      final spend = netSpendOf(t);
+      // Refunded in full: no spend that day from this row.
+      if (spend == 0 && refundedFor(t) > 0) continue;
       final day = t.effectiveDate.day;
-      byDay[day] = (byDay[day] ?? 0) + t.spendAmount;
+      byDay[day] = (byDay[day] ?? 0) + spend;
     }
     return byDay;
   }
 
   /// Spend and payment count on one calendar [day], by the same rule as
-  /// [expenseByDayInMonth] (the user's own share of split bills).
+  /// [expenseByDayInMonth] (the user's own share of split bills, linked
+  /// refunds taken off).
   ({double spent, int count}) spendOnDay(DateTime day) {
     final rows = _byMonth[day.year * 12 + day.month];
     var spent = 0.0;
@@ -683,14 +718,18 @@ class FinanceProvider extends ChangeNotifier {
           !countsInTotals(t)) {
         continue;
       }
-      spent += t.spendAmount;
+      final spend = netSpendOf(t);
+      // Refunded in full: no payment that day, as in [expenseByDayInMonth].
+      if (spend == 0 && refundedFor(t) > 0) continue;
+      spent += spend;
       count++;
     }
     return (spent: spent, count: count);
   }
 
   /// Confirmed money-out rows counted on one calendar [day], for the
-  /// heatmap's day-tap sheet.
+  /// heatmap's day-tap sheet. A refunded purchase stays listed, even when
+  /// refunded in full; what it adds to the day is [netSpendOf].
   List<Tx> expensesOnDay(DateTime day) => [
     for (final t in transactions)
       if (t.type == TxType.expense &&
@@ -724,7 +763,7 @@ class FinanceProvider extends ChangeNotifier {
           !countsInTotals(t)) {
         continue;
       }
-      totals[d.weekday - 1] += t.spendAmount;
+      totals[d.weekday - 1] += netSpendOf(t);
     }
     final start = DateTime(first.year, first.month, first.day);
     final now = DateTime.now();
@@ -1478,6 +1517,27 @@ class FinanceProvider extends ChangeNotifier {
       // the next launch.
       if (!_persistFailed) await prefs.setBool(_debitCardsDetectedKey, true);
     }
+    _refundReviewIds
+      ..clear()
+      ..addAll(prefs.getStringList(_refundSuggestIdsKey) ?? const []);
+    // Once, on the first launch of 1.42.0: refunds from the last 90 days
+    // are linked to their purchase when sure, or offered for review
+    // ([_linkPastRefunds]). Not when the ledger, the accounts or the
+    // category registry failed to load: the flag would make a reading of
+    // the wrong data final.
+    if (!(prefs.getBool(_refundsLinkedKey) ?? false) &&
+        registryIntact &&
+        !_loadWarnings.contains('transactions') &&
+        !_loadWarnings.contains('accounts')) {
+      final reviewBefore = _refundReviewIds.length;
+      if (_linkPastRefunds() > 0) await _persist(tx: true);
+      if (_refundReviewIds.length != reviewBefore) {
+        await _saveRefundReviewIds();
+      }
+      // A save that failed leaves the links in memory only: try again on
+      // the next launch.
+      if (!_persistFailed) await prefs.setBool(_refundsLinkedKey, true);
+    }
     // Colours of tags no row carries any more: the Undo that could bring
     // such a tag back does not outlive the app session.
     if (_tagColors.isNotEmpty && !_loadWarnings.contains('transactions')) {
@@ -2087,6 +2147,282 @@ class FinanceProvider extends ChangeNotifier {
       notifyListeners();
       await _persist(tx: true);
     }
+  }
+
+  // --- Refunds --------------------------------------------------------------
+  //
+  // A refund is an income row whose [Tx.refundOf] names the expense row it
+  // pays back. Whether a link holds is worked out from the rows on every
+  // change, never stored, so delete, Undo, restore and type edits need no
+  // cleanup: a link that stops holding counts as income again.
+
+  /// Worked out once per change from [_ordered]. A link holds when the
+  /// refund is a counted, non-transfer income row and its [Tx.refundOf]
+  /// names a confirmed, counted, non-transfer expense row that is not a
+  /// split. Refunds are taken oldest first (date, then insertion order)
+  /// while they fit in the purchase's amount; one that would take it past
+  /// the amount does not hold. Whole refunds only, so income and spend
+  /// always move by the same amount and [balance] never changes.
+  _RefundLinks get _refundLinks => _d.refunds ??= () {
+    final purchaseOf = <String, Tx>{};
+    final refunded = <String, double>{};
+    final refundsOf = <String, List<Tx>>{};
+    Map<String, Tx>? purchases;
+    for (final (t, _) in _ordered) {
+      final pid = t.refundOf;
+      if (pid == null || !_isRefundRow(t)) continue;
+      purchases ??= {
+        for (final (p, _) in _ordered)
+          if (_isRefundablePurchase(p)) p.id: p,
+      };
+      final p = purchases[pid];
+      if (p == null) continue;
+      final taken = refunded[pid] ?? 0;
+      if (taken + t.amount > p.amount + 0.005) continue;
+      purchaseOf[t.id] = p;
+      refunded[pid] = taken + t.amount;
+      (refundsOf[pid] ??= []).add(t);
+    }
+    return _RefundLinks(purchaseOf, refunded, refundsOf);
+  }();
+
+  /// The refund side of a link: confirmed income that counts, outside the
+  /// transfer categories (a transfer is never income, so taking it off a
+  /// purchase would move [balance]).
+  bool _isRefundRow(Tx t) =>
+      t.type == TxType.income &&
+      !t.pending &&
+      !isTransferCategory(t.categoryId) &&
+      countsInTotals(t);
+
+  /// The purchase side: confirmed spend that counts, outside the transfer
+  /// categories, not a split.
+  bool _isRefundablePurchase(Tx p) =>
+      p.type == TxType.expense &&
+      !p.pending &&
+      p.myShare == null &&
+      !isTransferCategory(p.categoryId) &&
+      countsInTotals(p);
+
+  /// Whether [t] is a refund whose link holds: it is out of income, and
+  /// its purchase's spend is down by it.
+  bool isLinkedRefund(Tx t) =>
+      t.refundOf != null && _refundLinks.purchaseOf.containsKey(t.id);
+
+  /// The purchase [refund] validly refunds, or null.
+  Tx? refundPurchaseOf(Tx refund) =>
+      refund.refundOf == null ? null : _refundLinks.purchaseOf[refund.id];
+
+  /// [t] is a confirmed, counted row that names a purchase, but the link
+  /// does not hold: the purchase was deleted, changed or used up by older
+  /// refunds, or [t] is no longer plain income. The edit sheet offers
+  /// Unlink. A pending row is not broken (its link holds once confirmed),
+  /// nor is a wallet row left out of the totals.
+  bool refundLinkBroken(Tx t) =>
+      t.refundOf != null &&
+      !t.pending &&
+      countsInTotals(t) &&
+      !isLinkedRefund(t);
+
+  /// The refunds whose link to [purchase] holds, oldest first.
+  List<Tx> refundsOf(Tx purchase) =>
+      List.unmodifiable(_refundLinks.refundsOf[purchase.id] ?? const <Tx>[]);
+
+  /// Total of [refundsOf] for [purchase]; 0 when none.
+  double refundedFor(Tx purchase) => _refundLinks.refunded[purchase.id] ?? 0;
+
+  /// What [purchase] has left for refunds: its amount less [refundedFor],
+  /// never below 0. The one figure every link and suggestion checks a
+  /// refund's amount against.
+  double refundableLeftOf(Tx purchase) {
+    final left = purchase.amount - refundedFor(purchase);
+    return left < 0 ? 0 : left;
+  }
+
+  /// What [t] adds to spend figures: [Tx.spendAmount] less its linked
+  /// refunds, never below 0. Every period figure uses this in place of
+  /// [Tx.spendAmount].
+  double netSpendOf(Tx t) {
+    if (t.type != TxType.expense) return t.spendAmount;
+    final refunded = refundedFor(t);
+    if (refunded == 0) return t.spendAmount;
+    final net = t.spendAmount - refunded;
+    return net < 0 ? 0 : net;
+  }
+
+  /// [refund] linked to [purchaseId]: confirmed, and counted when it sits
+  /// on a wallet, so its income and the purchase's spend change together.
+  Tx _linkedRefund(Tx refund, String purchaseId, {required bool unseen}) =>
+      refund.copyWith(
+        refundOf: purchaseId,
+        pending: false,
+        unseen: unseen,
+        walletCounted: accountForKey(refund.acctKey)?.isWallet == true
+            ? true
+            : null,
+      );
+
+  /// Links refund [refundId] to purchase [purchaseId], confirming the
+  /// refund. False, changing nothing, when the link would not hold: the
+  /// refund is not income or is a transfer, the purchase is not counted,
+  /// confirmed, non-transfer spend outside a split, the refund is dated
+  /// before the purchase's day, or the purchase has less than the refund's
+  /// amount left unrefunded.
+  Future<bool> linkRefund(String refundId, String purchaseId) async {
+    final ri = _transactions.indexWhere((t) => t.id == refundId);
+    final pi = _transactions.indexWhere((t) => t.id == purchaseId);
+    if (ri == -1 || pi == -1) return false;
+    final current = _transactions[ri];
+    final purchase = _transactions[pi];
+    final linked = _linkedRefund(current, purchaseId, unseen: false);
+    if (linked.type != TxType.income ||
+        isTransferCategory(linked.categoryId) ||
+        !countsInTotals(linked) ||
+        !_isRefundablePurchase(purchase) ||
+        refundDayGap(purchase, linked) < 0) {
+      return false;
+    }
+    // Re-linking a refund to the purchase it already holds must not count
+    // its own amount against itself.
+    final own = isLinkedRefund(current) && current.refundOf == purchaseId
+        ? current.amount
+        : 0.0;
+    final left = refundableLeftOf(purchase) + own;
+    if (left < linked.amount - 0.005) return false;
+    _transactions[ri] = linked;
+    final reviewed = _refundReviewIds.remove(refundId);
+    notifyListeners();
+    await _persist(tx: true);
+    if (reviewed) await _saveRefundReviewIds();
+    return true;
+  }
+
+  /// Clears [refundId]'s link: it counts as income again.
+  Future<void> unlinkRefund(String refundId) async {
+    final i = _transactions.indexWhere((t) => t.id == refundId);
+    if (i == -1 || _transactions[i].refundOf == null) return;
+    _transactions[i] = _transactions[i].copyWith(clearRefundOf: true);
+    notifyListeners();
+    await _persist(tx: true);
+  }
+
+  /// One suggestion per unlinked income row of [refunds]: its best
+  /// candidate ([refundCandidatesFor]) over the confirmed rows whose key is
+  /// not in [dismissed].
+  List<RefundSuggestion> refundSuggestions(
+    Iterable<Tx> refunds,
+    Set<String> dismissed,
+  ) {
+    final out = <RefundSuggestion>[];
+    for (final r in refunds) {
+      if (r.type != TxType.income || r.refundOf != null) continue;
+      final candidates = refundCandidatesFor(
+        r,
+        transactions,
+        remainingOf: refundableLeftOf,
+        counts: countsInTotals,
+      );
+      for (final c in candidates) {
+        final s = RefundSuggestion(refund: r, purchase: c.purchase);
+        if (dismissed.contains(s.key)) continue;
+        out.add(s);
+        break;
+      }
+    }
+    return out;
+  }
+
+  /// Ids of past income rows the one-time pass found a likely purchase
+  /// for, as stored; [refundReviewIds] filters them.
+  final Set<String> _refundReviewIds = {};
+
+  /// Past income rows the review card asks about ("Looks like a refund"):
+  /// those the one-time refund pass found a likely purchase for, still
+  /// confirmed income with no link.
+  Set<String> get refundReviewIds => _d.refundReview ??= () {
+    if (_refundReviewIds.isEmpty) return const <String>{};
+    return Set<String>.unmodifiable({
+      for (final (t, _) in _ordered)
+        if (t.type == TxType.income &&
+            t.refundOf == null &&
+            _refundReviewIds.contains(t.id))
+          t.id,
+    });
+  }();
+
+  /// Takes [id] off [refundReviewIds], as "Not a refund" does.
+  Future<void> dropRefundReviewId(String id) async {
+    if (!_refundReviewIds.remove(id)) return;
+    notifyListeners();
+    await _saveRefundReviewIds();
+  }
+
+  /// Puts [id] back on [refundReviewIds]: the Undo of "Not a refund" and of
+  /// Link on a suggestion the one-time pass offered.
+  Future<void> restoreRefundReviewId(String id) async {
+    if (!_refundReviewIds.add(id)) return;
+    notifyListeners();
+    await _saveRefundReviewIds();
+  }
+
+  Future<void> _saveRefundReviewIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_refundReviewIds.isEmpty) {
+      await prefs.remove(_refundSuggestIdsKey);
+    } else {
+      await prefs.setStringList(
+        _refundSuggestIdsKey,
+        _refundReviewIds.toList(),
+      );
+    }
+  }
+
+  /// The one-time pass on load: confirmed, counted income rows from the
+  /// last 90 days with no link. A sure match ([sureRefundPurchase]) is
+  /// linked, its "new" marker left as it was; a row with any candidate goes
+  /// to [refundReviewIds]. Oldest first, each link taking from what its
+  /// purchase has left. Returns how many rows it linked.
+  int _linkPastRefunds() {
+    // Earlier load steps change rows without a notify: the derived views
+    // may be stale. The links are worked out again here, before any link
+    // below, so [refundableLeftOf] reads the ledger as it was and [taken]
+    // adds this pass's links on top.
+    _d = _Derived();
+    _refundLinks;
+    final cutoff = DateTime.now().subtract(const Duration(days: 90));
+    final taken = <String, double>{};
+    final rows = [
+      for (final (t, _) in _ordered)
+        if (t.type == TxType.income &&
+            t.refundOf == null &&
+            !t.suspectedSpam &&
+            !isTransferCategory(t.categoryId) &&
+            // A wallet row the user left out of the totals stays out:
+            // linking would count it ([_linkedRefund]).
+            countsInTotals(t) &&
+            !t.date.isBefore(cutoff))
+          t,
+    ];
+    var linked = 0;
+    for (final t in rows) {
+      final c = refundCandidatesFor(
+        t,
+        _transactions,
+        remainingOf: (p) => refundableLeftOf(p) - (taken[p.id] ?? 0),
+        counts: countsInTotals,
+      );
+      if (c.isEmpty) continue;
+      final sure = sureRefundPurchase(t, c);
+      if (sure == null) {
+        _refundReviewIds.add(t.id);
+        continue;
+      }
+      final i = _transactions.indexWhere((x) => x.id == t.id);
+      _transactions[i] = _linkedRefund(t, sure.id, unseen: t.unseen);
+      taken[sure.id] = (taken[sure.id] ?? 0) + t.amount;
+      linked++;
+    }
+    return linked;
   }
 
   // --- Classifier rules -----------------------------------------------------
@@ -3618,8 +3954,9 @@ class FinanceProvider extends ChangeNotifier {
           !isTransferCategory(t.categoryId) &&
           !t.effectiveDate.isBefore(monthStart) &&
           t.effectiveDate.isBefore(monthEnd)) {
-        // Group splits: only the user's own share, like the Spent card.
-        spentThisMonth += t.spendAmount;
+        // Group splits: only the user's own share, and refunds taken off,
+        // like the Spent card.
+        spentThisMonth += netSpendOf(t);
       }
     }
 
@@ -4518,7 +4855,7 @@ class FinanceProvider extends ChangeNotifier {
       // split) plus money-out transfers in full. Income, money-in
       // transfers and an uncounted wallet row carry the tag at no spend.
       final spend = t.type == TxType.expense && countsInTotals(t)
-          ? (isTransferCategory(t.categoryId) ? t.amount : t.spendAmount)
+          ? (isTransferCategory(t.categoryId) ? t.amount : netSpendOf(t))
           : 0.0;
       for (final tag in t.tags) {
         final k = tagKey(tag);
@@ -4568,7 +4905,7 @@ class FinanceProvider extends ChangeNotifier {
       if (t.type != TxType.expense || !countsInTotals(t)) continue;
       final amount = isTransferCategory(t.categoryId)
           ? t.amount
-          : t.spendAmount;
+          : netSpendOf(t);
       if (amount <= 0) continue;
       for (final tag in t.tags) {
         final k = tagKey(tag);
@@ -5300,8 +5637,37 @@ class FinanceProvider extends ChangeNotifier {
       // Earlier rows that counted at once but are the other leg of a new
       // row's possible transfer: they go back to review with it.
       final backToReview = <String>{};
+      // What a purchase had left before this batch ([refundableLeftOf]),
+      // less what this batch's links take on top, so two refunds in one
+      // batch cannot both claim it. The links are worked out here, before
+      // any link below; the new rows were added pending, so they describe
+      // the ledger as it was until the notify after this pass.
+      _refundLinks;
+      final taken = <String, double>{};
       for (var i = firstNew; i < _transactions.length; i++) {
         final t = _transactions[i];
+        // A refund alert for one clear purchase is linked and counts at
+        // once, marked new, like a sure import.
+        if (t.type == TxType.income &&
+            !t.suspectedSpam &&
+            !isTransferCategory(t.categoryId) &&
+            isRefundWorded(t.smsText)) {
+          final purchase = sureRefundPurchase(
+            t,
+            refundCandidatesFor(
+              t,
+              _transactions,
+              remainingOf: (p) => refundableLeftOf(p) - (taken[p.id] ?? 0),
+              counts: countsInTotals,
+            ),
+          );
+          if (purchase != null) {
+            _transactions[i] = _linkedRefund(t, purchase.id, unseen: true);
+            taken[purchase.id] = (taken[purchase.id] ?? 0) + t.amount;
+            _lastImportCounted++;
+            continue;
+          }
+        }
         final sure = _isSureImport(
           t,
           fromRule: ruleRows.contains(i),
@@ -5688,6 +6054,9 @@ class FinanceProvider extends ChangeNotifier {
     }
     // The unreadable alerts kept for the import warning hold bank SMS text.
     await prefs.remove(kImportHealthKey);
+    // Past refunds waiting for review name rows that are gone.
+    _refundReviewIds.clear();
+    await prefs.remove(_refundSuggestIdsKey);
     if (includeConfig) {
       _rules.clear();
       _importRules.clear();
@@ -5756,7 +6125,9 @@ class FinanceProvider extends ChangeNotifier {
     // v25: reminders and subscription pins may carry cycle `halfYearly`.
     // v26: accounts may be type `debitCard` and carry `linkedAccountId`;
     // `acctKinds` may hold `'debit'`.
-    'version': 26,
+    // v27: transactions may carry `refundOf` (the purchase a refund pays
+    // back).
+    'version': 27,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),

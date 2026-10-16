@@ -17,7 +17,8 @@ DateTime Function() weekClock = DateTime.now;
 /// One week at a glance, for the Overview's This week row and the weekly
 /// digest sheet. Money out follows FinanceProvider.spendOnDay row for row
 /// (expense-typed, not a transfer, counted, by Tx.effectiveDate, the
-/// user's own share), so the day bars add up to [spent].
+/// user's own share less linked refunds), so the day bars add up to
+/// [spent].
 class WeekDigest {
   /// Monday 00:00.
   final DateTime start;
@@ -26,7 +27,7 @@ class WeekDigest {
   final int daysShown;
   final double spent;
 
-  /// Income-typed rows that are not transfers.
+  /// Income-typed rows that are not transfers or linked refunds.
   final double income;
 
   /// Confirmed counted rows in the days shown, transfers included.
@@ -46,7 +47,9 @@ class WeekDigest {
   /// FinanceProvider.expenseByCategory is, so a tap filters the rows.
   final List<MapEntry<TxCategory, double>> topCategories;
 
-  /// Up to 3 money-out rows by Tx.spendAmount, largest first.
+  /// Up to 3 money-out rows by FinanceProvider.netSpendOf, largest first;
+  /// a row with no net spend (refunded in full, or a split the user paid
+  /// none of) is left out.
   final List<Tx> biggest;
 
   const WeekDigest({
@@ -74,8 +77,8 @@ DateTime? _memoDay;
 WeekDigest? _memo;
 
 /// The digest of the week starting [weekStart] as of [now]. One pass over
-/// FinanceProvider.countedTransactions covers the week and the earlier
-/// weeks its usual week needs.
+/// FinanceProvider.countedTransactions covers the week; its usual week is
+/// [usualWeekByDay]'s entry for the days shown.
 WeekDigest buildWeekDigest(
   FinanceProvider finance,
   DateTime weekStart, {
@@ -91,14 +94,8 @@ WeekDigest buildWeekDigest(
     return cached;
   }
   final daysShown = start == weekStartOf(now) ? now.weekday : 7;
-  final earliest = DateTime(
-    start.year,
-    start.month,
-    start.day - 7 * kUsualWeeks,
-  );
 
   final byDay = List<double>.filled(7, 0);
-  final earlier = <DateTime, double>{};
   final byCategory = <String, double>{};
   final spends = <Tx>[];
   var income = 0.0;
@@ -106,41 +103,24 @@ WeekDigest buildWeekDigest(
   for (final t in finance.countedTransactions) {
     final d = t.effectiveDate;
     final day = d.weekday - 1;
-    // Day-aligned: the current week and every earlier one stop at the
-    // same weekday.
-    if (day >= daysShown) continue;
-    final week = weekStartOf(d);
-    if (week.isBefore(earliest) || week.isAfter(start)) continue;
+    if (day >= daysShown || weekStartOf(d) != start) continue;
     final money = !isTransferCategory(t.categoryId);
-    final out = money && t.type == TxType.expense;
-    if (week != start) {
-      if (out) earlier[week] = (earlier[week] ?? 0) + t.spendAmount;
-      continue;
-    }
     count++;
-    if (out) {
-      byDay[day] += t.spendAmount;
-      byCategory[t.categoryId] =
-          (byCategory[t.categoryId] ?? 0) + t.spendAmount;
-      spends.add(t);
-    } else if (money && t.type == TxType.income) {
+    if (money && t.type == TxType.expense) {
+      // A refund linked to this row comes off its own day; a row with no
+      // net spend (refunded in full, or a ₹0 share) adds nothing.
+      final net = finance.netSpendOf(t);
+      if (net > 0) {
+        byDay[day] += net;
+        byCategory[t.categoryId] = (byCategory[t.categoryId] ?? 0) + net;
+        spends.add(t);
+      }
+    } else if (money && t.type == TxType.income && !finance.isLinkedRefund(t)) {
       income += t.amount;
     }
   }
 
-  // Weeks from the one holding the first row on; quiet weeks count as 0.
-  double? usual;
-  final first = finance.firstTransactionDate;
-  if (first != null) {
-    final firstWeek = weekStartOf(first);
-    final weeks = <double>[];
-    for (var k = 1; k <= kUsualWeeks; k++) {
-      final w = DateTime(start.year, start.month, start.day - 7 * k);
-      if (w.isBefore(firstWeek)) break;
-      weeks.add(earlier[w] ?? 0);
-    }
-    if (weeks.length >= 2) usual = median(weeks);
-  }
+  final usual = usualWeekByDay(finance, start)[daysShown - 1];
 
   final weekEnd = DateTime(start.year, start.month, start.day + 7);
   final toReview = finance.pendingTransactions.where((t) {
@@ -165,7 +145,7 @@ WeekDigest buildWeekDigest(
     return MapEntry(key, e.value);
   }).toList()..sort((a, b) => b.value.compareTo(a.value));
   spends.sort((a, b) {
-    final c = b.spendAmount.compareTo(a.spendAmount);
+    final c = finance.netSpendOf(b).compareTo(finance.netSpendOf(a));
     return c != 0 ? c : b.date.compareTo(a.date);
   });
 
@@ -189,11 +169,13 @@ WeekDigest buildWeekDigest(
 }
 
 /// The usual week of [weekStart]'s week cut to 1 to 7 days, Monday first:
-/// entry `k - 1` is the [WeekDigest.usual] [buildWeekDigest] gives when
-/// `k` days are shown. The This week widget reads the entry for the day it
-/// draws, so it stays right through the week without the app. One pass over
-/// FinanceProvider.countedTransactions; [buildWeekDigest]'s memo is not
-/// touched. Every entry is null under 2 weeks of history.
+/// entry `k - 1` is the [WeekDigest.usual] [buildWeekDigest] takes when
+/// `k` days are shown. Money out is FinanceProvider.netSpendOf, so a
+/// linked refund comes off its purchase's day. The This week widget reads
+/// the entry for the day it draws, so it stays right through the week
+/// without the app. One pass over FinanceProvider.countedTransactions;
+/// [buildWeekDigest]'s memo is not touched. Every entry is null under 2
+/// weeks of history.
 List<double?> usualWeekByDay(FinanceProvider finance, DateTime weekStart) {
   final start = weekStartOf(weekStart);
   final earliest = DateTime(
@@ -211,11 +193,10 @@ List<double?> usualWeekByDay(FinanceProvider finance, DateTime weekStart) {
     final week = weekStartOf(d);
     if (week.isBefore(earliest) || !week.isBefore(start)) continue;
     final days = earlier.putIfAbsent(week, () => List<double>.filled(7, 0));
-    days[d.weekday - 1] += t.spendAmount;
+    days[d.weekday - 1] += finance.netSpendOf(t);
   }
 
-  // Weeks from the one holding the first row on; quiet weeks count as 0,
-  // as buildWeekDigest counts them.
+  // Weeks from the one holding the first row on; quiet weeks count as 0.
   final weeks = <List<double>>[];
   final first = finance.firstTransactionDate;
   if (first != null) {

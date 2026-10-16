@@ -493,6 +493,13 @@ class Tx {
   /// opened or Mark all seen runs. Never set on a pending row.
   final bool unseen;
 
+  /// On an income row: the id of the expense row it refunds. A valid link
+  /// takes the refund out of income and the purchase's spend down by it, in
+  /// the purchase's own period (see FinanceProvider.isLinkedRefund); an
+  /// invalid one (the purchase deleted, changed or used up) is ignored and
+  /// the row counts as income again. Null everywhere else.
+  final String? refundOf;
+
   const Tx({
     required this.id,
     required this.type,
@@ -517,6 +524,7 @@ class Tx {
     this.countIn,
     this.walletCounted = false,
     this.unseen = false,
+    this.refundOf,
   });
 
   /// The date period figures use: [countIn] when set, else [date].
@@ -579,6 +587,7 @@ class Tx {
       countIn: countIn,
       walletCounted: walletCounted,
       unseen: unseen,
+      refundOf: refundOf,
     );
   }
 
@@ -613,6 +622,8 @@ class Tx {
     bool clearCountIn = false,
     bool? walletCounted,
     bool? unseen,
+    String? refundOf,
+    bool clearRefundOf = false,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -643,6 +654,7 @@ class Tx {
         : normalizeCountIn(countIn ?? this.countIn, date ?? this.date),
     walletCounted: walletCounted ?? this.walletCounted,
     unseen: unseen ?? this.unseen,
+    refundOf: clearRefundOf ? null : (refundOf ?? this.refundOf),
   );
 
   Map<String, dynamic> toJson() => {
@@ -669,6 +681,7 @@ class Tx {
     if (countIn != null) 'countIn': countIn!.toIso8601String(),
     if (walletCounted) 'walletCounted': true,
     if (unseen) 'unseen': true,
+    if (refundOf != null) 'refundOf': refundOf,
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) {
@@ -709,6 +722,7 @@ class Tx {
       }, date),
       walletCounted: json['walletCounted'] == true,
       unseen: json['unseen'] == true,
+      refundOf: json['refundOf'] is String ? json['refundOf'] as String : null,
     );
   }
 }
