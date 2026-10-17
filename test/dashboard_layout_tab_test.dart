@@ -20,8 +20,8 @@ void main() {
   });
 
   Future<SettingsProvider> pump(WidgetTester tester, int tab) async {
-    // Tall enough for a whole page's rows, each with its 48dp Open/Folded
-    // target, so the drags below never start off screen. On a phone the
+    // Tall enough for a whole page's rows, so the drags below never start
+    // off screen. On a phone the
     // page is longer than the screen and the list auto-scrolls during a
     // drag: it is the page's only scrollable.
     tester.view.physicalSize = const Size(800, 1400);
@@ -50,10 +50,12 @@ void main() {
     expect(find.text('Trends'), findsOneWidget);
     expect(find.text('Breakdown'), findsOneWidget);
     expect(find.text('Top merchants'), findsOneWidget);
-    expect(find.text('Folded'), findsWidgets);
+    // The fold arrow beside each switch, no subtitle under the name.
+    expect(find.byTooltip('Starts folded'), findsWidgets);
+    expect(find.text('Folded'), findsNothing);
   });
 
-  testWidgets('Open / Folded sets how a section starts', (tester) async {
+  testWidgets('the fold arrow sets how a section starts', (tester) async {
     final s = await pump(tester, kCockpitTabDashBreakdown);
     expect(s.sectionOpen(DashboardSection.merchants), isFalse);
     await tester.tap(find.bySemanticsLabel('Top merchants, starts folded'));
@@ -64,15 +66,21 @@ void main() {
     await again.load();
     expect(again.sectionOpen(DashboardSection.merchants), isTrue);
     expect(find.bySemanticsLabel('Top merchants, starts open'), findsOneWidget);
-    // A hidden section says so instead.
+    final arrow = find.descendant(
+      of: find.widgetWithText(ListTile, 'Top merchants'),
+      matching: find.byType(IconButton),
+    );
+    expect(tester.widget<IconButton>(arrow).tooltip, 'Starts open');
+    // A hidden section keeps its arrow, disabled, so the switch stays put.
+    final switchX = tester.getTopLeft(
+      find.bySemanticsLabel('Show Top merchants'),
+    );
     await tester.tap(find.bySemanticsLabel('Show Top merchants'));
     await tester.pumpAndSettle();
+    expect(tester.widget<IconButton>(arrow).onPressed, isNull);
     expect(
-      find.descendant(
-        of: find.widgetWithText(ListTile, 'Top merchants'),
-        matching: find.text('Hidden'),
-      ),
-      findsOneWidget,
+      tester.getTopLeft(find.bySemanticsLabel('Show Top merchants')),
+      switchX,
     );
   });
 
@@ -132,7 +140,6 @@ void main() {
     await gesture.up();
     await tester.pumpAndSettle();
     expect(s.dashboardLayout(DashboardPage.trends).order, [
-      DashboardSection.previousMonth,
       DashboardSection.usual,
       DashboardSection.pace,
       DashboardSection.categoryComparison,
@@ -159,7 +166,7 @@ void main() {
     await tester.pumpAndSettle();
     // A non-breaking space keeps the count with its word.
     await tester.scrollUntilVisible(find.text('1 hidden'), 200);
-    expect(find.text('Dashboard'), findsOneWidget);
+    expect(find.text('Dashboard layout'), findsOneWidget);
     expect(find.text('1 hidden'), findsOneWidget);
   });
 

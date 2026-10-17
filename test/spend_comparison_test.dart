@@ -438,6 +438,69 @@ void main() {
       expect(deltaPhrase(c(800, 1000)), contains('less'));
       expect(deltaPhrase(c(1000.4, 1000)), 'About the same');
     });
+
+    test('whole rupees, with what it is measured against', () {
+      expect(deltaPhrase(c(1200.4, 1000)), '₹200 (20%) more');
+      expect(
+        deltaPhrase(c(800, 1000), than: ' than Aug'),
+        '₹200 (20%) less than Aug',
+      );
+    });
+
+    test('past a doubling it reads as times, not a percentage', () {
+      expect(
+        deltaPhrase(c(2700, 1000), than: ' than Sep by this day'),
+        '₹1,700 more than Sep by this day, 2.7 times as much',
+      );
+      // Exactly double is still a percentage; falls never pass 100%.
+      expect(deltaPhrase(c(2000, 1000)), '₹1,000 (100%) more');
+      expect(deltaPhrase(c(100, 1000)), '₹900 (90%) less');
+    });
+
+    test('timesPhrase: one decimal under 10, whole from 10', () {
+      expect(timesPhrase(1.7), '2.7 times');
+      expect(timesPhrase(2.0), '3 times');
+      expect(timesPhrase(11.4), '12 times');
+      expect(timesPhrase(1.0), isNull);
+      expect(timesPhrase(0.5), isNull);
+      expect(timesPhrase(null), isNull);
+    });
+  });
+
+  group('thin months in the usual window', () {
+    test('a month under a quarter of the middle stops the run', () async {
+      final p = await loaded();
+      // June and July full, August thin (a few rows only), September full.
+      for (final (m, amount) in [
+        (6, 20000.0),
+        (7, 22000.0),
+        (8, 1700.0),
+        (9, 23000.0),
+      ]) {
+        await spend(p, DateTime(2026, m, 1), amount);
+      }
+      // August sits under a quarter of the run's middle, so the run stops
+      // there, the way an empty month stops it: September alone.
+      expect(usualWindow(p, DateTime(2026, 10)), [DateTime(2026, 9)]);
+    });
+
+    test('a run that spent nothing drops no month', () async {
+      final p = await loaded();
+      for (final m in [7, 8, 9]) {
+        await p.addTransaction(
+          type: TxType.income,
+          categoryId: 'salary',
+          amount: 5000,
+          note: 'seed',
+          date: DateTime(2026, m, 1),
+        );
+      }
+      expect(usualWindow(p, DateTime(2026, 10)), [
+        DateTime(2026, 7),
+        DateTime(2026, 8),
+        DateTime(2026, 9),
+      ]);
+    });
   });
 
   group('records that start recently', () {

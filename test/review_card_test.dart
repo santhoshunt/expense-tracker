@@ -10,10 +10,12 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
+import 'package:expense_tracker/widgets/review_sheet.dart';
 
-/// v1.42.0 review card: suggestions as their own cards, Link for a refund,
-/// rows in a suggestion out of the list, the bulk actions under it, past
-/// refunds keeping the card up, and the filter sheet's year label.
+/// The review suggestions, now in the review sheet (v1.43.0): suggestions
+/// as their own cards, Link for a refund, rows in a suggestion out of the
+/// list, the bulk actions pinned under it, past refunds keeping the sheet
+/// up, and the filter sheet's year label.
 /// Invented merchants, accounts and alerts only.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -89,6 +91,21 @@ void main() {
     (w) => w.runtimeType.toString() == '_SuggestionCard',
   );
 
+  /// v1.43.0: the suggestions live in the review sheet; this page opens it.
+  final sheetOpener = Builder(
+    builder: (context) => Center(
+      child: TextButton(
+        onPressed: () => showReviewSheet(context),
+        child: const Text('open'),
+      ),
+    ),
+  );
+
+  Future<void> openSheet(WidgetTester tester) async {
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('a refund suggestion shows both sides and Link links it', (
     tester,
   ) async {
@@ -98,10 +115,15 @@ void main() {
     final p = FinanceProvider();
     await p.load();
     await p.restoreTransactions([buy, refund(), food]);
-    await tester.pumpWidget(screen(p, await settings()));
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(screen(p, await settings(), home: sheetOpener));
+    await openSheet(tester);
 
-    expect(find.text('Imported from SMS · 2 to review'), findsOneWidget);
+    expect(find.text('Imported from SMS'), findsOneWidget);
+    expect(find.text('2 to review'), findsOneWidget);
+    // Suggestions and rows both wait: each part has its label.
+    double top(Finder f) => tester.getTopLeft(f).dy;
+    expect(top(find.text('Suggestions')), lessThan(top(card)));
+    expect(top(card), lessThan(top(find.text('To review'))));
     expect(find.text('Looks like a refund'), findsOneWidget);
     expect(card, findsOneWidget);
     Finder inCard(Finder f) => find.descendant(of: card, matching: f);
@@ -119,9 +141,9 @@ void main() {
 
     // The refund sits in its card only: the list keeps the food row.
     expect(find.byTooltip('Confirm'), findsOneWidget);
-    final foodTitle = find.text('${categoryById('food').label} · Tasty Corner');
+    final foodTitle = find.text('Tasty Corner');
     expect(foodTitle, findsOneWidget);
-    // Discard all and Confirm all sit under the list.
+    // Discard all and Confirm all sit pinned under the list.
     expect(
       tester.getTopLeft(find.text('Confirm all')).dy,
       greaterThan(tester.getBottomLeft(foodTitle).dy),
@@ -141,6 +163,8 @@ void main() {
     expect(row().refundOf, 'buy');
     expect(p.isLinkedRefund(row()), isTrue);
     expect(find.text('Looks like a refund'), findsNothing);
+    // The food row is left, so the sheet stays and shows the toast itself.
+    expect(find.text('Imported from SMS'), findsOneWidget);
     expect(find.text('Linked as a refund'), findsOneWidget);
 
     // Undo puts the refund back in review, linked to nothing.
@@ -151,8 +175,8 @@ void main() {
     expect(find.text('Looks like a refund'), findsOneWidget);
   });
 
-  testWidgets('a counted refund to review keeps the card up with no imports, '
-      'and Not a refund drops it', (tester) async {
+  testWidgets('a counted refund to review fills the sheet with no imports, '
+      'and Not a refund closes it with Undo on the page', (tester) async {
     SharedPreferences.setMockInitialValues({
       'transactions_v1': jsonEncode([
         buy.toJson(),
@@ -165,22 +189,27 @@ void main() {
     await p.load();
     final s = await settings();
     expect(p.refundReviewIds, {'r-past'});
-    await tester.pumpWidget(screen(p, s));
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(screen(p, s, home: sheetOpener));
+    await openSheet(tester);
 
-    expect(find.text('Imported from SMS · 1 to review'), findsOneWidget);
+    expect(find.text('1 to review'), findsOneWidget);
     expect(find.text('Looks like a refund'), findsOneWidget);
+    // One part only: no section labels, and no batch bar.
+    expect(find.text('Suggestions'), findsNothing);
     expect(find.text('Confirm all'), findsNothing);
     expect(find.byTooltip('Confirm'), findsNothing);
 
-    await tester.ensureVisible(find.text('Not a refund'));
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Not a refund'));
     await tester.pumpAndSettle();
     expect(s.dismissedPairSuggestions, contains('refund|r-past|buy'));
     expect(p.refundReviewIds, isEmpty);
-    expect(find.text('Looks like a refund'), findsNothing);
-    expect(find.textContaining('Imported from SMS'), findsNothing);
+    // Emptied, the sheet closes; the toast waits on the page.
+    expect(find.text('Imported from SMS'), findsNothing);
+    expect(find.text('Marked not a refund'), findsOneWidget);
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(p.refundReviewIds, {'r-past'});
+    expect(s.dismissedPairSuggestions, isNot(contains('refund|r-past|buy')));
   });
 
   testWidgets('suggestion cards fit 320dp at 2x text', (tester) async {
@@ -194,8 +223,10 @@ void main() {
       refund().copyWith(amount: 1234567.89),
       food,
     ]);
-    await tester.pumpWidget(screen(p, await settings(), textScale: 2));
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(
+      screen(p, await settings(), textScale: 2, home: sheetOpener),
+    );
+    await openSheet(tester);
 
     expect(tester.takeException(), isNull);
     expect(find.text('Looks like a refund'), findsOneWidget);

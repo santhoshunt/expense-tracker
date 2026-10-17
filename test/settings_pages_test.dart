@@ -52,10 +52,11 @@ void main() {
       'Appearance': 'Dark theme',
       'SMS import': 'Automatic SMS import',
       'Backup and data': 'Cloud backup',
+      'Notifications': 'Budget alerts',
       'Privacy': 'App lock',
-      'Category order': 'In the add and edit sheets',
       'About': 'Check for updates',
     };
+    expect(find.text('Category order'), findsNothing, reason: 'moved');
     for (final title in pages.keys) {
       expect(find.text(title), findsOneWidget, reason: title);
     }
@@ -81,25 +82,37 @@ void main() {
         .read<SettingsProvider>();
 
     // A new install: dark, the default theme's own accent, no automatic
-    // import, no lock, most used first.
+    // import, no lock. Budget alerts count only with a cap or a custom
+    // budget to watch, so three of the four alerts are on.
     expect(find.text('Dark · Default accent'), findsOneWidget);
     expect(find.text('Automatic import off'), findsOneWidget);
     expect(find.text('Lock off'), findsOneWidget);
-    expect(find.text('Most used first'), findsOneWidget);
-    // The rows are one grouped card.
-    expect(find.byType(GroupedSurface), findsNWidgets(6));
+    expect(find.text('3 of 4 on'), findsOneWidget);
+    // The Cockpit card, then the rows of one grouped card.
+    expect(find.byType(GroupedSurface), findsNWidgets(7));
+    expect(find.text('Rules, categories, budgets, dashboard layout'), findsOne);
 
     await settings.setMode(ThemeMode.light);
     await settings.setPalette(AppPalette.ocean);
     await settings.setAutoImport(AutoImportFrequency.daily);
     await settings.setAppLock(true);
     await settings.setHideIncome(true);
-    await settings.setCategoryOrder(CategoryOrder.alphabetical);
+    await settings.setMonthlyBudget(40000);
     await pumpThrough(tester);
     expect(find.text('Light · Ocean accent'), findsOneWidget);
     expect(find.text('Daily'), findsOneWidget);
     expect(find.text('Lock on · Income hidden'), findsOneWidget);
-    expect(find.text('A to Z'), findsOneWidget);
+    expect(find.text('4 of 4 on'), findsOneWidget);
+
+    // Every mode but Off shows its own label, On open included.
+    await settings.setAutoImport(AutoImportFrequency.everyOpen);
+    await settings.setBudgetAlerts(false);
+    await settings.setUnusualAlerts(false);
+    await settings.setWeeklyDigest(false);
+    await settings.setUpcomingReminders(false);
+    await pumpThrough(tester);
+    expect(find.text('On open'), findsOneWidget);
+    expect(find.text('All off'), findsOneWidget);
   });
 
   testWidgets('radio options carry a short line each, and the paragraphs '
@@ -116,13 +129,32 @@ void main() {
     await pumpThrough(tester);
     expect(find.textContaining('Used in dark mode'), findsNothing);
     expect(find.textContaining('Used for buttons, highlights'), findsNothing);
-    await tester.pageBack();
+  });
+
+  testWidgets('SMS import: On open, an SMS filters row, and RCS capture as a '
+      'plain row', (tester) async {
+    await pumpSettings(tester);
+    await tester.tap(find.text('SMS import'));
     await pumpThrough(tester);
 
-    await tester.tap(find.text('Category order'));
-    await pumpThrough(tester);
-    expect(find.text('By amount over the last three months'), findsOneWidget);
-    expect(find.textContaining('How the category list'), findsNothing);
+    expect(find.text('On open'), findsOneWidget);
+    expect(find.text('Launch'), findsNothing);
+    expect(find.text('SMS filters'), findsOneWidget);
+    final finance = tester
+        .element(find.byType(SettingsGroupPage))
+        .read<FinanceProvider>();
+    final n = finance.importRules.length;
+    expect(
+      find.text(
+        'What gets ignored or flagged · $n ${n == 1 ? 'rule' : 'rules'}',
+      ),
+      findsOneWidget,
+    );
+    // No access under tests: Off, with the explanation in its tip.
+    expect(find.text('Capture RCS alerts'), findsOneWidget);
+    expect(find.text('Off · tap to allow notification access'), findsOneWidget);
+    expect(find.text('Enable'), findsNothing);
+    expect(find.bySemanticsLabel('About Capture RCS alerts'), findsOneWidget);
   });
 
   testWidgets('Move glow with tilt switch toggles the setting', (tester) async {

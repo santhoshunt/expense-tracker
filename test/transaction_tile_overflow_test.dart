@@ -1,7 +1,4 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,9 +10,9 @@ import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/transaction_tile.dart';
 
-/// The tile's "note · date" line fits any width and text scale: the note
-/// and its separator give way before the line can overflow, and the date
-/// always shows.
+/// The tile leads with its merchant (Paid to or the note), the category
+/// under it, and the date or time under the amount (v1.43.0). It fits any
+/// width and text scale, and the date always shows.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -121,9 +118,9 @@ void main() {
       textScale: scale,
     );
 
-    // Side by side: the amount level with the category, to its right.
+    // Side by side: the amount level with the title, to its right.
     await at(1.3);
-    final title = find.text('Food & Dining');
+    final title = find.text('coffeerun');
     expect(
       tester.getTopLeft(amount).dx,
       greaterThan(tester.getTopRight(title).dx),
@@ -142,9 +139,8 @@ void main() {
     );
   });
 
-  testWidgets('at normal size the note, separator and date all show', (
-    tester,
-  ) async {
+  testWidgets('at normal size the note leads, the category sits under it '
+      'and the date under the amount', (tester) async {
     final p = await seeded('coffeerun');
     await pump(
       tester,
@@ -154,23 +150,72 @@ void main() {
       textScale: 1,
     );
     expect(tester.takeException(), isNull);
-    expect(find.text(' · '), findsOneWidget);
-    expect(find.text(dateLabel), findsOneWidget);
-    // Laid out as before: the note gets its natural width, capped at its
-    // 3/5 share of the line after the " · ".
-    final note = tester.renderObject<RenderParagraph>(find.text('coffeerun'));
-    final line = tester.getSize(
-      find
-          .ancestor(of: find.text('coffeerun'), matching: find.byType(Row))
-          .first,
-    );
-    final separator = tester.getSize(find.text(' · '));
-    final natural = note.getMaxIntrinsicWidth(double.infinity);
+    final title = find.text('coffeerun');
+    final category = find.text('Food & Dining');
+    final amount = find.text('−${fmtMoney(120)}');
+    final day = find.text(dateLabel);
     expect(
-      note.size.width,
-      moreOrLessEquals(
-        min(natural, (line.width - separator.width) * 3 / 5),
-        epsilon: 0.01,
+      tester.getTopLeft(category).dy,
+      greaterThanOrEqualTo(tester.getBottomLeft(title).dy),
+    );
+    expect(
+      tester.getTopLeft(day).dy,
+      greaterThanOrEqualTo(tester.getBottomLeft(amount).dy),
+    );
+    expect(
+      tester.getTopRight(day).dx,
+      moreOrLessEquals(tester.getTopRight(amount).dx, epsilon: 0.5),
+    );
+    // The note is the title, so line two does not repeat it.
+    expect(title, findsOneWidget);
+  });
+
+  testWidgets('Paid to leads, line two adds the note; no name, no line two', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 90,
+      payee: 'Sample Mess',
+      note: 'lunch with team',
+      date: date,
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 40,
+      note: '',
+      date: date.add(const Duration(hours: 13, minutes: 5)),
+    );
+    final named = p.transactions.firstWhere((t) => t.payee.isNotEmpty);
+    final plain = p.transactions.firstWhere((t) => t.payee.isEmpty);
+    await pump(
+      tester,
+      p,
+      ListView(
+        children: [
+          TransactionTile(tx: named),
+          // Under a day header: the time under the amount.
+          TransactionTile(tx: plain, showDate: false),
+        ],
+      ),
+      size: const Size(400, 800),
+      textScale: 1,
+    );
+    expect(tester.takeException(), isNull);
+    expect(find.text('Sample Mess'), findsOneWidget);
+    expect(find.text('Food & Dining · lunch with team'), findsOneWidget);
+    // The row with no name is titled by its category and has no line two.
+    expect(find.text('Food & Dining'), findsOneWidget);
+    final time = find.text(fmtTime(plain.date));
+    expect(time, findsOneWidget);
+    expect(
+      tester.getTopLeft(time).dy,
+      greaterThanOrEqualTo(
+        tester.getBottomLeft(find.text('−${fmtMoney(40)}')).dy,
       ),
     );
   });

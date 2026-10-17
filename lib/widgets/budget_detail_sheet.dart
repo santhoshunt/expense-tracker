@@ -6,8 +6,8 @@ import '../models/spend_budget.dart';
 import '../models/transaction.dart' show TxCategory, TxType;
 import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
+import '../utils/contrast.dart';
 import '../utils/format.dart';
-import '../utils/money_colors.dart';
 import 'budget_dialog.dart';
 import 'category_donut_chart.dart';
 import 'info_tip.dart';
@@ -137,6 +137,12 @@ Future<void> showBudgetDetailSheet(
             if (m.isAfter(latest)) latest = m;
           }
           final end = windowEnd ??= initialBudgetWindowEnd(shown, latest);
+          // The ledger's first month: nothing before it is on record, so the
+          // chevron stops there and earlier bars stay empty.
+          final first = finance.firstTransactionDate;
+          final firstMonth = first == null
+              ? null
+              : DateTime(first.year, first.month);
           void showMonth(DateTime m) => setSheetState(() {
             shown = m;
             windowEnd = pageBudgetWindow(
@@ -164,6 +170,13 @@ Future<void> showBudgetDetailSheet(
           final trend = [
             for (final m in months) finance.budgetSpentFor(budget, m),
           ];
+          // The window's months from the first one on record, for the
+          // chart's heading.
+          final fromFirst = [
+            for (final m in months)
+              if (firstMonth == null || !m.isBefore(firstMonth)) m,
+          ];
+          final onRecord = fromFirst.isEmpty ? months : fromFirst;
           String emptyText(DateTime m) =>
               'Nothing counted toward this budget in ${fmtMonth(m)}.';
 
@@ -293,8 +306,12 @@ Future<void> showBudgetDetailSheet(
                           tooltip: 'Previous month',
                           visualDensity: VisualDensity.compact,
                           icon: const Icon(Icons.chevron_left, size: 20),
-                          onPressed: () =>
-                              showMonth(DateTime(shown.year, shown.month - 1)),
+                          onPressed:
+                              firstMonth != null && !shown.isAfter(firstMonth)
+                              ? null
+                              : () => showMonth(
+                                  DateTime(shown.year, shown.month - 1),
+                                ),
                         ),
                         Text(
                           fmtMonth(shown),
@@ -342,30 +359,24 @@ Future<void> showBudgetDetailSheet(
                                 fit: BoxFit.scaleDown,
                                 alignment: Alignment.centerLeft,
                                 child: Text(
-                                  '${fmtMoney(spent)} / ${fmtMoney(limit)}',
+                                  '${fmtMoneyWhole(spent)} / '
+                                  '${fmtMoneyWhole(limit)}',
                                   style: Theme.of(ctx).textTheme.titleMedium
                                       ?.copyWith(fontWeight: FontWeight.w700),
                                 ),
                               ),
                               const SizedBox(height: 4),
-                              // Over the limit, the line is in the money-out
-                              // red.
+                              // Plain text either way: the ring carries the
+                              // colour.
                               Text(
                                 over
-                                    ? '${fmtMoneyCompact(spent - limit)} '
+                                    ? '${fmtMoneyWhole(spent - limit)} '
                                           'over the limit'
                                           '${shown == current ? '' : ' $when'}'
-                                    : '${fmtMoneyCompact(limit - spent)} '
+                                    : '${fmtMoneyWhole(limit - spent)} '
                                           'left $when',
                                 style: Theme.of(ctx).textTheme.bodySmall
-                                    ?.copyWith(
-                                      color: over
-                                          ? moneyColor(
-                                              ctx,
-                                              type: TxType.expense,
-                                            )
-                                          : scheme.onSurface,
-                                    ),
+                                    ?.copyWith(color: scheme.onSurface),
                               ),
                             ],
                           ),
@@ -398,13 +409,24 @@ Future<void> showBudgetDetailSheet(
                               ),
                             ),
                           ),
-                        CategoryDonutChart(
-                          key: const ValueKey('budget-donut'),
-                          data: breakdown,
-                          emptyRing: true,
-                          emptyText: emptyText(shown),
-                          onCategoryTap: onCategoryTap,
-                        ),
+                        // One category is not a split: a full ring says
+                        // nothing a line cannot.
+                        if (breakdown.length == 1)
+                          Align(
+                            alignment: Alignment.topCenter,
+                            child: _OneCategoryLine(
+                              entry: breakdown.single,
+                              onTap: onCategoryTap,
+                            ),
+                          )
+                        else
+                          CategoryDonutChart(
+                            key: const ValueKey('budget-donut'),
+                            data: breakdown,
+                            emptyRing: true,
+                            emptyText: emptyText(shown),
+                            onCategoryTap: onCategoryTap,
+                          ),
                       ],
                     ),
                     const SizedBox(height: 20),
@@ -412,19 +434,25 @@ Future<void> showBudgetDetailSheet(
                       alignment: Alignment.centerLeft,
                       child: InfoLabel(
                         // Names its months: once the window pages back,
-                        // they are no longer the last six.
+                        // they are no longer the last six. The empty slots
+                        // before the first month on record are left out.
                         label: Text(
-                          '$kBudgetChartMonths months: '
-                          '${DateFormat('MMM').format(months.first)} to '
-                          '${DateFormat('MMM').format(months.last)}',
+                          onRecord.length == 1
+                              ? '1 month: '
+                                    '${DateFormat('MMM').format(onRecord.first)}'
+                              : '${onRecord.length} months: '
+                                    '${DateFormat('MMM').format(onRecord.first)} to '
+                                    '${DateFormat('MMM').format(onRecord.last)}',
                           style: Theme.of(ctx).textTheme.titleSmall,
                         ),
                         tip: const InfoTip(
                           title: '$kBudgetChartMonths months',
                           message:
                               "Each bar is that month's spending in this "
-                              'budget, coloured like the ring. The line '
-                              'marks the limit. The six months stay put '
+                              'budget, coloured like the ring, with its '
+                              'amount above it when there is any. The line '
+                              'marks the limit. Months before your records '
+                              'start stay empty. The six months stay put '
                               'while you step through them; stepping past '
                               'either end moves six months. Tap a bar to '
                               'show that month.',
@@ -437,6 +465,7 @@ Future<void> showBudgetDetailSheet(
                       spent: trend,
                       limit: limit,
                       selected: shown,
+                      firstMonth: firstMonth,
                       // A bar shows its month: the sheet steps there, as
                       // the chevrons do.
                       onSelect: showMonth,
@@ -474,12 +503,16 @@ class _BudgetTrendBars extends StatelessWidget {
   final DateTime selected;
   final ValueChanged<DateTime> onSelect;
 
+  /// The ledger's first month; a slot before it stays empty and untappable.
+  final DateTime? firstMonth;
+
   const _BudgetTrendBars({
     required this.months,
     required this.spent,
     required this.limit,
     required this.selected,
     required this.onSelect,
+    this.firstMonth,
   });
 
   @override
@@ -504,6 +537,9 @@ class _BudgetTrendBars extends StatelessWidget {
       color: scheme.onSurface,
     );
 
+    // A month before the records start is not on record at all.
+    bool before(int i) => firstMonth != null && months[i].isBefore(firstMonth!);
+
     // One row of six equal slots, so the value labels, the bars and the
     // month labels line up column for column.
     Widget slots(Widget Function(int i) cell) => Row(
@@ -511,7 +547,7 @@ class _BudgetTrendBars extends StatelessWidget {
       children: [
         for (var i = 0; i < months.length; i++) ...[
           if (i > 0) const SizedBox(width: 8),
-          Expanded(child: cell(i)),
+          Expanded(child: before(i) ? const SizedBox.shrink() : cell(i)),
         ],
       ],
     );
@@ -560,9 +596,14 @@ class _BudgetTrendBars extends StatelessWidget {
       child: Column(
         children: [
           slots(
+            // Only above a bar with something in it: a row of "₹0" said
+            // nothing.
             (i) => FittedBox(
               fit: BoxFit.scaleDown,
-              child: Text(fmtMoneyCompact(spent[i]), style: label),
+              child: Text(
+                spent[i] > 0 ? fmtMoneyCompact(spent[i]) : '',
+                style: label,
+              ),
             ),
           ),
           const SizedBox(height: 2),
@@ -615,6 +656,41 @@ class _BudgetTrendBars extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// A month whose budget spending sits in one category: "All in Groceries"
+/// and the amount, in place of a ring that would be one full circle. The
+/// row opens that category, as a legend entry does.
+class _OneCategoryLine extends StatelessWidget {
+  final MapEntry<TxCategory, double> entry;
+  final void Function(String categoryId)? onTap;
+
+  const _OneCategoryLine({required this.entry, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = entry.key;
+    final tap = onTap;
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.control),
+      onTap: tap == null ? null : () => tap(c.id),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Row(
+          children: [
+            Icon(c.icon, size: 20, color: categoryGlyphColor(context, c.color)),
+            const SizedBox(width: 12),
+            Expanded(child: Text('All in ${c.label}')),
+            const SizedBox(width: 8),
+            Text(
+              fmtMoneyWhole(entry.value),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
       ),
     );
   }

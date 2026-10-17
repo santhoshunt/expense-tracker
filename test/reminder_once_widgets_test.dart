@@ -241,7 +241,11 @@ void main() {
     expect(find.textContaining('Once, ${on.day} '), findsOneWidget);
     expect(find.textContaining(' · done'), findsOneWidget);
     expect(find.textContaining(' · paid'), findsNothing);
-    await tester.tap(find.byTooltip('Delete reminder'));
+    // A tap edits; Delete lives in the editor.
+    await tester.tap(find.textContaining(' · done'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.tap(find.widgetWithText(TextButton, 'Delete'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 700));
     expect(p.reminders, isEmpty);

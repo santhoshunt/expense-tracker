@@ -191,6 +191,8 @@ class BackupService {
     'unseen',
     // The id of the purchase a refund is linked to (Tx.refundOf).
     'refundOf',
+    // Who a manual entry paid (Tx.payee); older files lack it.
+    'payee',
   ];
 
   /// A split's people as one CSV cell:
@@ -356,6 +358,7 @@ class BackupService {
           t.walletCounted.toString(),
           t.unseen.toString(),
           _csvEscape(t.refundOf ?? ''),
+          _csvEscape(t.payee),
         ].join(','),
       );
     }
@@ -499,6 +502,8 @@ class BackupService {
     final unseenCol = col('unseen');
     // Older files lack the column; their rows link to no purchase.
     final refundOfCol = col('refundof');
+    // Older files lack the column; their rows name no payee.
+    final payeeCol = col('payee');
 
     String cell(List<String> r, int? c) {
       final v = c == null || c >= r.length ? '' : r[c].trim();
@@ -597,6 +602,7 @@ class BackupService {
           '' => null,
           final p => p,
         },
+        payee: normalizePayee(cell(r, payeeCol)),
       );
       // CSVs written before the smsBody column existed kept the raw SMS in
       // the note, so that note has to be moved. Files with either the
@@ -1124,7 +1130,7 @@ class BackupService {
                 2: const pw.FlexColumnWidth(),
                 3: const pw.FixedColumnWidth(72),
               },
-              headers: ['Date', 'Category', 'Note', 'Amount'],
+              headers: ['Date', 'Category', 'Details', 'Amount'],
               headerStyle: pw.TextStyle(
                 fontSize: 8,
                 fontWeight: pw.FontWeight.bold,
@@ -1156,9 +1162,14 @@ class BackupService {
                       if (t.countIn != null)
                         'counts in ${DateFormat('d MMM').format(t.countIn!)}',
                     ].join(' · '),
-                    // The user's own words only — no fallback. Blank stays
-                    // blank; the raw SMS body never leaves the app.
-                    clip(t.note),
+                    // The user's own words only: Paid to and the note. Blank
+                    // stays blank; the raw SMS body never leaves the app.
+                    clip(
+                      [
+                        t.payee,
+                        t.note,
+                      ].where((s) => s.trim().isNotEmpty).join(' · '),
+                    ),
                     '${t.type == TxType.income ? '+' : '-'}${_money.format(t.amount)}',
                   ],
               ],

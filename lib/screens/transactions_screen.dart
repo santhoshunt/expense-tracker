@@ -14,9 +14,6 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/backup_service.dart';
 import '../services/recurring_detector.dart';
-import '../services/refund_matching.dart';
-import '../services/transfer_pairing.dart';
-import '../widgets/animated_fold.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../utils/contrast.dart';
@@ -36,8 +33,6 @@ import '../widgets/status_dot.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/transaction_tile.dart';
 import '../widgets/undo_snackbar.dart';
-import '../widgets/info_tip.dart';
-import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
 
 enum _Filter { all, income, expense, transfers }
@@ -53,6 +48,14 @@ const _sortLabels = {
   _Sort.dateAsc: 'Date · oldest first',
   _Sort.amountDesc: 'Amount · high to low',
   _Sort.amountAsc: 'Amount · low to high',
+};
+
+/// The sort chip's short names.
+const _sortShort = {
+  _Sort.dateDesc: 'Newest first',
+  _Sort.dateAsc: 'Oldest first',
+  _Sort.amountDesc: 'Largest first',
+  _Sort.amountAsc: 'Smallest first',
 };
 
 /// A deep-link into the Transactions tab: exactly which filters to apply.
@@ -307,64 +310,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   // its output is cached and recomputed only when the data or the filters
   // actually change (see _recomputePipeline) — not on selection taps,
   // scroll-driven setStates or jump-control visibility toggles.
-  /// Transfer-pair suggestions walk every row, so they are memoised on the
-  /// ledger revision plus the dismissal list (dashboard `_recurring` idiom).
-  Object? _pairRev;
-  int _pairDismissedCount = -1;
-  List<PairSuggestion> _pairs = const [];
-
-  List<PairSuggestion> _pairSuggestions(
-    FinanceProvider finance,
-    List<Tx> pending,
-    List<Tx> confirmed,
-  ) {
-    final dismissed = context.read<SettingsProvider>().dismissedPairSuggestions;
-    if (!identical(_pairRev, finance.revision) ||
-        _pairDismissedCount != dismissed.length) {
-      _pairRev = finance.revision;
-      _pairDismissedCount = dismissed.length;
-      _pairs = suggestTransferPairs(
-        [...pending, ...confirmed],
-        dismissed: dismissed,
-        accountFor: finance.accountForKey,
-      );
-    }
-    return _pairs;
-  }
-
-  /// "Looks like a refund" suggestions, memoised the same way: for income
-  /// rows in review, and for confirmed ones the one-time refund pass left
-  /// to look at ([FinanceProvider.refundReviewIds]).
-  Object? _refundRev;
-  int _refundDismissedCount = -1;
-  List<RefundSuggestion> _refunds = const [];
-
-  List<RefundSuggestion> _refundSuggestions(
-    FinanceProvider finance,
-    List<Tx> pending,
-  ) {
-    final dismissed = context.read<SettingsProvider>().dismissedPairSuggestions;
-    if (!identical(_refundRev, finance.revision) ||
-        _refundDismissedCount != dismissed.length) {
-      _refundRev = finance.revision;
-      _refundDismissedCount = dismissed.length;
-      final reviewIds = finance.refundReviewIds;
-      bool open(Tx t) =>
-          t.type == TxType.income &&
-          t.refundOf == null &&
-          t.pairId == null &&
-          !isTransferCategory(t.categoryId);
-      _refunds = finance.refundSuggestions([
-        for (final t in pending)
-          if (open(t)) t,
-        if (reviewIds.isNotEmpty)
-          for (final t in finance.transactions)
-            if (reviewIds.contains(t.id) && open(t)) t,
-      ], dismissed);
-    }
-    return _refunds;
-  }
-
   Object? _pipelineRevision;
   String? _pipelineFingerprint;
 
@@ -372,26 +317,19 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// ledger or a non-tab filter input changes.
   final Map<_Filter, _PageData> _pageCache = {};
 
-  /// One compact, dismissible chip per active filter. Named chips so a
-  /// deep-link (or a sheet Apply) always says WHAT is filtering the list
-  /// and offers an inline way out; compact density so a strip of many
-  /// stays one short line (horizontally scrollable at the call site).
+  /// One chip per active filter, each with a 48dp close target. Named chips
+  /// so a deep-link (or a sheet Apply) always says WHAT is filtering the
+  /// list and offers an inline way out; one short line, horizontally
+  /// scrollable at the call site.
   List<Widget> _activeFilterChips(
     FinanceProvider finance,
     Account? activeAccount,
   ) {
-    InputChip chip({
+    Widget chip({
       required Widget avatar,
       required String label,
       required VoidCallback onDeleted,
-    }) => InputChip(
-      avatar: avatar,
-      // Ellipsized when the strip caps the chip's width.
-      label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
-      visualDensity: VisualDensity.compact,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      onDeleted: onDeleted,
-    );
+    }) => _ActiveFilterChip(avatar: avatar, label: label, onRemove: onDeleted);
 
     return [
       if (activeAccount != null)
@@ -472,16 +410,34 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     return 'Amount up to ${fmtMoneyTidy(max ?? 0)}';
   }
 
-  bool get _hasAdvancedFilters =>
-      _categoryFilter.isNotEmpty ||
-      _groupFilter.isNotEmpty ||
-      _budgetFilter.isNotEmpty ||
-      _tagFilter.isNotEmpty ||
-      _minAmount != null ||
-      _maxAmount != null ||
-      _accountId != null ||
-      _monthFilter != null ||
-      _rangeFilter != null;
+  /// Clears every filter the chip strip shows; the search, the type tab
+  /// and the sort stay. Call inside setState.
+  void _clearFilters() {
+    _categoryFilter.clear();
+    _groupFilter.clear();
+    _budgetFilter.clear();
+    _tagFilter.clear();
+    _minAmount = null;
+    _maxAmount = null;
+    _accountId = null;
+    _monthFilter = null;
+    _setRange(null);
+  }
+
+  /// The sort picker under the search.
+  Future<void> _openSort() async {
+    final r = await showPickerSheet<_Sort>(
+      context: context,
+      title: 'Sort by',
+      items: [
+        for (final s in _Sort.values)
+          PickerItem(value: s, label: _sortLabels[s]!),
+      ],
+      selected: _sort,
+    );
+    final v = r?.value;
+    if (v != null && mounted) setState(() => _sort = v);
+  }
 
   @override
   void didUpdateWidget(TransactionsScreen oldWidget) {
@@ -541,52 +497,37 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     });
   }
 
-  /// The pending count the ⋮ menu entries were last scheduled for: the
-  /// only part of their labels that changes.
-  int? _menuPending;
+  /// The ⋮ menu entries' labels as last published, joined.
+  String? _menuLabels;
 
   /// Publishes this tab's "This page" entries in Home's ⋮ menu after the
   /// frame, and only when their labels change.
-  void _scheduleMenuPublish(int pendingCount) {
-    if (_menuPending == pendingCount) return;
-    _menuPending = pendingCount;
+  void _scheduleMenuPublish() {
+    final entries = [
+      if (AppNav.instance.canImportSms)
+        PageMenuAction(
+          icon: Icons.sms_outlined,
+          label: 'Import from SMS',
+          onTap: () => AppNav.instance.importSms(context),
+        ),
+      PageMenuAction(
+        icon: Icons.checklist,
+        label: 'Select',
+        onTap: _enterSelectMode,
+      ),
+      PageMenuAction(
+        icon: Icons.download_outlined,
+        label: 'Export CSV',
+        onTap: _exportCsv,
+      ),
+    ];
+    final labels = entries.map((e) => e.label).join('|');
+    if (labels == _menuLabels) return;
+    _menuLabels = labels;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      AppNav.instance.pageMenu.publish(this, kHomeTabTransactions, [
-        if (pendingCount > 0)
-          PageMenuAction(
-            icon: Icons.inbox_outlined,
-            label: 'Review imports ($pendingCount)',
-            onTap: _openReview,
-          ),
-        PageMenuAction(
-          icon: Icons.checklist,
-          label: 'Select',
-          onTap: _enterSelectMode,
-        ),
-        PageMenuAction(
-          icon: Icons.download_outlined,
-          label: 'Export CSV',
-          onTap: _exportCsv,
-        ),
-      ]);
+      AppNav.instance.pageMenu.publish(this, kHomeTabTransactions, entries);
     });
-  }
-
-  /// Opens whichever review card is folded. Both sit pinned above the
-  /// list, so opening them is all it takes to bring them into view.
-  void _openReview() {
-    if (!mounted) return;
-    final settings = context.read<SettingsProvider>();
-    final pending = context.read<FinanceProvider>().pendingTransactions;
-    if (pending.any((t) => !t.suspectedSpam) &&
-        settings.isSectionCollapsed('pending_review')) {
-      settings.toggleSection('pending_review');
-    }
-    if (pending.any((t) => t.suspectedSpam) &&
-        settings.isSectionCollapsed('spam_review')) {
-      settings.toggleSection('spam_review');
-    }
   }
 
   /// Selection mode with nothing picked yet: row taps then select.
@@ -1045,12 +986,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final finance = context.watch<FinanceProvider>();
     // Read once: each of these getters used to be called two or more times per
     // build, and each one filters the whole ledger.
-    final allPending = finance.pendingTransactions;
     final allConfirmed = finance.transactions;
-    final pending = allPending.where((t) => !t.suspectedSpam).toList();
-    final spamSuspects = allPending.where((t) => t.suspectedSpam).toList();
     final filtered = _pageDataFor(_filter, finance, allConfirmed).filtered;
-    _scheduleMenuPublish(finance.pendingCount);
+    _scheduleMenuPublish();
     _newLineShown = finance.unseenCount > 0;
     // Drop selections that no longer exist (deleted, or re-filtered away by
     // an edit) so the action bar count never lies.
@@ -1064,89 +1002,20 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final activeAccount = _accountId == null
         ? null
         : finance.accountById(_accountId!);
-    // Rebuilds on "Not a transfer" and its Undo: the suggestions below
-    // read the dismissed list, which lives in settings, not the ledger.
-    context.select<SettingsProvider, int>(
-      (s) => s.dismissedPairSuggestions.length,
-    );
-    final pairs = pending.isEmpty
-        ? const <PairSuggestion>[]
-        : _pairSuggestions(finance, allPending, allConfirmed);
-    final refunds = pending.isEmpty && finance.refundReviewIds.isEmpty
-        ? const <RefundSuggestion>[]
-        : _refundSuggestions(finance, pending);
-    // Refunds already counted, offered for a link: they keep the review
-    // card up with no import waiting, and count in its title.
-    final pastRefunds = refunds.where((s) => !s.refund.pending).length;
-    // Up to three suggestions, transfers first. A row already in a shown
-    // transfer is not offered as a refund too.
-    final shownPairs = pairs.take(3).toList();
-    final paired = {
-      for (final s in shownPairs) ...[s.out.id, s.incoming.id],
-    };
-    final shownRefunds = refunds
-        .where((s) => !paired.contains(s.refund.id))
-        .take(3 - shownPairs.length)
-        .toList();
-    final showReview = pending.isNotEmpty || pastRefunds > 0;
 
-    final hasFilterChips =
-        activeAccount != null ||
-        _monthFilter != null ||
-        _rangeFilter != null ||
-        _categoryFilter.isNotEmpty ||
-        _groupFilter.isNotEmpty ||
-        _budgetFilter.isNotEmpty ||
-        _tagFilter.isNotEmpty ||
-        _minAmount != null ||
-        _maxAmount != null;
+    // Built once: the Filters chip counts exactly the chips the strip shows.
+    // _pageDataFor above has already dropped the ids of deleted categories,
+    // groups, budgets and tags, so every filter still on has its chip.
+    final filterChips = _activeFilterChips(finance, activeAccount);
+    final hasFilterChips = filterChips.isNotEmpty;
 
-    // The cards and bars above the list fold in and out (AnimatedPresence)
-    // so the list slides instead of jumping. Each child is built only while
-    // it shows: once hidden, the switcher keeps the last built copy for the
-    // fold-out, so no card is ever built from an empty list.
-    //
-    // The two review cards share at most [_kReviewCardsShare] of the
-    // height and scroll inside it: open, with large text on a small phone,
-    // they used to take the whole screen and leave the list none. They stay
-    // out of the list itself, whose rows are indexed for the month jumps
-    // and the sticky band.
+    // The bars above the list fold in and out (AnimatedPresence) so the
+    // list slides instead of jumping. Each child is built only while it
+    // shows: once hidden, the switcher keeps the last built copy for the
+    // fold-out.
     return LayoutBuilder(
       builder: (context, box) => Column(
         children: [
-          ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: box.maxHeight.isFinite
-                  ? box.maxHeight * _kReviewCardsShare
-                  : double.infinity,
-            ),
-            child: _ReviewCardsScroll(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  AnimatedPresence(
-                    key: const ValueKey('spam-card'),
-                    visible: spamSuspects.isNotEmpty,
-                    child: spamSuspects.isEmpty
-                        ? const SizedBox.shrink()
-                        : _SuspectedSpamCard(suspects: spamSuspects),
-                  ),
-                  AnimatedPresence(
-                    key: const ValueKey('pending-card'),
-                    visible: showReview,
-                    child: !showReview
-                        ? const SizedBox.shrink()
-                        : _PendingReviewCard(
-                            pending: pending,
-                            suggestions: shownPairs,
-                            refundSuggestions: shownRefunds,
-                            pastRefunds: pastRefunds,
-                          ),
-                  ),
-                ],
-              ),
-            ),
-          ),
           _SearchAndFilterBar(
             searchCtrl: _searchCtrl,
             onSearch: _onSearchChanged,
@@ -1156,7 +1025,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             },
             filter: _filter,
             onFilter: _setFilter,
-            hasAdvancedFilters: _hasAdvancedFilters,
+            sortLabel: _sortShort[_sort]!,
+            onOpenSort: _openSort,
+            filterCount: filterChips.length,
             onOpenFilters: _openFilterSheet,
           ),
           AnimatedPresence(
@@ -1164,41 +1035,40 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             visible: hasFilterChips,
             child: !hasFilterChips
                 ? const SizedBox.shrink()
-                // Single-line, horizontally scrollable strip of COMPACT chips —
-                // a wrapping layout grew a row per filter and buried the list
-                // when several were active.
+                // Single-line, horizontally scrollable strip: a wrapping
+                // layout grew a row per filter and buried the list when
+                // several were active. 48dp tall: each close is a full tap
+                // target; Clear all leads once two filters are on.
                 // Left-aligned under the type chips: a narrower strip would
                 // otherwise sit centred. Each chip is capped at the strip's
                 // width, its label ellipsized, so its ✕ never runs off screen
                 // at large text.
-                : Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: LayoutBuilder(
-                      builder: (context, box) => Align(
-                        alignment: AlignmentDirectional.centerStart,
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          padding: const EdgeInsets.symmetric(horizontal: 16),
-                          child: Row(
-                            children: [
-                              for (final chip in _activeFilterChips(
-                                finance,
-                                activeAccount,
-                              ))
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 8),
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      maxWidth: math.max(
-                                        0.0,
-                                        box.maxWidth - 32,
-                                      ),
-                                    ),
-                                    child: chip,
-                                  ),
+                : LayoutBuilder(
+                    builder: (context, box) => Align(
+                      alignment: AlignmentDirectional.centerStart,
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            if (filterChips.length >= 2)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: _ClearFiltersChip(
+                                  onTap: () => setState(_clearFilters),
                                 ),
-                            ],
-                          ),
+                              ),
+                            for (final chip in filterChips)
+                              Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: math.max(0.0, box.maxWidth - 32),
+                                  ),
+                                  child: chip,
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     ),
@@ -1214,6 +1084,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     onSelectAll: () => setState(
                       () => _selected.addAll([for (final t in filtered) t.id]),
                     ),
+                    onSelectNone: () => setState(() {
+                      _selected.clear();
+                      _selectMode = true;
+                    }),
                     onCategory: () => _bulkCategory(filtered),
                     onAccount: _bulkAccount,
                     onCountIn: _bulkCountIn,
@@ -1269,16 +1143,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       color: Colors.transparent,
       child: data.filtered.isEmpty
           // Scrollable so the empty state survives being squeezed: while
-          // the review cards and a snackbar animate, this area can pass
+          // a bar above it and a snackbar animate, this area can pass
           // through a few frames shorter than the text.
           ? Center(
               child: SingleChildScrollView(
                 child: allConfirmed.isEmpty
+                    // The floating button adds; the empty list offers the
+                    // import.
                     ? EmptyState(
                         icon: Icons.receipt_long_outlined,
-                        message: 'No transactions yet.',
-                        actionLabel: 'Add transaction',
-                        onAction: () => showAddTransactionSheet(context),
+                        message: AppNav.instance.canImportSms
+                            ? 'No transactions yet.\n\nImport your bank SMS '
+                                  'to bring in past payments.'
+                            : 'No transactions yet.',
+                        actionLabel: AppNav.instance.canImportSms
+                            ? 'Import SMS'
+                            : null,
+                        actionIcon: Icons.sms_outlined,
+                        onAction: AppNav.instance.canImportSms
+                            ? () => AppNav.instance.importSms(context)
+                            : null,
                       )
                     // Something is hiding every row (a chip may be
                     // scrolled out of view) — offer the way out here.
@@ -1300,15 +1184,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               setState(() {
                                 _search = '';
                                 _filter = _Filter.all;
-                                _categoryFilter.clear();
-                                _groupFilter.clear();
-                                _budgetFilter.clear();
-                                _tagFilter.clear();
-                                _minAmount = null;
-                                _maxAmount = null;
-                                _accountId = null;
-                                _monthFilter = null;
-                                _setRange(null);
+                                _clearFilters();
                               });
                               // A reset is a jump, not a sideways step.
                               if (_pageCtrl.hasClients) {
@@ -1344,7 +1220,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     itemScrollController: _listCtrls[f],
                     itemPositionsListener: _listPositions[f],
                     itemCount: data.rows.length,
-                    padding: const EdgeInsets.only(bottom: 120),
+                    // Clears the half of the docked Add button that rises
+                    // over the page.
+                    padding: const EdgeInsets.only(bottom: 48),
                     itemBuilder: (_, i) {
                       final (month, tx) = data.rows[i];
                       if (month != null) {
@@ -1519,42 +1397,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       for (final c in allCategories)
         if (types.contains(c.type)) c,
     ];
+    // The keyboard inset keeps the search field in view.
     final picked = await showModalBottomSheet<TxCategory>(
       context: context,
+      isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Set category', style: Theme.of(ctx).textTheme.titleLarge),
-              if (types.length > 1)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    'Mixed selection: the category applies only to rows of '
-                    'its own type, income or expense.',
-                    style: Theme.of(ctx).textTheme.bodySmall,
-                  ),
-                ),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  for (final c in options)
-                    ActionChip(
-                      avatar: Icon(c.icon, size: 16, color: c.color),
-                      label: categoryChipLabel(c),
-                      onPressed: () => Navigator.pop(ctx, c),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: _BulkCategorySheet(options: options, mixed: types.length > 1),
       ),
     );
     if (picked == null || !mounted) return;
@@ -2019,11 +1870,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       text: _maxAmount == null ? '' : _maxAmount!.toStringAsFixed(0),
     );
     final filterSearchCtrl = TextEditingController();
-    // The sort is a view setting, not a filter: a pick applies at once (a
-    // sheet swiped away keeps it) and Clear all leaves it alone.
-    var sort = _sort;
 
-    // Apply and Export CSV both commit the sheet's choices.
+    // Apply commits the sheet's choices.
     void apply() {
       setState(() {
         _categoryFilter
@@ -2050,8 +1898,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       });
     }
 
-    // True when the sheet closed through Export CSV.
-    final exportAfter = await showModalBottomSheet<bool>(
+    await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       // Keeps the sheet (and its drag handle) below the status bar / notch.
@@ -2193,28 +2040,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Not narrowed by the filter query, like Date.
-                            const SizedBox(height: 12),
-                            Text(
-                              'Sort by',
-                              style: Theme.of(ctx).textTheme.titleSmall,
-                            ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 4,
-                              children: [
-                                for (final s in _Sort.values)
-                                  ChoiceChip(
-                                    label: Text(_sortLabels[s]!),
-                                    selected: sort == s,
-                                    onSelected: (_) {
-                                      setSheetState(() => sort = s);
-                                      setState(() => _sort = s);
-                                    },
-                                  ),
-                              ],
-                            ),
                             // Not narrowed by the filter query: three fixed
                             // choices, and the one that is active must stay
                             // reachable.
@@ -2516,20 +2341,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               ],
                             ),
                             const SizedBox(height: 16),
-                            const Divider(height: 1),
-                            ListTile(
-                              contentPadding: EdgeInsets.zero,
-                              leading: const Icon(Icons.ios_share),
-                              title: const Text('Export CSV'),
-                              subtitle: const Text(
-                                'Applies these filters, then saves the rows '
-                                'the list shows',
-                              ),
-                              onTap: () {
-                                apply();
-                                Navigator.pop(ctx, true);
-                              },
-                            ),
                           ],
                         ),
                       );
@@ -2542,9 +2353,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ),
       ),
     );
-    // Run from this screen once the sheet has gone, so a save dialog never
-    // opens over a route that is closing.
-    if (exportAfter == true && mounted) await _exportCsv();
   }
 }
 
@@ -2705,14 +2513,118 @@ class _BulkTagSheetState extends State<_BulkTagSheet> {
   }
 }
 
-enum _MoreAction { selectAll, tags, subscription, dateTime, pair }
+/// The bulk Set category sheet: a search over the categories, then the
+/// chips it leaves. Pops the picked category.
+class _BulkCategorySheet extends StatefulWidget {
+  final List<TxCategory> options;
 
-/// Action bar shown while transactions are selected: the count, the four
-/// most used bulk edits as labelled icons, and the rest behind More. A
-/// fixed row: nothing scrolls off screen, whatever the width or text size.
+  /// Income and expense rows together: the category applies to its own
+  /// type only, and the sheet says so.
+  final bool mixed;
+
+  const _BulkCategorySheet({required this.options, required this.mixed});
+
+  @override
+  State<_BulkCategorySheet> createState() => _BulkCategorySheetState();
+}
+
+class _BulkCategorySheetState extends State<_BulkCategorySheet> {
+  final _ctrl = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final shown = [
+      for (final c in widget.options)
+        if (c.label.toLowerCase().contains(_query)) c,
+    ];
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Set category', style: textTheme.titleLarge),
+            if (widget.mixed)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  'Mixed selection: the category applies only to rows of '
+                  'its own type, income or expense.',
+                  style: textTheme.bodySmall,
+                ),
+              ),
+            const SizedBox(height: 12),
+            // The picker sheet's search field, so search looks the same
+            // everywhere.
+            TextField(
+              controller: _ctrl,
+              decoration: InputDecoration(
+                hintText: 'Search…',
+                prefixIcon: const Icon(Icons.search, size: 18),
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: 'Clear search',
+                        icon: const Icon(Icons.close, size: 16),
+                        onPressed: () {
+                          _ctrl.clear();
+                          setState(() => _query = '');
+                        },
+                      ),
+              ),
+              onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+            ),
+            const SizedBox(height: 12),
+            if (shown.isEmpty)
+              Text('No matches.', style: textTheme.bodySmall)
+            else
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final c in shown)
+                    ActionChip(
+                      avatar: Icon(c.icon, size: 16, color: c.color),
+                      label: categoryChipLabel(c),
+                      onPressed: () => Navigator.pop(context, c),
+                    ),
+                ],
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+enum _MoreAction { tags, subscription, dateTime, pair }
+
+/// The count menu's two entries.
+enum _CountAction { all, none }
+
+/// Action bar shown while transactions are selected: the count (a menu of
+/// Select all shown and Select none), the four most used bulk edits as
+/// labelled icons, and the rest behind More. A fixed row: nothing scrolls
+/// off screen, whatever the width or text size.
 class _SelectionBar extends StatelessWidget {
   final int count;
   final VoidCallback onSelectAll;
+
+  /// Empties the selection and keeps the bar, as the ⋮ menu's Select does.
+  final VoidCallback onSelectNone;
   final VoidCallback onCategory;
   final VoidCallback onAccount;
   final VoidCallback onCountIn;
@@ -2728,6 +2640,7 @@ class _SelectionBar extends StatelessWidget {
   const _SelectionBar({
     required this.count,
     required this.onSelectAll,
+    required this.onSelectNone,
     required this.onCategory,
     required this.onAccount,
     required this.onCountIn,
@@ -2773,7 +2686,27 @@ class _SelectionBar extends StatelessWidget {
                 icon: const Icon(Icons.close, size: _kBarIconSize),
                 onPressed: onClose,
               ),
-              _SelectedCount(count: count, color: scheme.primary),
+              PopupMenuButton<_CountAction>(
+                tooltip: 'Select all or none',
+                popUpAnimationStyle: const AnimationStyle(
+                  duration: Duration.zero,
+                ),
+                onSelected: (v) =>
+                    v == _CountAction.all ? onSelectAll() : onSelectNone(),
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    key: ValueKey('bulk-count-all'),
+                    value: _CountAction.all,
+                    child: Text('Select all shown'),
+                  ),
+                  PopupMenuItem(
+                    key: ValueKey('bulk-count-none'),
+                    value: _CountAction.none,
+                    child: Text('Select none'),
+                  ),
+                ],
+                child: _SelectedCount(count: count, color: scheme.primary),
+              ),
               Expanded(
                 child: _BarAction(
                   icon: Icons.category_outlined,
@@ -2822,8 +2755,6 @@ class _SelectionBar extends StatelessWidget {
                 ),
                 onSelected: (v) {
                   switch (v) {
-                    case _MoreAction.selectAll:
-                      onSelectAll();
                     case _MoreAction.tags:
                       onTags();
                     case _MoreAction.subscription:
@@ -2835,12 +2766,6 @@ class _SelectionBar extends StatelessWidget {
                   }
                 },
                 itemBuilder: (_) => [
-                  _item(
-                    _MoreAction.selectAll,
-                    'select-all',
-                    Icons.select_all,
-                    'Select all shown',
-                  ),
                   _item(_MoreAction.tags, 'tags', Icons.label_outline, 'Tags'),
                   _item(
                     _MoreAction.subscription,
@@ -2874,8 +2799,9 @@ class _SelectionBar extends StatelessWidget {
 /// Icon size across the selection bar: close, actions and More alike.
 const double _kBarIconSize = 18;
 
-/// The selection count: the number alone at the icons' size, centred in
-/// the bar's height. Shrinks to fit rather than crowding the actions.
+/// The selection count, a menu of Select all shown and Select none: the
+/// number at the icons' size with a drop-down arrow, centred in the bar's
+/// height. Shrinks to fit rather than crowding the actions.
 class _SelectedCount extends StatelessWidget {
   final int count;
   final Color color;
@@ -2884,25 +2810,36 @@ class _SelectedCount extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Semantics(
-      label: '$count selected',
+      label: '$count selected. Select all or none',
       excludeSemantics: true,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 48, maxWidth: 56),
+        // 48 by 48 at least: the menu's whole tap target.
+        constraints: const BoxConstraints(
+          minWidth: 48,
+          minHeight: 48,
+          maxWidth: 64,
+        ),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
           // FittedBox centres the number in the 48dp height.
           child: FittedBox(
             fit: BoxFit.scaleDown,
-            child: Text(
-              '$count',
-              maxLines: 1,
-              textScaler: TextScaler.noScaling,
-              style: TextStyle(
-                fontSize: _kBarIconSize,
-                height: 1,
-                fontWeight: FontWeight.w700,
-                color: color,
-              ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '$count',
+                  maxLines: 1,
+                  textScaler: TextScaler.noScaling,
+                  style: TextStyle(
+                    fontSize: _kBarIconSize,
+                    height: 1,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                  ),
+                ),
+                Icon(Icons.arrow_drop_down, size: 16, color: color),
+              ],
             ),
           ),
         ),
@@ -2995,15 +2932,22 @@ class _BarAction extends StatelessWidget {
   }
 }
 
+/// Search, then the sort and Filters chips, then the type chips.
 class _SearchAndFilterBar extends StatelessWidget {
   final TextEditingController searchCtrl;
   final ValueChanged<String> onSearch;
   final VoidCallback onClearSearch;
   final _Filter filter;
   final ValueChanged<_Filter> onFilter;
-  final bool hasAdvancedFilters;
 
-  /// The Filters sheet, which also holds the sort and Export CSV.
+  /// The current sort's short name, on the sort chip.
+  final String sortLabel;
+  final VoidCallback onOpenSort;
+
+  /// How many filter chips are on: the Filters chip counts them.
+  final int filterCount;
+
+  /// The Filters sheet.
   final VoidCallback onOpenFilters;
 
   const _SearchAndFilterBar({
@@ -3012,61 +2956,89 @@ class _SearchAndFilterBar extends StatelessWidget {
     required this.onClearSearch,
     required this.filter,
     required this.onFilter,
-    required this.hasAdvancedFilters,
+    required this.sortLabel,
+    required this.onOpenSort,
+    required this.filterCount,
     required this.onOpenFilters,
   });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
       child: Column(
         children: [
-          // Listen to the controller directly: this widget only rebuilds on
-          // the 250ms debounce, so the ✕ used to appear a beat after the
-          // first keystroke.
-          ValueListenableBuilder<TextEditingValue>(
-            valueListenable: searchCtrl,
-            builder: (context, value, _) => TextField(
-              controller: searchCtrl,
-              onChanged: onSearch,
-              decoration: InputDecoration(
-                hintText: 'Search',
-                prefixIcon: const Icon(Icons.search),
-                // Sort, filters and export sit behind one button in the
-                // field, so the search gets the whole row.
-                suffixIcon: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (value.text.isNotEmpty)
-                      IconButton(
-                        tooltip: 'Clear search',
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          searchCtrl.clear();
-                          // Immediate, not debounced: clearing should
-                          // never lag behind the tap.
-                          onClearSearch();
-                        },
-                      ),
-                    IconButton(
-                      tooltip: 'Sort, filter and export',
-                      icon: Badge(
-                        isLabelVisible: hasAdvancedFilters,
-                        child: const Icon(Icons.tune),
-                      ),
-                      onPressed: onOpenFilters,
-                    ),
-                  ],
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            // Listen to the controller directly: this widget only rebuilds
+            // on the 250ms debounce, so the ✕ used to appear a beat after
+            // the first keystroke.
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: searchCtrl,
+              builder: (context, value, _) => TextField(
+                controller: searchCtrl,
+                onChanged: onSearch,
+                decoration: InputDecoration(
+                  hintText: 'Search',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: value.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          icon: const Icon(Icons.clear),
+                          onPressed: () {
+                            searchCtrl.clear();
+                            // Immediate, not debounced: clearing should
+                            // never lag behind the tap.
+                            onClearSearch();
+                          },
+                        ),
+                  isDense: true,
                 ),
-                isDense: true,
               ),
             ),
           ),
           const SizedBox(height: 8),
+          // The current sort always shows; Filters says how many are on.
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            // Each chip may take up to half the row, then ellipsizes; the
+            // free room goes between them.
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: _ViewChip(
+                    icon: Icons.swap_vert,
+                    label: sortLabel,
+                    semanticLabel: 'Sort: $sortLabel',
+                    onTap: onOpenSort,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: _ViewChip(
+                    icon: Icons.tune,
+                    label: filterCount == 0
+                        ? 'Filters'
+                        : 'Filters · $filterCount',
+                    semanticLabel: filterCount == 0
+                        ? 'Filters'
+                        : filterCount == 1
+                        ? '1 filter on'
+                        : '$filterCount filters on',
+                    active: filterCount > 0,
+                    onTap: onOpenFilters,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Edge to edge: the strip scrolls off the screen's edge.
           Align(
             alignment: Alignment.centerLeft,
             child: ChipTabs<_Filter>(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               options: const [
                 (_Filter.all, 'All'),
                 (_Filter.income, 'Income'),
@@ -3083,16 +3055,205 @@ class _SearchAndFilterBar extends StatelessWidget {
   }
 }
 
+/// The sort and Filters chips: ChipTabs' outlined pill with a leading
+/// icon, 36dp tall in a 44dp target. [active] draws the accent outline.
+class _ViewChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String semanticLabel;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _ViewChip({
+    required this.icon,
+    required this.label,
+    required this.semanticLabel,
+    required this.onTap,
+    this.active = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final color = active ? scheme.onSurface : scheme.onSurfaceVariant;
+    return Semantics(
+      button: true,
+      label: semanticLabel,
+      excludeSemantics: true,
+      onTap: onTap,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(AppRadius.control * 2),
+              onTap: onTap,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 36),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AppRadius.control * 2),
+                  border: Border.all(
+                    color: active ? scheme.primary : scheme.outlineVariant,
+                    width: active ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: 16, color: color),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 13, color: color),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One active filter: the compact pill drawn inside a 48dp row, its close
+/// button a 44 by 48dp target.
+class _ActiveFilterChip extends StatelessWidget {
+  final Widget avatar;
+  final String label;
+  final VoidCallback onRemove;
+
+  const _ActiveFilterChip({
+    required this.avatar,
+    required this.label,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 48,
+      child: Stack(
+        alignment: AlignmentDirectional.centerStart,
+        children: [
+          Positioned.fill(
+            top: 8,
+            bottom: 8,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.control * 2),
+                border: Border.all(color: scheme.outlineVariant),
+              ),
+            ),
+          ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(width: 10),
+              avatar,
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+              ),
+              IconButton(
+                tooltip: 'Remove $label',
+                icon: const Icon(Icons.close, size: 16),
+                style: IconButton.styleFrom(
+                  fixedSize: const Size(44, 48),
+                  minimumSize: const Size(44, 48),
+                  padding: EdgeInsets.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: onRemove,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Leads the filter strip once two filters are on: clears every filter,
+/// not the search, the type tab or the sort.
+class _ClearFiltersChip extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _ClearFiltersChip({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final radius = BorderRadius.circular(AppRadius.control * 2);
+    return Semantics(
+      button: true,
+      label: 'Clear all filters',
+      excludeSemantics: true,
+      onTap: onTap,
+      child: SizedBox(
+        height: 48,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            borderRadius: radius,
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                decoration: BoxDecoration(
+                  borderRadius: radius,
+                  border: Border.all(color: scheme.outlineVariant),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.filter_alt_off,
+                      size: 16,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Clear all',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Space above a list month header's label.
 const double _kMonthHeaderTop = 24;
+
+/// Where a row's amount ends: TransactionTile's 16dp inset plus its 14dp
+/// row padding.
+const double _kRowAmountEdge = 30;
 
 /// [_kMonthHeaderTop] for the list's first header while the "N new" line
 /// shows above it.
 const double _kMonthHeaderTopUnderLine = 4;
-
-/// The most of the tab's height the open review cards take together; past
-/// it they scroll inside that space.
-const double _kReviewCardsShare = 0.4;
 
 /// Room a month header keeps beside its name for the Select month button:
 /// the 18dp icon, its padding and the compact tap target around it.
@@ -3152,9 +3313,9 @@ double _monthHeaderRowHeight(BuildContext context) =>
 }
 
 /// The label above a day's rows under a date sort: "Today", "Yesterday" or
-/// the weekday and date, with the day's net on the right, green when money
-/// came in on balance and red when it went out. The rows under it show
-/// their times, not the date again.
+/// the weekday and date, with the day's net on the right, on the rows'
+/// amount edge, green when money came in on balance and red when it went
+/// out. The rows under it show their times, not the date again.
 class _DayHeader extends StatelessWidget {
   final DateTime day;
 
@@ -3209,7 +3370,7 @@ class _DayHeader extends StatelessWidget {
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, AppSpace.gap, 20, 6),
+      padding: const EdgeInsets.fromLTRB(20, AppSpace.gap, _kRowAmountEdge, 6),
       child: Row(
         children: [
           Expanded(
@@ -3475,902 +3636,6 @@ class _JumpControls extends StatelessWidget {
       ),
     );
   }
-}
-
-/// A review card's title in its fold header, with the "i" beside it only
-/// while the card is open; folded, the title shows alone. The title itself
-/// stays plain: a tap on the header folds the card.
-class _FoldTitle extends StatelessWidget {
-  final bool collapsed;
-  final Widget label;
-  final InfoTip tip;
-
-  const _FoldTitle({
-    required this.collapsed,
-    required this.label,
-    required this.tip,
-  });
-
-  @override
-  Widget build(BuildContext context) =>
-      collapsed ? label : InfoLabel(icon: true, label: label, tip: tip);
-}
-
-/// The review cards' capped area. When the cards outgrow it, it says so: a
-/// scrollbar that stays visible, and, while more lies below, the last card
-/// fades out over its bottom 24dp and ends on the card's rounded corners
-/// instead of a flat cut.
-class _ReviewCardsScroll extends StatefulWidget {
-  final Widget child;
-  const _ReviewCardsScroll({required this.child});
-
-  @override
-  State<_ReviewCardsScroll> createState() => _ReviewCardsScrollState();
-}
-
-class _ReviewCardsScrollState extends State<_ReviewCardsScroll> {
-  final _ctrl = ScrollController();
-
-  /// The cards are taller than the area.
-  bool _overflow = false;
-
-  /// Some of them lie below the area's bottom edge.
-  bool _moreBelow = false;
-
-  /// Applied in a microtask: metrics change during layout, where a
-  /// setState is not allowed.
-  void _update(ScrollMetrics m) {
-    final overflow = m.maxScrollExtent > 0.5;
-    final moreBelow = m.extentAfter > 0.5;
-    if (overflow == _overflow && moreBelow == _moreBelow) return;
-    scheduleMicrotask(() {
-      if (!mounted) return;
-      if (overflow == _overflow && moreBelow == _moreBelow) return;
-      setState(() {
-        _overflow = overflow;
-        _moreBelow = moreBelow;
-      });
-    });
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // A fold or a new row changes the height without a scroll: check after
-    // every layout this widget takes part in.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _ctrl.hasClients && _ctrl.position.hasContentDimensions) {
-        _update(_ctrl.position);
-      }
-    });
-    // The same widgets every time, only their settings change: swapping a
-    // wrapper in or out would rebuild the cards and lose their state.
-    return NotificationListener<Notification>(
-      onNotification: (n) {
-        // Depth 0 only: the review list inside a card scrolls too.
-        if (n is ScrollMetricsNotification && n.depth == 0) {
-          _update(n.metrics);
-        } else if (n is ScrollNotification && n.depth == 0) {
-          _update(n.metrics);
-        }
-        return false;
-      },
-      child: Scrollbar(
-        controller: _ctrl,
-        thumbVisibility: _overflow,
-        child: ClipPath(
-          clipper: _CardBottomClip(rounded: _moreBelow),
-          child: ShaderMask(
-            // dstIn keeps the cards where the gradient is opaque; dst
-            // leaves them untouched.
-            blendMode: _moreBelow ? BlendMode.dstIn : BlendMode.dst,
-            shaderCallback: (rect) => LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: const [Colors.black, Colors.black, Colors.transparent],
-              stops: [0, rect.height <= 24 ? 0 : 1 - 24 / rect.height, 1],
-            ).createShader(rect),
-            child: SingleChildScrollView(
-              key: const ValueKey('review-cards'),
-              controller: _ctrl,
-              primary: false,
-              child: widget.child,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Clips the review cards' area. While a card runs past its bottom edge,
-/// the edge follows the cards' rounded corners (inside their 16dp side
-/// margins); otherwise it is the plain rectangle.
-class _CardBottomClip extends CustomClipper<Path> {
-  final bool rounded;
-  const _CardBottomClip({required this.rounded});
-
-  @override
-  Path getClip(Size size) {
-    if (!rounded) return Path()..addRect(Offset.zero & size);
-    const inset = 16.0;
-    const r = Radius.circular(AppRadius.card);
-    return Path()
-      ..addRect(Rect.fromLTWH(0, 0, size.width, math.max(0, size.height - r.y)))
-      ..addRRect(
-        RRect.fromLTRBAndCorners(
-          inset,
-          0,
-          math.max(inset, size.width - inset),
-          size.height,
-          bottomLeft: r,
-          bottomRight: r,
-        ),
-      );
-  }
-
-  @override
-  bool shouldReclip(_CardBottomClip old) => old.rounded != rounded;
-}
-
-/// Review queue for regular SMS imports: confirm/discard each, or the batch.
-/// Also holds the refunds already counted that look like they belong to a
-/// purchase.
-class _PendingReviewCard extends StatelessWidget {
-  final List<Tx> pending;
-
-  /// "Looks like a transfer" cards, shown above the list. At most three
-  /// together with [refundSuggestions].
-  final List<PairSuggestion> suggestions;
-
-  /// "Looks like a refund" cards, after the transfers.
-  final List<RefundSuggestion> refundSuggestions;
-
-  /// Refund suggestions for confirmed rows, which count in the title.
-  final int pastRefunds;
-  const _PendingReviewCard({
-    required this.pending,
-    this.suggestions = const [],
-    this.refundSuggestions = const [],
-    this.pastRefunds = 0,
-  });
-
-  // Bulk and effectively irreversible (rows join the ledger with no batch
-  // inverse) — warrants a dialog instead of an Undo snackbar.
-  Future<void> _confirmAll(BuildContext context) async {
-    final finance = context.read<FinanceProvider>();
-    final count = pending.length;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Confirm all $count transaction${count == 1 ? '' : 's'}?'),
-        content: const Text(
-          'They join the ledger as reviewed entries. '
-          'Suspected spam stays in its own queue.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Confirm all'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) await finance.confirmAllPending();
-  }
-
-  Future<void> _discardAll(BuildContext context) async {
-    final finance = context.read<FinanceProvider>();
-    final count = pending.length;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Discard all $count import${count == 1 ? '' : 's'}?'),
-        content: const Text(
-          'They leave the review queue without joining the ledger. '
-          'Suspected spam stays in its own queue. Undo restores them.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(ctx).colorScheme.error,
-              foregroundColor: Theme.of(ctx).colorScheme.onError,
-            ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Discard all'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true || !context.mounted) return;
-    final removed = await finance.discardAllPending();
-    if (removed.isEmpty || !context.mounted) return;
-    showUndoSnackBar(
-      context,
-      'Discarded ${removed.length} import${removed.length == 1 ? '' : 's'}',
-      () => finance.restoreTransactions(removed),
-      icon: Icons.block,
-      tone: AppToastTone.removal,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final collapsed = context.watch<SettingsProvider>().isSectionCollapsed(
-      'pending_review',
-    );
-    // A row shown in a suggestion card above leaves the list: it would
-    // otherwise show twice.
-    final inCards = {
-      for (final s in suggestions) ...[s.out.id, s.incoming.id],
-      for (final s in refundSuggestions) ...[s.refund.id, s.purchase.id],
-    };
-    final rows = [
-      for (final t in pending)
-        if (!inCards.contains(t.id)) t,
-    ];
-    // The plain card fill: tinted, every line on it was text on a colour.
-    return Card(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () => context.read<SettingsProvider>().toggleSection(
-              'pending_review',
-            ),
-            child: Padding(
-              // 4 + the tip's 32dp target + 4: the old 10 + 20 + 10 height,
-              // so the pinned cards leave the list the same room. The row
-              // keeps that height folded too, where the tip is gone.
-              padding: const EdgeInsets.fromLTRB(
-                AppSpace.card,
-                4,
-                AppSpace.card,
-                4,
-              ),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 32),
-                child: Row(
-                  children: [
-                    Icon(Icons.sms, size: 18, color: scheme.primary),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: _FoldTitle(
-                          collapsed: collapsed,
-                          label: Text(
-                            'Imported from SMS · '
-                            '${pending.length + pastRefunds} to review',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          tip: const InfoTip(
-                            title: 'Imported from SMS',
-                            message:
-                                'These imports need a look: the app was not '
-                                'sure of their account, category or whether '
-                                'they are a transfer. They count once you '
-                                'confirm them. Other imports already count '
-                                'and show as new in the list.',
-                            link: InfoLink(
-                              prompt: 'Imports classified wrong?',
-                              label: 'Set up transaction rules',
-                              onTap: goCockpitRules,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    AnimatedRotation(
-                      turns: collapsed ? 0.5 : 0,
-                      duration: AnimatedFold.duration,
-                      curve: Curves.easeOutCubic,
-                      child: Icon(
-                        Icons.expand_less,
-                        size: 20,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          AnimatedFold(
-            collapsed: collapsed,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Two legs of one own-account move arrive as an expense and
-                // an income; pairing books both as transfers so neither
-                // inflates Spent or Income.
-                for (final s in suggestions)
-                  _TransferSuggestionRow(suggestion: s),
-                // A refund linked to its purchase takes that spend down
-                // instead of counting as income.
-                for (final s in refundSuggestions)
-                  _RefundSuggestionRow(suggestion: s),
-                if (rows.isNotEmpty)
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 200),
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      // Explicit: otherwise the list absorbs the extend-body
-                      // safe-area insets as phantom top/bottom padding.
-                      padding: EdgeInsets.zero,
-                      itemCount: rows.length,
-                      itemBuilder: (context, i) => _PendingRow(tx: rows[i]),
-                    ),
-                  ),
-                // Bulk actions live inside the fold: a collapsed card can't
-                // fire them, and the wrapped title above keeps its room.
-                // Under the list, so the rows come first. Compact
-                // everywhere: two review cards + toolbar + list must fit
-                // short viewports without overflowing the tab Column. An
-                // OverflowBar: at 320dp with large text the two buttons
-                // stack, right-aligned, instead of running off the card.
-                if (pending.isNotEmpty)
-                  Padding(
-                    key: const ValueKey('review-bulk-actions'),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: OverflowBar(
-                      alignment: MainAxisAlignment.end,
-                      overflowAlignment: OverflowBarAlignment.end,
-                      children: [
-                        // Plain text: the dialog's red button carries the
-                        // warning.
-                        TextButton(
-                          style: TextButton.styleFrom(
-                            foregroundColor: scheme.onSurface,
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          onPressed: () => _discardAll(context),
-                          child: const Text('Discard all'),
-                        ),
-                        TextButton(
-                          style: TextButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          onPressed: () => _confirmAll(context),
-                          child: const Text('Confirm all'),
-                        ),
-                      ],
-                    ),
-                  )
-                else
-                  const SizedBox(height: 8),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A suggestion side's account: its name, else the SMS sender.
-String _side(FinanceProvider finance, Tx t) =>
-    finance.accountForKey(t.acctKey)?.name ??
-    (t.sender.isNotEmpty ? t.sender : 'Unknown account');
-
-/// One "Looks like a transfer" suggestion: pair the two legs, or dismiss
-/// the guess for good.
-class _TransferSuggestionRow extends StatelessWidget {
-  final PairSuggestion suggestion;
-  const _TransferSuggestionRow({required this.suggestion});
-
-  @override
-  Widget build(BuildContext context) {
-    final finance = context.read<FinanceProvider>();
-    final s = suggestion;
-    final kindLabel = switch (s.kind) {
-      PairKind.cardPayment => 'card payment',
-      PairKind.savings => 'savings deposit',
-      PairKind.transfer => 'transfer',
-    };
-    return _SuggestionCard(
-      icon: Icons.sync_alt,
-      kind: 'Looks like a $kindLabel',
-      sides: [
-        (label: _side(finance, s.out), tx: s.out),
-        (label: _side(finance, s.incoming), tx: s.incoming),
-      ],
-      dismissLabel: 'Not a transfer',
-      onDismiss: () {
-        final settings = context.read<SettingsProvider>();
-        final key = s.key;
-        // The toast goes up before the dismissal notifies: this card
-        // leaves the tree once it does.
-        showUndoSnackBar(
-          context,
-          'Marked not a $kindLabel',
-          () => settings.restorePairSuggestion(key),
-          icon: Icons.link_off,
-        );
-        settings.dismissPairSuggestion(key);
-      },
-      acceptLabel: 'Pair',
-      onAccept: () async {
-        // Taken first: the paired rows leave the queue, and this card
-        // with them, before the save completes.
-        final messenger = ScaffoldMessenger.of(context);
-        final pairId = await finance.pairTransactions(s.out.id, s.incoming.id);
-        if (pairId == null) return;
-        _undoToastOn(
-          messenger,
-          'Paired as $kindLabel',
-          () => finance.unpair(pairId),
-        );
-      },
-    );
-  }
-}
-
-/// [showUndoSnackBar] on a messenger taken before an await, for a card
-/// that may have left the tree by then.
-void _undoToastOn(
-  ScaffoldMessengerState messenger,
-  String message,
-  VoidCallback undo,
-) => showAppToastOn(
-  messenger,
-  message,
-  tone: AppToastTone.change,
-  icon: Icons.link,
-  actionLabel: 'Undo',
-  onAction: undo,
-  duration: const Duration(seconds: 5),
-);
-
-/// One "Looks like a refund" suggestion: link the refund to the purchase
-/// it gives money back for, or dismiss the guess for good.
-class _RefundSuggestionRow extends StatelessWidget {
-  final RefundSuggestion suggestion;
-  const _RefundSuggestionRow({required this.suggestion});
-
-  @override
-  Widget build(BuildContext context) {
-    final finance = context.read<FinanceProvider>();
-    final s = suggestion;
-    return _SuggestionCard(
-      icon: Icons.undo,
-      kind: 'Looks like a refund',
-      sides: [
-        (
-          label:
-              finance.merchantLabelFor(s.purchase) ?? s.purchase.category.label,
-          tx: s.purchase,
-        ),
-        (label: _side(finance, s.refund), tx: s.refund),
-      ],
-      dismissLabel: 'Not a refund',
-      onDismiss: () {
-        final settings = context.read<SettingsProvider>();
-        final key = s.key;
-        final refundId = s.refund.id;
-        final past = !s.refund.pending;
-        // As Not a transfer: the toast first, then the dismissal.
-        showUndoSnackBar(context, 'Marked not a refund', () {
-          settings.restorePairSuggestion(key);
-          if (past) finance.restoreRefundReviewId(refundId);
-        }, icon: Icons.link_off);
-        settings.dismissPairSuggestion(key);
-        // A counted refund the one-time pass offered stops being looked at.
-        if (past) finance.dropRefundReviewId(refundId);
-      },
-      acceptLabel: 'Link',
-      onAccept: () async {
-        // Taken first: a linked refund leaves the queue, and this card
-        // with it, before the save completes.
-        final messenger = ScaffoldMessenger.of(context);
-        final before = s.refund;
-        final linked = await finance.linkRefund(before.id, s.purchase.id);
-        if (!linked) return;
-        // Putting the row back as it was also returns a refund that was
-        // in review to the queue, which unlinking alone would not; a past
-        // refund goes back on the one-time pass's list.
-        _undoToastOn(messenger, 'Linked as a refund', () {
-          finance.restoreEditedTransactions([before]);
-          if (!before.pending) finance.restoreRefundReviewId(before.id);
-        });
-      },
-    );
-  }
-}
-
-/// A suggestion as its own outlined card inside the review card: what the
-/// match looks like, one line per side (its account or merchant and date
-/// on the left, its signed amount on the right), then dismiss and accept.
-class _SuggestionCard extends StatelessWidget {
-  final IconData icon;
-  final String kind;
-  final List<({String label, Tx tx})> sides;
-  final String dismissLabel;
-  final VoidCallback onDismiss;
-  final String acceptLabel;
-  final VoidCallback onAccept;
-
-  const _SuggestionCard({
-    required this.icon,
-    required this.kind,
-    required this.sides,
-    required this.dismissLabel,
-    required this.onDismiss,
-    required this.acceptLabel,
-    required this.onAccept,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
-    return Container(
-      margin: const EdgeInsets.fromLTRB(AppSpace.card, 4, AppSpace.card, 4),
-      padding: const EdgeInsets.fromLTRB(12, 8, 4, 0),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadius.control),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 18, color: scheme.primary),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  kind,
-                  style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          for (final side in sides)
-            Padding(
-              padding: const EdgeInsets.only(top: 2, right: 8),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Two lines before a long account name is cut.
-                  Expanded(
-                    flex: 3,
-                    child: Text.rich(
-                      TextSpan(
-                        children: [
-                          TextSpan(text: side.label),
-                          // The day alone: with the time the line wrapped
-                          // at 360dp, and the two sides are hours apart.
-                          TextSpan(
-                            text:
-                                ' · ${fmtDateCompact(DateUtils.dateOnly(side.tx.date))}',
-                            style: muted,
-                          ),
-                        ],
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: text.bodySmall,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // At most 2/5 of the line: a large figure at a large
-                  // text scale shrinks rather than push the name out.
-                  Flexible(
-                    flex: 2,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: AlignmentDirectional.centerEnd,
-                      child: Text(
-                        '${side.tx.type == TxType.income ? '+' : '−'}'
-                        '${fmtMoneyTidy(side.tx.amount)}',
-                        style: text.bodySmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: moneyColor(
-                            context,
-                            type: side.tx.type,
-                            transfer: isTransferCategory(side.tx.categoryId),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          // Stacks, right-aligned, when the two buttons do not fit side by
-          // side (320dp with large text).
-          OverflowBar(
-            alignment: MainAxisAlignment.end,
-            overflowAlignment: OverflowBarAlignment.end,
-            children: [
-              TextButton(
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                ),
-                onPressed: onDismiss,
-                child: Text(dismissLabel),
-              ),
-              FilledButton.tonal(
-                style: FilledButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                ),
-                onPressed: onAccept,
-                child: Text(acceptLabel),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Suspected spam: individually reviewed only — deliberately no batch action.
-class _SuspectedSpamCard extends StatelessWidget {
-  final List<Tx> suspects;
-  const _SuspectedSpamCard({required this.suspects});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final collapsed = context.watch<SettingsProvider>().isSectionCollapsed(
-      'spam_review',
-    );
-    // The warning lives on the outline and icon, not a pink fill under text.
-    return Card(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        side: BorderSide(color: scheme.error.withValues(alpha: 0.6)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          InkWell(
-            onTap: () =>
-                context.read<SettingsProvider>().toggleSection('spam_review'),
-            child: Padding(
-              // 4 + the tip's 32dp target + 4, as on the review card, and
-              // the same height folded.
-              padding: const EdgeInsets.fromLTRB(
-                AppSpace.card,
-                4,
-                AppSpace.card,
-                4,
-              ),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 32),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.warning_amber_rounded,
-                      size: 18,
-                      color: scheme.error,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: _FoldTitle(
-                          collapsed: collapsed,
-                          label: Text(
-                            'Suspected spam · ${suspects.length} to review',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                          tip: const InfoTip(
-                            title: 'Suspected spam',
-                            message:
-                                'Messages containing one of the Flagged as '
-                                "spam phrases on the Cockpit's Import tab "
-                                'wait here. Confirm or discard each one; '
-                                'there is no batch confirm for these.',
-                            link: InfoLink(
-                              prompt: 'Want fewer false flags?',
-                              label: 'Edit import rules',
-                              onTap: goCockpitImport,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    AnimatedRotation(
-                      turns: collapsed ? 0.5 : 0,
-                      duration: AnimatedFold.duration,
-                      curve: Curves.easeOutCubic,
-                      child: Icon(
-                        Icons.expand_less,
-                        size: 20,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          AnimatedFold(
-            collapsed: collapsed,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 160),
-              child: ListView.builder(
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                itemCount: suspects.length,
-                itemBuilder: (context, i) =>
-                    _PendingRow(tx: suspects[i], spam: true),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// One import waiting for review: "category · merchant" over the amount,
-/// the date and the sender, with Confirm and Discard. Above
-/// [kLargeTextScale] the two buttons move under the text, so the text
-/// keeps the row's width.
-class _PendingRow extends StatelessWidget {
-  final Tx tx;
-
-  /// A suspected spam row: its amount is plain text, not money green or
-  /// red, since it may be no money at all.
-  final bool spam;
-  const _PendingRow({required this.tx, this.spam = false});
-
-  /// "Food & Dining · Swiggy": what the row would count as, and where. The
-  /// category alone when the row names no merchant. The Cockpit's Review
-  /// tab titles its rows the same way, though it lists confirmed rows,
-  /// not these.
-  static String titleOf(Tx tx, FinanceProvider finance) {
-    final merchant = merchantLabelOrNull(tx, alias: finance.merchantAlias);
-    return merchant == null
-        ? tx.category.label
-        : '${tx.category.label} · $merchant';
-  }
-
-  /// "13 Oct, 12:02 PM · VM-DEMOBK", without the sender when there is none.
-  static String whenAndWho(Tx tx) => [
-    fmtDateCompact(tx.date),
-    if (tx.sender.isNotEmpty) tx.sender,
-  ].join(' · ');
-
-  @override
-  Widget build(BuildContext context) {
-    final cat = tx.category;
-    final isIncome = tx.type == TxType.income;
-    final large = isLargeTextScale(context);
-    final finance = context.read<FinanceProvider>();
-    final tile = ListTile(
-      dense: true,
-      // Starts in line with the card header's icon; the end keeps the
-      // Material 3 default.
-      contentPadding: EdgeInsetsDirectional.only(
-        start: AppSpace.card,
-        end: large ? AppSpace.card : 24,
-      ),
-      onTap: () => showAddTransactionSheet(context, existing: tx),
-      leading: CircleAvatar(
-        radius: 16,
-        backgroundColor: cat.color.withValues(alpha: 0.15),
-        child: Icon(
-          cat.icon,
-          color: categoryGlyphColor(context, cat.color),
-          size: 16,
-        ),
-      ),
-      title: Text(
-        titleOf(tx, finance),
-        maxLines: large ? 2 : 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      // The amount in its money colour, as on the ledger rows; plain on a
-      // spam suspect.
-      subtitle: Text.rich(
-        TextSpan(
-          children: [
-            TextSpan(
-              text: '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
-              style: TextStyle(
-                color: spam
-                    ? Theme.of(context).colorScheme.onSurface
-                    : moneyColor(
-                        context,
-                        type: tx.type,
-                        transfer: isTransferCategory(tx.categoryId),
-                      ),
-              ),
-            ),
-            TextSpan(text: ' · ${whenAndWho(tx)}'),
-          ],
-        ),
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
-      trailing: large ? null : _actions(context),
-    );
-    if (!large) return tile;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        tile,
-        Padding(
-          padding: const EdgeInsetsDirectional.only(end: 8),
-          child: Align(
-            alignment: AlignmentDirectional.centerEnd,
-            child: _actions(context),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _actions(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      IconButton(
-        tooltip: 'Confirm',
-        icon: Icon(
-          Icons.check_circle_outline,
-          color: AppColors.of(context).green,
-        ),
-        // Symmetric with Discard below: a mis-tapped Confirm silently
-        // moved the row into the ledger with nothing to grab. Undo puts
-        // the captured pending copy back in the queue.
-        onPressed: () {
-          final finance = context.read<FinanceProvider>();
-          final confirmed = tx;
-          finance.confirmTransaction(confirmed.id);
-          showUndoSnackBar(
-            context,
-            'Confirmed ${fmtMoney(confirmed.amount)} from '
-            '${confirmed.sender.isEmpty ? 'SMS' : confirmed.sender}',
-            () => finance.restoreEditedTransactions([confirmed]),
-            icon: Icons.done_all,
-            tone: AppToastTone.success,
-          );
-        },
-      ),
-      IconButton(
-        tooltip: 'Discard',
-        icon: const Icon(Icons.cancel_outlined),
-        onPressed: () {
-          final finance = context.read<FinanceProvider>();
-          final discarded = tx;
-          finance.deleteTransaction(discarded.id);
-          // Restoring keeps pending: true, so the row returns to this
-          // review queue rather than silently joining the ledger.
-          showUndoSnackBar(
-            context,
-            'Discarded ${fmtMoney(discarded.amount)} from '
-            '${discarded.sender.isEmpty ? 'SMS' : discarded.sender}',
-            () => finance.restoreTransaction(discarded),
-            icon: Icons.block,
-            tone: AppToastTone.removal,
-          );
-        },
-      ),
-    ],
-  );
 }
 
 /// "3 new · Mark all seen" above the list while imports that counted at

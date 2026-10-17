@@ -17,9 +17,11 @@ import '../services/weekly_digest.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
+import '../utils/haptics.dart';
 import '../utils/money_colors.dart';
 import 'delta_note.dart';
 import 'figure_tile.dart';
+import 'undo_snackbar.dart';
 
 /// Last week (or any week) at a glance: spent against the usual week, a
 /// bar per day, the top categories, the biggest payments, what is due and
@@ -124,14 +126,14 @@ Future<void> showWeeklyDigestSheet(
           compareLine = 'Not enough weeks yet for a usual week';
         } else {
           final diff = d.spent - usual;
-          final usualText = fmtMoneyTidy(usual);
+          final usualText = fmtMoneyWhole(usual);
           // Under a rupee is the same, as the recap's = mark has it.
           compareLine = negligibleDelta(diff)
               ? 'The same as your usual week$soFar ($usualText)'
               : diff > 0
-              ? '${fmtMoneyTidy(diff)} more than your usual week$soFar '
+              ? '${fmtMoneyWhole(diff)} more than your usual week$soFar '
                     '($usualText)'
-              : '${fmtMoneyTidy(-diff)} less than your usual week$soFar '
+              : '${fmtMoneyWhole(-diff)} less than your usual week$soFar '
                     '($usualText)';
         }
 
@@ -216,9 +218,8 @@ Future<void> showWeeklyDigestSheet(
                           fit: BoxFit.scaleDown,
                           alignment: Alignment.centerLeft,
                           child: Text(
-                            fmtMoney(d.spent),
+                            fmtMoneyWhole(d.spent),
                             style: text.headlineSmall?.copyWith(
-                              color: out,
                               fontWeight: FontWeight.w700,
                             ),
                           ),
@@ -248,7 +249,7 @@ Future<void> showWeeklyDigestSheet(
                                 Expanded(
                                   child: FigureTile(
                                     title: 'In',
-                                    value: fmtMoney(d.income),
+                                    value: fmtMoneyWhole(d.income),
                                     color: moneyColor(ctx, type: TxType.income),
                                   ),
                                 ),
@@ -310,8 +311,8 @@ Future<void> showWeeklyDigestSheet(
                                 color: categoryGlyphColor(ctx, e.key.color),
                               ),
                               label: e.key.label,
-                              amount: fmtMoney(e.value),
-                              amountColor: out,
+                              amount: fmtMoneyWhole(e.value),
+                              amountColor: scheme.onSurface,
                               onTap: open(
                                 TxFilterRequest(
                                   categoryId: e.key.id,
@@ -353,15 +354,26 @@ Future<void> showWeeklyDigestSheet(
                                 DateFormat('EEE').format(t.effectiveDate),
                               ].join(' · '),
                               // Net of linked refunds, as the week's figures.
-                              amount: fmtMoney(finance.netSpendOf(t)),
-                              amountColor: out,
+                              amount: fmtMoneyWhole(finance.netSpendOf(t)),
+                              amountColor: scheme.onSurface,
                               // Over the digest, which shows an edit at once. A
                               // delete's Undo shows on the digest, which stays
                               // open; the app-level toast would draw under it.
                               onTap: () => showAddTransactionSheet(
                                 ctx,
                                 existing: t,
-                                onUndoable: offerUndo,
+                                onUndoable:
+                                    (
+                                      message,
+                                      undo, {
+                                      required icon,
+                                      required tone,
+                                    }) {
+                                      if (tone == AppToastTone.removal) {
+                                        Haptics.thud();
+                                      }
+                                      offerUndo(message, icon, undo);
+                                    },
                               ),
                             ),
                           ),
@@ -396,17 +408,12 @@ Future<void> showWeeklyDigestSheet(
                                   : 'Due ${fmtInDays(u.days)}',
                               amount: u.amount == null
                                   ? ''
-                                  : fmtMoney(u.amount!),
-                              // As the Upcoming card colours them: a card bill and a
-                              // transfer move your own money, so they stay plain.
-                              amountColor: moneyColor(
-                                ctx,
-                                type: u.type,
-                                transfer:
-                                    u.kind == UpcomingKind.cardBill ||
-                                    (u.categoryId != null &&
-                                        isTransferCategory(u.categoryId!)),
-                              ),
+                                  : fmtMoneyWhole(u.amount!),
+                              // One colour for every bill; income keeps its
+                              // green.
+                              amountColor: u.type == TxType.income
+                                  ? moneyColor(ctx, type: TxType.income)
+                                  : scheme.onSurface,
                             ),
                           ),
                       ],
@@ -441,10 +448,7 @@ Future<void> showWeeklyDigestSheet(
                                   TextButton(
                                     onPressed: () {
                                       Navigator.pop(ctx);
-                                      AppNav.instance.openHomeTab(
-                                        context,
-                                        kHomeTabTransactions,
-                                      );
+                                      AppNav.instance.openReview(context);
                                     },
                                     child: const Text('Review'),
                                   ),
@@ -625,7 +629,7 @@ class _DayBars extends StatelessWidget {
                   ),
                 );
                 final label =
-                    '${DateFormat('EEEE').format(day)} ${fmtMoney(amount)}';
+                    '${DateFormat('EEEE').format(day)} ${fmtMoneyWhole(amount)}';
                 final tap = onDay;
                 if (!shown || tap == null) {
                   return Semantics(

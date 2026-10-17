@@ -500,6 +500,12 @@ class Tx {
   /// the row counts as income again. Null everywhere else.
   final String? refundOf;
 
+  /// Who a manual entry paid, or on income who paid the user, as typed in
+  /// the Add sheet's Paid to (Received from) field. Empty on SMS imports,
+  /// whose alert names the merchant, and on rows saved before the field
+  /// existed, whose note stands in for it (see merchantIdentityOf).
+  final String payee;
+
   const Tx({
     required this.id,
     required this.type,
@@ -525,6 +531,7 @@ class Tx {
     this.walletCounted = false,
     this.unseen = false,
     this.refundOf,
+    this.payee = '',
   });
 
   /// The date period figures use: [countIn] when set, else [date].
@@ -588,6 +595,7 @@ class Tx {
       walletCounted: walletCounted,
       unseen: unseen,
       refundOf: refundOf,
+      payee: payee,
     );
   }
 
@@ -624,6 +632,7 @@ class Tx {
     bool? unseen,
     String? refundOf,
     bool clearRefundOf = false,
+    String? payee,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -655,6 +664,7 @@ class Tx {
     walletCounted: walletCounted ?? this.walletCounted,
     unseen: unseen ?? this.unseen,
     refundOf: clearRefundOf ? null : (refundOf ?? this.refundOf),
+    payee: payee ?? this.payee,
   );
 
   Map<String, dynamic> toJson() => {
@@ -682,6 +692,7 @@ class Tx {
     if (walletCounted) 'walletCounted': true,
     if (unseen) 'unseen': true,
     if (refundOf != null) 'refundOf': refundOf,
+    if (payee.isNotEmpty) 'payee': payee,
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) {
@@ -723,6 +734,7 @@ class Tx {
       walletCounted: json['walletCounted'] == true,
       unseen: json['unseen'] == true,
       refundOf: json['refundOf'] is String ? json['refundOf'] as String : null,
+      payee: json['payee'] is String ? json['payee'] as String : '',
     );
   }
 }
@@ -812,6 +824,20 @@ String normalizePersonName(String raw) {
     n = n.characters.take(kMaxPersonNameLength).toString().trim();
   }
   return n;
+}
+
+/// Longest payee ([Tx.payee]), in characters: one line that fits a row
+/// title, long enough for alert-style service names.
+const int kMaxPayeeLength = 60;
+
+/// A payee as stored: whitespace collapsed to one space, trimmed, capped at
+/// [kMaxPayeeLength] characters.
+String normalizePayee(String raw) {
+  var p = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (p.characters.length > kMaxPayeeLength) {
+    p = p.characters.take(kMaxPayeeLength).toString().trim();
+  }
+  return p;
 }
 
 /// How people are matched: "arun" and "Arun" are one person.

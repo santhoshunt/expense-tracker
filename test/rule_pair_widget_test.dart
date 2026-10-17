@@ -102,9 +102,12 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
 
-      // Deleting the tile removes both rules; Undo restores both.
-      await tester.tap(find.byTooltip('Delete rule pair'));
+      // Delete in the pair's editor removes both rules; Undo restores both.
+      await tester.tap(find.text('contains "amma"'));
       await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Deleted rule pair "amma"'), findsOneWidget);
       expect(p.rules.where((r) => !r.isBuiltIn), isEmpty);
       await tester.tap(find.text('Undo'));
       await tester.pumpAndSettle();

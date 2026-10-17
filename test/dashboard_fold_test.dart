@@ -131,7 +131,6 @@ void main() {
       setup: (s) => s.setDashboardOrder(DashboardPage.trends, [
         DashboardSection.sixMonths,
         DashboardSection.pace,
-        DashboardSection.previousMonth,
         DashboardSection.usual,
         DashboardSection.categoryComparison,
       ]),
@@ -147,8 +146,12 @@ void main() {
   testWidgets('Trends summaries follow the cards', (tester) async {
     await pump(tester);
     await openDashboardView(tester, 'Trends');
-    // 900 this month against 400 on the same days last month.
-    expect(fold(tester, 'previousMonth').summary, startsWith('Up '));
+    // 900 this month against 400 on the same days last month: past a
+    // doubling, so "times", not a percentage.
+    expect(
+      fold(tester, 'pace').summary,
+      allOf(startsWith('₹900 so far, '), endsWith(' times last month')),
+    );
     // One month on record: no usual yet, so no category reads as up.
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('fold-categoryComparison')),
@@ -183,7 +186,6 @@ void main() {
       containsAll([
         for (final s in [
           'pace',
-          'previousMonth',
           'usual',
           'categoryComparison',
           'sixMonths',

@@ -646,13 +646,13 @@ void main() {
   });
 
   group('backup', () {
-    test('version 27 carries refundOf, and a restore keeps the link', () async {
+    test('the backup carries refundOf, and a restore keeps the link', () async {
       final p = await loaded();
       final buy = await purchase(p);
       final back = await refund(p);
       await p.linkRefund(back, buy);
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 27);
+      expect(data['version'], 28);
       final rows = (data['transactions'] as List).cast<Map>();
       expect(rows.firstWhere((m) => m['id'] == back)['refundOf'], buy);
       expect(

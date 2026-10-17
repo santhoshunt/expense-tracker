@@ -107,7 +107,9 @@ void main() {
       }
     });
 
-    testWidgets('the ⋮ lists Cockpit and People, not Settings', (tester) async {
+    testWidgets('the ⋮ lists Cockpit and Who owes you, not Settings', (
+      tester,
+    ) async {
       final (finance, settings) = await loaded();
       await pumpHome(tester, finance, settings);
       await tester.tap(find.byTooltip('More'));
@@ -117,7 +119,7 @@ void main() {
         matching: find.byWidgetPredicate((w) => w is PopupMenuItem),
       );
       expect(row('Cockpit'), findsOneWidget);
-      expect(row('People'), findsOneWidget);
+      expect(row('Who owes you'), findsOneWidget);
       expect(row('Settings'), findsNothing);
       await tester.tap(row('Cockpit'));
       await settle(tester);
@@ -260,8 +262,11 @@ void main() {
       await tester.tap(find.text('start'));
       await tester.pumpAndSettle();
 
-      // The Classify page on Rules.
-      expect(find.widgetWithText(AppBar, 'Classify'), findsOneWidget);
+      // The Categories and rules page on Rules.
+      expect(
+        find.widgetWithText(AppBar, 'Categories and rules'),
+        findsOneWidget,
+      );
       final bar = tester.widget<TabBar>(find.byType(TabBar));
       expect((bar.tabs[bar.controller!.index] as Tab).text, 'Rules');
 

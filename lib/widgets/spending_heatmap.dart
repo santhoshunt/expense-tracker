@@ -294,7 +294,9 @@ class SpendingHeatmap extends StatelessWidget {
                     style: Theme.of(ctx).textTheme.titleSmall,
                   ),
                 ),
-                for (final t in rows)
+                for (final (t, name) in rows.map(
+                  (t) => (t, finance.rowTitleFor(t)),
+                ))
                   ListTile(
                     dense: true,
                     leading: Icon(
@@ -303,7 +305,7 @@ class SpendingHeatmap extends StatelessWidget {
                       size: 20,
                     ),
                     title: Text(
-                      t.note.isNotEmpty ? t.note : t.category.label,
+                      name ?? t.category.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -311,7 +313,7 @@ class SpendingHeatmap extends StatelessWidget {
                     // split bill — say so on the row, or a ₹125 header over a
                     // single −₹500 row doesn't add up (same annotation as the
                     // main transaction tile).
-                    // Left out when it would repeat the title (no note).
+                    // Left out when it would repeat the title (no name).
                     // A refunded purchase counts net in the header, likewise.
                     subtitle: t.isSplit
                         ? Text(
@@ -323,7 +325,7 @@ class SpendingHeatmap extends StatelessWidget {
                             '${t.category.label} · '
                             '${fmtMoney(finance.refundedFor(t))} refunded',
                           )
-                        : t.note.isEmpty
+                        : name == null
                         ? null
                         : Text(t.category.label),
                     trailing: Text(

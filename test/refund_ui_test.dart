@@ -10,6 +10,7 @@ import 'package:expense_tracker/screens/add_transaction_sheet.dart';
 import 'package:expense_tracker/utils/app_theme.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/transaction_tile.dart';
+import 'package:expense_tracker/widgets/undo_snackbar.dart';
 
 /// v1.42.0 refund rows and the edit sheet: the purchase and refund tiles,
 /// a save that confirms a row in review, and Make rule from the SMS text.
@@ -202,7 +203,9 @@ void main() {
 
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    final save = find.widgetWithText(FilledButton, 'Save changes');
+    // v1.43.0: a pending row's save button says it confirms.
+    expect(find.widgetWithText(FilledButton, 'Save changes'), findsNothing);
+    final save = find.widgetWithText(FilledButton, 'Save and confirm');
     await tester.ensureVisible(save);
     await tester.pumpAndSettle();
     await tester.tap(save);
@@ -239,14 +242,19 @@ void main() {
     // Still the edit sheet, now offering the link again.
     expect(find.text('Edit transaction'), findsOneWidget);
     expect(find.text('Link to a purchase'), findsOneWidget);
-    expect(find.text('Unlinked'), findsOneWidget);
+    // v1.43.0: the toast draws on the sheet itself, not under it.
+    final toast = find.text('Unlinked');
+    expect(toast, findsOneWidget);
+    expect(
+      find.ancestor(of: toast, matching: find.byType(ToastHost)),
+      findsOneWidget,
+    );
+    expect(toast.hitTestable(), findsOneWidget);
 
-    // The toast sits under the open sheet; it outlasts closing it.
-    Navigator.of(tester.element(find.text('Edit transaction'))).pop();
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Undo'));
     await tester.pumpAndSettle();
     expect(p.transactions.firstWhere((t) => t.id == 'back').refundOf, 'buy');
+    expect(find.text('Edit transaction'), findsOneWidget);
   });
 
   testWidgets('a row in review that names a purchase shows no broken link', (
@@ -319,10 +327,9 @@ void main() {
       isTrue,
     );
     expect(p.refundReviewIds, isEmpty);
-    expect(find.text('Linked as a refund'), findsOneWidget);
+    // On the sheet's own toast, above the sheet.
+    expect(find.text('Linked as a refund').hitTestable(), findsOneWidget);
 
-    Navigator.of(tester.element(find.text('Edit transaction'))).pop();
-    await tester.pumpAndSettle();
     await tester.tap(find.text('Undo'));
     await tester.pumpAndSettle();
     expect(p.transactions.firstWhere((t) => t.id == 'back').refundOf, isNull);

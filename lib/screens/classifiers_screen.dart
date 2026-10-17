@@ -9,14 +9,15 @@ import '../models/transaction.dart';
 import '../models/dashboard_layout.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
-import '../services/recurring_detector.dart';
 import '../services/sms_parser.dart';
 import '../services/subscriptions.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
 import '../utils/money_colors.dart';
+import '../utils/search_text.dart';
 import '../utils/text_scale.dart';
+import '../widgets/animated_fold.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dialog_expander.dart';
 import '../widgets/dispose_scope.dart';
@@ -48,26 +49,29 @@ const int kCockpitTabTags = 7;
 const int kCockpitTabDashOverview = 8;
 const int kCockpitTabDashTrends = 9;
 const int kCockpitTabDashBreakdown = 10;
+const int kCockpitTabGroups = 11;
 
 /// The Cockpit's groups, each one page holding the tabs in [tabs]
 /// (kCockpitTab* ids, in tab order). Six tabs on one bar were too many to
-/// scan, so the hub splits them by what they steer, as Settings does.
+/// scan, so the hub splits them by what they steer, as Settings does. The
+/// value names are short ids and differ from the titles.
 enum CockpitGroup {
-  classify('Classify', Icons.rule, [
+  classify('Categories and rules', Icons.rule, [
     kCockpitTabRules,
+    kCockpitTabCategories,
     kCockpitTabImport,
     kCockpitTabTransactions,
   ]),
-  organise('Organise', Icons.category_outlined, [
-    kCockpitTabCategories,
+  organise('Groups and tags', Icons.workspaces_outlined, [
+    kCockpitTabGroups,
     kCockpitTabTags,
   ]),
-  plan('Plan', Icons.track_changes, [
+  plan('Budgets and bills', Icons.track_changes, [
     kCockpitTabBudgets,
     kCockpitTabReminders,
     kCockpitTabSubscriptions,
   ]),
-  dashboard('Dashboard', Icons.dashboard_customize_outlined, [
+  dashboard('Dashboard layout', Icons.dashboard_customize_outlined, [
     kCockpitTabDashOverview,
     kCockpitTabDashTrends,
     kCockpitTabDashBreakdown,
@@ -84,14 +88,15 @@ enum CockpitGroup {
       values.firstWhere((g) => g.tabs.contains(tab));
 }
 
-/// Tab bar labels by kCockpitTab* id. The Transactions tab reads "Review"
-/// here: it sits beside Rules as the place to check their results, and the
+/// Tab bar labels by kCockpitTab* id. The Transactions tab reads "Results"
+/// here: it sits beside Rules as the place to check what they did, and the
 /// home screen already has a Transactions tab.
 const Map<int, String> _kCockpitTabLabels = {
   kCockpitTabRules: 'Rules',
   kCockpitTabImport: 'Import',
-  kCockpitTabTransactions: 'Review',
+  kCockpitTabTransactions: 'Results',
   kCockpitTabCategories: 'Categories',
+  kCockpitTabGroups: 'Groups',
   kCockpitTabBudgets: 'Budgets',
   kCockpitTabReminders: 'Reminders',
   kCockpitTabSubscriptions: 'Subscriptions',
@@ -188,17 +193,19 @@ class _CockpitHub extends StatelessWidget {
       (s) => s.hiddenSectionCount,
     );
     final counts = {
+      // In the order of the group's name. Categories counts what the
+      // Categories tab lists: your categories plus the built-ins.
       CockpitGroup.classify: [
-        _count(ownRules, 'rule', 'rules'),
-        _count(finance.importRules.length, 'import rule', 'import rules'),
-      ],
-      // What the Categories tab lists: your categories plus the built-ins.
-      CockpitGroup.organise: [
         _count(
           customCategories.length + kCategories.length,
           'category',
           'categories',
         ),
+        _count(ownRules, 'rule', 'rules'),
+        _count(finance.importRules.length, 'import rule', 'import rules'),
+      ],
+      CockpitGroup.organise: [
+        _count(finance.groups.length, 'group', 'groups'),
         _count(finance.allTags.length, 'tag', 'tags'),
       ],
       // A limit passed leads: it is the one thing here that needs acting on.
@@ -303,10 +310,11 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
   /// Null on a single-tab group, which shows no tab bar.
   TabController? _tab;
 
-  /// Whether the FAB shows its label. Scrolling down folds it to the icon
-  /// so it covers less of the list; scrolling up or a tab change brings the
-  /// label back.
-  bool _fabExtended = true;
+  /// Whether the add button shows. Scrolling down slides it away so it
+  /// covers none of the list; scrolling up or a tab change brings it back.
+  /// Only a user scroll hides it, so a short list that cannot scroll always
+  /// shows it.
+  bool _fabShown = true;
 
   List<int> get _tabs => widget.group.tabs;
 
@@ -322,7 +330,7 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
         length: _tabs.length,
         vsync: this,
         initialIndex: start < 0 ? 0 : start,
-      )..addListener(() => setState(() => _fabExtended = true));
+      )..addListener(() => setState(() => _fabShown = true));
     }
   }
 
@@ -330,12 +338,12 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
     // The TabBarView's own page swipes arrive here too, as horizontal
     // scrolls; only a list moving up or down steers the FAB.
     if (n.metrics.axis != Axis.vertical) return false;
-    final extend = switch (n.direction) {
+    final show = switch (n.direction) {
       ScrollDirection.reverse => false,
       ScrollDirection.forward => true,
-      ScrollDirection.idle => _fabExtended,
+      ScrollDirection.idle => _fabShown,
     };
-    if (extend != _fabExtended) setState(() => _fabExtended = extend);
+    if (show != _fabShown) setState(() => _fabShown = show);
     return false;
   }
 
@@ -350,6 +358,7 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
     kCockpitTabImport => _ImportTab(),
     kCockpitTabTransactions => _TransactionsTab(),
     kCockpitTabCategories => const CategoriesTab(),
+    kCockpitTabGroups => const GroupsTab(),
     kCockpitTabBudgets => const BudgetsTab(),
     kCockpitTabSubscriptions => const SubscriptionsTab(),
     kCockpitTabTags => const TagsTab(),
@@ -368,6 +377,45 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
   @override
   Widget build(BuildContext context) {
     final tab = _tab;
+    // One add button per tab with an add flow, always with its label.
+    final Widget? fab = switch (_current) {
+      kCockpitTabRules => GlassButton(
+        icon: Icons.add,
+        label: 'New rule',
+        onPressed: () => showRuleDialog(context),
+      ),
+      kCockpitTabImport => GlassButton(
+        icon: Icons.add,
+        label: 'New import rule',
+        onPressed: () => _showImportRuleDialog(context),
+      ),
+      kCockpitTabCategories => GlassButton(
+        icon: Icons.add,
+        label: 'New category',
+        onPressed: () => showCategoryDialog(context),
+      ),
+      kCockpitTabGroups => GlassButton(
+        icon: Icons.add,
+        label: 'New group',
+        onPressed: () => showGroupDialog(context),
+      ),
+      kCockpitTabBudgets => GlassButton(
+        icon: Icons.add,
+        label: 'New budget',
+        onPressed: () => showBudgetDialog(context),
+      ),
+      kCockpitTabReminders => GlassButton(
+        icon: Icons.add,
+        label: 'New reminder',
+        onPressed: () => showReminderEditor(context),
+      ),
+      _ => null,
+    };
+    final fabMotion = motionDuration(
+      context,
+      const Duration(milliseconds: 200),
+    );
+    final scrollTabs = MediaQuery.textScalerOf(context).scale(1) > 1;
     return CockpitScope(
       controller: tab,
       tabs: _tabs,
@@ -376,57 +424,46 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
           backgroundColor: Colors.transparent,
           appBar: AppBar(
             title: Text(widget.group.title),
-            // Two or three short labels fit the width, so the bar is fixed
-            // rather than scrolling.
+            // At the default text size up to four short labels fit the
+            // width, so the bar is fixed rather than scrolling.
             bottom: tab == null
                 ? null
                 : TabBar(
                     controller: tab,
-                    // Large text: the labels scroll whole instead of being
-                    // cut to "Budge" and "Remir" in fixed thirds.
-                    isScrollable: isLargeTextScale(context),
-                    tabAlignment: isLargeTextScale(context)
-                        ? TabAlignment.start
-                        : null,
+                    // Half the default inset on every group page, so four
+                    // tabs at 360dp keep "Categories" whole.
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    // Any text larger than the default: the labels scroll
+                    // whole. Four tabs at 360dp leave "Categories" no room
+                    // to grow, so even Android's 1.15 step cuts it short
+                    // in fixed quarters.
+                    isScrollable: scrollTabs,
+                    tabAlignment: scrollTabs ? TabAlignment.start : null,
                     tabs: [
                       for (final t in _tabs) Tab(text: _kCockpitTabLabels[t]),
                     ],
                   ),
           ),
-          // FAB only on the tabs with an add flow.
-          floatingActionButton: switch (_current) {
-            kCockpitTabRules => GlassButton(
-              icon: Icons.add,
-              label: 'New rule',
-              extended: _fabExtended,
-              onPressed: () => showRuleDialog(context),
-            ),
-            kCockpitTabImport => GlassButton(
-              icon: Icons.add,
-              label: 'New import rule',
-              extended: _fabExtended,
-              onPressed: () => _showImportRuleDialog(context),
-            ),
-            kCockpitTabCategories => GlassButton(
-              icon: Icons.add,
-              label: 'New category',
-              extended: _fabExtended,
-              onPressed: () => showCategoryDialog(context),
-            ),
-            kCockpitTabBudgets => GlassButton(
-              icon: Icons.add,
-              label: 'New budget',
-              extended: _fabExtended,
-              onPressed: () => showBudgetDialog(context),
-            ),
-            kCockpitTabReminders => GlassButton(
-              icon: Icons.add,
-              label: 'New reminder',
-              extended: _fabExtended,
-              onPressed: () => showReminderEditor(context),
-            ),
-            _ => null,
-          },
+          // Slides down and fades while hidden; hidden, it takes no taps
+          // and leaves the semantics tree.
+          floatingActionButton: fab == null
+              ? null
+              : AnimatedSlide(
+                  offset: _fabShown ? Offset.zero : const Offset(0, 2),
+                  duration: fabMotion,
+                  curve: Curves.easeOutCubic,
+                  child: AnimatedOpacity(
+                    opacity: _fabShown ? 1 : 0,
+                    duration: fabMotion,
+                    child: IgnorePointer(
+                      ignoring: !_fabShown,
+                      child: ExcludeSemantics(
+                        excluding: !_fabShown,
+                        child: fab,
+                      ),
+                    ),
+                  ),
+                ),
           body: NotificationListener<UserScrollNotification>(
             onNotification: _onUserScroll,
             child: tab == null
@@ -470,6 +507,75 @@ class _RulesTabState extends State<_RulesTab> {
   /// (Transactions-screen idiom.)
   final Set<String> _selected = {};
   bool get _selecting => _selected.isNotEmpty;
+
+  /// Whether the built-in rules show under their fold row. Folded on each
+  /// visit and never stored; a search shows matching built-ins anyway.
+  bool _builtinOpen = false;
+
+  void _toggleBuiltins() => setState(() => _builtinOpen = !_builtinOpen);
+
+  /// Puts every built-in rule back as it first was, with Undo. Past rows
+  /// are not re-sorted here: the next rule add, edit or merge does that,
+  /// and an Undo could not take a re-sort back.
+  Future<void> _confirmRestoreBuiltins() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Restore built-in rules?'),
+        content: const Text(
+          'Deleted or edited built-in rules come back as they first were. '
+          'Rules you created yourself are kept. Past transactions are sorted '
+          'again the next time you add, edit or merge a rule.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final finance = context.read<FinanceProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    // The whole list, not only the built-ins: restoreRules puts back the
+    // exact order, priorities included, and leaves past rows as they are.
+    final before = List.of(finance.rules);
+    final n = await finance.restoreDefaultRules();
+    if (n > 0) {
+      showUndoSnackBarOn(
+        messenger,
+        'Restored $n built-in rule${n == 1 ? '' : 's'}',
+        () => finance.restoreRules(before, reapply: false),
+        icon: Icons.settings_backup_restore,
+      );
+    } else {
+      showAppToastOn(
+        messenger,
+        'Built-in rules are as they first were',
+        tone: AppToastTone.info,
+        icon: Icons.settings_backup_restore,
+      );
+    }
+  }
+
+  /// Ends the list, even with no built-in rule left, and sits under the
+  /// empty state when every rule is gone.
+  Widget _restoreBuiltinsButton({bool centered = false}) => Padding(
+    padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+    child: Align(
+      alignment: centered ? Alignment.center : Alignment.centerLeft,
+      child: TextButton.icon(
+        icon: const Icon(Icons.settings_backup_restore),
+        label: const Text('Restore built-in rules'),
+        onPressed: _confirmRestoreBuiltins,
+      ),
+    ),
+  );
 
   /// Merge is only meaningful within one category: the matcher's type gate
   /// skips mismatched rules anyway, so a cross-category merge would change
@@ -536,16 +642,23 @@ class _RulesTabState extends State<_RulesTab> {
       // viewport or a large font scale.
       return Center(
         child: SingleChildScrollView(
-          child: EmptyState(
-            icon: Icons.rule,
-            message:
-                'No rules yet.\n\nRules categorise SMS imports automatically, '
-                'e.g. if the message contains "Starbucks" → Food & Dining.\n\n'
-                'A rule with the Spam category drops matching messages '
-                'entirely. They are never imported.',
-            // Same words as the floating button on this tab.
-            actionLabel: 'New rule',
-            onAction: () => showRuleDialog(context),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              EmptyState(
+                icon: Icons.rule,
+                message:
+                    'No rules yet.\n\nRules categorise SMS imports '
+                    'automatically, e.g. if the message contains "Starbucks" '
+                    '→ Food & Dining.\n\n'
+                    'A rule with the Spam category drops matching messages '
+                    'entirely. They are never imported.',
+                // Same words as the floating button on this tab.
+                actionLabel: 'New rule',
+                onAction: () => showRuleDialog(context),
+              ),
+              _restoreBuiltinsButton(centered: true),
+            ],
           ),
         ),
       );
@@ -564,20 +677,24 @@ class _RulesTabState extends State<_RulesTab> {
         .toList();
     final userRules = visible.where((r) => !r.isBuiltIn).toList();
     final builtinRules = visible.where((r) => r.isBuiltIn).toList();
+    // A search shows the matching built-ins whatever the fold.
+    final builtinsShown = _builtinOpen || q.isNotEmpty;
 
-    // Drop selections that no longer exist or were re-filtered away, so the
-    // bar count never lies (transactions-screen idiom).
+    // Drop selections that no longer exist, were re-filtered away or sit
+    // in the closed fold, so the bar count never lies (transactions-screen
+    // idiom). Only rendered tiles count; a twin under a tile of your own
+    // stays selected with its owner, so a merge never splits a pair.
     if (_selected.isNotEmpty) {
       final visibleIds = {
-        for (final r in visible) ...[r.id, ?siblingOf[r.id]?.id],
+        for (final r in userRules) ...[r.id, ?siblingOf[r.id]?.id],
+        if (builtinsShown)
+          for (final r in builtinRules) ...[r.id, ?siblingOf[r.id]?.id],
       };
       _selected.removeWhere((id) => !visibleIds.contains(id));
     }
 
-    Widget header(String label) => UppercaseSectionHeader(label);
-
-    // The ordering tip rides on whichever header shows first: with no
-    // rules of your own (fresh install, or filtered away) it is Built-in.
+    // The ordering tip rides on the Your rules header, which shows even
+    // with no rules of your own unless a search filtered them away.
     Widget orderHeader(String label) => _TipHeader(
       label: label,
       tip: InfoTip(
@@ -622,14 +739,57 @@ class _RulesTabState extends State<_RulesTab> {
       );
     }
 
+    final scheme = Theme.of(context).colorScheme;
     // Flat item list keeps the whole thing lazily built. Filtering happens
-    // before the section split, so an all-filtered section drops its header.
+    // before the section split, so a search that empties a section drops
+    // its header.
     final items = <Widget>[
-      if (userRules.isNotEmpty) orderHeader('Your rules'),
+      if (userRules.isNotEmpty || q.isEmpty) orderHeader('Your rules'),
       ...userRules.map(tile),
+      if (userRules.isEmpty && q.isEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+          child: Text(
+            'No rules of your own yet.',
+            style: TextStyle(color: scheme.onSurfaceVariant),
+          ),
+        ),
       if (builtinRules.isNotEmpty)
-        userRules.isEmpty ? orderHeader('Built-in') : header('Built-in'),
-      ...builtinRules.map(tile),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: FrostedPanel(
+            radius: BorderRadius.circular(AppRadius.card),
+            // TalkBack says whether the fold is open. Merged, so the state
+            // sits on the tile's own node rather than one above it.
+            child: MergeSemantics(
+              child: Semantics(
+                button: true,
+                expanded: builtinsShown,
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.format_list_bulleted, size: 20),
+                  ),
+                  title: Text('Built-in rules · ${builtinRules.length}'),
+                  subtitle: const Text(
+                    'Common words such as restaurant, petrol and pharmacy. '
+                    'Checked after yours.',
+                  ),
+                  trailing: AnimatedRotation(
+                    turns: builtinsShown ? 0 : 0.5,
+                    duration: motionDuration(
+                      context,
+                      const Duration(milliseconds: 200),
+                    ),
+                    child: const Icon(Icons.expand_less),
+                  ),
+                  onTap: _toggleBuiltins,
+                ),
+              ),
+            ),
+          ),
+        ),
+      if (builtinsShown) ...builtinRules.map(tile),
+      _restoreBuiltinsButton(),
     ];
     return Column(
       children: [
@@ -669,7 +829,9 @@ class _RulesTabState extends State<_RulesTab> {
             onClose: () => setState(_selected.clear),
           ),
         Expanded(
-          child: items.isEmpty
+          // The list always holds the Restore button, so an empty search
+          // is told by its two sections.
+          child: q.isNotEmpty && userRules.isEmpty && builtinRules.isEmpty
               ? const Center(
                   child: Padding(
                     padding: EdgeInsets.all(32),
@@ -897,58 +1059,71 @@ class _RuleTile extends StatelessWidget {
                 '(${cat.type == TxType.income ? 'income' : 'expense'})',
         ].join(' · '),
       ),
-      // No delete while selecting — a mis-tap next to a checkable row would
-      // silently drop a rule.
-      trailing: selectionMode
+      // Tap edits, and Delete lives in the editor. No chevron while
+      // selecting, where a tap ticks the row, or at large text, where the
+      // words need the width.
+      trailing: selectionMode || isLargeTextScale(context)
           ? null
-          : IconButton(
-              tooltip: sib == null ? 'Delete rule' : 'Delete rule pair',
-              // 20 matches every other trailing delete icon in the app.
-              icon: const Icon(Icons.delete_outline, size: 20),
-              onPressed: () {
-                final finance = context.read<FinanceProvider>();
-                // Position = match priority; Undo must put each back where
-                // it was. Indexes are captured before either delete and
-                // restored lowest-first so the second insert lands right.
-                final all = finance.rules;
-                final index = all.indexWhere((r) => r.id == rule.id);
-                final sibIndex = sib == null
-                    ? -1
-                    : all.indexWhere((r) => r.id == sib.id);
-                finance.deleteRule(rule.id);
-                if (sib != null) finance.deleteRule(sib.id);
-                // patterns.first, not the raw stored string — the '|' encoding is
-                // an implementation detail users never typed.
-                showUndoSnackBar(
-                  context,
-                  'Deleted rule${sib == null ? '' : ' pair'} '
-                  '"${rule.patterns.firstOrNull ?? rule.pattern}"'
-                  '${rule.patterns.length > 1 ? ' (+${rule.patterns.length - 1})' : ''}',
-                  () {
-                    if (sib == null) {
-                      finance.restoreRule(rule, index);
-                    } else if (sibIndex < index) {
-                      finance.restoreRule(sib, sibIndex);
-                      finance.restoreRule(rule, index);
-                    } else {
-                      finance.restoreRule(rule, index);
-                      finance.restoreRule(sib, sibIndex);
-                    }
-                  },
-                  icon: Icons.delete_outline,
-                  tone: AppToastTone.removal,
-                );
-              },
-            ),
+          : Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
     );
   }
+}
+
+/// Deletes [rule] and its twin [sib] at once, with Undo. The toast shows
+/// first: the delete rebuilds the list, which unmounts the row whose
+/// [context] this is.
+void _deleteRuleWithUndo(
+  BuildContext context,
+  ClassifierRule rule,
+  ClassifierRule? sib,
+) {
+  final finance = context.read<FinanceProvider>();
+  // Position = match priority; Undo must put each back where it was.
+  // Indexes are captured before either delete and restored lowest-first so
+  // the second insert lands right.
+  final all = finance.rules;
+  final index = all.indexWhere((r) => r.id == rule.id);
+  final sibIndex = sib == null ? -1 : all.indexWhere((r) => r.id == sib.id);
+  // patterns.first, not the raw stored string: the '|' encoding is an
+  // implementation detail users never typed.
+  showUndoSnackBar(
+    context,
+    'Deleted rule${sib == null ? '' : ' pair'} '
+    '"${rule.patterns.firstOrNull ?? rule.pattern}"'
+    '${rule.patterns.length > 1 ? ' (+${rule.patterns.length - 1})' : ''}',
+    () {
+      if (sib == null) {
+        finance.restoreRule(rule, index);
+      } else if (sibIndex < index) {
+        finance.restoreRule(sib, sibIndex);
+        finance.restoreRule(rule, index);
+      } else {
+        finance.restoreRule(rule, index);
+        finance.restoreRule(sib, sibIndex);
+      }
+    },
+    icon: Icons.delete_outline,
+    tone: AppToastTone.removal,
+  );
+  finance.deleteRule(rule.id);
+  if (sib != null) finance.deleteRule(sib.id);
 }
 
 // ── Import tab ───────────────────────────────────────────────────────────────
 
 /// Shows every criterion the SMS importer applies: the fixed structural
-/// checks (read-only) and the editable ignore/spam-signal rules.
-class _ImportTab extends StatelessWidget {
+/// checks (read-only) and the editable ignore/spam-signal rules, led by the
+/// message tester.
+class _ImportTab extends StatefulWidget {
+  @override
+  State<_ImportTab> createState() => _ImportTabState();
+}
+
+class _ImportTabState extends State<_ImportTab> {
+  /// Whether the core checks show under their fold row. Folded on each
+  /// visit and never stored.
+  bool _checksOpen = false;
+
   @override
   Widget build(BuildContext context) {
     final rules = context.watch<FinanceProvider>().importRules;
@@ -962,7 +1137,11 @@ class _ImportTab extends StatelessWidget {
     Widget header(String label) => UppercaseSectionHeader(label);
 
     final items = <Widget>[
-      const _CoreChecksCard(),
+      const _TestMessageCard(),
+      _CoreChecksCard(
+        open: _checksOpen,
+        onToggle: () => setState(() => _checksOpen = !_checksOpen),
+      ),
       header('Ignored when containing'),
       if (ignoreRules.isEmpty)
         const EmptyState(
@@ -982,7 +1161,7 @@ class _ImportTab extends StatelessWidget {
           link: InfoLink(
             prompt: 'Something flagged by mistake?',
             label: 'Review suspected spam',
-            onTap: goAllTransactions,
+            onTap: goReview,
           ),
         ),
       ),
@@ -995,33 +1174,13 @@ class _ImportTab extends StatelessWidget {
       ...spamRules.map((r) => _ImportRuleTile(rule: r)),
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-        // Wrap, not Row: the two buttons together overflow a 360dp screen.
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 4,
-          children: [
-            InfoLabel(
-              icon: true,
-              label: TextButton.icon(
-                icon: const Icon(Icons.science_outlined),
-                label: const Text('Test a message'),
-                onPressed: () => _showTestMessageDialog(context),
-              ),
-              tip: const InfoTip(
-                title: 'Test a message',
-                message:
-                    'Shows what the parser does with the pasted text. It is '
-                    'more lenient about senders than the real inbox scan and '
-                    'does not check for duplicates, so a real import can '
-                    'still skip the message.',
-              ),
-            ),
-            TextButton.icon(
-              icon: const Icon(Icons.settings_backup_restore),
-              label: const Text('Restore defaults'),
-              onPressed: () => _confirmRestoreDefaults(context),
-            ),
-          ],
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            icon: const Icon(Icons.settings_backup_restore),
+            label: const Text('Restore defaults'),
+            onPressed: () => _confirmRestoreDefaults(context),
+          ),
         ),
       ),
     ];
@@ -1059,10 +1218,58 @@ class _ImportTab extends StatelessWidget {
   }
 }
 
-/// The structural criteria that are code, not data — shown so the whole
-/// import decision is visible in one place.
+/// The Import tab's first card: opens the message tester, which shows what
+/// import would do with a pasted SMS.
+class _TestMessageCard extends StatelessWidget {
+  const _TestMessageCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: FrostedPanel(
+        radius: BorderRadius.circular(AppRadius.card),
+        child: ListTile(
+          leading: const CircleAvatar(
+            child: Icon(Icons.science_outlined, size: 20),
+          ),
+          // Left-aligned in the title slot: stretched, the whole width
+          // would open the tip.
+          title: const Align(
+            alignment: Alignment.centerLeft,
+            child: InfoLabel(
+              icon: true,
+              label: Text('Test a message'),
+              tip: InfoTip(
+                title: 'Test a message',
+                message:
+                    'Shows what the parser does with the pasted text. It is '
+                    'more lenient about senders than the real inbox scan and '
+                    'does not check for duplicates, so a real import can '
+                    'still skip the message.',
+              ),
+            ),
+          ),
+          subtitle: const Text('Paste a bank SMS to see what import would do'),
+          trailing: OutlinedButton(
+            onPressed: () => _showTestMessageDialog(context),
+            child: const Text('Test'),
+          ),
+          onTap: () => _showTestMessageDialog(context),
+        ),
+      ),
+    );
+  }
+}
+
+/// The structural criteria that are code, not data, shown so the whole
+/// import decision is visible in one place. Folded to its header row until
+/// [onToggle] opens it.
 class _CoreChecksCard extends StatelessWidget {
-  const _CoreChecksCard();
+  final bool open;
+  final VoidCallback onToggle;
+
+  const _CoreChecksCard({required this.open, required this.onToggle});
 
   @override
   Widget build(BuildContext context) {
@@ -1081,48 +1288,85 @@ class _CoreChecksCard extends StatelessWidget {
     );
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: FrostedPanel(
         radius: BorderRadius.circular(AppRadius.card),
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpace.card),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const UppercaseSectionHeader(
-                'Core checks (always applied)',
-                padding: EdgeInsets.zero,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // TalkBack says whether the fold is open. Merged, so the state
+            // sits on the tile's own node rather than one above it.
+            MergeSemantics(
+              child: Semantics(
+                button: true,
+                expanded: open,
+                child: ListTile(
+                  leading: const CircleAvatar(
+                    child: Icon(Icons.fact_check_outlined, size: 20),
+                  ),
+                  title: const Text('Core checks · 4'),
+                  subtitle: const Text(
+                    'Always applied: sender, amount, debit or credit word',
+                  ),
+                  trailing: AnimatedRotation(
+                    turns: open ? 0 : 0.5,
+                    duration: motionDuration(
+                      context,
+                      const Duration(milliseconds: 200),
+                    ),
+                    child: const Icon(Icons.expand_less),
+                  ),
+                  onTap: onToggle,
+                ),
               ),
-              const SizedBox(height: 10),
-              check(
-                Icons.account_balance,
-                'Sender must look like a bank or payment app '
-                '(DLT ids like VM-HDFCBK, or brand names for '
-                'notification-captured alerts).',
+            ),
+            AnimatedFold(
+              collapsed: !open,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpace.card,
+                  0,
+                  AppSpace.card,
+                  AppSpace.card,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    check(
+                      Icons.account_balance,
+                      'Sender must look like a bank or payment app '
+                      '(DLT ids like VM-HDFCBK, or brand names for '
+                      'notification-captured alerts).',
+                    ),
+                    check(
+                      Icons.currency_rupee,
+                      'The message must state an amount in Rs, INR or ₹.',
+                    ),
+                    check(
+                      Icons.swap_vert,
+                      'It must contain a debit verb (debited, spent, paid…) or a '
+                      'credit verb (credited, received…).',
+                    ),
+                    check(
+                      Icons.credit_card,
+                      'Credit-card bill payments import on both sides: the bank '
+                      'debit as a "Card bill" expense, the card confirmation as a '
+                      '"Card payment" income. The two cancel out.',
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Changes below apply to future scans. To re-evaluate old '
+                      'messages, run Import from SMS with a date range.',
+                      style: TextStyle(
+                        color: scheme.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              check(
-                Icons.currency_rupee,
-                'The message must state an amount in Rs, INR or ₹.',
-              ),
-              check(
-                Icons.swap_vert,
-                'It must contain a debit verb (debited, spent, paid…) or a '
-                'credit verb (credited, received…).',
-              ),
-              check(
-                Icons.credit_card,
-                'Credit-card bill payments import on both sides: the bank '
-                'debit as a "Card bill" expense, the card confirmation as a '
-                '"Card payment" income. The two cancel out.',
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Changes below apply to future scans. To re-evaluate old '
-                'messages, run Import from SMS with a date range.',
-                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -1159,25 +1403,27 @@ class _ImportRuleTile extends StatelessWidget {
             ? 'Ignored, never imported'
             : 'Flagged for individual review, still imported',
       ),
-      trailing: IconButton(
-        tooltip: 'Delete rule',
-        // 20 matches every other trailing delete icon in the app.
-        icon: const Icon(Icons.delete_outline, size: 20),
-        onPressed: () {
-          final finance = context.read<FinanceProvider>();
-          final index = finance.importRules.indexWhere((r) => r.id == rule.id);
-          finance.deleteImportRule(rule.id);
-          showUndoSnackBar(
-            context,
-            'Deleted rule "${rule.pattern}"',
-            () => finance.restoreImportRule(rule, index),
-            icon: Icons.delete_outline,
-            tone: AppToastTone.removal,
-          );
-        },
-      ),
+      // Tap edits, and Delete lives in the editor.
+      trailing: isLargeTextScale(context)
+          ? null
+          : Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
     );
   }
+}
+
+/// Deletes [rule] with Undo. The toast shows first: the delete rebuilds
+/// the list, which unmounts the row whose [context] this is.
+void _deleteImportRuleWithUndo(BuildContext context, ImportRule rule) {
+  final finance = context.read<FinanceProvider>();
+  final index = finance.importRules.indexWhere((r) => r.id == rule.id);
+  showUndoSnackBar(
+    context,
+    'Deleted rule "${rule.pattern}"',
+    () => finance.restoreImportRule(rule, index),
+    icon: Icons.delete_outline,
+    tone: AppToastTone.removal,
+  );
+  finance.deleteImportRule(rule.id);
 }
 
 // ── Transactions tab ─────────────────────────────────────────────────────────
@@ -1250,16 +1496,19 @@ class _TransactionsTabState extends State<_TransactionsTab> {
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
     final all = finance.transactions;
-    final q = _search.trim().toLowerCase();
+    // The ledger search's matching: the note, payee, SMS, sender, category,
+    // account, merchant and its alias, tags, people on a split, the payer
+    // of a repayment and the amount.
+    final q = normalizeSearchText(_search);
     final txs = q.isEmpty
         ? all
         : all
               .where(
-                (t) =>
-                    t.note.toLowerCase().contains(q) ||
-                    t.smsBody.toLowerCase().contains(q) ||
-                    t.sender.toLowerCase().contains(q) ||
-                    t.category.label.toLowerCase().contains(q),
+                (t) => searchHaystack(
+                  t,
+                  accountName: finance.accountForKey(t.acctKey)?.displayName,
+                  merchantAlias: finance.merchantAliasFor(t),
+                ).contains(q),
               )
               .toList();
 
@@ -1335,7 +1584,7 @@ class _TransactionsTabState extends State<_TransactionsTab> {
                   itemCount: txs.length,
                   itemBuilder: (context, i) => _ClassificationTile(
                     tx: txs[i],
-                    alias: finance.merchantAlias,
+                    named: finance.rowTitleFor(txs[i]),
                     offerRule: txs[i].id == _ruleOfferId,
                     onPicked: _recategorise,
                     onMakeRule: _makeRule,
@@ -1355,18 +1604,14 @@ class _TransactionsTabState extends State<_TransactionsTab> {
 String _rulePatternFor(Tx tx) =>
     tx.smsText.split('\n').first.split('|').first.trim();
 
-/// A Review row's title: "Food & Dining · Croma". The category alone when
-/// no merchant can be told apart.
-String _reviewRowTitle(Tx tx, {MerchantAliasLookup? alias}) {
-  final merchant = merchantLabelOrNull(tx, alias: alias);
-  return merchant == null
-      ? tx.category.label
-      : '${tx.category.label} · $merchant';
-}
-
+/// One Results row: the merchant first, as the ledger names it, then the
+/// category and date under it.
 class _ClassificationTile extends StatelessWidget {
   final Tx tx;
-  final MerchantAliasLookup? alias;
+
+  /// What the row leads with ([FinanceProvider.rowTitleFor]); null when
+  /// the row names no merchant, payee or note, and its category leads.
+  final String? named;
 
   /// Shows "Make rule" under the row: it was just recategorised.
   final bool offerRule;
@@ -1375,7 +1620,7 @@ class _ClassificationTile extends StatelessWidget {
 
   const _ClassificationTile({
     required this.tx,
-    required this.alias,
+    required this.named,
     required this.offerRule,
     required this.onPicked,
     required this.onMakeRule,
@@ -1394,9 +1639,12 @@ class _ClassificationTile extends StatelessWidget {
       transfer: cat.isTransfer,
     );
 
-    // Category and merchant, not the raw SMS: the category is what a tap
-    // changes, and the merchant is what a rule would match.
-    final title = _reviewRowTitle(tx, alias: alias);
+    // The merchant, not the raw SMS, as the ledger reads; the category,
+    // which a tap changes, leads the line under it. The category alone
+    // leads when nothing names the merchant.
+    final title = named ?? cat.label;
+    final date = fmtDateCompact(tx.date);
+    final details = named == null ? date : '${cat.label} · $date';
     final canMakeRule = offerRule && _rulePatternFor(tx).isNotEmpty;
     // Large text: no icon, and the amount moves under the date, so the
     // words get the row's width (at 320dp and 2x text the title read "Tra…").
@@ -1458,9 +1706,10 @@ class _ClassificationTile extends StatelessWidget {
                           ),
                           const SizedBox(height: 2),
                           // The amount stays on the right in its money colour,
-                          // so the line under the title is the date alone.
+                          // so the line under the title is the category and
+                          // date.
                           Text(
-                            fmtDateCompact(tx.date),
+                            details,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: textTheme.bodySmall?.copyWith(
@@ -1728,6 +1977,8 @@ Future<void> _showImportRuleDialog(
 }) async {
   final patternCtrl = TextEditingController(text: existing?.pattern ?? '');
   var kind = existing?.kind ?? ImportRuleKind.ignore;
+  // Delete pops the editor first; the caller's row then deletes with Undo.
+  var deleteRequested = false;
 
   await showDialog(
     context: context,
@@ -1786,6 +2037,17 @@ Future<void> _showImportRuleDialog(
             ),
           ),
           actions: [
+            if (existing != null)
+              TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(ctx).colorScheme.error,
+                ),
+                onPressed: () {
+                  deleteRequested = true;
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Delete'),
+              ),
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel'),
@@ -1818,6 +2080,9 @@ Future<void> _showImportRuleDialog(
       ),
     ),
   );
+  if (deleteRequested && existing != null && context.mounted) {
+    _deleteImportRuleWithUndo(context, existing);
+  }
 }
 
 /// Category rows of one money direction only, for the pair's second slot.
@@ -1896,6 +2161,9 @@ Future<void> showRuleDialog(
   // The other-direction expander starts open on a pair, so its second
   // category is in view.
   var otherOpen = twin != null;
+  // Delete pops the editor first; the caller's row then deletes the rule,
+  // and its twin, with Undo.
+  var deleteRequested = false;
 
   // What the rule matches, in one line under the fields: a pair stays
   // readable while its expander is closed.
@@ -2105,6 +2373,17 @@ Future<void> showRuleDialog(
             ),
           ),
           actions: [
+            if (existing != null)
+              TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(ctx).colorScheme.error,
+                ),
+                onPressed: () {
+                  deleteRequested = true;
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Delete'),
+              ),
             TextButton(
               onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel'),
@@ -2252,6 +2531,9 @@ Future<void> showRuleDialog(
       ),
     ),
   );
+  if (deleteRequested && existing != null && context.mounted) {
+    _deleteRuleWithUndo(context, existing, twin);
+  }
 }
 
 /// Runs of whitespace as one space, trimmed: rules match single-line SMS

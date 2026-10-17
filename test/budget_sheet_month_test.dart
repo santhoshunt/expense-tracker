@@ -73,7 +73,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text(fmtMonth(thisMonth)), findsOneWidget);
-    expect(find.text('${fmtMoney(800)} / ${fmtMoney(1000)}'), findsOneWidget);
+    expect(
+      find.text('${fmtMoneyWhole(800)} / ${fmtMoneyWhole(1000)}'),
+      findsOneWidget,
+    );
     // No data after the current month, so the forward chevron is disabled
     // here. byTooltip
     // matches the Tooltip INSIDE the button, so climb to the button itself.
@@ -87,16 +90,36 @@ void main() {
     );
     expect(next.onPressed, isNull);
 
+    // One category: a line, not a full ring.
+    expect(find.text('All in Entertainment'), findsOneWidget);
+    expect(find.byKey(const ValueKey('budget-donut')), findsNothing);
+
     await tester.tap(find.byTooltip('Previous month'));
     await tester.pumpAndSettle();
     expect(find.text(fmtMonth(lastMonth)), findsOneWidget);
-    expect(find.text('${fmtMoney(300)} / ${fmtMoney(1000)}'), findsOneWidget);
+    expect(
+      find.text('${fmtMoneyWhole(300)} / ${fmtMoneyWhole(1000)}'),
+      findsOneWidget,
+    );
+    // The records start last month: the chevron stops there.
+    final previous = tester.widget<IconButton>(
+      find
+          .ancestor(
+            of: find.byTooltip('Previous month'),
+            matching: find.byType(IconButton),
+          )
+          .first,
+    );
+    expect(previous.onPressed, isNull);
 
     // Back forward — enabled again below the current month.
     await tester.tap(find.byTooltip('Next month'));
     await tester.pumpAndSettle();
     expect(find.text(fmtMonth(thisMonth)), findsOneWidget);
-    expect(find.text('${fmtMoney(800)} / ${fmtMoney(1000)}'), findsOneWidget);
+    expect(
+      find.text('${fmtMoneyWhole(800)} / ${fmtMoneyWhole(1000)}'),
+      findsOneWidget,
+    );
   });
 
   test('snackbars dismiss with a horizontal swipe, both themes', () {

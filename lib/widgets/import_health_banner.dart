@@ -294,8 +294,8 @@ Future<void> showImportHealthSheet(
                 const SizedBox(height: 8),
               ],
               Text(
-                'To see why one fails, paste it into Cockpit, Import, Test '
-                'a message.',
+                'To see why one fails, paste it into Cockpit, Categories and '
+                'rules, Import, Test a message.',
                 style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
             ],

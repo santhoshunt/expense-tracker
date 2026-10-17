@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Widget picker preview for Recent: sample rows only. -->
+<!-- Widget picker preview for Recent: sample rows only. Icons carry their
+     categories' colours: Food & Dining, To savings and Salary. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
@@ -62,7 +63,7 @@
                 android:layout_height="15dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/widget_ic_food"
-                android:tint="#B4C0C8" />
+                android:tint="#EA7C69" />
 
             <TextView
                 android:layout_width="0dp"
@@ -112,7 +113,7 @@
                 android:layout_height="15dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/widget_ic_transfer"
-                android:tint="#B4C0C8" />
+                android:tint="#FFB572" />
 
             <TextView
                 android:layout_width="0dp"
@@ -162,7 +163,7 @@
                 android:layout_height="15dp"
                 android:importantForAccessibility="no"
                 android:src="@drawable/widget_ic_income"
-                android:tint="#B4C0C8" />
+                android:tint="#50D1AA" />
 
             <TextView
                 android:layout_width="0dp"

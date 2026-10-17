@@ -27,4 +27,8 @@ void main() {
       LaunchAction.openThisWeek,
     );
   });
+
+  test('the v1.43.0 This week review count opens the review', () {
+    expect(LaunchActions.fromName('open_review'), LaunchAction.openReview);
+  });
 }

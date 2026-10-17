@@ -91,7 +91,7 @@ void main() {
   testWidgets('rows are at least 44dp and under 56dp', (tester) async {
     await openMenu(tester, shortActions());
     final all = rows().evaluate().toList();
-    // Year, Select, then Cockpit and People.
+    // Year, Select, then Cockpit and Who owes you.
     expect(all, hasLength(4));
     for (final e in all) {
       final h = tester.getSize(find.byWidget(e.widget)).height;
@@ -99,24 +99,32 @@ void main() {
       expect(h, lessThan(56));
     }
     // A row without a trailing is the 44dp minimum at normal text.
-    expect(tester.getSize(row('People')).height, 44);
+    expect(tester.getSize(row('Who owes you')).height, 44);
   });
 
+  // The test font draws every glyph a full em wide, so "Who owes you"
+  // (v1.43.0, was "People") alone reaches Flutter's 280dp menu cap at 1x;
+  // on a phone's real font it is about half that. At 0.75x the App rows
+  // leave room under the cap, which is what these two tests measure.
   testWidgets('short labels make a menu narrower than 280dp', (tester) async {
-    await openMenu(tester, shortActions());
-    expect(tester.getSize(row('People')).width, lessThan(280));
+    await openMenu(tester, shortActions(), textScale: 0.75);
+    expect(tester.getSize(row('Who owes you')).width, lessThan(280));
   });
 
   testWidgets('a longer label widens the menu to fit it', (tester) async {
-    await openMenu(tester, shortActions());
-    final short = tester.getSize(row('People')).width;
+    await openMenu(tester, shortActions(), textScale: 0.75);
+    final short = tester.getSize(row('Who owes you')).width;
     await tester.tapAt(const Offset(5, 880));
     await tester.pumpAndSettle();
-    await openMenu(tester, [
+    await openMenu(tester, textScale: 0.75, [
       ...shortActions(),
-      PageMenuAction(icon: Icons.add, label: 'Balance sheet', onTap: () {}),
+      PageMenuAction(
+        icon: Icons.add,
+        label: 'Balance sheet for the year',
+        onTap: () {},
+      ),
     ]);
-    expect(tester.getSize(row('People')).width, greaterThan(short));
+    expect(tester.getSize(row('Who owes you')).width, greaterThan(short));
   });
 
   testWidgets('the trailing sits at the right edge and has its own tap', (
@@ -152,7 +160,7 @@ void main() {
 
   testWidgets('rows grow with large text', (tester) async {
     await openMenu(tester, shortActions(), textScale: 3);
-    expect(tester.getSize(row('People')).height, greaterThan(44));
+    expect(tester.getSize(row('Who owes you')).height, greaterThan(44));
     expect(tester.takeException(), isNull);
   });
 }

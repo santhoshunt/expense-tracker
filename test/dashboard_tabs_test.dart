@@ -14,6 +14,7 @@ import 'package:expense_tracker/services/spend_comparison.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
 import 'package:expense_tracker/widgets/dashboard_fold.dart';
+import 'package:expense_tracker/widgets/monthly_recap_card.dart';
 import 'package:expense_tracker/widgets/spend_comparison_cards.dart';
 
 import 'dashboard_test_utils.dart';
@@ -85,7 +86,7 @@ void main() {
       expect(find.text('Spending heatmap'), findsNothing);
 
       await openDashboardView(tester, 'Trends');
-      expect(find.text('This month vs last month'), findsOneWidget);
+      expect(find.text('This month so far'), findsOneWidget);
       // This month vs usual starts folded.
       expect(
         tester
@@ -103,7 +104,7 @@ void main() {
 
       await openDashboardView(tester, 'Breakdown');
       expect(find.byType(CategoryDonutChart), findsOneWidget);
-      expect(find.text('This month vs last month'), findsNothing);
+      expect(find.text('This month so far'), findsNothing);
       expect(find.text('Spent'), findsNothing);
     });
 
@@ -153,9 +154,9 @@ void main() {
         find.byTooltip('Previous month'),
         find.byKey(const ValueKey('balance')),
         find.text('Spent'),
-        find.text('Upcoming'),
+        find.text('Next 7 days'),
         find.text('Budgets'),
-        find.text('Owed to you'),
+        find.text('Who owes you'),
       ];
       final tops = [for (final f in order) tester.getTopLeft(f).dy];
       for (var i = 1; i < tops.length; i++) {
@@ -175,7 +176,7 @@ void main() {
       }
 
       await swipe(-300);
-      expect(find.text('This month vs last month'), findsOneWidget);
+      expect(find.text('This month so far'), findsOneWidget);
 
       await swipe(-300);
       expect(find.byType(CategoryDonutChart), findsOneWidget);
@@ -186,7 +187,7 @@ void main() {
 
       // And right goes back, as far as the Overview.
       await swipe(300);
-      expect(find.text('This month vs last month'), findsOneWidget);
+      expect(find.text('This month so far'), findsOneWidget);
       await swipe(300);
       expect(find.byKey(const ValueKey('balance')), findsOneWidget);
     });
@@ -208,11 +209,11 @@ void main() {
       await pump(tester);
       await tester.tap(find.text('Trends'));
       await tester.pumpAndSettle();
-      expect(find.text('This month vs last month'), findsOneWidget);
+      expect(find.text('This month so far'), findsOneWidget);
 
       await toggleYearView(tester);
       expect(
-        find.text('This month vs last month'),
+        find.text('This month so far'),
         findsNothing,
         reason: 'a month comparison has no meaning over a year',
       );
@@ -267,14 +268,14 @@ void main() {
         ),
       );
       expect(find.textContaining('complete months'), findsOneWidget);
-      expect(find.textContaining('is 1 month'), findsOneWidget);
+      expect(find.textContaining('is 1 such month'), findsOneWidget);
     });
 
     testWidgets('a running month names the day it is measured through', (
       tester,
     ) async {
-      await show(tester, PreviousMonthCard(comparison: made()));
-      expect(find.textContaining('Through 17 Sep'), findsOneWidget);
+      await show(tester, MonthPaceCard(comparison: made()));
+      expect(find.textContaining('1 to 17 Sep'), findsOneWidget);
       expect(find.textContaining('August'), findsWidgets);
     });
 
@@ -284,15 +285,64 @@ void main() {
       // made() carries a null actualFull, the shape of a month's first days
       // (before kMinDaysForProjection). "Show both" still holds: the full
       // reference month is named even though nothing can be projected yet.
-      await show(tester, PreviousMonthCard(comparison: made()));
-      expect(find.text('All of August: ${fmtMoney(1000)}'), findsOneWidget);
+      await show(tester, MonthPaceCard(comparison: made()));
+      expect(
+        find.text('All of August: ${fmtMoneyWhole(1000)}'),
+        findsOneWidget,
+      );
       expect(find.textContaining('On track for'), findsNothing);
 
       await show(tester, UsualSpendCard(comparison: made()));
       expect(
-        find.text('Usually ${fmtMoney(1000)} in a full month'),
+        find.text('Usually ${fmtMoneyWhole(1000)} in a full month'),
         findsOneWidget,
       );
+    });
+
+    testWidgets('a past month is named, never "this month" or "by now"', (
+      tester,
+    ) async {
+      MonthComparison past(SpendCompare vs) => MonthComparison(
+        month: DateTime(2026, 9),
+        previousMonth: DateTime(2026, 8),
+        throughDay: 30,
+        partial: false,
+        usualMonths: 6,
+        paceDays: 30,
+        vsPrevious: vs,
+        vsUsual: compare(0, 1000),
+        categories: const [],
+      );
+
+      await show(
+        tester,
+        MonthPaceCard(
+          comparison: past(compare(0, 1000, state: CompareState.noneThisMonth)),
+        ),
+      );
+      expect(
+        find.text(
+          'Nothing in September. August came to ${fmtMoneyWhole(1000)}.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('this month'), findsNothing);
+      expect(find.textContaining('by now'), findsNothing);
+      // The tip carries the card's title, not "This month so far".
+      expect(find.bySemanticsLabel('About September'), findsOneWidget);
+      expect(find.bySemanticsLabel('About This month so far'), findsNothing);
+
+      await show(
+        tester,
+        MonthPaceCard(
+          comparison: past(compare(1400, 0, state: CompareState.newThisMonth)),
+        ),
+      );
+      expect(
+        find.text('All of it new. Nothing in all of August.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('by this day'), findsNothing);
     });
 
     testWidgets('a row with nothing spent this month still opens', (

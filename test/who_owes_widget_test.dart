@@ -225,26 +225,58 @@ void main() {
         categoryIds: {'food'},
       );
       await pumpDashboard(tester, p);
-      expect(find.text('Owed to you'), findsNothing);
+      expect(find.text('Who owes you'), findsNothing);
 
       await dinner(p);
       await tester.pumpAndSettle();
-      // Last on the page, after Budgets.
+      // Last on the page, after Budgets, under its own label.
       await tester.scrollUntilVisible(
-        find.text('Owed to you'),
+        find.text('Who owes you'),
         300,
         scrollable: verticalScrollable(),
       );
-      expect(find.text(fmtMoney(2000)), findsOneWidget);
+      expect(find.text('Owed to you'), findsNothing);
+      // The first name and how many more, and the whole-rupee total.
+      expect(find.textContaining(' and 1 more'), findsOneWidget);
+      final total = find.text(fmtMoneyWhole(2000));
+      expect(total, findsOneWidget);
       expect(
         tester.getTopLeft(find.text('Budgets')).dy,
-        lessThan(tester.getTopLeft(find.text('Owed to you')).dy),
+        lessThan(tester.getTopLeft(find.text('Who owes you')).dy),
       );
 
-      await tapVisible(tester, find.text('Owed to you'));
+      await tapVisible(tester, total);
       expect(find.text('Who owes you'), findsOneWidget);
       expect(find.text('Arun'), findsOneWidget);
       expect(find.text('Priya'), findsOneWidget);
+    });
+
+    testWidgets('the People page leads with the total in large type', (
+      tester,
+    ) async {
+      final p = await loaded();
+      await tester.pumpWidget(withProviders(p, const PeopleScreen()));
+      await tester.pumpAndSettle();
+      expect(find.text('Nobody owes you anything right now.'), findsOneWidget);
+      expect(
+        find.text(
+          'Tick Group split payment on an expense and add who owes what.',
+        ),
+        findsOneWidget,
+      );
+
+      await dinner(p);
+      await tester.pumpAndSettle();
+      expect(find.text('2 people owe you'), findsOneWidget);
+      final total = find.text(fmtMoney(2000));
+      expect(total, findsOneWidget);
+      final style = tester.widget<Text>(total).style!;
+      expect(style.fontWeight, FontWeight.w700);
+      expect(
+        style.fontSize,
+        Theme.of(tester.element(total)).textTheme.headlineSmall!.fontSize,
+      );
+      expect(find.text('Owed to you'), findsNothing);
     });
 
     Future<void> openPerson(
@@ -363,7 +395,8 @@ void main() {
       expect(find.text('Marked Arun settled'), findsOneWidget);
 
       // Arun sits in the folded Settled list.
-      expect(find.text('Everyone is settled up.'), findsOneWidget);
+      // The hero line says so; no second "settled up" message.
+      expect(find.text('Nobody owes you anything right now.'), findsOneWidget);
       expect(find.text('Settled (1)'), findsOneWidget);
       AnimatedFold fold() => tester.widget<AnimatedFold>(
         find.ancestor(

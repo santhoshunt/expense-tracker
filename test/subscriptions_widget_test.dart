@@ -82,10 +82,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Plan'), findsOneWidget);
+    expect(find.text('Budgets and bills'), findsOneWidget);
     expect(find.text('Netflix'), findsOneWidget);
     expect(find.textContaining('1 regular payment · '), findsOneWidget);
-    expect(find.text('Up ${fmtMoney(150)}'), findsOneWidget);
+    // Whole rupees: paise only when there are some.
+    expect(find.text('Up ${fmtMoneyTidy(150)}'), findsOneWidget);
+    expect(find.text('Up ₹150'), findsOneWidget);
     expect(find.text('Stopped (1)'), findsOneWidget);
     // AnimatedFold keeps its child built at zero height; ask it directly.
     bool folded() => tester
@@ -113,7 +115,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('Netflix'));
+    await tester.tap(find.text('Netflix'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Hide'));
     await tester.pumpAndSettle();
@@ -127,8 +129,10 @@ void main() {
     expect(find.text('Netflix'), findsOneWidget);
   });
 
-  testWidgets('the ⋮ button opens the long-press menu; rows leave the yearly '
-      'cost to the header; a marked one shows a pin', (tester) async {
+  testWidgets('a tap opens the actions sheet, led by See transactions; rows '
+      'leave the yearly cost to the header; a marked one shows a pin', (
+    tester,
+  ) async {
     final p = await seeded();
     await p.setSubscriptionPins({'expense|netflix': SubscriptionCycle.monthly});
     await tester.pumpWidget(
@@ -145,16 +149,21 @@ void main() {
     expect(find.textContaining('marked by you'), findsNothing);
     expect(find.byTooltip('Marked by you'), findsOneWidget);
 
-    final more = find.descendant(
-      of: find.ancestor(
-        of: find.text('Netflix'),
-        matching: find.byType(ListTile),
-      ),
-      matching: find.byTooltip('More'),
+    final tile = find.ancestor(
+      of: find.text('Netflix'),
+      matching: find.byType(ListTile),
     );
-    expect(more, findsOneWidget);
-    await tester.tap(more);
+    expect(
+      find.descendant(of: tile, matching: find.byTooltip('More')),
+      findsNothing,
+    );
+    expect(
+      find.descendant(of: tile, matching: find.byIcon(Icons.chevron_right)),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Netflix'));
     await tester.pumpAndSettle();
+    expect(find.text('See transactions'), findsOneWidget);
     expect(find.text('Rename'), findsOneWidget);
     expect(find.text('Make a reminder'), findsOneWidget);
     expect(find.text('Change cycle'), findsOneWidget);
@@ -175,7 +184,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('Netflix'));
+    await tester.tap(find.text('Netflix'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Mark unpaid'));
     await tester.pumpAndSettle();
@@ -224,7 +233,7 @@ void main() {
     expect(find.text('Salary'), findsNothing, reason: 'income is no payment');
   });
 
-  testWidgets('rows with a rise or Unhide beside ⋮ fit 320dp at 2x text', (
+  testWidgets('rows with a rise or Unhide fit 320dp at 2x text', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(320, 900);
@@ -251,7 +260,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Up ${fmtMoney(150)}'), findsOneWidget);
+    expect(find.text('Up ${fmtMoneyTidy(150)}'), findsOneWidget);
     // The list builds lazily, and at 2x text the fold starts below it.
     final fold = find.text('Hidden (1)');
     await tester.scrollUntilVisible(
@@ -267,7 +276,7 @@ void main() {
     expect(find.widgetWithText(TextButton, 'Unhide'), findsOneWidget);
     expect(tester.takeException(), isNull);
     // ListTile squeezes a title rather than throwing: the names must keep
-    // a readable width beside the badge, Unhide and ⋮.
+    // a readable width beside the badge and Unhide.
     expect(tester.getSize(find.text('Netflix')).width, greaterThan(60));
     expect(tester.getSize(find.text('Gym')).width, greaterThan(40));
   });
@@ -283,7 +292,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('Netflix'));
+    await tester.tap(find.text('Netflix'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Make a reminder'));
     await tester.pumpAndSettle();
@@ -298,9 +307,8 @@ void main() {
     expect(name.controller?.text, 'Netflix');
   });
 
-  testWidgets('a tap opens its own tab, so uncounted wallet rows stay out', (
-    tester,
-  ) async {
+  testWidgets('See transactions opens its own tab, so uncounted wallet rows '
+      'stay out', (tester) async {
     final p = await seeded();
     TxFilterRequest? opened;
     final owner = Object();
@@ -320,6 +328,8 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Netflix'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('See transactions'));
     await tester.pumpAndSettle();
     // The Expense tab, not All: All also lists wallet rows that the
     // subscription's figures leave out.
@@ -342,7 +352,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(line);
     await tester.pumpAndSettle();
-    expect(find.text('Plan'), findsOneWidget);
+    expect(find.text('Budgets and bills'), findsOneWidget);
     expect(find.text('Netflix'), findsOneWidget);
   });
 }

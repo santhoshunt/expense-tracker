@@ -80,7 +80,7 @@ void main() {
 
     expect(find.text('HDFC Card bill'), findsOneWidget);
     expect(find.textContaining('Due '), findsOneWidget);
-    expect(find.text(fmtMoney(5000)), findsOneWidget);
+    expect(find.text(fmtMoneyWhole(5000)), findsOneWidget);
 
     await tester.tap(find.text('HDFC Card bill'));
     await pumpThrough(tester);
@@ -90,17 +90,19 @@ void main() {
     await tester.tap(find.text('Mark paid for this cycle'));
     await pumpThrough(tester);
 
-    // The row survives with the live amount; only the urgency is gone.
+    // The row survives, its next bill under the name and a Paid tag in
+    // place of the amount, so Mark unpaid stays in reach.
     expect(finance.accountById(id)!.billPaidMonth, isNotNull);
     expect(find.text('HDFC Card bill'), findsOneWidget);
-    expect(find.textContaining('Paid · next bill '), findsOneWidget);
-    expect(find.text(fmtMoney(5000)), findsOneWidget);
+    expect(find.textContaining('Next bill '), findsOneWidget);
+    expect(find.text('Paid'), findsOneWidget);
+    expect(find.text(fmtMoneyWhole(5000)), findsNothing);
 
     // Reopening offers the undo.
     await tester.tap(find.text('HDFC Card bill'));
     await pumpThrough(tester);
-    expect(find.text('Undo mark paid'), findsOneWidget);
-    await tester.tap(find.text('Undo mark paid'));
+    expect(find.text('Mark unpaid'), findsOneWidget);
+    await tester.tap(find.text('Mark unpaid'));
     await pumpThrough(tester);
     expect(finance.accountById(id)!.billPaidMonth, isNull);
     expect(find.textContaining('Due '), findsOneWidget);
@@ -136,8 +138,9 @@ void main() {
     expect(payment.amount, 2000);
     // Manual figure 5,000 minus the recorded payment.
     expect(finance.accountOutstanding(finance.accountById(id)!), 3000);
-    expect(find.text(fmtMoney(3000)), findsOneWidget);
-    expect(find.textContaining('Paid · next bill '), findsOneWidget);
+    // The cycle is paid: the row keeps its place with the Paid tag.
+    expect(find.text('Paid'), findsOneWidget);
+    expect(find.textContaining('Next bill '), findsOneWidget);
 
     // Empty / junk amounts are rejected inline, not saved.
     await tester.tap(find.text('HDFC Card bill'));
@@ -167,11 +170,9 @@ void main() {
     expect(find.text('Payment due day'), findsOneWidget);
   });
 
-  testWidgets('not-yet-billed row: both dates shown, muted, not urgent', (
-    tester,
-  ) async {
-    // Due in 3 days (inside the urgency window), statement generates
-    // tomorrow — the row must read as "nothing to do yet".
+  testWidgets('a card not billed yet is left off Next 7 days', (tester) async {
+    // Due in 3 days, but the statement generates tomorrow: nothing is owed
+    // this week.
     final now = DateTime.now();
     final (finance, _) = await seeded(
       stmtDay: now.add(const Duration(days: 1)).day,
@@ -180,31 +181,17 @@ void main() {
     await pumpApp(tester, finance);
     await pumpThrough(tester);
 
-    expect(
-      find.text(
-        'Bill generates ${fmtDateCompact(DateTime(now.year, now.month, now.day).add(const Duration(days: 1)))}'
-        ' · due ${fmtDateCompact(DateTime(now.year, now.month, now.day).add(const Duration(days: 3)))}',
-      ),
-      findsOneWidget,
-    );
-    final ctx = tester.element(find.byIcon(Icons.credit_card));
-    final icon = tester.widget<Icon>(find.byIcon(Icons.credit_card));
-    expect(
-      icon.color,
-      AppColors.of(ctx).green,
-      reason: 'no bill exists yet — green, not the error red',
-    );
-    final amount = tester.widget<Text>(find.text(fmtMoney(5000)));
-    expect(amount.style?.color, Theme.of(ctx).colorScheme.onSurfaceVariant);
+    expect(find.text('HDFC Card bill'), findsNothing);
+    expect(find.text('Nothing due in the next 7 days.'), findsOneWidget);
   });
 
   testWidgets('billed with time to spare renders orange', (tester) async {
-    // Statement well in the past, due in 8 days: billed, outside the
-    // 5-day urgent window.
+    // Statement well in the past, due in 6 days: billed, outside the
+    // 5-day urgent window and inside the 7-day list.
     final now = DateTime.now();
     final (finance, _) = await seeded(
       stmtDay: now.subtract(const Duration(days: 15)).day,
-      dueInDays: 8,
+      dueInDays: 6,
     );
     await pumpApp(tester, finance);
     await pumpThrough(tester);
@@ -214,7 +201,7 @@ void main() {
     expect(icon.color, AppColors.of(ctx).orange);
   });
 
-  testWidgets('billed row: statement date joins the due line, bold look', (
+  testWidgets('billed row: the due line leaves the statement date out', (
     tester,
   ) async {
     // Statement 15 days back, due today: billed and urgent.
@@ -225,14 +212,20 @@ void main() {
     await pumpApp(tester, finance);
     await pumpThrough(tester);
 
-    expect(find.textContaining('Billed '), findsOneWidget);
-    expect(find.textContaining(' · due '), findsOneWidget);
+    // Accounts and the actions sheet keep "Billed 3 Oct · due ...".
+    expect(find.textContaining('Billed '), findsNothing);
+    expect(
+      find.text(
+        'Due ${fmtDateCompact(DateTime(now.year, now.month, now.day))} · today',
+      ),
+      findsOneWidget,
+    );
     final icon = tester.widget<Icon>(find.byIcon(Icons.credit_card));
     final scheme = Theme.of(
       tester.element(find.byIcon(Icons.credit_card)),
     ).colorScheme;
     expect(icon.color, scheme.error, reason: 'due today is inside the window');
-    final amount = tester.widget<Text>(find.text(fmtMoney(5000)));
+    final amount = tester.widget<Text>(find.text(fmtMoneyWhole(5000)));
     expect(
       amount.style?.color,
       scheme.onSurface,

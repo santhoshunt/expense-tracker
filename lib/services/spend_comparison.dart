@@ -28,6 +28,13 @@ const int kMinDaysForProjection = 5;
 /// Category rows shown before "Show all".
 const int kTopMoversShown = 5;
 
+/// A month under this share of the usual run's middle spend is missing
+/// records, not a quiet month, and ends the run.
+const double kThinMonthShare = 0.25;
+
+/// A rise above this fraction (100%) reads as "N times", not a percentage.
+const double kTimesAbove = 1.0;
+
 /// A difference under a rupee is rounding, not news. Every icon, chip and
 /// phrase that plays a delta down agrees through this one threshold.
 bool negligibleDelta(double delta) => delta.abs() < 1;
@@ -173,7 +180,9 @@ double median(List<double> values) {
 /// a single transaction, and folding those zeros into the median would
 /// report a baseline that is an artefact of the import history rather than
 /// of spending. The run also stops at a first month the records join
-/// part-way through, for the same reason.
+/// part-way through, for the same reason. A month with under a quarter of
+/// the run's middle spend is a gap in the records, not a quiet month, and
+/// stops the run too.
 List<DateTime> usualWindow(FinanceProvider finance, DateTime month) {
   final first = finance.firstTransactionDate;
   if (first == null) return const [];
@@ -190,7 +199,17 @@ List<DateTime> usualWindow(FinanceProvider finance, DateTime month) {
     if (m.isBefore(DateTime(first.year, first.month))) break;
     out.add(m);
   }
-  return out.reversed.toList();
+  // `out` runs newest first. A thin month stops the run where it sits, the
+  // way an empty one does; with a middle of 0 nothing counts as thin.
+  final floor =
+      kThinMonthShare *
+      median([for (final m in out) finance.expenseInMonth(m)]);
+  final kept = <DateTime>[];
+  for (final m in out) {
+    if (floor > 0 && finance.expenseInMonth(m) < floor) break;
+    kept.add(m);
+  }
+  return kept.reversed.toList();
 }
 
 MonthComparison buildMonthComparison(
@@ -308,14 +327,35 @@ List<double>? usualCumulativeByDay(FinanceProvider finance, DateTime month) {
   ];
 }
 
-/// "₹3,100 (21%) more", "₹900 less", "About the same": the magnitude without
-/// naming what it is measured against, so both cards share one phrasing.
-String deltaPhrase(SpendCompare c) {
+/// "2.7" for 2.7, "3" for 3.0, "12" for 12.4: one decimal under 10, whole
+/// numbers from 10.
+String _times(double ratio) {
+  if (ratio >= 10) return '${ratio.round()}';
+  final s = ratio.toStringAsFixed(1);
+  return s.endsWith('.0') ? s.substring(0, s.length - 2) : s;
+}
+
+/// "2.7 times" for a rise of more than 100%, else null. Falls stay as
+/// percentages because they cannot pass 100%.
+String? timesPhrase(double? pct) {
+  if (pct == null || pct <= kTimesAbove) return null;
+  return '${_times(1 + pct)} times';
+}
+
+/// "₹3,100 (21%) more", "₹900 less", "About the same", and above a doubling
+/// "₹30,000 more, 2.7 times as much". [than] names what it is measured
+/// against (" than Sep"), placed before the times clause; empty keeps the
+/// magnitude bare so both cards share one phrasing.
+String deltaPhrase(SpendCompare c, {String than = ''}) {
   final d = c.delta;
   if (c.negligible) return 'About the same';
   final pct = c.deltaPct;
+  final times = d > 0 ? timesPhrase(pct) : null;
+  if (times != null) {
+    return '${fmtMoneyWhole(d.abs())} more$than, $times as much';
+  }
   final suffix = pct == null ? '' : ' (${(pct.abs() * 100).round()}%)';
-  return '${fmtMoney(d.abs())}$suffix ${d > 0 ? 'more' : 'less'}';
+  return '${fmtMoneyWhole(d.abs())}$suffix ${d > 0 ? 'more' : 'less'}$than';
 }
 
 /// Scales [actual] by how much of [referenceFull] the reference month had

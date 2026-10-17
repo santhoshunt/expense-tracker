@@ -93,6 +93,36 @@ void main() {
       expect(recurringKeyOf(t), 'expense|netflix');
     });
 
+    test('a payee under 3 characters falls back to the note', () {
+      final t = Tx(
+        id: 't${seq++}',
+        type: TxType.expense,
+        categoryId: 'bills',
+        amount: 800,
+        note: 'Water can',
+        payee: 'AB',
+        date: DateTime(2026, 8, 1),
+      );
+      expect(recurringKeyOf(t), 'expense|water can');
+      // The label follows the key.
+      expect(merchantDisplayLabel(t), 'Water Can');
+      // With no note either, there is nothing to key on.
+      expect(
+        recurringKeyOf(
+          Tx(
+            id: 't${seq++}',
+            type: TxType.expense,
+            categoryId: 'bills',
+            amount: 800,
+            note: '',
+            payee: 'AB',
+            date: DateTime(2026, 8, 1),
+          ),
+        ),
+        isNull,
+      );
+    });
+
     test('digits-only identities (phone/VPA numbers) yield null', () {
       expect(
         recurringKeyOf(

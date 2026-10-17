@@ -12,8 +12,9 @@ import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/widgets/glossy.dart';
 
-/// The Add button folds to its icon while a list scrolls down and comes
-/// back on the way up; folded or not, TalkBack can still press it.
+/// v1.43.0: the Add button is a round button docked in a notch at the nav
+/// bar's right end. It no longer folds while a list scrolls; TalkBack and
+/// a long-press name it by its tooltip.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -29,9 +30,8 @@ void main() {
     }
   }
 
-  testWidgets('scrolling the Transactions list folds and unfolds Add', (
-    tester,
-  ) async {
+  testWidgets('Add docks in the bar notch, clear of the tabs, and stays put '
+      'while the list scrolls', (tester) async {
     final semantics = tester.ensureSemantics();
     final finance = FinanceProvider();
     await finance.load();
@@ -59,25 +59,34 @@ void main() {
     await tester.tap(find.text('Transactions').last);
     await settle(tester);
 
-    Matcher pressable() =>
-        isSemantics(label: 'Add', isButton: true, hasTapAction: true);
+    Matcher pressable(String label) =>
+        isSemantics(label: label, isButton: true, hasTapAction: true);
 
-    expect(find.text('Add'), findsOneWidget);
-    expect(tester.getSemantics(find.byType(GlassButton)), pressable());
-
-    // Mid-screen is the list (the header cards sit above it).
-    await tester.dragFrom(const Offset(400, 420), const Offset(0, -300));
-    await settle(tester);
-    expect(find.text('Add'), findsNothing, reason: 'folded to its icon');
+    final add = find.byType(GlassRoundButton);
+    expect(add, findsOneWidget);
+    expect(tester.getSemantics(add), pressable('Add transaction'));
+    expect(tester.getSize(add), const Size(56, 56));
+    // Docked: its centre sits on the bar's top edge, in the bar's right
+    // end, and no tab lies under it.
+    final bar = tester.getRect(find.byType(BottomAppBar));
+    final button = tester.getRect(add);
+    expect(button.center.dy, moreOrLessEquals(bar.top, epsilon: 1));
+    expect(button.left, greaterThan(bar.right - 88));
     expect(
-      tester.getSemantics(find.byType(GlassButton)),
-      pressable(),
-      reason: 'still named and pressable when folded',
+      tester.getRect(find.byType(NavigationBar)).right,
+      lessThanOrEqualTo(bar.right - 88 + 0.5),
     );
 
-    await tester.dragFrom(const Offset(400, 300), const Offset(0, 200));
+    // Mid-screen is the list.
+    await tester.dragFrom(const Offset(400, 420), const Offset(0, -300));
     await settle(tester);
-    expect(find.text('Add'), findsOneWidget);
+    expect(tester.getRect(add), button, reason: 'no fold while scrolling');
+    expect(tester.getSemantics(add), pressable('Add transaction'));
+
+    // On Accounts the same button adds an account.
+    await tester.tap(find.text('Accounts').last);
+    await settle(tester);
+    expect(tester.getSemantics(add), pressable('New account'));
     semantics.dispose();
   });
 

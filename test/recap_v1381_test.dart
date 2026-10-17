@@ -10,6 +10,7 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/services/monthly_recap.dart';
 import 'package:expense_tracker/services/safe_to_spend.dart';
+import 'package:expense_tracker/services/spend_comparison.dart';
 import 'package:expense_tracker/services/spend_history.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/monthly_recap_card.dart';
@@ -107,7 +108,9 @@ void main() {
       tester,
       p,
       s,
-      MonthPaceCard(pace: buildMonthPace(p, s, now: paceDay)!),
+      MonthPaceCard(
+        comparison: buildMonthComparison(p, DateTime(2026, 9), now: paceDay),
+      ),
     );
     expect(cardOf(tester, MonthPaceCard).margin, EdgeInsets.zero);
   });
@@ -139,7 +142,7 @@ void main() {
       final row = find.ancestor(of: name, matching: find.byType(InkWell)).first;
       final figure = find.descendant(
         of: row,
-        matching: find.text(fmtMoney(amount)),
+        matching: find.text(fmtMoneyWhole(amount)),
       );
       expect(figure, findsOneWidget, reason: id);
       expect(
@@ -276,7 +279,7 @@ void main() {
       final hero = find.byKey(const ValueKey('balance-figure'));
       final figure = find.descendant(
         of: hero,
-        matching: find.text(fmtMoney(p.balance)),
+        matching: find.text(fmtMoneyWhole(p.balance)),
       );
       expect(figure, findsOneWidget);
       final paragraph = tester.renderObject<RenderParagraph>(
@@ -298,11 +301,9 @@ void main() {
         );
       }
 
-      // Wrapped, never cut short.
-      for (final text in [
-        'Spent so far, with 1 to review',
-        'Month-end forecast',
-      ]) {
+      // Wrapped, never cut short. (The card's name is the section label
+      // above it now, one line like every Overview label.)
+      for (final text in ['Spent so far, with 1 to review']) {
         expect(paragraphOf(text).didExceedMaxLines, isFalse, reason: text);
       }
       // The label column keeps room for a whole word: "spending" in Roboto
@@ -321,7 +322,7 @@ void main() {
     ) async {
       await pumpOverview(tester, size: const Size(390, 4000));
       // Spent so far: this month's ₹2,400 and the ₹300 waiting.
-      final forecastAmount = find.text(fmtMoney(2700));
+      final forecastAmount = find.text(fmtMoneyWhole(2700));
       expect(forecastAmount, findsOneWidget);
       // The recap's Transport row: of its two ₹400 figures (Spent and the
       // row), the one level with the category name.
@@ -333,7 +334,7 @@ void main() {
       final recapAmount = find
           .descendant(
             of: find.byType(MonthlyRecapCard),
-            matching: find.text(fmtMoney(400)),
+            matching: find.text(fmtMoneyWhole(400)),
           )
           .evaluate()
           .where(
@@ -482,6 +483,14 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('Spent so far, with 1 to review'), findsOneWidget);
-    expect(find.text('Spent so far'), findsNothing);
+    // The plain label is the This week row's alone.
+    expect(find.text('Spent so far'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('presence-week')),
+        matching: find.text('Spent so far'),
+      ),
+      findsOneWidget,
+    );
   });
 }

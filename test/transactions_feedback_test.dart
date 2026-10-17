@@ -61,7 +61,14 @@ void main() {
     return p;
   }
 
-  final tune = find.byTooltip('Sort, filter and export');
+  // v1.43.0: the Filters chip under the search opens the sheet; the sort
+  // has its own chip.
+  final tune = find.byIcon(Icons.tune);
+  final sortChip = find.byIcon(Icons.swap_vert);
+
+  /// One active filter chip: the 48dp box around the pill and its close.
+  Finder filterChip(String label) =>
+      find.ancestor(of: find.text(label), matching: find.byType(Stack)).first;
 
   testWidgets('the search hint reads Search, and a lakh amount matches its '
       'Indian grouping', (tester) async {
@@ -107,24 +114,36 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
     await tester.pumpAndSettle();
 
-    final chip = find.widgetWithText(InputChip, 'Amount ₹500 to ₹2,000');
-    expect(chip, findsOneWidget);
-    // Left-aligned with the type chips above it (both start at the
-    // screen's 16dp gutter), not centred.
+    const label = 'Amount ₹500 to ₹2,000';
+    final chip = filterChip(label);
+    expect(find.text(label), findsOneWidget);
+    // Left-aligned with the first type pill above it (both start at the
+    // screen's 16dp gutter), not centred. The type strip itself runs edge
+    // to edge.
     expect(tester.getTopLeft(chip).dx, moreOrLessEquals(16, epsilon: 1));
     expect(
+      tester.getTopLeft(find.text('All').first).dx,
+      greaterThanOrEqualTo(16),
+    );
+    expect(
       tester.getTopLeft(find.byWidgetPredicate((w) => w is ChipTabs)).dx,
-      moreOrLessEquals(16, epsilon: 1),
+      moreOrLessEquals(0, epsilon: 1),
     );
     expect(find.text('dinner'), findsOneWidget);
     expect(find.text('tea'), findsNothing);
     expect(find.text('party'), findsNothing);
 
-    await tester.tap(
-      find.descendant(of: chip, matching: find.byTooltip('Delete')),
+    // The close is a full 44 by 48dp target.
+    final close = find.byTooltip('Remove $label');
+    expect(
+      tester.getSize(
+        find.ancestor(of: close, matching: find.byType(IconButton)),
+      ),
+      const Size(44, 48),
     );
+    await tester.tap(close);
     await tester.pumpAndSettle();
-    expect(chip, findsNothing);
+    expect(find.text(label), findsNothing);
     expect(find.text('tea'), findsOneWidget);
     expect(find.text('party'), findsOneWidget);
     // Both bounds went: the sheet opens with empty fields.
@@ -174,7 +193,7 @@ void main() {
         reason: 'width $width',
       );
       expect(
-        tester.getTopLeft(find.text('Sort by')).dx,
+        tester.getTopLeft(find.text('Date')).dx,
         moreOrLessEquals(20, epsilon: 0.5),
         reason: 'width $width',
       );
@@ -256,22 +275,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
-    final chip = find.byWidgetPredicate(
-      (w) =>
-          w is InputChip &&
-          w.label is Text &&
-          (w.label as Text).data!.startsWith('Amount'),
+    final delete = find.byWidgetPredicate(
+      (w) => w is Tooltip && (w.message ?? '').startsWith('Remove Amount'),
     );
-    expect(chip, findsOneWidget);
-    final delete = find.descendant(
-      of: chip,
-      matching: find.byTooltip('Delete'),
-    );
+    expect(delete, findsOneWidget);
+    final chip = find.ancestor(of: delete, matching: find.byType(Stack)).first;
     expect(tester.getTopRight(chip).dx, lessThanOrEqualTo(320));
     expect(tester.getTopRight(delete).dx, lessThanOrEqualTo(320));
     await tester.tap(delete);
     await tester.pumpAndSettle();
-    expect(chip, findsNothing);
+    expect(delete, findsNothing);
   });
 
   testWidgets('under a day header a row shows its time, not the date', (
@@ -288,19 +301,25 @@ void main() {
     await tester.pumpWidget(screen(p));
     await tester.pumpAndSettle();
 
-    expect(find.text(fmtTime(teaTime)), findsOneWidget);
+    // v1.43.0: the time sits under the amount; line two is the category.
+    final time = find.text(fmtTime(teaTime));
+    expect(time, findsOneWidget);
+    expect(
+      tester.getTopLeft(time).dy,
+      greaterThanOrEqualTo(
+        tester.getBottomLeft(find.text('−${fmtMoney(40)}')).dy,
+      ),
+    );
     expect(find.text(fmtDateCompact(teaTime)), findsNothing);
-    // The midnight row shows its note alone, with no separator.
+    // The midnight row shows no time.
     expect(find.text('lunch'), findsOneWidget);
-    expect(find.text(' · '), findsOneWidget, reason: "tea's line only");
+    expect(find.text(' · '), findsNothing);
     expect(find.text(fmtDateCompact(lunchDay)), findsNothing);
 
     // Any other sort has no day headers: the date comes back.
-    await tester.tap(tune);
+    await tester.tap(sortChip);
     await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Amount · high to low'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
+    await tester.tap(find.text('Amount · high to low'));
     await tester.pumpAndSettle();
     expect(find.text(fmtDateCompact(teaTime)), findsOneWidget);
     expect(find.text(fmtDateCompact(lunchDay)), findsOneWidget);
@@ -370,10 +389,14 @@ void main() {
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
 
+      // v1.43.0: Paid to sits in the form; Sender left the add sheet.
       final sender = find.widgetWithText(TextFormField, 'Sender (optional)');
+      final payee = find.widgetWithText(TextFormField, 'Paid to');
       final more = find.text('More details');
       expect(more, findsOneWidget);
-      expect(sender, findsNothing, reason: 'folded');
+      expect(find.text('Tags, subscription, count in another date'), findsOne);
+      expect(payee, findsOneWidget);
+      expect(sender, findsNothing);
       expect(find.text('Count in another date ›'), findsNothing);
 
       // Add sits in the footer, above the keyboard's 300px.
@@ -400,21 +423,22 @@ void main() {
       await tester.tap(more);
       await tester.pumpAndSettle();
       expect(expanded(), isTrue);
-      expect(sender, findsOneWidget);
+      expect(sender, findsNothing);
       expect(find.widgetWithText(TextField, 'Tags'), findsOneWidget);
       expect(find.text('Count in another date ›'), findsOneWidget);
       // The footer stays put with the fold open.
       expect(tester.getBottomLeft(add).dy, lessThanOrEqualTo(900 - 300));
 
-      // A sender typed in the fold saves with the row.
+      // A payee typed in Paid to saves with the row, tidied.
       await tester.enterText(
         find.widgetWithText(TextFormField, 'Amount'),
         '80',
       );
-      await tester.enterText(sender, 'Corner shop');
+      await tester.enterText(payee, '  Corner   shop ');
       await tester.tap(add);
       await tester.pumpAndSettle();
-      expect(p.transactions.single.sender, 'Corner shop');
+      expect(p.transactions.single.payee, 'Corner shop');
+      expect(p.transactions.single.sender, isEmpty);
     });
 
     testWidgets('editing keeps every field in place and Save at the top', (
@@ -429,10 +453,12 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('More details'), findsNothing);
+      // A manual row with no sender shows Paid to, not Sender.
       expect(
         find.widgetWithText(TextFormField, 'Sender (optional)'),
-        findsOneWidget,
+        findsNothing,
       );
+      expect(find.widgetWithText(TextFormField, 'Paid to'), findsOneWidget);
       expect(find.text('Count in another date ›'), findsOneWidget);
       expect(find.widgetWithText(FilledButton, 'Add'), findsNothing);
       final save = find.widgetWithText(FilledButton, 'Save changes');

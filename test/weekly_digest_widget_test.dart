@@ -69,8 +69,13 @@ void main() {
     return opened;
   }
 
-  Finder weekRow() =>
-      find.ancestor(of: find.text('This week'), matching: find.byType(Card));
+  // The row under the This week label: its tap target.
+  Finder weekRow() => find
+      .descendant(
+        of: find.byKey(const ValueKey('presence-week')),
+        matching: find.byType(InkWell),
+      )
+      .first;
 
   Finder inSheet(Finder f) =>
       find.descendant(of: find.byType(BottomSheet), matching: f);
@@ -79,11 +84,11 @@ void main() {
     await pumpDashboard(tester);
     expect(find.text('This week'), findsOneWidget);
     expect(
-      find.descendant(of: weekRow(), matching: find.text(fmtMoneyTidy(3000))),
+      find.descendant(of: weekRow(), matching: find.text(fmtMoneyWhole(3000))),
       findsOneWidget,
     );
     // Its tap target is at least 48dp tall.
-    expect(tester.getSize(weekRow().first).height, greaterThanOrEqualTo(48));
+    expect(tester.getSize(weekRow()).height, greaterThanOrEqualTo(48));
   });
 
   testWidgets('Year view hides the row; Month view brings it back', (
@@ -107,12 +112,12 @@ void main() {
     tester,
   ) async {
     final opened = await pumpDashboard(tester);
-    await tester.tap(find.text('This week'));
+    await tester.tap(weekRow());
     await tester.pumpAndSettle();
     final week = weekStartOf(weekClock());
     expect(find.byType(BottomSheet), findsOneWidget);
     expect(inSheet(find.text('Spent so far')), findsOneWidget);
-    expect(inSheet(find.text(fmtMoney(3000))), findsOneWidget);
+    expect(inSheet(find.text(fmtMoneyWhole(3000))), findsOneWidget);
     expect(inSheet(find.text('Top categories')), findsOneWidget);
     expect(inSheet(find.text('Biggest payments')), findsOneWidget);
     // This week has no later week to step to.

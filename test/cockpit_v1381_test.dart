@@ -12,7 +12,7 @@ import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 import 'package:expense_tracker/utils/format.dart';
 
-/// Cockpit in v1.38.1: Review rows titled by category and merchant, Undo
+/// Cockpit in v1.38.1 (Results rows merchant first since v1.43.0): Undo
 /// and Make rule after a recategorise, the hub's passed limit in red and
 /// the monthly cap field grouped.
 void main() {
@@ -72,17 +72,51 @@ void main() {
     return (p, id);
   }
 
-  testWidgets('a Review row reads category · merchant over its date', (
-    tester,
-  ) async {
+  testWidgets('a Results row leads with the merchant, over its category and '
+      'date', (tester) async {
     final (p, _) = await withChai();
     await pumpCockpit(tester, p, tab: kCockpitTabTransactions);
 
-    expect(find.text('Food & Dining · Chai Stall'), findsOneWidget);
-    expect(find.text('12 Oct, 1:05 PM'), findsOneWidget);
-    // The old subtitle carried the category and the year.
+    // The row title the ledger shows: the note's first line as typed.
+    expect(find.text('Chai stall'), findsOneWidget);
+    expect(find.text('Food & Dining · 12 Oct, 1:05 PM'), findsOneWidget);
+    // The old subtitle carried the year.
     expect(find.textContaining('12 Oct 2026'), findsNothing);
     expect(find.text('Make rule'), findsNothing);
+  });
+
+  testWidgets('a Results row names its payee, and a row naming nothing leads '
+      'with its category over the date alone', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'shopping',
+      amount: 1200,
+      note: '',
+      payee: 'Corner Florist',
+      date: DateTime(2026, 10, 11, 10, 30),
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'transport',
+      amount: 90,
+      note: '',
+      date: DateTime(2026, 10, 10, 9, 15),
+    );
+    await pumpCockpit(tester, p, tab: kCockpitTabTransactions);
+
+    expect(find.text('Corner Florist'), findsOneWidget);
+    expect(find.text('Shopping · 11 Oct, 10:30 AM'), findsOneWidget);
+    expect(find.text('Transport'), findsOneWidget);
+    expect(find.text('10 Oct, 9:15 AM'), findsOneWidget);
+
+    // The payee a row shows is what its search finds.
+    await tester.enterText(find.byType(TextField), 'florist');
+    await tester.pump(const Duration(milliseconds: 300));
+    await pumpThrough(tester);
+    expect(find.text('Corner Florist'), findsOneWidget);
+    expect(find.text('10 Oct, 9:15 AM'), findsNothing);
   });
 
   testWidgets('recategorising offers Undo and Make rule; Undo puts it back', (
@@ -93,7 +127,7 @@ void main() {
     Tx row() => p.transactions.firstWhere((t) => t.id == id);
     final setByHandBefore = row().userCategorized;
 
-    await tester.tap(find.text('Food & Dining · Chai Stall'));
+    await tester.tap(find.text('Chai stall'));
     await pumpThrough(tester);
     await tester.tap(find.text('Transport').last);
     await pumpThrough(tester);
@@ -101,14 +135,14 @@ void main() {
     expect(row().categoryId, 'transport');
     expect(row().userCategorized, isTrue);
     expect(find.text('Moved to Transport'), findsOneWidget);
-    expect(find.text('Transport · Chai Stall'), findsOneWidget);
+    expect(find.text('Transport · 12 Oct, 1:05 PM'), findsOneWidget);
     expect(find.text('Make rule'), findsOneWidget);
 
     await tester.tap(find.text('Undo'));
     await pumpThrough(tester);
     expect(row().categoryId, 'food');
     expect(row().userCategorized, setByHandBefore);
-    expect(find.text('Food & Dining · Chai Stall'), findsOneWidget);
+    expect(find.text('Food & Dining · 12 Oct, 1:05 PM'), findsOneWidget);
     expect(find.text('Make rule'), findsNothing);
   });
 
@@ -118,7 +152,7 @@ void main() {
     final (p, _) = await withChai();
     await pumpCockpit(tester, p, tab: kCockpitTabTransactions);
 
-    await tester.tap(find.text('Food & Dining · Chai Stall'));
+    await tester.tap(find.text('Chai stall'));
     await pumpThrough(tester);
     await tester.tap(find.text('Transport').last);
     await pumpThrough(tester);
@@ -230,7 +264,7 @@ void main() {
       size: const Size(320, 640),
       textScale: 2,
     );
-    await tester.tap(find.text('Food & Dining · Chai Stall'));
+    await tester.tap(find.text('Chai stall'));
     await pumpThrough(tester);
     await tester.tap(find.text('Transport').last);
     await pumpThrough(tester);
@@ -247,12 +281,12 @@ void main() {
     expect({for (final b in boxes) b.top}.length, 1);
 
     // The row: the title is not cut, and the amount sits under the date.
-    final title = find.text('Transport · Chai Stall');
+    final title = find.text('Chai stall');
     final titleText = tester.renderObject<RenderParagraph>(
       find.descendant(of: title, matching: find.byType(RichText)),
     );
     expect(titleText.didExceedMaxLines, isFalse);
-    final date = find.text('12 Oct, 1:05 PM');
+    final date = find.text('Transport · 12 Oct, 1:05 PM');
     final amount = find.text('−${fmtMoney(320)}');
     expect(
       tester.getTopLeft(amount).dy,
@@ -291,6 +325,44 @@ void main() {
     );
   });
 
+  testWidgets('at 1.3x text on 360dp the Cockpit tab bars scroll, labels '
+      'whole', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    for (final (tab, labels) in [
+      (kCockpitTabRules, ['Rules', 'Categories', 'Import', 'Results']),
+      (kCockpitTabBudgets, ['Budgets', 'Reminders', 'Subscriptions']),
+    ]) {
+      // A fresh tree per page: a new home on the same MaterialApp would
+      // keep the first page's route.
+      await tester.pumpWidget(const SizedBox());
+      await pumpCockpit(
+        tester,
+        p,
+        tab: tab,
+        size: const Size(360, 780),
+        textScale: 1.3,
+      );
+      expect(tester.takeException(), isNull);
+      final bar = find.byType(TabBar);
+      expect(tester.widget<TabBar>(bar).isScrollable, isTrue);
+      for (final l in labels) {
+        final label = tester.renderObject<RenderParagraph>(
+          find.descendant(
+            of: find.descendant(of: bar, matching: find.text(l)),
+            matching: find.byType(RichText),
+          ),
+        );
+        expect(label.didExceedMaxLines, isFalse, reason: l);
+        expect(
+          label.size.width,
+          greaterThanOrEqualTo(label.getMaxIntrinsicWidth(double.infinity)),
+          reason: l,
+        );
+      }
+    }
+  });
+
   testWidgets('at normal text the Cockpit tab bars stay fixed', (tester) async {
     final p = FinanceProvider();
     await p.load();
@@ -320,7 +392,11 @@ void main() {
       find.descendant(of: field, matching: find.byType(InputDecorator)),
     );
     expect(
-      tester.getTopLeft(find.text('Monthly cap')).dy,
+      tester
+          .getTopLeft(
+            find.descendant(of: field, matching: find.text('Monthly cap')),
+          )
+          .dy,
       greaterThanOrEqualTo(box.top),
     );
 

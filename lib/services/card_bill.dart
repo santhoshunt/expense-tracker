@@ -82,8 +82,9 @@ DateTime _statementBefore(int day, DateTime due) {
 /// The one-line story of the shown cycle, shared by the dashboard Upcoming
 /// row, its actions sheet and the account tile's bill line. Dates are only
 /// as compact as the data allows: the statement date appears when the
-/// account has one.
-String cardBillSubtitle(CardBillStatus s) {
+/// account has one. [withStatement] false leaves a billed cycle's statement
+/// date out ("Due 22 Oct · in 6 days"), for the Overview's short rows.
+String cardBillSubtitle(CardBillStatus s, {bool withStatement = true}) {
   final stmt = s.statementDate;
   final due = fmtDateCompact(s.due);
   switch (s.phase) {
@@ -95,10 +96,21 @@ String cardBillSubtitle(CardBillStatus s) {
       return 'Bill generates ${fmtDateCompact(stmt!)} · due $due';
     case CardBillPhase.billed:
       final when = fmtInDays(s.daysUntil);
-      return stmt == null
+      return stmt == null || !withStatement
           ? 'Due $due · $when'
           : 'Billed ${fmtDateCompact(stmt)} · due $due · $when';
   }
+}
+
+/// A paid cycle's line without the "Paid" its tag already says:
+/// "Next bill 3 Nov · due 22 Nov", or "Next bill due 22 Nov" without a
+/// statement day.
+String cardBillNextLine(CardBillStatus s) {
+  final stmt = s.statementDate;
+  final due = fmtDateCompact(s.due);
+  return stmt == null
+      ? 'Next bill due $due'
+      : 'Next bill ${fmtDateCompact(stmt)} · due $due';
 }
 
 /// Icon color for the shown cycle: green = nothing owed right now (not

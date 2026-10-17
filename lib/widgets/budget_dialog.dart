@@ -11,17 +11,22 @@ import 'category_chip_label.dart';
 import 'dispose_scope.dart';
 import 'icon_picker_sheet.dart';
 import 'info_tip.dart';
+import 'undo_snackbar.dart';
 
-/// Create/edit dialog for a [SpendBudget]. Shared by Settings ("Custom
-/// budgets") and the dashboard's category rows, which open it pre-filled
-/// for one category via the `preset*` parameters (ignored when [existing]
-/// is given).
+/// Create/edit dialog for a [SpendBudget]. Shared by the Cockpit's Budgets
+/// tab and the dashboard's category rows, which open it pre-filled for one
+/// category via the `preset*` parameters (ignored when [existing] is given).
+///
+/// [allowDelete] adds Delete when editing, which removes the budget with
+/// Undo. Only the Cockpit list passes it: opened from a sheet, a delete
+/// would leave the sheet showing a removed budget.
 Future<void> showBudgetDialog(
   BuildContext context, {
   SpendBudget? existing,
   String? presetName,
   BudgetMode? presetMode,
   Set<String>? presetCategoryIds,
+  bool allowDelete = false,
 }) async {
   final finance = context.read<FinanceProvider>();
   final nameCtrl = TextEditingController(
@@ -37,6 +42,8 @@ Future<void> showBudgetDialog(
   };
   // The picked icon's key, or null for Automatic.
   var iconKey = existing?.iconKey;
+  // Delete pops the editor first; the budget then goes with Undo.
+  var deleteRequested = false;
 
   // Groupable categories bucketed by parent group ("Other" last), so the
   // picker mirrors the dashboard's grouping.
@@ -273,6 +280,17 @@ Future<void> showBudgetDialog(
               ),
             ),
             actions: [
+              if (existing != null && allowDelete)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(ctx).colorScheme.error,
+                  ),
+                  onPressed: () {
+                    deleteRequested = true;
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Delete'),
+                ),
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text('Cancel'),
@@ -311,4 +329,19 @@ Future<void> showBudgetDialog(
       ),
     ),
   );
+  if (deleteRequested && existing != null && context.mounted) {
+    // The delete reads the alert marker across an await, so the Undo waits
+    // on the same future for what it captured.
+    final pending = finance.deleteBudget(existing.id);
+    showUndoSnackBar(
+      context,
+      'Deleted budget "${existing.name}"',
+      () async {
+        final removed = await pending;
+        if (removed != null) await finance.restoreBudget(removed);
+      },
+      icon: Icons.delete_outline,
+      tone: AppToastTone.removal,
+    );
+  }
 }

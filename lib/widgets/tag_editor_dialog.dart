@@ -3,14 +3,17 @@ import 'package:provider/provider.dart';
 
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../screens/app_nav.dart';
+import '../screens/transactions_screen.dart' show TxFilterRequest;
 import 'dispose_scope.dart';
 import 'hue_color_picker.dart';
 import 'undo_snackbar.dart';
 
 /// Edits one tag everywhere it is used: its name (renaming to an existing
-/// tag merges the two), its colour, or deletes it. Opened from the Tags
-/// tab and a By tags row on Breakdown. Not from the edit sheet: its Undo
-/// toast would sit under the sheet, out of reach.
+/// tag merges the two), its colour, or deletes it; it also opens the tag's
+/// transactions. Opened from the Tags tab and a By tags row on Breakdown.
+/// Not from the edit sheet: its Undo toast would sit under the sheet, out
+/// of reach.
 ///
 /// Every change applies to all rows at once and offers one Undo that puts
 /// back both the rows and the colours. [onEdited] reports the tag's name
@@ -27,6 +30,8 @@ Future<void> showTagEditor(
   final startColour = finance.tagColor(tag) ?? kNoCategoryColor;
   final ctrl = TextEditingController(text: tag);
   var colour = startColour;
+  final count =
+      finance.tagSummaries.where((s) => s.tag == tag).firstOrNull?.count ?? 0;
 
   final result = await showDialog<({String? name, Color colour})>(
     context: context,
@@ -68,6 +73,23 @@ Future<void> showTagEditor(
                   customTitle: 'Tag colour',
                   onChanged: (c) => setState(() => colour = c),
                 ),
+                if (count > 0)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      icon: const Icon(Icons.list_alt),
+                      label: Text(
+                        'See $count transaction${count == 1 ? '' : 's'}',
+                      ),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        AppNav.instance.openTransactions(
+                          context,
+                          TxFilterRequest(tag: tag),
+                        );
+                      },
+                    ),
+                  ),
               ],
             ),
             actions: [

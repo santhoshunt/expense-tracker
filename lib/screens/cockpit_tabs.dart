@@ -9,7 +9,6 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/big_bills.dart' show reminderIsBigBill;
-import '../services/notification_service.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
 import '../services/subscriptions.dart';
@@ -24,8 +23,8 @@ import '../widgets/info_tip.dart';
 import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/tag_editor_dialog.dart';
+import '../utils/text_scale.dart';
 import '../widgets/glossy.dart';
-import '../widgets/transaction_tile.dart' show isLargeTextScale;
 import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
 import 'transactions_screen.dart' show TxFilterRequest;
@@ -33,6 +32,7 @@ import 'transactions_screen.dart' show TxFilterRequest;
 /// The Budgets and Reminders tabs of the Cockpit screen. The sections moved
 /// here from Settings (2026-09) so all recurring money management lives in
 /// one place; the editors stay in widgets/ because the dashboard shares them.
+/// The alert switches live on Settings, Notifications.
 
 class BudgetsTab extends StatelessWidget {
   const BudgetsTab({super.key});
@@ -42,16 +42,23 @@ class BudgetsTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
       children: [
-        Text('Budget & alerts', style: Theme.of(context).textTheme.titleMedium),
+        Text('Monthly cap', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 4),
         Text(
-          'Set a monthly spending cap and get notified as you approach it. '
-          'Checks run while the app is open, after imports or edits. '
-          'There is no always-on background monitoring.',
+          'Set a monthly spending cap. Budget alerts for the cap and custom '
+          'budgets are on the Notifications page in Settings.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
-        const SizedBox(height: 12),
-        const _BudgetSection(),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            icon: const Icon(Icons.notifications_outlined),
+            label: const Text('Notification settings'),
+            onPressed: () => goNotificationSettings(context),
+          ),
+        ),
+        const SizedBox(height: 4),
+        const _MonthlyCapSection(),
         const SizedBox(height: 24),
         Text('Custom budgets', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 4),
@@ -99,19 +106,20 @@ class RemindersTab extends StatelessWidget {
           tip: const InfoTip(
             title: 'Reminders',
             message:
-                'Reminders notify only when Payment reminders is on, in the '
-                'Budgets tab.',
+                'Reminders notify only when Payment reminders is on, on the '
+                'Notifications page in Settings.',
             link: InfoLink(
               prompt: 'Notifications not arriving?',
               label: 'Check Payment reminders',
-              onTap: goCockpitBudgets,
+              onTap: goNotificationSettings,
             ),
           ),
         ),
         const SizedBox(height: 4),
         Text(
           'Bills the app cannot detect from SMS: cash, a new payee, '
-          'money to send home. They show in Upcoming and notify on open.',
+          'money to send home. They show in Next 7 days and notify from 2 '
+          'days before they are due.',
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
@@ -123,10 +131,10 @@ class RemindersTab extends StatelessWidget {
   }
 }
 
-/// Every tag with its all-time spend, row count and date span. Tags are
-/// added from a transaction's sheet or the bulk Tag action, so there is no
-/// add button here; the edit button (or a long-press) opens the tag editor:
-/// rename, merge into an existing tag, colour, delete.
+/// Every tag with its all-time spend, transaction count and date span. Tags
+/// are added from a transaction's sheet or the bulk Tag action, so there is
+/// no add button here; a tap opens the tag editor: rename, merge into an
+/// existing tag, colour, delete, or see its transactions.
 class TagsTab extends StatelessWidget {
   const TagsTab({super.key});
 
@@ -144,11 +152,11 @@ class TagsTab extends StatelessWidget {
             title: 'Tags',
             message:
                 'Labels that cut across categories, like a trip or '
-                '"Reimbursable". A row can carry up to 5. Spent counts money '
-                'out as the dashboard does: your share of a split bill, and '
-                'no transfers. Tap a tag for its transactions, or the pencil '
-                'to rename it, give it a colour or delete it. Renaming to an '
-                'existing tag merges the two.',
+                '"Reimbursable". A transaction can carry up to 5. Spent '
+                'counts money out as the dashboard does: your share of a '
+                'split bill, and no transfers. Tap a tag to rename it, give '
+                'it a colour, delete it or see its transactions. Renaming to '
+                'an existing tag merges the two.',
           ),
         ),
         const SizedBox(height: 4),
@@ -183,22 +191,15 @@ class TagsTab extends StatelessWidget {
                           Theme.of(context).colorScheme.tertiary,
                     ),
                     title: Text(s.tag),
-                    trailing: IconButton(
-                      tooltip: 'Edit tag',
-                      icon: const Icon(Icons.edit_outlined, size: 20),
-                      onPressed: () => showTagEditor(context, s.tag),
-                    ),
+                    trailing: _rowChevron(context),
                     subtitle: Text(
-                      '${fmtMoney(s.spent)} spent · ${s.count} '
-                      '${s.count == 1 ? 'row' : 'rows'} · '
+                      '${fmtMoneyTidy(s.spent)} spent · ${s.count} '
+                      '${s.count == 1 ? 'transaction' : 'transactions'} · '
                       '${fmtDateRange(DateTimeRange(start: s.first, end: s.last))}',
                       style: text.bodySmall,
                     ),
-                    onTap: () => AppNav.instance.openTransactions(
-                      context,
-                      TxFilterRequest(tag: s.tag),
-                    ),
-                    onLongPress: () => showTagEditor(context, s.tag),
+                    // The editor also opens the tag's transactions.
+                    onTap: () => showTagEditor(context, s.tag),
                   ),
               ],
             ),
@@ -269,8 +270,8 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
               ? 'Regular payments show here once the app spots them or you '
                     'mark one.'
               : '$count regular ${count == 1 ? 'payment' : 'payments'} · '
-                    '${fmtMoney(summary.monthlyTotal)} a month · '
-                    '${fmtMoney(summary.yearlyTotal)} a year',
+                    '${fmtMoneyTidy(summary.monthlyTotal)} a month · '
+                    '${fmtMoneyTidy(summary.yearlyTotal)} a year',
           style: muted,
         ),
         const SizedBox(height: 12),
@@ -346,7 +347,7 @@ class _SubscriptionTile extends StatelessWidget {
     final details = Text.rich(
       TextSpan(
         text:
-            '${fmtMoney(hit.expectedAmount)} '
+            '${fmtMoneyTidy(hit.expectedAmount)} '
             '${(cycle ?? SubscriptionCycle.monthly).label.toLowerCase()} · '
             '$when',
         children: [
@@ -380,7 +381,7 @@ class _SubscriptionTile extends StatelessWidget {
         // Colour on the border and text only, never a filled badge.
         : Tooltip(
             message:
-                'Up ${fmtMoney(rise.amount)} since '
+                'Up ${fmtMoneyTidy(rise.amount)} since '
                 '${fmtDateCompact(rise.since)}',
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -389,27 +390,19 @@ class _SubscriptionTile extends StatelessWidget {
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Text(
-                'Up ${fmtMoney(rise.amount)}',
+                'Up ${fmtMoneyTidy(rise.amount)}',
                 style: text.labelSmall?.copyWith(color: scheme.error),
               ),
             ),
           );
     // At large text, Unhide or the badge takes a line under the subtitle
-    // so the name keeps its width beside the ⋮ at 320dp.
+    // so the name keeps its width at 320dp.
     final stacked = isLargeTextScale(context);
 
     return ListTile(
       dense: true,
-      // The default 24dp end inset plus the ⋮ button's own padding set the
-      // glyph well inside the left inset; 4dp brings the two in line.
-      contentPadding: const EdgeInsetsDirectional.only(start: 16, end: 4),
-      onTap: () => AppNav.instance.openTransactions(
-        context,
-        // The subscription's own tab: All would also list uncounted wallet
-        // rows that its figures leave out.
-        TxFilterRequest(type: hit.type, query: item.identity),
-      ),
-      onLongPress: () => _actions(context),
+      // Tap opens the actions sheet, which also lists its transactions.
+      onTap: () => _actions(context),
       leading: CircleAvatar(
         radius: 16,
         backgroundColor: category.color.withValues(alpha: 0.15),
@@ -427,24 +420,18 @@ class _SubscriptionTile extends StatelessWidget {
               children: [details, const SizedBox(height: 4), extra],
             )
           : details,
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (!stacked && extra != null) extra,
-          // The long-press menu, in reach of a tap.
-          IconButton(
-            tooltip: 'More',
-            icon: const Icon(Icons.more_vert, size: 20),
-            onPressed: () => _actions(context),
-          ),
-        ],
-      ),
+      trailing: stacked
+          ? null
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [?extra, ?_rowChevron(context)],
+            ),
     );
   }
 
-  /// Long-press or ⋮: rename the payee, turn it into a reminder, or hide
-  /// it; one marked paid by hand can be marked unpaid; a merchant the user
-  /// marked can also change its cycle or be unmarked.
+  /// Tap: see its transactions, rename the payee, turn it into a reminder,
+  /// or hide it; one marked paid by hand can be marked unpaid; a merchant
+  /// the user marked can also change its cycle or be unmarked.
   Future<void> _actions(BuildContext context) async {
     final hit = item.hit;
     final marked = hit.pinned;
@@ -455,13 +442,18 @@ class _SubscriptionTile extends StatelessWidget {
       context: context,
       useSafeArea: true,
       showDragHandle: true,
-      // Scrolls: a marked merchant has five actions, more than the sheet's
+      // Scrolls: a marked merchant has six actions, more than the sheet's
       // height holds on a short screen or at large text.
       builder: (ctx) => SafeArea(
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              ListTile(
+                leading: const Icon(Icons.list_alt),
+                title: const Text('See transactions'),
+                onTap: () => Navigator.pop(ctx, 'see'),
+              ),
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
                 title: const Text('Rename'),
@@ -515,6 +507,13 @@ class _SubscriptionTile extends StatelessWidget {
     );
     if (!context.mounted || choice == null) return;
     switch (choice) {
+      case 'see':
+        AppNav.instance.openTransactions(
+          context,
+          // The subscription's own tab: All would also list uncounted wallet
+          // rows that its figures leave out.
+          TxFilterRequest(type: hit.type, query: item.identity),
+        );
       case 'rename':
         await showRenameMerchantDialog(
           context,
@@ -609,26 +608,28 @@ class _SubscriptionTile extends StatelessWidget {
   }
 }
 
-/// Monthly cap amount, master alert toggle and the 80/90/overshoot threshold
-/// switches. Enabling alerts requests notification permission.
-class _BudgetSection extends StatefulWidget {
-  const _BudgetSection();
+/// The trailing mark of a row that opens its editor on tap, dropped at
+/// large text so the words get the width.
+Widget? _rowChevron(BuildContext context) => isLargeTextScale(context)
+    ? null
+    : Icon(
+        Icons.chevron_right,
+        size: 20,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      );
+
+/// The monthly cap amount. Its alerts are on Settings, Notifications.
+class _MonthlyCapSection extends StatefulWidget {
+  const _MonthlyCapSection();
 
   @override
-  State<_BudgetSection> createState() => _BudgetSectionState();
+  State<_MonthlyCapSection> createState() => _MonthlyCapSectionState();
 }
 
-class _BudgetSectionState extends State<_BudgetSection>
-    with WidgetsBindingObserver {
-  // Survives State re-creation: the "notifications blocked" row must not
-  // appear/disappear a beat after the section rebuilds (height change
-  // mid-scroll jerks the list).
-  static NotificationStatus? _lastKnownNotifStatus;
-
+class _MonthlyCapSectionState extends State<_MonthlyCapSection> {
   late final TextEditingController _capCtrl;
   late final FocusNode _capFocus;
   late final SettingsProvider _settings; // captured: dispose can't use context
-  NotificationStatus? _notifStatus = _lastKnownNotifStatus;
 
   @override
   void initState() {
@@ -640,15 +641,6 @@ class _BudgetSectionState extends State<_BudgetSection>
     // character rebuilds the whole screen with the keyboard open, and the
     // keep-focused-field-visible logic then fights scroll gestures.
     _capFocus = FocusNode()..addListener(_onCapFocusChange);
-    // Resume re-check: a system-level block is fixed on an Android Settings
-    // page, and the row must reflect that on the way back.
-    WidgetsBinding.instance.addObserver(this);
-    _checkNotifications();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _checkNotifications();
   }
 
   void _onCapFocusChange() {
@@ -667,12 +659,6 @@ class _BudgetSectionState extends State<_BudgetSection>
   /// field kept showing whatever was typed.
   String? _capError;
 
-  Future<void> _checkNotifications() async {
-    final status = await NotificationService.instance.status;
-    _lastKnownNotifStatus = status;
-    if (mounted) setState(() => _notifStatus = status);
-  }
-
   @override
   void deactivate() {
     // Commit here rather than in dispose(): committing notifies
@@ -687,7 +673,6 @@ class _BudgetSectionState extends State<_BudgetSection>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     // Detach first: disposing a FocusNode fires a final focus-change, which
     // would otherwise re-enter _commitCap during teardown.
     _capFocus.removeListener(_onCapFocusChange);
@@ -738,20 +723,12 @@ class _BudgetSectionState extends State<_BudgetSection>
     final spent = context.read<FinanceProvider>().budgetSpentInMonth(
       DateTime(now.year, now.month),
     );
-    return 'This month: ${fmtMoneyCompact(spent)} of '
-        '${fmtMoneyCompact(cap)} (${(spent / cap * 100).round()}%)';
+    return 'This month: ${fmtMoneyTidy(spent)} of '
+        '${fmtMoneyTidy(cap)} (${(spent / cap * 100).round()}%)';
   }
 
   @override
   Widget build(BuildContext context) {
-    final settings = context.watch<SettingsProvider>();
-    // Alerts apply to the monthly cap AND custom budgets — enable the switch
-    // when either exists.
-    final hasCustomBudgets = context.select<FinanceProvider, bool>(
-      (f) => f.budgets.any((b) => b.limit > 0),
-    );
-    final hasCap = settings.monthlyBudget > 0 || hasCustomBudgets;
-
     return FrostedPanel(
       radius: BorderRadius.circular(AppRadius.card),
       child: Padding(
@@ -818,205 +795,6 @@ class _BudgetSectionState extends State<_BudgetSection>
               onSubmitted: (_) => _capFocus.unfocus(),
               onTapOutside: (_) => _capFocus.unfocus(),
             ),
-            _SwitchWithTip(
-              tip: const InfoTip(
-                title: 'Budget alerts',
-                message:
-                    'Checks run only while the app is open. Each alert fires '
-                    'at most once a month per budget, for the highest level '
-                    'newly crossed. Changing a limit re-arms its alerts.',
-              ),
-              child: SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Budget alerts'),
-                subtitle: Text(
-                  hasCap
-                      ? 'Notify as spending approaches the cap or a custom '
-                            'budget limit'
-                      : 'Set a cap or a custom budget to enable alerts',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                value: settings.budgetAlerts && hasCap,
-                onChanged: hasCap
-                    ? (on) async {
-                        await context.read<SettingsProvider>().setBudgetAlerts(
-                          on,
-                        );
-                        if (on) {
-                          await NotificationService.instance
-                              .requestPermission();
-                        }
-                        await _checkNotifications();
-                      }
-                    : null,
-              ),
-            ),
-            // Alerts silently go nowhere while notifications cannot be shown —
-            // say WHICH problem it is, since each has a different remedy and
-            // only a fresh runtime denial can be fixed from inside the app.
-            if (((hasCap && settings.budgetAlerts) ||
-                    settings.unusualAlerts ||
-                    settings.weeklyDigest) &&
-                _notifStatus != null &&
-                _notifStatus != NotificationStatus.enabled)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.notifications_off_outlined,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        switch (_notifStatus!) {
-                          NotificationStatus.appBlocked =>
-                            'Notifications are turned off for this app. '
-                                'Turn them on in Android Settings → Apps → '
-                                'Expense Tracker → Notifications.',
-                          NotificationStatus.channelBlocked =>
-                            'The "Budget alerts" notification channel is '
-                                'muted in Android Settings.',
-                          _ =>
-                            'Notifications could not be initialised on this '
-                                'device, so alerts cannot be shown.',
-                        },
-                        // The one row here the user must not miss: bodyMedium
-                        // + w600 (12px error-on-white was under AA).
-                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: Theme.of(context).colorScheme.error,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    // The system dialog only helps for a runtime denial; a
-                    // muted channel or a plugin failure has no in-app fix.
-                    if (_notifStatus == NotificationStatus.appBlocked)
-                      TextButton(
-                        onPressed: () async {
-                          await NotificationService.instance
-                              .requestPermission();
-                          await _checkNotifications();
-                        },
-                        child: const Text('Request'),
-                      ),
-                  ],
-                ),
-              ),
-            if (hasCap && settings.budgetAlerts) ...[
-              for (final (level, label) in const [
-                (80, 'At 80% of budget'),
-                (90, 'At 90% of budget'),
-                (100, 'When over budget'),
-              ])
-                _ThresholdSwitch(
-                  level: level,
-                  label: label,
-                  value: switch (level) {
-                    80 => settings.alert80,
-                    90 => settings.alert90,
-                    _ => settings.alertOver,
-                  },
-                ),
-            ],
-            // Independent of the cap too: it measures each category against
-            // its own usual month.
-            _SwitchWithTip(
-              tip: const InfoTip(
-                title: 'Unusual spending alerts',
-                message:
-                    'A category alerts once a month when its spending so far '
-                    'reaches 1.5 times its usual month and is at least '
-                    '₹1,000 more. The usual month is the middle of up to 6 '
-                    'whole months, so a category needs 2 whole months since '
-                    'its first spend. '
-                    'Checks run when the app opens, when transactions '
-                    'change and about every 6 hours with the app closed. '
-                    "Tapping an alert opens the category's history.",
-              ),
-              child: SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Unusual spending alerts'),
-                subtitle: Text(
-                  'Notify when a category runs well past its usual month',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                value: settings.unusualAlerts,
-                onChanged: (on) async {
-                  await context.read<SettingsProvider>().setUnusualAlerts(on);
-                  if (on) {
-                    await NotificationService.instance.requestPermission();
-                  }
-                  await _checkNotifications();
-                },
-              ),
-            ),
-            // Only the note: the digest itself always opens from the
-            // Overview and the ⋮ menu.
-            _SwitchWithTip(
-              tip: const InfoTip(
-                title: 'Weekly digest',
-                message:
-                    "Every Monday at 9 AM, a note says last week's digest is "
-                    'ready. The note shows no amounts. The digest also opens '
-                    'any time from This week on the Overview or the ⋮ menu.',
-              ),
-              child: SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Weekly digest'),
-                subtitle: Text(
-                  'A note on Monday morning about last week',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                value: settings.weeklyDigest,
-                onChanged: (on) async {
-                  await context.read<SettingsProvider>().setWeeklyDigest(on);
-                  if (on) {
-                    await NotificationService.instance.requestPermission();
-                  }
-                  await _checkNotifications();
-                },
-              ),
-            ),
-            // Independent of the cap: card due dates and detected recurring
-            // payments exist without any budget.
-            _SwitchWithTip(
-              tip: const InfoTip(
-                title: 'Payment reminders',
-                message:
-                    'Card bills notify once billed and unpaid, from 5 days '
-                    'before the due date. Detected recurring payments and '
-                    'your reminders notify from 2 days before. Each notifies '
-                    'once per due month. Checks run when the app opens and '
-                    'about every 6 hours with it closed.',
-                link: InfoLink(
-                  prompt: 'A bill the app cannot detect?',
-                  label: 'Add a reminder',
-                  onTap: goNewReminder,
-                ),
-              ),
-              child: SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Payment reminders'),
-                subtitle: Text(
-                  'Card bills, your reminders and detected recurring '
-                  'payments, checked when the app opens',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                value: settings.upcomingReminders,
-                onChanged: (on) async {
-                  await context.read<SettingsProvider>().setUpcomingReminders(
-                    on,
-                  );
-                  if (on) {
-                    await NotificationService.instance.requestPermission();
-                  }
-                  await _checkNotifications();
-                },
-              ),
-            ),
           ],
         ),
       ),
@@ -1024,51 +802,9 @@ class _BudgetSectionState extends State<_BudgetSection>
   }
 }
 
-/// A switch row with its [InfoTip] beside the tile rather than inside it:
-/// SwitchListTile merges its children's semantics, which would fold the
-/// tip into the switch so a screen reader could never open it.
-class _SwitchWithTip extends StatelessWidget {
-  final Widget child;
-  final InfoTip tip;
-  const _SwitchWithTip({required this.child, required this.tip});
-
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Expanded(child: child),
-      tip,
-    ],
-  );
-}
-
-class _ThresholdSwitch extends StatelessWidget {
-  final int level;
-  final String label;
-  final bool value;
-  const _ThresholdSwitch({
-    required this.level,
-    required this.label,
-    required this.value,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SwitchListTile(
-      dense: true,
-      // Right inset = the info tip beside the switches above, so all the
-      // switches in the panel share one column.
-      contentPadding: const EdgeInsets.only(left: 8, right: 32),
-      title: Text(label),
-      value: value,
-      onChanged: (on) =>
-          context.read<SettingsProvider>().setAlertThreshold(level, on),
-    );
-  }
-}
-
-/// User-defined spend limits: list with edit/delete; adding goes through the
-/// Cockpit FAB. The category/group pickers live in the dialog; progress
-/// renders on the dashboard.
+/// User-defined spend limits: a tap edits, and Delete lives in the editor;
+/// adding goes through the Cockpit FAB. The category/group pickers live in
+/// the dialog; progress renders on the dashboard.
 class _CustomBudgetsSection extends StatelessWidget {
   const _CustomBudgetsSection();
 
@@ -1084,7 +820,7 @@ class _CustomBudgetsSection extends StatelessWidget {
           : (n == 0
                 ? 'All spending'
                 : 'All except $n ${n == 1 ? 'category' : 'categories'}');
-      return '$scope · ${fmtMoneyCompact(b.limit)}/month';
+      return '$scope · ${fmtMoneyTidy(b.limit)} a month';
     }
 
     return FrostedPanel(
@@ -1104,7 +840,8 @@ class _CustomBudgetsSection extends StatelessWidget {
             for (final b in finance.budgets)
               ListTile(
                 dense: true,
-                onTap: () => showBudgetDialog(context, existing: b),
+                onTap: () =>
+                    showBudgetDialog(context, existing: b, allowDelete: true),
                 leading: CircleAvatar(
                   radius: 16,
                   backgroundColor: scheme.primary.withValues(alpha: 0.15),
@@ -1119,42 +856,18 @@ class _CustomBudgetsSection extends StatelessWidget {
                   subtitle(b),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-                trailing: IconButton(
-                  tooltip: 'Delete budget',
-                  icon: const Icon(Icons.delete_outline, size: 20),
-                  onPressed: () => _delete(context, b),
-                ),
+                trailing: _rowChevron(context),
               ),
           ],
         ),
       ),
     );
   }
-
-  /// Deletes at once and offers Undo (the app's delete model, see
-  /// showUndoSnackBar). The provider is captured here because the undo can
-  /// run after this tab is gone.
-  void _delete(BuildContext context, SpendBudget b) {
-    final finance = context.read<FinanceProvider>();
-    // The delete reads the alert marker across an await, so the undo waits
-    // on the same future for what it captured.
-    final pending = finance.deleteBudget(b.id);
-    showUndoSnackBar(
-      context,
-      'Deleted budget "${b.name}"',
-      () async {
-        final removed = await pending;
-        if (removed != null) await finance.restoreBudget(removed);
-      },
-      icon: Icons.delete_outline,
-      tone: AppToastTone.removal,
-    );
-  }
 }
 
-/// Manual monthly reminders: list with edit/delete; adding goes through the
-/// Cockpit FAB. The editor lives in widgets/ so the dashboard's Upcoming
-/// card shares it.
+/// Manual monthly reminders: a tap edits, and Delete lives in the editor;
+/// adding goes through the Cockpit FAB. The editor lives in widgets/ so the
+/// dashboard's Upcoming card shares it.
 class _RemindersSection extends StatelessWidget {
   const _RemindersSection();
 
@@ -1165,7 +878,7 @@ class _RemindersSection extends StatelessWidget {
 
     String subtitle(Reminder r) => [
       reminderCycleLabel(r),
-      if (r.expectedAmount != null) fmtMoneyCompact(r.expectedAmount!),
+      if (r.expectedAmount != null) fmtMoneyTidy(r.expectedAmount!),
       if (r.autoAdd) 'adds itself',
       // A one-time reminder past its date or paid needs nothing more; it
       // stays listed so it can be deleted.
@@ -1208,7 +921,8 @@ class _RemindersSection extends StatelessWidget {
             for (final r in finance.reminders)
               ListTile(
                 dense: true,
-                onTap: () => showReminderEditor(context, existing: r),
+                onTap: () =>
+                    showReminderEditor(context, existing: r, allowDelete: true),
                 leading: CircleAvatar(
                   radius: 16,
                   backgroundColor: categoryById(
@@ -1231,17 +945,12 @@ class _RemindersSection extends StatelessWidget {
                         children: [details(r), unpaidButton(r)!],
                       )
                     : details(r),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (!stacked && unpaidButton(r) != null) unpaidButton(r)!,
-                    IconButton(
-                      tooltip: 'Delete reminder',
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      onPressed: () => _delete(context, r),
-                    ),
-                  ],
-                ),
+                trailing: stacked
+                    ? null
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [?unpaidButton(r), ?_rowChevron(context)],
+                      ),
               ),
             if (finance.reminders.any(reminderIsBigBill))
               Padding(
@@ -1275,20 +984,5 @@ class _RemindersSection extends StatelessWidget {
       icon: Icons.undo,
     );
     await finance.unmarkLatestReminderPaid(r.id);
-  }
-
-  /// Deletes at once and offers Undo, which returns the reminder to the
-  /// position it held in the list rather than the end.
-  void _delete(BuildContext context, Reminder r) {
-    final finance = context.read<FinanceProvider>();
-    final index = finance.reminders.indexWhere((x) => x.id == r.id);
-    finance.deleteReminder(r.id);
-    showUndoSnackBar(
-      context,
-      'Deleted reminder "${r.name}"',
-      () => finance.restoreReminder(r, index: index),
-      icon: Icons.delete_outline,
-      tone: AppToastTone.removal,
-    );
   }
 }

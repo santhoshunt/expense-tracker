@@ -72,26 +72,27 @@ void main() {
         '$count$nb${count == 1 ? one : many}';
     final hub = <(String, String, String)>[
       (
-        'Classify',
-        // Only the rule added above: built-ins are not the user's own.
-        '1${nb}rule · '
+        'Categories and rules',
+        // In the order of the name. Only the rule added above: built-ins
+        // are not the user's own.
+        '${n(customCategories.length + kCategories.length, 'category', 'categories')} · '
+            '1${nb}rule · '
             '${n(p.importRules.length, 'import rule', 'import rules')}',
         'Rules',
       ),
       (
-        'Organise',
-        '${n(customCategories.length + kCategories.length, 'category', 'categories')} · '
-            '0${nb}tags',
-        'New category',
+        'Groups and tags',
+        '${n(p.groups.length, 'group', 'groups')} · 0${nb}tags',
+        'New group',
       ),
       // A passed limit leads the line.
       (
-        'Plan',
+        'Budgets and bills',
         '1${nb}budget over · 1${nb}budget · 1${nb}reminder · '
             '0${nb}subscriptions',
         'Budgets',
       ),
-      ('Dashboard', 'All sections shown', 'Overview'),
+      ('Dashboard layout', 'All sections shown', 'Overview'),
     ];
     for (final (title, count, _) in hub) {
       // The fourth row can sit below a short screen's fold.
@@ -126,23 +127,25 @@ void main() {
     expect(find.text('Cockpit'), findsOneWidget);
   });
 
-  testWidgets('Plan hosts Budgets and Reminders tabs with add flows', (
-    tester,
-  ) async {
+  testWidgets('Budgets and bills hosts Budgets and Reminders tabs with add '
+      'flows', (tester) async {
     final p = FinanceProvider();
     await p.load();
     await tester.pumpWidget(cockpit(p));
     await pumpThrough(tester);
 
-    await tester.tap(find.text('Plan'));
+    await tester.tap(find.text('Budgets and bills'));
     await pumpThrough(tester);
     expect(find.text('Budgets'), findsOneWidget);
     expect(find.text('Reminders'), findsOneWidget);
 
     await tester.tap(find.text('Budgets'));
     await pumpThrough(tester);
-    expect(find.text('Monthly cap'), findsOneWidget);
-    // Below the alert switches on a 600dp-tall test screen.
+    // The heading and the cap field's label.
+    expect(find.text('Monthly cap'), findsNWidgets(2));
+    // The alert switches moved to Settings, Notifications.
+    expect(find.text('Budget alerts'), findsNothing);
+    expect(find.text('Notification settings'), findsOneWidget);
     final list = find
         .byWidgetPredicate(
           (w) => w is Scrollable && w.axisDirection == AxisDirection.down,
@@ -154,7 +157,7 @@ void main() {
       scrollable: list,
     );
     expect(find.text('No custom budgets yet.'), findsOneWidget);
-    // Back up: scrolling down folds the FAB to its icon.
+    // Back up: scrolling down hides the FAB.
     await tester.drag(list, const Offset(0, 600));
     await pumpThrough(tester);
     // The FAB is the only add flow; the inline button duplicated it.
@@ -168,7 +171,7 @@ void main() {
     expect(find.text('New reminder'), findsOneWidget);
   });
 
-  testWidgets('Settings lost the moved sections and the Cockpit card', (
+  testWidgets('Settings lost the moved sections; a Cockpit card leads it', (
     tester,
   ) async {
     final p = FinanceProvider();
@@ -191,9 +194,9 @@ void main() {
     for (final group in [
       'Appearance',
       'SMS import',
+      'Notifications',
       'Backup and data',
       'Privacy',
-      'Category order',
       'About',
     ]) {
       await tester.tap(find.text(group));
@@ -204,11 +207,12 @@ void main() {
       await tester.pageBack();
       await pumpThrough(tester);
     }
-    // Cockpit opens from the home screen's ⋮ menu; the Category order page
-    // no longer repeats it.
-    await tester.tap(find.text('Category order'));
+    // Category order moved beside the categories.
+    expect(find.text('Category order'), findsNothing);
+    // The Cockpit card on top opens the hub.
+    await tester.tap(find.text('Cockpit'));
     await pumpThrough(tester);
-    expect(find.text('Open Cockpit', skipOffstage: false), findsNothing);
-    expect(find.widgetWithText(AppBar, 'Category order'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'Cockpit'), findsOneWidget);
+    expect(find.text('Categories and rules'), findsOneWidget);
   });
 }

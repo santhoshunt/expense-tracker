@@ -234,6 +234,18 @@ void main() {
     final s = safe(p);
     expect(s.spentToday, 2000);
     expect(s.leftToday, closeTo((40000 - 22500 - 5000) / 12 - 2000, 1e-9));
+    // The budget card's parts: the waiting row, the one bill, and all of it
+    // together.
+    expect(s.pendingSpent, 2000);
+    expect(s.billsCount, 1);
+    expect(s.committed, 22500 + 2000 + 5000);
+  });
+
+  test('the bills count matches the bills summed', () async {
+    final s = safe(await ledger(reminders: [rent, phone]));
+    expect(s.billsCount, 2);
+    expect(s.pendingSpent, 0);
+    expect(s.committed, 22500 + 6000);
   });
 
   test('a row counted into this month is this month\'s spend', () async {

@@ -12,11 +12,14 @@ import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/utils/format.dart';
+import 'package:expense_tracker/widgets/category_tile_icon.dart';
+import 'package:expense_tracker/widgets/review_sheet.dart';
 import 'package:expense_tracker/widgets/status_dot.dart';
 
 /// v1.38.1 on the Transactions tab: the opaque month band, the slim jump
-/// panel, the review queue at 320dp with large text, the review row text,
-/// the spam card, Mark all seen and the ⋮ menu's page entries.
+/// panel, Mark all seen and the ⋮ menu's page entries. The review queue,
+/// its rows and the spam fold moved to the review sheet in v1.43.0; their
+/// tests here run against the sheet.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -45,6 +48,41 @@ void main() {
       home: const Scaffold(body: TransactionsScreen()),
     ),
   );
+
+  /// A page with one button that opens the review sheet.
+  Widget sheetHost(
+    FinanceProvider p,
+    SettingsProvider s, {
+    double textScale = 1,
+  }) => MultiProvider(
+    providers: [
+      ChangeNotifierProvider.value(value: p),
+      ChangeNotifierProvider.value(value: s),
+    ],
+    child: MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: child!,
+      ),
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => Center(
+            child: TextButton(
+              onPressed: () => showReviewSheet(context),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Future<void> openSheet(WidgetTester tester) async {
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+  }
 
   Future<SettingsProvider> settings() async {
     final s = SettingsProvider();
@@ -189,14 +227,14 @@ void main() {
     expect(jumpOpacity(tester), 0, reason: 'gone 1.6 s later');
   });
 
-  testWidgets('the review queue fits 320dp at 2x text', (tester) async {
+  testWidgets('the review sheet fits 320dp at 2x text', (tester) async {
     tester.view.physicalSize = const Size(640, 3200);
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
 
     final p = await queue();
-    await tester.pumpWidget(screen(p, await settings(), textScale: 2));
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(sheetHost(p, await settings(), textScale: 2));
+    await openSheet(tester);
 
     expect(tester.takeException(), isNull);
     expect(find.text('Not a transfer'), findsOneWidget);
@@ -204,14 +242,8 @@ void main() {
     expect(find.text('Confirm all'), findsOneWidget);
     expect(find.text('Discard all'), findsOneWidget);
 
-    // The food row may sit below the review list's fold.
-    expect(
-      find.text(
-        '${categoryById('food').label} · Tasty Corner',
-        skipOffstage: false,
-      ),
-      findsOneWidget,
-    );
+    // Merchant first: the note names the row.
+    expect(find.text('Tasty Corner', skipOffstage: false), findsOneWidget);
 
     // Large text: Confirm and Discard sit under the row's text.
     final confirm = find.byTooltip('Confirm').first;
@@ -228,28 +260,44 @@ void main() {
     );
   });
 
-  testWidgets('a review row reads category · merchant over date · sender', (
-    tester,
-  ) async {
+  testWidgets('a review row reads merchant over amount · category, under '
+      'its day', (tester) async {
     final p = await queue();
-    await tester.pumpWidget(screen(p, await settings()));
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(sheetHost(p, await settings()));
+    await openSheet(tester);
 
+    final title = find.text('Tasty Corner');
+    expect(title, findsOneWidget);
+    final line = find.text('−${fmtMoney(349)} · ${categoryById('food').label}');
+    expect(line, findsOneWidget);
+    // Time and sender stay in the edit sheet (the suggestion card above
+    // names its sides' senders, not the rows).
+    Finder inRows(Finder f) =>
+        find.descendant(of: find.byType(ListTile), matching: f);
+    expect(inRows(find.textContaining('VM-DEMOBK')), findsNothing);
+    expect(inRows(find.textContaining('12:02 PM')), findsNothing);
+    // The day label sits over the row.
+    final day = find.text(fmtDayHeading(food.date));
+    expect(day, findsOneWidget);
+    expect(tester.getTopLeft(day).dy, lessThan(tester.getTopLeft(title).dy));
+    // The category's tile leads the row.
     expect(
-      find.text('${categoryById('food').label} · Tasty Corner'),
+      find.ancestor(of: title, matching: find.byType(ListTile)),
       findsOneWidget,
     );
     expect(
-      find.textContaining(
-        '−${fmtMoney(349)} · ${fmtDateCompact(food.date)} · VM-DEMOBK',
+      find.descendant(
+        of: find.ancestor(of: title, matching: find.byType(ListTile)),
+        matching: find.byType(CategoryTileIcon),
       ),
       findsOneWidget,
     );
-    expect(fmtDateCompact(food.date), '13 Oct, 12:02 PM');
   });
 
-  testWidgets('inside Home at 320x700 with 2x text, both open review cards '
-      'leave the list real height', (tester) async {
+  testWidgets('inside Home at 320x700 with 2x text, nothing sits above the '
+      'list but the bars, and the message icon opens the sheet', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(640, 1400);
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
@@ -290,66 +338,26 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
-    // Both cards are open: their fold contents are built.
-    expect(find.text('Not a transfer'), findsOneWidget);
-    expect(find.textContaining('Suspected spam · 1'), findsOneWidget);
-
+    // No review card on the tab: the list keeps the height.
+    expect(find.text('Not a transfer'), findsNothing);
+    expect(find.byKey(const ValueKey('review-cards')), findsNothing);
     final screenHeight = tester.getSize(find.byType(TransactionsScreen)).height;
-    final cards = tester.getSize(find.byKey(const ValueKey('review-cards')));
-    expect(cards.height, lessThanOrEqualTo(screenHeight * 0.4 + 0.5));
     final list = tester.getSize(find.byType(PageView));
     expect(list.height, greaterThan(screenHeight * 0.3));
 
-    // The full area says it scrolls: a visible scrollbar, and the last
-    // card fades out on rounded corners while more lies below.
-    final area = find.byKey(const ValueKey('review-cards'));
-    Scrollbar bar() => tester.widget<Scrollbar>(
-      find.ancestor(of: area, matching: find.byType(Scrollbar)).first,
+    // The badge counts what the sheet lists: three imports and the spam.
+    expect(
+      find.descendant(
+        of: find.byTooltip('Review imports'),
+        matching: find.text('4'),
+      ),
+      findsOneWidget,
     );
-    ShaderMask fade() => tester.widget<ShaderMask>(
-      find.ancestor(of: area, matching: find.byType(ShaderMask)).first,
-    );
-    expect(bar().thumbVisibility, isTrue);
-    expect(fade().blendMode, BlendMode.dstIn);
-
-    // Scrolled to its end, nothing lies below: no fade.
-    final position = tester
-        .state<ScrollableState>(
-          find.descendant(of: area, matching: find.byType(Scrollable)).first,
-        )
-        .position;
-    position.jumpTo(position.maxScrollExtent);
+    await tester.tap(find.byTooltip('Review imports'));
     await tester.pumpAndSettle();
-    expect(fade().blendMode, BlendMode.dst);
-    expect(bar().thumbVisibility, isTrue);
     expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('review cards that fit show no scroll cue', (tester) async {
-    tester.view.physicalSize = const Size(780, 3200);
-    tester.view.devicePixelRatio = 2;
-    addTearDown(tester.view.reset);
-    final p = await queue();
-    await tester.pumpWidget(screen(p, await settings()));
-    await tester.pumpAndSettle();
-
-    final area = find.byKey(const ValueKey('review-cards'));
-    expect(
-      tester
-          .widget<Scrollbar>(
-            find.ancestor(of: area, matching: find.byType(Scrollbar)).first,
-          )
-          .thumbVisibility,
-      isFalse,
-    );
-    expect(
-      tester
-          .widget<ShaderMask>(
-            find.ancestor(of: area, matching: find.byType(ShaderMask)).first,
-          )
-          .blendMode,
-      BlendMode.dst,
-    );
+    expect(find.text('Not a transfer'), findsOneWidget);
+    expect(find.text('Imported from SMS'), findsOneWidget);
   });
 
   testWidgets('the new line starts at the list inset, one text size', (
@@ -411,13 +419,16 @@ void main() {
     // The no-merchant row is a transfer leg: it shows in the list once the
     // suggestion holding it is dismissed.
     await s.dismissPairSuggestion('q-in|q-out');
-    await tester.pumpWidget(screen(p, s));
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(sheetHost(p, s));
+    await openSheet(tester);
 
-    final card = find.byKey(const ValueKey('pending-card'));
     final other = categoryById('other_expense').label;
     expect(find.textContaining('· Payment'), findsNothing);
-    expect(find.descendant(of: card, matching: find.text(other)), findsWidgets);
+    // Both legs are titled by their category ("Other" either way), and
+    // line two is the amount alone.
+    expect(find.text(other), findsNWidgets(2));
+    expect(find.text('−${fmtMoney(5000)}'), findsOneWidget);
+    expect(find.text('+${fmtMoney(5000)}'), findsOneWidget);
   });
 
   testWidgets('Not a transfer hides the suggestion, and Undo brings it back', (
@@ -425,8 +436,8 @@ void main() {
   ) async {
     final p = await queue();
     final s = await settings();
-    await tester.pumpWidget(screen(p, s));
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(sheetHost(p, s));
+    await openSheet(tester);
 
     final suggestion = find.textContaining('Looks like a transfer');
     expect(suggestion, findsOneWidget);
@@ -444,27 +455,44 @@ void main() {
     expect(suggestion, findsOneWidget);
   });
 
-  testWidgets('spam amounts are plain text and the title counts them', (
-    tester,
-  ) async {
+  testWidgets('spam amounts are plain text, the fold counts them and its '
+      'rows carry their day', (tester) async {
     final p = await queue();
-    await tester.pumpWidget(screen(p, await settings()));
-    await tester.pumpAndSettle();
+    await tester.pumpWidget(sheetHost(p, await settings()));
+    await openSheet(tester);
 
-    expect(find.text('Suspected spam · 1 to review'), findsOneWidget);
-    final scheme = Theme.of(
-      tester.element(find.byType(TransactionsScreen)),
-    ).colorScheme;
-    Color? amountColor(String sender) {
-      final text = tester.widget<Text>(find.textContaining('· $sender').first);
+    final fold = find.text('Suspected spam · 1');
+    expect(fold, findsOneWidget);
+    // Folded while imports wait: open it.
+    await tester.tap(fold);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Confirm all and Discard all skip these.'),
+      findsOneWidget,
+    );
+
+    final scheme = Theme.of(tester.element(fold)).colorScheme;
+    Color? amountColor(Finder line) {
+      final text = tester.widget<Text>(line.first);
       final span = text.textSpan! as TextSpan;
       return (span.children!.first as TextSpan).style?.color;
     }
 
-    expect(amountColor('AX-PROMOS'), scheme.onSurface);
+    // The spam row ends its line with its day: the fold has no day labels.
+    final spamLine = find.descendant(
+      of: find.ancestor(of: fold, matching: find.byType(Card)).first,
+      matching: find.textContaining(
+        ' · ${fmtDateCompact(DateUtils.dateOnly(spam.date))}',
+      ),
+    );
+    expect(spamLine, findsOneWidget);
+    expect(amountColor(spamLine), scheme.onSurface);
     // An ordinary review row keeps its money colour. The food row: the
     // transfer legs sit in their suggestion card, not the list.
-    expect(amountColor('VM-DEMOBK'), isNot(scheme.onSurface));
+    expect(
+      amountColor(find.textContaining('−${fmtMoney(349)}')),
+      isNot(scheme.onSurface),
+    );
   });
 
   testWidgets('Mark all seen clears the new markers, and Undo restores them', (
@@ -499,14 +527,22 @@ void main() {
     expect(find.text('1 new ·'), findsOneWidget);
   });
 
-  testWidgets('the ⋮ menu gets Review imports, Select and Export CSV', (
+  testWidgets('the ⋮ menu gets Import from SMS, Select and Export CSV', (
     tester,
   ) async {
-    // Tall: both review cards, the selection bar and the list together
-    // outgrow the default 600dp test height.
     tester.view.physicalSize = const Size(1600, 2400);
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
+    // Home registers the SMS import; stood in for here.
+    final owner = Object();
+    var imports = 0;
+    AppNav.instance.attachHome(
+      owner,
+      setTab: (_) {},
+      openTransactions: (_) {},
+      importSms: () => imports++,
+    );
+    addTearDown(() => AppNav.instance.detachHome(owner));
     final p = await queue();
     final s = await settings();
     await tester.pumpWidget(screen(p, s));
@@ -516,15 +552,11 @@ void main() {
     List<String> labels() => [
       for (final a in menu.actionsFor(kHomeTabTransactions)) a.label,
     ];
-    expect(labels(), ['Review imports (4)', 'Select', 'Export CSV']);
-
-    // Review imports opens a folded review card.
-    await s.toggleSection('pending_review');
-    await tester.pumpAndSettle();
-    expect(s.isSectionCollapsed('pending_review'), isTrue);
+    // No review entry: the message icon opens the review sheet.
+    expect(labels(), ['Import from SMS', 'Select', 'Export CSV']);
     menu.actionsFor(kHomeTabTransactions).first.onTap();
     await tester.pumpAndSettle();
-    expect(s.isSectionCollapsed('pending_review'), isFalse);
+    expect(imports, 1);
 
     // Select enters selection mode with nothing picked.
     expect(find.byTooltip('Clear selection'), findsNothing);
@@ -535,12 +567,26 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byTooltip('Clear selection'), findsNothing);
 
-    // An empty queue drops the review entry.
+    // The entries do not depend on the queue.
     await p.confirmAllPending();
-    for (final t in p.pendingTransactions.toList()) {
-      await p.deleteTransaction(t.id);
-    }
     await tester.pumpAndSettle();
-    expect(labels(), ['Select', 'Export CSV']);
+    expect(labels(), ['Import from SMS', 'Select', 'Export CSV']);
+  });
+
+  testWidgets('without SMS import the ⋮ menu has Select and Export CSV', (
+    tester,
+  ) async {
+    final p = await queue();
+    await tester.pumpWidget(screen(p, await settings()));
+    await tester.pumpAndSettle();
+    expect(
+      [
+        for (final a in AppNav.instance.pageMenu.actionsFor(
+          kHomeTabTransactions,
+        ))
+          a.label,
+      ],
+      ['Select', 'Export CSV'],
+    );
   });
 }

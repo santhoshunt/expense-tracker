@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
@@ -32,6 +31,7 @@ import '../utils/haptics.dart';
 import '../widgets/glossy.dart';
 import '../widgets/lock_gate.dart';
 import '../widgets/motion.dart';
+import '../widgets/review_sheet.dart';
 import '../widgets/undo_snackbar.dart';
 import 'accounts_screen.dart';
 import 'add_transaction_sheet.dart';
@@ -63,10 +63,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _index = 0;
   bool _importing = false;
-
-  // The Add button folds to its icon while a list scrolls down, so it
-  // covers less of the rows; scrolling up or switching tab brings it back.
-  bool _fabExtended = true;
   final _smsImport = SmsImportService();
   final _budgetMonitor = BudgetMonitor();
   final _upcomingMonitor = UpcomingMonitor();
@@ -163,6 +159,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void _viewTag(String tag, DateTime month) =>
       _openTransactions(TxFilterRequest(month: month, tag: tag));
 
+  /// The review sheet over Transactions: the review notification, the This
+  /// week widget's count, AppNav.openReview and an import that left rows
+  /// to review. Open routes stay, as with every launch action.
+  void _openReview() {
+    if (!mounted) return;
+    setState(() => _showTab(kHomeTabTransactions));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) showReviewSheet(context);
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -180,6 +187,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               if (mounted && !_importing) _importFromSms();
             }
           : null,
+      openReview: _openReview,
     );
     WidgetsBinding.instance.addObserver(this);
     // Shortcut, tile and notification actions wait for Home and the lock.
@@ -395,7 +403,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           (_) => AppNav.instance.showRecap(),
         );
       case LaunchAction.openReview:
-        setState(() => _showTab(1));
+        _openReview();
       case LaunchAction.openBudget:
         _showSection(DashboardSection.monthlyBudget);
       case LaunchAction.openBudgets:
@@ -889,7 +897,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           tone: parts.isEmpty ? AppToastTone.info : AppToastTone.success,
           icon: Icons.sms_outlined,
         );
-        if (result.imported > 0) setState(() => _showTab(1));
+        // Rows left to review open the sheet at once; rows that only
+        // counted land on Transactions as before.
+        if (result.toReview > 0) {
+          _openReview();
+        } else if (result.imported > 0) {
+          setState(() => _showTab(kHomeTabTransactions));
+        }
       }
     } catch (e) {
       // Without this a mid-scan platform error just cleared the spinner —
@@ -939,8 +953,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (openSettings == true) await _smsImport.openAppSettings();
   }
 
-  /// Every tab switch, by tap or by a link, lands with the Add button
-  /// unfolded. Call inside setState.
+  /// Every tab switch, by tap or by a link. Call inside setState.
   void _showTab(int i) {
     if (i != _index) {
       // Never the tab being shown: back must always land somewhere else.
@@ -950,7 +963,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ..add(_index);
     }
     _index = i;
-    _fabExtended = true;
   }
 
   /// Tabs left behind, newest last. Tab switches (a tap, a donut slice's
@@ -961,33 +973,74 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _back() {
     if (_tabHistory.isEmpty) return;
-    setState(() {
-      _index = _tabHistory.removeLast();
-      _fabExtended = true;
-    });
-  }
-
-  /// Vertical drags only: the pagers and the stat-card strip scroll
-  /// sideways.
-  bool _onUserScroll(UserScrollNotification n) {
-    if (n.metrics.axis != Axis.vertical) return false;
-    final extend = switch (n.direction) {
-      ScrollDirection.reverse => false,
-      ScrollDirection.forward => true,
-      ScrollDirection.idle => _fabExtended,
-    };
-    if (extend != _fabExtended) setState(() => _fabExtended = extend);
-    return false;
+    setState(() => _index = _tabHistory.removeLast());
   }
 
   @override
   Widget build(BuildContext context) {
     final onAccounts = _index == 2;
-    // Counted directly: the selector runs on every provider change, and
-    // materialising + sorting the pending list to read its length was pure
-    // waste.
-    final pendingCount = context.select<FinanceProvider, int>(
-      (f) => f.pendingCount,
+    // What the review sheet lists: imports to review, suspected spam and
+    // counted refunds with a suggestion. Rebuilt when a suggestion is
+    // dismissed or restored; the provider caches the queue per revision.
+    context.select<SettingsProvider, int>(
+      (s) => s.dismissedPairSuggestions.length,
+    );
+    final dismissed = context.read<SettingsProvider>().dismissedPairSuggestions;
+    final reviewCount = context.select<FinanceProvider, int>(
+      (f) => f.reviewCount(dismissed),
+    );
+    // The docked Add keeps 88dp, which leaves each tab about 90dp at 360dp.
+    // "Transactions" fits there up to 1.15x text and wraps mid-word by
+    // 1.3x, even alone, since each tab keeps its share of the width. So
+    // the bar's labels stop growing at this scale, and above it only the
+    // selected label shows. Tooltips still name every tab.
+    const labelsFitScale = 1.15;
+    final textScaler = MediaQuery.textScalerOf(context);
+    final labelsFit = textScaler.scale(1) <= labelsFitScale;
+    final barScaler = textScaler.clamp(maxScaleFactor: labelsFitScale);
+    // Scales with the bar's labels: any constant (68, then 76) clipped
+    // them again at a large enough scale.
+    final barHeight = barScaler.scale(76);
+    // Solid kit-style bar; the theme paints the accent rounded indicator.
+    // Transparent: the notched BottomAppBar around it paints the fill.
+    final navigationBar = NavigationBar(
+      height: barHeight,
+      backgroundColor: Colors.transparent,
+      labelBehavior: labelsFit
+          ? NavigationDestinationLabelBehavior.alwaysShow
+          : NavigationDestinationLabelBehavior.onlyShowSelected,
+      selectedIndex: _index,
+      onDestinationSelected: (i) {
+        if (i != _index) Haptics.tick();
+        setState(() => _showTab(i));
+      },
+      destinations: [
+        const NavigationDestination(
+          icon: Icon(Icons.dashboard_outlined),
+          selectedIcon: Icon(Icons.dashboard),
+          label: 'Dashboard',
+        ),
+        // What the review sheet lists, as on the message button, so it
+        // shows from every tab: that button lives on Transactions only.
+        NavigationDestination(
+          icon: Badge(
+            isLabelVisible: reviewCount > 0,
+            label: Text('$reviewCount'),
+            child: const Icon(Icons.receipt_long_outlined),
+          ),
+          selectedIcon: Badge(
+            isLabelVisible: reviewCount > 0,
+            label: Text('$reviewCount'),
+            child: const Icon(Icons.receipt_long),
+          ),
+          label: 'Transactions',
+        ),
+        const NavigationDestination(
+          icon: Icon(Icons.account_balance_wallet_outlined),
+          selectedIcon: Icon(Icons.account_balance_wallet),
+          label: 'Accounts',
+        ),
+      ],
     );
 
     return PopScope(
@@ -1013,16 +1066,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                 : Text(_titles[_index]),
             titleSpacing: _index == kHomeTabDashboard ? 4 : null,
             actions: [
-              // Same IconButton in both states (disabled + spinner icon while
-              // importing) so the action row doesn't shift and the pending
-              // badge doesn't blink out for the duration. Transactions only:
-              // imported rows land there.
+              // Opens the review sheet. Same IconButton in both states
+              // (disabled + spinner icon while importing) so the action row
+              // doesn't shift and the badge doesn't blink out for the
+              // duration. Transactions only: imported rows land there.
               if (_smsImport.isSupported && _index == kHomeTabTransactions)
                 IconButton(
-                  tooltip: _importing ? 'Importing…' : 'Import from SMS',
+                  tooltip: _importing ? 'Importing…' : 'Review imports',
                   icon: Badge(
-                    isLabelVisible: pendingCount > 0,
-                    label: Text('$pendingCount'),
+                    isLabelVisible: reviewCount > 0,
+                    label: Text('$reviewCount'),
                     child: _importing
                         ? const SizedBox(
                             width: 20,
@@ -1031,10 +1084,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           )
                         : const Icon(Icons.sms_outlined),
                   ),
-                  onPressed: _importing ? null : _importFromSms,
+                  onPressed: _importing ? null : () => showReviewSheet(context),
                 ),
               const SettingsButton(),
-              // The shown tab's own entries, then Cockpit and People.
+              // The shown tab's own entries, then Cockpit and Who owes you.
               HomeMenu(tab: _index),
             ],
           ),
@@ -1042,71 +1095,60 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             children: [
               const _StorageWarningBanners(),
               Expanded(
-                child: NotificationListener<UserScrollNotification>(
-                  onNotification: _onUserScroll,
-                  child: _FadeThroughIndexedStack(
-                    index: _index,
-                    children: [
-                      _dashboardTab,
-                      _transactionsTabWidget,
-                      _accountsTab,
-                    ],
-                  ),
+                child: _FadeThroughIndexedStack(
+                  index: _index,
+                  children: [
+                    _dashboardTab,
+                    _transactionsTabWidget,
+                    _accountsTab,
+                  ],
                 ),
               ),
             ],
           ),
-          floatingActionButton: GlassButton(
+          floatingActionButton: GlassRoundButton(
             icon: Icons.add,
-            label: onAccounts ? 'New account' : 'Add',
-            extended: _fabExtended,
+            tooltip: onAccounts ? 'New account' : 'Add transaction',
             onPressed: () => onAccounts
                 ? showAddAccountDialog(context)
                 : showAddTransactionSheet(context),
           ),
-          // Solid kit-style bar; the theme paints the accent rounded indicator.
-          bottomNavigationBar: NavigationBar(
-            // Scales with the font setting — any constant (68, then 76) clips
-            // the always-shown labels again at a large enough scale.
-            height: MediaQuery.textScalerOf(context).scale(76),
-            selectedIndex: _index,
-            onDestinationSelected: (i) {
-              if (i != _index) Haptics.tick();
-              setState(() => _showTab(i));
-            },
-            destinations: [
-              const NavigationDestination(
-                icon: Icon(Icons.dashboard_outlined),
-                selectedIcon: Icon(Icons.dashboard),
-                label: 'Dashboard',
-              ),
-              // The pending-import count, as on the SMS button, so it shows
-              // from every tab: that button lives on Transactions only.
-              NavigationDestination(
-                icon: Badge(
-                  isLabelVisible: pendingCount > 0,
-                  label: Text('$pendingCount'),
-                  child: const Icon(Icons.receipt_long_outlined),
+          // The Add button docks in a notch at the bar's right end; the tabs
+          // shift left to make room.
+          floatingActionButtonLocation: FloatingActionButtonLocation.endDocked,
+          bottomNavigationBar: BottomAppBar(
+            shape: const CircularNotchedRectangle(),
+            notchMargin: 6,
+            clipBehavior: Clip.antiAlias,
+            padding: EdgeInsets.zero,
+            height: barHeight,
+            elevation: 0,
+            color: Theme.of(context).navigationBarTheme.backgroundColor,
+            surfaceTintColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            child: Row(
+              children: [
+                Expanded(
+                  child: MediaQuery(
+                    data: MediaQuery.of(
+                      context,
+                    ).copyWith(textScaler: barScaler),
+                    child: navigationBar,
+                  ),
                 ),
-                selectedIcon: Badge(
-                  isLabelVisible: pendingCount > 0,
-                  label: Text('$pendingCount'),
-                  child: const Icon(Icons.receipt_long),
-                ),
-                label: 'Transactions',
-              ),
-              const NavigationDestination(
-                icon: Icon(Icons.account_balance_wallet_outlined),
-                selectedIcon: Icon(Icons.account_balance_wallet),
-                label: 'Accounts',
-              ),
-            ],
+                const SizedBox(width: _kAddDockReserve),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 }
+
+/// Width kept free at the nav bar's right end for the docked Add button:
+/// twice the 44dp from the edge to its centre that endDocked uses.
+const double _kAddDockReserve = 88;
 
 /// Storage-health banners: a dismissible one when parts of the stored data
 /// couldn't be read at startup (each was skipped rather than bricking the

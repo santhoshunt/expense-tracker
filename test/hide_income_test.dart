@@ -92,12 +92,12 @@ void main() {
 
     // The stat card at the top (the chart legend is lazy-built lower down).
     expect(find.text('Income'), findsOneWidget);
-    expect(find.text(fmtMoney(50000)), findsOneWidget);
+    expect(find.text(fmtMoneyWhole(50000)), findsOneWidget);
 
     await settings.setHideIncome(true);
     await tester.pump(const Duration(milliseconds: 700));
     expect(find.text('Income'), findsNothing);
-    expect(find.text(fmtMoney(50000)), findsNothing);
+    expect(find.text(fmtMoneyWhole(50000)), findsNothing);
     // Expense stays untouched, unmasked.
     expect(find.text('Spent'), findsOneWidget);
     expect(find.textContaining(kMaskedAmount), findsNothing);
@@ -121,7 +121,7 @@ void main() {
     // …and so is the stat card, which lives on the other sub-tab.
     await openDashboardView(tester, 'Overview');
     expect(find.text('Income'), findsOneWidget);
-    expect(find.text(fmtMoney(50000)), findsOneWidget);
+    expect(find.text(fmtMoneyWhole(50000)), findsOneWidget);
   });
 
   testWidgets('transactions month header masks the income total', (

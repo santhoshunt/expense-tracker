@@ -180,6 +180,51 @@ class _AccountsScreenState extends State<AccountsScreen> {
               (a.isDebitCard && finance.linkedAccountOf(a) == null),
         )
         .length;
+    // What each net line sums, exactly: bankBalanceTotal's accounts, and
+    // the cards cardOutstandingTotal adds a known outstanding for.
+    final open = finance.openAccounts.where(
+      (a) => !finance.isOrphanedAccount(a),
+    );
+    final bankCount = open
+        .where(
+          (a) =>
+              a.type == AccountType.bank ||
+              (a.isDebitCard && finance.linkedAccountOf(a) == null),
+        )
+        .length;
+    final cardCount = open
+        .where((a) => a.isCard && finance.accountOutstanding(a) != null)
+        .length;
+    final cardDue = finance.cardOutstandingTotal;
+    const netTip = InfoTip(
+      title: 'Net balance',
+      message:
+          'Bank balances minus credit card outstanding. Savings, asset and '
+          'wallet accounts are not included.',
+    );
+    final netLines = <_NetLine>[
+      if (bankCount > 0)
+        _NetLine(
+          label: Text(
+            'In $bankCount bank${bankCount == 1 ? '' : 's'}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          amount: fmtMoney(finance.bankBalanceTotal),
+        ),
+      if (cardCount > 0)
+        _NetLine(
+          label: Text(
+            'Due on $cardCount card${cardCount == 1 ? '' : 's'}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          amount: cardDue > 0.005 ? '−${fmtMoney(cardDue)}' : fmtMoney(0),
+          color: cardDue > 0.005
+              ? moneyColor(context, type: TxType.expense)
+              : null,
+        ),
+    ];
 
     return Column(
       children: [
@@ -205,10 +250,11 @@ class _AccountsScreenState extends State<AccountsScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Plain text colour: amounts are never coloured;
-                          // the accent stays on the icon.
-                          // Scales down rather than cutting digits at large
-                          // text, as the Dashboard's balance.
+                          // The headline stays plain; the card line is money
+                          // out, in the expense colour, as in Balance
+                          // breakdown. Scales down rather than cutting
+                          // digits at large text, as the Dashboard's
+                          // balance.
                           FittedBox(
                             fit: BoxFit.scaleDown,
                             alignment: Alignment.centerLeft,
@@ -223,30 +269,49 @@ class _AccountsScreenState extends State<AccountsScreen> {
                           ),
                           // The label opens its tip; the rest of the card
                           // still opens the breakdown.
-                          InfoLabel(
-                            // The chevron says the card opens the breakdown.
-                            label: Text(
-                              netAccounts == 1
-                                  ? 'Net across 1 bank or card account'
-                                  : 'Net across $netAccounts bank and card '
-                                        'accounts',
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: scheme.onSurfaceVariant),
-                            ),
-                            tip: InfoTip(
-                              title: 'Net balance',
-                              message:
-                                  'Bank balances minus credit card '
-                                  'outstanding. Savings, asset and wallet '
-                                  'accounts are not included.',
-                              example: () =>
-                                  '${fmtMoney(finance.bankBalanceTotal)} in '
-                                  'banks − '
-                                  '${fmtMoney(finance.cardOutstandingTotal)} '
-                                  'on cards = ${fmtMoney(finance.netWorth)}',
-                            ),
-                          ),
+                          if (netLines.isEmpty)
+                            InfoLabel(
+                              // The chevron says the card opens the breakdown.
+                              label: Text(
+                                netAccounts == 1
+                                    ? 'Net across 1 bank or card account'
+                                    : 'Net across $netAccounts bank and card '
+                                          'accounts',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                              tip: InfoTip(
+                                title: 'Net balance',
+                                message:
+                                    'Bank balances minus credit card '
+                                    'outstanding. Savings, asset and wallet '
+                                    'accounts are not included.',
+                                example: () =>
+                                    '${fmtMoney(finance.bankBalanceTotal)} in '
+                                    'banks − '
+                                    '${fmtMoney(finance.cardOutstandingTotal)} '
+                                    'on cards = ${fmtMoney(finance.netWorth)}',
+                              ),
+                            )
+                          else ...[
+                            const SizedBox(height: 4),
+                            // The first line's label carries the tip; the
+                            // lines say what the sum is made of.
+                            for (final (i, line) in netLines.indexed)
+                              i == 0
+                                  ? _NetLine(
+                                      label: InfoLabel(
+                                        label: line.label,
+                                        tip: netTip,
+                                      ),
+                                      amount: line.amount,
+                                      color: line.color,
+                                    )
+                                  : line,
+                          ],
                         ],
                       ),
                     ),
@@ -261,15 +326,14 @@ class _AccountsScreenState extends State<AccountsScreen> {
         // with a savings account to show.
         // Pills, not a boxed segmented bar: a swipe sets the selection
         // through onPageChanged, a tap animates the pager there.
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: ChipTabs<AccountType?>(
-              options: [for (final t in order) (t, _chipLabel(t))],
-              selected: _typeFilter,
-              onChanged: _setTypeFilter,
-            ),
+        // Edge to edge: the strip scrolls off the screen's edge.
+        Align(
+          alignment: Alignment.centerLeft,
+          child: ChipTabs<AccountType?>(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            options: [for (final t in order) (t, _chipLabel(t))],
+            selected: _typeFilter,
+            onChanged: _setTypeFilter,
           ),
         ),
         Expanded(
@@ -288,8 +352,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   /// Wallets grouped by service ("Amazon Pay"), alphabetically, each group
-  /// headed by its name and ₹ total; wallets with no service come last,
-  /// under "Other wallets".
+  /// headed by its name and, for two or more wallets, their ₹ total;
+  /// wallets with no service come last, under "Other wallets".
   List<Widget> _walletGroups(FinanceProvider finance, List<Account> wallets) {
     final groups = <String, List<Account>>{};
     for (final a in wallets) {
@@ -306,7 +370,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
           service: k.isEmpty
               ? 'Other wallets'
               : groups[k]!.first.service!.trim(),
-          total: groups[k]!.fold(0.0, (s, a) => s + finance.accountBalance(a)),
+          total: groups[k]!.length > 1
+              ? groups[k]!.fold<double>(
+                  0.0,
+                  (s, a) => s + finance.accountBalance(a),
+                )
+              : null,
         ),
         ..._cardRun(groups[k]!),
       ],
@@ -359,13 +428,16 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   ? (t == AccountType.wallet
                         ? 'No wallets yet.'
                         : 'No ${t.label.toLowerCase()} accounts yet.')
-                  : 'No accounts yet.\n\nAccounts are detected '
-                        'automatically from the account and card '
-                        'numbers in your bank SMS. Import messages '
-                        'to populate them.',
-              // Same words as the floating button on this tab.
-              actionLabel: 'New account',
-              onAction: () => showAddAccountDialog(context, initialType: t),
+                  : AppNav.instance.canImportSms
+                  ? 'No accounts yet.\n\nAccounts are found from the '
+                        'account and card numbers in your bank SMS.'
+                  : 'No accounts yet.',
+              // The floating button adds; the empty page offers the import.
+              actionLabel: AppNav.instance.canImportSms ? 'Import SMS' : null,
+              actionIcon: Icons.sms_outlined,
+              onAction: AppNav.instance.canImportSms
+                  ? () => AppNav.instance.importSms(context)
+                  : null,
             )
           : Builder(
               builder: (context) {
@@ -442,7 +514,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   ],
                 ];
                 return ListView.builder(
-                  padding: const EdgeInsets.only(top: 4, bottom: 120),
+                  // Clears the half of the docked Add button that rises
+                  // over the page.
+                  padding: const EdgeInsets.only(top: 4, bottom: 48),
                   itemCount: items.length,
                   itemBuilder: (context, i) => items[i],
                 );
@@ -508,11 +582,11 @@ class _AccountCard extends StatelessWidget {
     final txCount = finance.balanceTransactionCount(account);
     final orphaned = finance.isOrphanedAccount(account);
     final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
+    final double? owed = isCard ? finance.accountOutstanding(account) : null;
     final String figure;
     if (drawsFrom != null) {
       figure = '${fmtMoney(finance.accountSpentThisMonth(account))} this month';
     } else if (isCard) {
-      final owed = finance.accountOutstanding(account);
       // No figure: name the same blocker the open card explains.
       figure = owed != null
           ? fmtMoney(owed)
@@ -624,6 +698,33 @@ class _AccountCard extends StatelessWidget {
                                           ),
                                         ],
                                       )
+                                    // What a card owes reads as money out:
+                                    // a minus, the expense colour and the
+                                    // word due.
+                                    : isCard && owed != null
+                                    ? (owed > 0.005
+                                          ? Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  '−${fmtMoney(owed)}',
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                    color: moneyColor(
+                                                      context,
+                                                      type: TxType.expense,
+                                                    ),
+                                                  ),
+                                                ),
+                                                Text(' due', style: muted),
+                                              ],
+                                            )
+                                          : const Text(
+                                              'Nothing due',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                            ))
                                     : Text(
                                         figure,
                                         style: const TextStyle(
@@ -634,6 +735,17 @@ class _AccountCard extends StatelessWidget {
                           ],
                         ),
                       ),
+                      // One tap to the list from the closed row; the open
+                      // card keeps its own button.
+                      if (!expanded)
+                        IconButton(
+                          tooltip: 'View transactions',
+                          icon: Icon(
+                            Icons.list_alt,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                          onPressed: () => onView(account.id),
+                        ),
                       // The hint lives in the open card; closed, a mark
                       // says there is one.
                       if (!expanded && orphaned)
@@ -745,11 +857,14 @@ class _AccountCard extends StatelessWidget {
   }
 }
 
-/// A service's row above its wallets: "Amazon Pay" and what they hold in ₹.
+/// A service's row above its wallets: "Amazon Pay" and, for two or more
+/// wallets, what they hold in ₹.
 class _WalletServiceHeader extends StatelessWidget {
   final String service;
-  final double total;
-  const _WalletServiceHeader({required this.service, required this.total});
+
+  /// Null for a lone wallet: its own row right below shows the figure.
+  final double? total;
+  const _WalletServiceHeader({required this.service, this.total});
 
   @override
   Widget build(BuildContext context) {
@@ -767,10 +882,55 @@ class _WalletServiceHeader extends StatelessWidget {
               style: text.titleSmall,
             ),
           ),
-          const SizedBox(width: 8),
-          Text(fmtMoney(total), style: text.titleSmall?.copyWith(color: muted)),
+          if (total case final t?) ...[
+            const SizedBox(width: 8),
+            Text(fmtMoney(t), style: text.titleSmall?.copyWith(color: muted)),
+          ],
         ],
       ),
+    );
+  }
+}
+
+/// One line under the net balance: what it is made of on the left, its
+/// figure on the right, in [color] (plain when null).
+class _NetLine extends StatelessWidget {
+  final Widget label;
+  final String amount;
+  final Color? color;
+
+  const _NetLine({required this.label, required this.amount, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Each side may take up to half the line: the label ellipsizes and the
+    // figure scales down, so large text never overflows.
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Flexible(
+          child: DefaultTextStyle.merge(
+            style: TextStyle(color: scheme.onSurfaceVariant),
+            child: label,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: AlignmentDirectional.centerEnd,
+            child: Text(
+              amount,
+              maxLines: 1,
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: color ?? scheme.onSurface,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1775,91 +1935,95 @@ class _AccountMenu extends StatelessWidget {
   void _showLinkedNumbers(BuildContext context) {
     showDialog(
       context: context,
-      builder: (ctx) => Consumer<FinanceProvider>(
-        builder: (ctx, finance, _) {
-          final current = finance.accountById(account.id);
-          if (current == null) return const SizedBox.shrink();
-          final keys = current.keys.toList()..sort();
-          return AlertDialog(
-            title: const Text('Linked numbers'),
-            // Scrollable: an account can accumulate more linked numbers than
-            // a small landscape screen has room for.
-            content: SizedBox(
-              width: double.maxFinite,
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (keys.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8),
-                        child: Text(
-                          'No numbers linked yet. SMS mentioning a linked '
-                          'number are assigned to this account.',
+      // Its own toast, drawn over the dialog: Unlink's Undo and the "already
+      // linked" note show while the dialog stays open.
+      builder: (ctx) => ToastHost(
+        child: Consumer<FinanceProvider>(
+          builder: (ctx, finance, _) {
+            final current = finance.accountById(account.id);
+            if (current == null) return const SizedBox.shrink();
+            final keys = current.keys.toList()..sort();
+            return AlertDialog(
+              title: const Text('Linked numbers'),
+              // Scrollable: an account can accumulate more linked numbers than
+              // a small landscape screen has room for.
+              content: SizedBox(
+                width: double.maxFinite,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (keys.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 8),
+                          child: Text(
+                            'No numbers linked yet. SMS mentioning a linked '
+                            'number are assigned to this account.',
+                          ),
                         ),
-                      ),
-                    for (final k in keys)
-                      ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        leading: const Icon(Icons.tag, size: 18),
-                        // Show "HDFC ••1234" instead of the raw key.
-                        title: Text(k.replaceFirst(':', ' ••')),
-                        trailing: IconButton(
-                          tooltip: 'Unlink',
-                          icon: const Icon(Icons.link_off, size: 18),
-                          onPressed: () {
-                            // How it was linked travels with the undo: an
-                            // SMS-made number stays one.
-                            final hand =
-                                (finance.accountById(account.id) ?? account)
-                                    .linkedByHand
-                                    .contains(k);
-                            finance.removeAccountKey(account.id, k);
-                            // Relinking by hand means re-typing bank + digits;
-                            // addAccountKey is the exact inverse, so offer it.
-                            showUndoSnackBar(
-                              context,
-                              'Unlinked ${k.replaceFirst(':', ' ••')}',
-                              () => finance.addAccountKey(
-                                account.id,
-                                k,
-                                byHand: hand,
-                              ),
-                              icon: Icons.link_off,
-                              tone: AppToastTone.removal,
-                            );
-                          },
+                      for (final k in keys)
+                        ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.tag, size: 18),
+                          // Show "HDFC ••1234" instead of the raw key.
+                          title: Text(k.replaceFirst(':', ' ••')),
+                          trailing: IconButton(
+                            tooltip: 'Unlink',
+                            icon: const Icon(Icons.link_off, size: 18),
+                            onPressed: () {
+                              // How it was linked travels with the undo: an
+                              // SMS-made number stays one.
+                              final hand =
+                                  (finance.accountById(account.id) ?? account)
+                                      .linkedByHand
+                                      .contains(k);
+                              finance.removeAccountKey(account.id, k);
+                              // Relinking by hand means re-typing bank + digits;
+                              // addAccountKey is the exact inverse, so offer it.
+                              showUndoSnackBar(
+                                ctx,
+                                'Unlinked ${k.replaceFirst(':', ' ••')}',
+                                () => finance.addAccountKey(
+                                  account.id,
+                                  k,
+                                  byHand: hand,
+                                ),
+                                icon: Icons.link_off,
+                                tone: AppToastTone.removal,
+                              );
+                            },
+                          ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Close'),
-              ),
-              FilledButton.icon(
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add number'),
-                onPressed: () async {
-                  final key = await showAccountKeyDialog(ctx);
-                  if (key == null || !ctx.mounted) return;
-                  final ok = await finance.addAccountKey(account.id, key);
-                  if (!ok && ctx.mounted) {
-                    showAppToast(
-                      context,
-                      'That number is already linked to another account.',
-                      tone: AppToastTone.error,
-                    );
-                  }
-                },
-              ),
-            ],
-          );
-        },
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Close'),
+                ),
+                FilledButton.icon(
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add number'),
+                  onPressed: () async {
+                    final key = await showAccountKeyDialog(ctx);
+                    if (key == null || !ctx.mounted) return;
+                    final ok = await finance.addAccountKey(account.id, key);
+                    if (!ok && ctx.mounted) {
+                      showAppToast(
+                        ctx,
+                        'That number is already linked to another account.',
+                        tone: AppToastTone.error,
+                      );
+                    }
+                  },
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
   }

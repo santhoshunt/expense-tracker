@@ -66,15 +66,14 @@ void main() {
     expect(selectedTab(tester), 'Reminders');
   });
 
-  testWidgets('openCockpit from Rules to Budgets pushes the Plan page', (
-    tester,
-  ) async {
+  testWidgets('openCockpit from Rules to Budgets pushes the Budgets and '
+      'bills page', (tester) async {
     final p = await providers();
     await tester.pumpWidget(
       app(p, const ClassifiersScreen(initialTab: kCockpitTabRules)),
     );
     await tester.pump();
-    expect(find.text('Classify'), findsOneWidget);
+    expect(find.text('Categories and rules'), findsOneWidget);
 
     AppNav.instance.openCockpit(
       tester.element(find.byType(TabBarView)),
@@ -83,16 +82,34 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(groupPages(), findsNWidgets(2));
-    expect(find.text('Plan'), findsOneWidget);
+    expect(find.text('Budgets and bills'), findsOneWidget);
     expect(selectedTab(tester), 'Budgets');
 
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(find.text('Classify'), findsOneWidget);
+    expect(find.text('Categories and rules'), findsOneWidget);
     expect(selectedTab(tester), 'Rules');
   });
 
   testWidgets('a real tip link to a tab of the same group stays on the page', (
+    tester,
+  ) async {
+    final p = await providers();
+    await tester.pumpWidget(
+      app(p, const ClassifiersScreen(initialTab: kCockpitTabRules)),
+    );
+    await tester.pump();
+
+    await tester.tap(find.bySemanticsLabel('About Your rules'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('See classified transactions'));
+    await tester.pumpAndSettle();
+
+    expect(groupPages(), findsOneWidget, reason: 'no stack');
+    expect(selectedTab(tester), 'Results');
+  });
+
+  testWidgets('the Reminders tip link opens the Notifications page', (
     tester,
   ) async {
     final p = await providers();
@@ -106,8 +123,11 @@ void main() {
     await tester.tap(find.text('Check Payment reminders'));
     await tester.pumpAndSettle();
 
-    expect(groupPages(), findsOneWidget, reason: 'no stack');
-    expect(selectedTab(tester), 'Budgets');
+    expect(find.widgetWithText(AppBar, 'Notifications'), findsOneWidget);
+    expect(find.text('Payment reminders'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(selectedTab(tester), 'Reminders');
   });
 
   testWidgets('from a pushed route, a home jump pops back and runs the '
@@ -158,22 +178,30 @@ void main() {
 
     AppNav.instance.openCockpit(home, kCockpitTabReminders);
     await tester.pumpAndSettle();
-    expect(find.text('Plan'), findsOneWidget);
+    expect(find.text('Budgets and bills'), findsOneWidget);
     expect(selectedTab(tester), 'Reminders');
     await backHome();
 
-    // Organise now holds Categories and Tags: the tab bar opens on the
-    // requested one, with its add button.
+    // Categories sit beside the rules: the tab bar opens on the requested
+    // tab, with its add button.
     AppNav.instance.openCockpit(home, kCockpitTabCategories);
     await tester.pumpAndSettle();
-    expect(find.text('Organise'), findsOneWidget);
+    expect(find.text('Categories and rules'), findsOneWidget);
     expect(selectedTab(tester), 'Categories');
     expect(find.text('New category'), findsOneWidget);
     await backHome();
 
+    // Groups lead the Groups and tags page, with their own add button.
+    AppNav.instance.openCockpit(home, kCockpitTabGroups);
+    await tester.pumpAndSettle();
+    expect(find.text('Groups and tags'), findsOneWidget);
+    expect(selectedTab(tester), 'Groups');
+    expect(find.text('New group'), findsOneWidget);
+    await backHome();
+
     AppNav.instance.openCockpit(home, kCockpitTabSubscriptions);
     await tester.pumpAndSettle();
-    expect(find.text('Plan'), findsOneWidget);
+    expect(find.text('Budgets and bills'), findsOneWidget);
     expect(selectedTab(tester), 'Subscriptions');
     // Nothing is added by hand there, so no add button.
     expect(find.text('New reminder'), findsNothing);

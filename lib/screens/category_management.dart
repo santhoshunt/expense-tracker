@@ -4,8 +4,10 @@ import 'package:provider/provider.dart';
 import '../models/category_group.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../providers/settings_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
+import '../utils/text_scale.dart';
 import '../widgets/dialog_expander.dart';
 import '../widgets/hue_color_picker.dart';
 import '../widgets/picker_sheet.dart';
@@ -13,13 +15,17 @@ import '../widgets/dispose_scope.dart';
 import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/section_header.dart';
+import '../widgets/undo_snackbar.dart';
 
-/// Category & group management — the Categories tab in the Cockpit.
+/// Category and group management: the Categories tab beside the Rules, and
+/// the Groups tab beside Tags, in the Cockpit.
 ///
 /// Moved here from Settings: creating categories is classification work, so
 /// it lives next to the rules that use them. Groups (Needs/Wants/…) are the
 /// parent layer for spend analytics; every expense or transfer category can
 /// belong to one.
+///
+/// Rows open their editor on tap; Delete lives in the editor, with Undo.
 /// Pads a picker swatch out to a 48dp tap target without growing its
 /// visual — Material's minimum; the raw 32–40dp swatches were hard to hit.
 Widget _pickerTarget(Widget child) =>
@@ -43,39 +49,230 @@ class _CategoriesTabState extends State<CategoriesTab> {
     super.dispose();
   }
 
-  /// Label or parent-group match (the tile's subtitle shows the group, so
-  /// "savings" finding grouped members reads naturally).
-  bool _matches(FinanceProvider finance, TxCategory c, String q) {
-    if (q.isEmpty) return true;
-    if (c.label.toLowerCase().contains(q)) return true;
-    final groupId = finance.groupIdOf(c.id);
-    final group = groupId == null
-        ? null
-        : finance.groups.where((g) => g.id == groupId).firstOrNull;
-    return group != null && group.label.toLowerCase().contains(q);
+  /// Label match only; the tile's subtitle still shows the group.
+  bool _matches(TxCategory c, String q) =>
+      q.isEmpty || c.label.toLowerCase().contains(q);
+
+  /// Picks the category order of the add and edit sheets.
+  Future<void> _pickOrder(CategoryOrder order) async {
+    final picked = await showPickerSheet<CategoryOrder>(
+      context: context,
+      title: 'Order in add sheets',
+      subtitle:
+          'Sets the order of the category list when you add or edit a '
+          'transaction. The first category in the list is picked by default '
+          'for a new transaction. Most used ranks by the amounts of the last '
+          'three months.',
+      items: const [
+        PickerItem(value: CategoryOrder.mostUsed, label: 'Most used first'),
+        PickerItem(value: CategoryOrder.alphabetical, label: 'A to Z'),
+      ],
+      selected: order,
+    );
+    final v = picked?.value;
+    if (v == null || !mounted) return;
+    await context.read<SettingsProvider>().setCategoryOrder(v);
   }
 
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
+    final order = context.select<SettingsProvider, CategoryOrder>(
+      (s) => s.categoryOrder,
+    );
     final q = _search.trim().toLowerCase();
     final searching = q.isNotEmpty;
     final custom = [
       for (final c in customCategories)
-        if (_matches(finance, c, q)) c,
+        if (_matches(c, q)) c,
     ];
     final builtIn = [
       for (final c in kCategories)
-        // Match against the override-applied definition — a renamed
+        // Match against the override-applied definition: a renamed
         // built-in must be findable by its current name.
-        if (_matches(finance, categoryById(c.id), q)) c,
+        if (_matches(categoryById(c.id), q)) c,
     ];
     final scheme = Theme.of(context).colorScheme;
+    final large = isLargeTextScale(context);
 
     Widget header(String label) => UppercaseSectionHeader(
       label,
       padding: const EdgeInsets.fromLTRB(12, 16, 12, 6),
     );
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
+      children: [
+        // The order the add sheets list categories in, set beside the
+        // categories themselves.
+        FrostedPanel(
+          radius: BorderRadius.circular(AppRadius.card),
+          child: ListTile(
+            leading: large ? null : const Icon(Icons.swap_vert),
+            title: const Text('Order in add sheets'),
+            subtitle: Text(
+              order == CategoryOrder.mostUsed ? 'Most used first' : 'A to Z',
+            ),
+            trailing: _rowChevron(context),
+            onTap: () => _pickOrder(order),
+          ),
+        ),
+        const SizedBox(height: 16),
+        Text('Categories', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 4),
+        Text(
+          'Add your own income and expense categories (e.g. Home, Pets), '
+          'or transfer categories (e.g. Chit) that move money without '
+          'counting as income or spending. Built-in categories can be '
+          'renamed, restyled and grouped, but not deleted.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 12),
+        // Rebuild on every controller change so the ✕ appears with the
+        // first keystroke (same idiom as the Rules tab search).
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _searchCtrl,
+          builder: (context, value, _) => TextField(
+            controller: _searchCtrl,
+            onChanged: (v) => setState(() => _search = v),
+            decoration: InputDecoration(
+              hintText: 'Search categories',
+              prefixIcon: const Icon(Icons.search),
+              isDense: true,
+              suffixIcon: value.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear search',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        setState(() => _search = '');
+                      },
+                    ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        FrostedPanel(
+          radius: BorderRadius.circular(AppRadius.card),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (searching && custom.isEmpty && builtIn.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 16, 12, 4),
+                    child: Text(
+                      'Nothing matches your search.',
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                if (!searching || custom.isNotEmpty) header('Your categories'),
+                if (custom.isEmpty && !searching)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+                    child: Text(
+                      'No custom categories yet.',
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                // The tab's 'New category' button is the add flow.
+                for (final c in custom)
+                  _categoryTile(
+                    context,
+                    finance,
+                    c,
+                    onTap: () => showCategoryDialog(context, existing: c),
+                  ),
+                if (builtIn.any((c) => c.id != kSpamCategoryId))
+                  header('Built-in'),
+                for (final c in builtIn)
+                  if (c.id != kSpamCategoryId)
+                    _categoryTile(
+                      context,
+                      finance,
+                      // Show the override, not the pristine definition.
+                      categoryById(c.id),
+                      onTap: () => showCategoryDialog(
+                        context,
+                        existing: categoryById(c.id),
+                      ),
+                    ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _categoryTile(
+    BuildContext context,
+    FinanceProvider finance,
+    TxCategory c, {
+    VoidCallback? onTap,
+  }) {
+    final groupId = finance.groupIdOf(c.id);
+    final group = groupId == null
+        ? null
+        : finance.groups.where((g) => g.id == groupId).firstOrNull;
+    final kind = c.isTransfer
+        ? (c.type == TxType.income
+              ? 'Transfer · money in'
+              : 'Transfer · money out')
+        : (c.type == TxType.income ? 'Income' : 'Expense');
+    return ListTile(
+      dense: true,
+      onTap: onTap,
+      leading: CircleAvatar(
+        radius: 16,
+        backgroundColor: c.color.withValues(alpha: 0.15),
+        child: Icon(
+          c.icon,
+          color: categoryGlyphColor(context, c.color),
+          size: 18,
+        ),
+      ),
+      title: Text(c.label),
+      subtitle: Text(
+        group == null ? kind : '$kind · ${group.label}',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      // Tap edits, and a custom category's Delete lives in the editor.
+      trailing: _rowChevron(context),
+    );
+  }
+}
+
+/// The trailing mark of a row that opens its editor on tap, dropped at
+/// large text so the words get the width.
+Widget? _rowChevron(BuildContext context) => isLargeTextScale(context)
+    ? null
+    : Icon(
+        Icons.chevron_right,
+        size: 20,
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      );
+
+/// "3 categories": how many categories [groupId] holds.
+String _memberCountLabel(FinanceProvider finance, String groupId) {
+  var n = 0;
+  for (final c in allCategories) {
+    if (finance.groupIdOf(c.id) == groupId) n++;
+  }
+  return n == 1 ? '1 category' : '$n categories';
+}
+
+/// The Groups tab: the parent buckets (Needs, Wants, …) the dashboard's By
+/// group card adds up. Adding goes through the tab's 'New group' button.
+class GroupsTab extends StatelessWidget {
+  const GroupsTab({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.watch<FinanceProvider>();
+    final scheme = Theme.of(context).colorScheme;
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
@@ -125,7 +322,7 @@ class _CategoriesTabState extends State<CategoriesTab> {
                 for (final g in finance.groups)
                   ListTile(
                     dense: true,
-                    onTap: () => _showGroupDialog(context, existing: g),
+                    onTap: () => showGroupDialog(context, existing: g),
                     leading: CircleAvatar(
                       radius: 16,
                       backgroundColor: g.color.withValues(alpha: 0.15),
@@ -140,115 +337,8 @@ class _CategoriesTabState extends State<CategoriesTab> {
                       _memberCountLabel(finance, g.id),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
-                    trailing: IconButton(
-                      tooltip: 'Delete group',
-                      icon: const Icon(Icons.delete_outline, size: 20),
-                      onPressed: () => _confirmDeleteGroup(context, g),
-                    ),
+                    trailing: _rowChevron(context),
                   ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                  child: TextButton.icon(
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add group'),
-                    onPressed: () => _showGroupDialog(context),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 24),
-        Text('Categories', style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 4),
-        Text(
-          'Add your own income and expense categories (e.g. Home, Pets), '
-          'or transfer categories (e.g. Chit) that move money without '
-          'counting as income or spending. Built-in categories can be '
-          'renamed, restyled and grouped, but not deleted.',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-        const SizedBox(height: 12),
-        // Rebuild on every controller change so the ✕ appears with the
-        // first keystroke (same idiom as the Rules tab search).
-        ValueListenableBuilder<TextEditingValue>(
-          valueListenable: _searchCtrl,
-          builder: (context, value, _) => TextField(
-            controller: _searchCtrl,
-            onChanged: (v) => setState(() => _search = v),
-            decoration: InputDecoration(
-              hintText: 'Search categories and groups',
-              prefixIcon: const Icon(Icons.search),
-              isDense: true,
-              suffixIcon: value.text.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: 'Clear search',
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _searchCtrl.clear();
-                        setState(() => _search = '');
-                      },
-                    ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 12),
-        FrostedPanel(
-          radius: BorderRadius.circular(AppRadius.card),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (searching && custom.isEmpty && builtIn.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 16, 12, 4),
-                    child: Text(
-                      'Nothing matches your search.',
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
-                  ),
-                if (!searching || custom.isNotEmpty) header('Your categories'),
-                if (custom.isEmpty && !searching)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
-                    child: Text(
-                      'No custom categories yet.',
-                      style: TextStyle(color: scheme.onSurfaceVariant),
-                    ),
-                  ),
-                for (final c in custom)
-                  _categoryTile(
-                    context,
-                    finance,
-                    c,
-                    onTap: () => showCategoryDialog(context, existing: c),
-                    onDelete: () => _confirmDeleteCategory(context, c),
-                  ),
-                if (!searching)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
-                    child: TextButton.icon(
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add category'),
-                      onPressed: () => showCategoryDialog(context),
-                    ),
-                  ),
-                if (builtIn.any((c) => c.id != kSpamCategoryId))
-                  header('Built-in'),
-                for (final c in builtIn)
-                  if (c.id != kSpamCategoryId)
-                    _categoryTile(
-                      context,
-                      finance,
-                      // Show the override, not the pristine definition.
-                      categoryById(c.id),
-                      onTap: () => showCategoryDialog(
-                        context,
-                        existing: categoryById(c.id),
-                      ),
-                    ),
               ],
             ),
           ),
@@ -256,184 +346,141 @@ class _CategoriesTabState extends State<CategoriesTab> {
       ],
     );
   }
+}
 
-  String _memberCountLabel(FinanceProvider finance, String groupId) {
-    var n = 0;
-    for (final c in allCategories) {
-      if (finance.groupIdOf(c.id) == groupId) n++;
-    }
-    return n == 1 ? '1 category' : '$n categories';
-  }
+// ── Groups ──────────────────────────────────────────────────────────────────
 
-  Widget _categoryTile(
-    BuildContext context,
-    FinanceProvider finance,
-    TxCategory c, {
-    VoidCallback? onTap,
-    VoidCallback? onDelete,
-  }) {
-    final groupId = finance.groupIdOf(c.id);
-    final group = groupId == null
-        ? null
-        : finance.groups.where((g) => g.id == groupId).firstOrNull;
-    final kind = c.isTransfer
-        ? (c.type == TxType.income
-              ? 'Transfer · money in'
-              : 'Transfer · money out')
-        : (c.type == TxType.income ? 'Income' : 'Expense');
-    return ListTile(
-      dense: true,
-      onTap: onTap,
-      leading: CircleAvatar(
-        radius: 16,
-        backgroundColor: c.color.withValues(alpha: 0.15),
-        child: Icon(
-          c.icon,
-          color: categoryGlyphColor(context, c.color),
-          size: 18,
-        ),
-      ),
-      title: Text(c.label),
-      subtitle: Text(
-        group == null ? kind : '$kind · ${group.label}',
-        style: Theme.of(context).textTheme.bodySmall,
-      ),
-      trailing: onDelete == null
-          ? null
-          : IconButton(
-              tooltip: 'Delete category',
-              icon: const Icon(Icons.delete_outline, size: 20),
-              onPressed: onDelete,
-            ),
-    );
-  }
+/// The New group and Edit group dialog. Public so the Cockpit's add button
+/// can open it. Editing offers Delete, which removes the group at once with
+/// Undo.
+Future<void> showGroupDialog(
+  BuildContext context, {
+  CategoryGroup? existing,
+}) async {
+  final labelCtrl = TextEditingController(text: existing?.label ?? '');
+  var color = existing?.color ?? kNoCategoryColor;
+  // Delete pops the editor first; the group then goes with Undo.
+  var deleteRequested = false;
 
-  // ── Groups ────────────────────────────────────────────────────────────────
-
-  Future<void> _confirmDeleteGroup(
-    BuildContext context,
-    CategoryGroup g,
-  ) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Delete "${g.label}"?'),
-        content: const Text(
-          'Categories in this group become ungrouped (shown under "Other"). '
-          'Budgets are not affected.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true && context.mounted) {
-      await context.read<FinanceProvider>().deleteGroup(g.id);
-    }
-  }
-
-  Future<void> _showGroupDialog(
-    BuildContext context, {
-    CategoryGroup? existing,
-  }) async {
-    final labelCtrl = TextEditingController(text: existing?.label ?? '');
-    var color = existing?.color ?? kNoCategoryColor;
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => DisposeScope(
-        disposables: [labelCtrl],
-        child: StatefulBuilder(
-          builder: (ctx, setState) => AlertDialog(
-            title: Text(existing == null ? 'New group' : 'Edit group'),
-            content: SingleChildScrollView(
-              // Keeps the floating "Name" label from clipping at the top.
-              padding: const EdgeInsets.only(top: 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  TextField(
-                    controller: labelCtrl,
-                    autofocus: existing == null,
-                    textCapitalization: TextCapitalization.sentences,
-                    onChanged: (_) => setState(() {}),
-                    decoration: const InputDecoration(
-                      labelText: 'Name',
-                      hintText: 'e.g. Leisure',
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  HueColorPicker(
-                    value: color,
-                    onChanged: (c) => setState(() => color = c),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              // Disabled while the name is empty instead of a silent no-op.
-              FilledButton(
-                onPressed: labelCtrl.text.trim().isEmpty
-                    ? null
-                    : () {
-                        final label = labelCtrl.text.trim();
-                        final finance = ctx.read<FinanceProvider>();
-                        if (existing == null) {
-                          finance.addGroup(label: label, color: color);
-                        } else {
-                          finance.updateGroup(
-                            CategoryGroup(
-                              id: existing.id,
-                              label: label,
-                              color: color,
-                            ),
-                          );
-                        }
-                        Navigator.pop(ctx);
-                      },
-                child: Text(existing == null ? 'Create' : 'Save'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  // ── Categories ────────────────────────────────────────────────────────────
-
-  Future<void> _confirmDeleteCategory(
-    BuildContext context,
-    TxCategory c,
-  ) async {
-    // Same-direction destinations only, so rows keep their type. "Other"
-    // (the historical hard-coded target) leads as the default.
-    final fallbackId = c.type == TxType.expense
-        ? 'other_expense'
-        : 'other_income';
-    final targets = [
-      categoryById(fallbackId),
-      for (final t in allCategories)
-        if (t.type == c.type && t.id != c.id && t.id != fallbackId) t,
-    ];
-    var moveTo = fallbackId;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
+  await showDialog(
+    context: context,
+    builder: (ctx) => DisposeScope(
+      disposables: [labelCtrl],
+      child: StatefulBuilder(
         builder: (ctx, setState) => AlertDialog(
-          // Like every sibling dialog: landscape + large text overflow a
+          title: Text(existing == null ? 'New group' : 'Edit group'),
+          content: SingleChildScrollView(
+            // Keeps the floating "Name" label from clipping at the top.
+            padding: const EdgeInsets.only(top: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  controller: labelCtrl,
+                  autofocus: existing == null,
+                  textCapitalization: TextCapitalization.sentences,
+                  onChanged: (_) => setState(() {}),
+                  decoration: const InputDecoration(
+                    labelText: 'Name',
+                    hintText: 'e.g. Leisure',
+                  ),
+                ),
+                const SizedBox(height: 16),
+                HueColorPicker(
+                  value: color,
+                  onChanged: (c) => setState(() => color = c),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            if (existing != null)
+              TextButton(
+                style: TextButton.styleFrom(
+                  foregroundColor: Theme.of(ctx).colorScheme.error,
+                ),
+                onPressed: () {
+                  deleteRequested = true;
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Delete'),
+              ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            // Disabled while the name is empty instead of a silent no-op.
+            FilledButton(
+              onPressed: labelCtrl.text.trim().isEmpty
+                  ? null
+                  : () {
+                      final label = labelCtrl.text.trim();
+                      final finance = ctx.read<FinanceProvider>();
+                      if (existing == null) {
+                        finance.addGroup(label: label, color: color);
+                      } else {
+                        finance.updateGroup(
+                          CategoryGroup(
+                            id: existing.id,
+                            label: label,
+                            color: color,
+                          ),
+                        );
+                      }
+                      Navigator.pop(ctx);
+                    },
+              child: Text(existing == null ? 'Create' : 'Save'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+  if (deleteRequested && existing != null && context.mounted) {
+    await _deleteGroupWithUndo(context, existing);
+  }
+}
+
+/// Deletes [g] at once, with no confirm: its categories only become
+/// ungrouped, and Undo puts back the members still free to rejoin.
+Future<void> _deleteGroupWithUndo(BuildContext context, CategoryGroup g) async {
+  final finance = context.read<FinanceProvider>();
+  final d = await finance.deleteGroup(g.id);
+  if (d == null || !context.mounted) return;
+  showUndoSnackBar(
+    context,
+    'Deleted group "${g.label}"',
+    () => finance.restoreGroup(d),
+    icon: Icons.delete_outline,
+    tone: AppToastTone.removal,
+  );
+}
+
+// ── Categories ──────────────────────────────────────────────────────────────
+
+/// Asks where [c]'s transactions go, then deletes it with Undo, which also
+/// puts back its rules, group, budgets and remapped reminders.
+Future<void> _confirmDeleteCategory(BuildContext context, TxCategory c) async {
+  final finance = context.read<FinanceProvider>();
+  // Same-direction destinations only, so rows keep their type. "Other"
+  // (the historical hard-coded target) leads as the default.
+  final fallbackId = c.type == TxType.expense
+      ? 'other_expense'
+      : 'other_income';
+  final targets = [
+    categoryById(fallbackId),
+    for (final t in allCategories)
+      if (t.type == c.type && t.id != c.id && t.id != fallbackId) t,
+  ];
+  var moveTo = fallbackId;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) {
+        final scheme = Theme.of(ctx).colorScheme;
+        return AlertDialog(
+          // Like every sibling dialog: landscape and large text overflow a
           // fixed column.
           scrollable: true,
           title: Text('Delete "${c.label}"?'),
@@ -467,21 +514,33 @@ class _CategoriesTabState extends State<CategoriesTab> {
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('Cancel'),
             ),
+            // Red like the ledger's bulk delete: this one moves rows.
             FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: scheme.error,
+                foregroundColor: scheme.onError,
+              ),
               onPressed: () => Navigator.pop(ctx, true),
               child: const Text('Delete'),
             ),
           ],
-        ),
-      ),
-    );
-    if (ok == true && context.mounted) {
-      await context.read<FinanceProvider>().deleteCategory(
-        c.id,
-        moveTo: moveTo,
-      );
-    }
-  }
+        );
+      },
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+  final d = await finance.deleteCategory(c.id, moveTo: moveTo);
+  if (!context.mounted) return;
+  final moved = d.movedRows.length;
+  showUndoSnackBar(
+    context,
+    'Deleted category "${c.label}"'
+    '${moved == 0 ? '' : ' · $moved transaction${moved == 1 ? '' : 's'} '
+              'moved to ${categoryById(moveTo).label}'}',
+    () => finance.restoreCategory(d),
+    icon: Icons.delete_outline,
+    tone: AppToastTone.removal,
+  );
 }
 
 /// The category dialog's Icon and colour sheet: the icon grid, centred, and
@@ -597,6 +656,8 @@ Future<void> showCategoryDialog(
   String? saveError;
   // Transfer options start open when editing a transfer.
   var transferOpen = isTransfer;
+  // Delete pops the editor first, then asks where the transactions go.
+  var deleteRequested = false;
 
   // The icon grid and the colours, in one sheet over the dialog. A pick
   // sets both: the sheet shows it selected, and the dialog's circle,
@@ -913,6 +974,18 @@ Future<void> showCategoryDialog(
               ],
             ),
             actions: [
+              // Built-in categories cannot be deleted, only reset.
+              if (existing != null && !isBuiltIn)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(ctx).colorScheme.error,
+                  ),
+                  onPressed: () {
+                    deleteRequested = true;
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Delete'),
+                ),
               if (isBuiltIn && finance.isBuiltinOverridden(existing.id))
                 // Reset restores the original definition INCLUDING direction —
                 // the provider re-types this category's transactions to match
@@ -1048,4 +1121,7 @@ Future<void> showCategoryDialog(
       ),
     ),
   );
+  if (deleteRequested && existing != null && context.mounted) {
+    await _confirmDeleteCategory(context, existing);
+  }
 }

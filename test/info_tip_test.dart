@@ -36,6 +36,37 @@ void main() {
     ),
   );
 
+  testWidgets('the "i" is a 32dp target, 48dp under InfoTipTarget', (
+    tester,
+  ) async {
+    Future<Size> sizeUnder(double? target) async {
+      const tip = InfoTip(title: 'Next 7 days', message: 'Due soon.');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: target == null
+                  ? tip
+                  : InfoTipTarget(size: target, child: tip),
+            ),
+          ),
+        ),
+      );
+      // The outer box: the glyph's own sits inside it.
+      return tester.getSize(
+        find
+            .descendant(
+              of: find.byType(InfoTip),
+              matching: find.byType(SizedBox),
+            )
+            .first,
+      );
+    }
+
+    expect(await sizeUnder(null), const Size(32, 32));
+    expect(await sizeUnder(48), const Size(48, 48));
+  });
+
   testWidgets('opens with the example, closes on Got it', (tester) async {
     var calls = 0;
     await pump(

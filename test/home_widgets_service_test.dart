@@ -1,15 +1,21 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart' show Brightness, Color, ThemeMode;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/services/budget_widget_service.dart';
+import 'package:expense_tracker/services/card_bill.dart';
 import 'package:expense_tracker/services/home_widgets_service.dart';
 import 'package:expense_tracker/services/recurring_detector.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
+import 'package:expense_tracker/utils/contrast.dart';
+import 'package:expense_tracker/utils/figma_palette.dart';
 import 'package:expense_tracker/utils/format.dart';
 
 /// The Month pace, Upcoming and Today widgets' snapshot.
@@ -271,6 +277,7 @@ void main() {
       expect(lunch['timeLabel'], '1:05 PM');
       expect(lunch['dateLabel'], '18 Jul');
       expect(lunch['icon'], 'food');
+      expect(lunch['color'], categoryById('food').color.toARGB32());
       expect(recent[1]['unseen'], isFalse);
       // A midnight row has no time to show.
       expect(recent.last['timeLabel'], isNull);
@@ -342,13 +349,88 @@ void main() {
     expect(rent['dueDay'], epochDay(now) - 2);
     expect(rent['amountLabel'], '₹18,000');
     expect(rent['icon'], categoryById('bills').iconKey);
+    // A reminder is urgent from its due day; dark keeps the category hue.
+    expect(rent['urgentDays'], 0);
+    expect(rent['color'], categoryById('bills').color.toARGB32());
     final pay = up.last as Map<String, dynamic>;
     expect(pay['kind'], 'in');
     expect(pay['amountLabel'], '+₹90,000');
+    // A detected payment is urgent only once overdue.
+    expect(pay['urgentDays'], -1);
+    expect(pay['color'], categoryById('salary').color.toARGB32());
 
     await s.setHideIncome(true);
     expect((await upcoming()).last['amountLabel'], '+$kMaskedAmount');
   });
+
+  test('a light widget theme bakes glyph colours for its surface', () async {
+    final p = await ledger();
+    final s = SettingsProvider();
+    await s.load();
+    await p.restoreReminder(
+      const Reminder(
+        id: 'rent',
+        name: 'Rent',
+        dayOfMonth: 20,
+        expectedAmount: 18000,
+        categoryId: 'bills',
+      ),
+    );
+    final snap = buildHomeWidgetSnapshot(p, s, now, const [], light: true);
+    int light(Color base) => categoryGlyphColorOn(
+      base,
+      surface: FigmaPaletteLight.surface,
+      dark: false,
+    ).toARGB32();
+    final rent = (snap['upcoming'] as List).single as Map<String, dynamic>;
+    expect(rent['color'], light(categoryById('bills').color));
+    final recent = (snap['recent'] as List).first as Map<String, dynamic>;
+    expect(recent['color'], light(p.transactions.first.category.color));
+  });
+
+  test('the widget theme is light by the app theme mode', () async {
+    final s = SettingsProvider();
+    await s.load();
+    await s.setMode(ThemeMode.light);
+    expect(widgetThemeIsLight(s, Brightness.dark), isTrue);
+    await s.setMode(ThemeMode.dark);
+    expect(widgetThemeIsLight(s, Brightness.light), isFalse);
+    await s.setMode(ThemeMode.system);
+    expect(widgetThemeIsLight(s, Brightness.light), isTrue);
+    expect(widgetThemeIsLight(s, Brightness.dark), isFalse);
+  });
+
+  test(
+    'a card bill row is plain, uncoloured and urgent by its window',
+    () async {
+      final p = FinanceProvider();
+      await p.load();
+      final s = SettingsProvider();
+      await s.load();
+      final day = DateTime.now();
+      final id = await p.addAccount(
+        name: 'Demo Card',
+        type: AccountType.creditCard,
+      );
+      // Outstanding on a card, due today.
+      await p.setManualBalance(id, 5000);
+      await p.setCardCycle(id, dueDay: day.day);
+      final up =
+          buildHomeWidgetSnapshot(
+                p,
+                s,
+                day.add(const Duration(milliseconds: 200)),
+                const [],
+              )['upcoming']
+              as List;
+      final card =
+          up.singleWhere((u) => (u as Map)['icon'] == 'card')
+              as Map<String, dynamic>;
+      expect(card['kind'], 'neutral');
+      expect(card.containsKey('color'), isFalse);
+      expect(card['urgentDays'], kCardUrgentWindowDays);
+    },
+  );
 
   test('epochDay counts local calendar days from 1970', () {
     expect(epochDay(DateTime(1970, 1, 2, 23, 59)), 1);

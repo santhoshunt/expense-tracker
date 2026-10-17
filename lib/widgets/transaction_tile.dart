@@ -9,6 +9,7 @@ import '../utils/contrast.dart';
 import '../utils/format.dart';
 import '../utils/money_colors.dart';
 import '../utils/text_scale.dart';
+import 'category_tile_icon.dart';
 import 'glossy.dart';
 import 'grouped_surface.dart';
 import 'motion.dart';
@@ -52,9 +53,9 @@ class TransactionTile extends StatelessWidget {
   final bool groupedFirst;
   final bool groupedLast;
 
-  /// False under a day header, which already names the date: the second
-  /// line then shows the time ("4:12 PM"), or no time for a midnight row
-  /// (the app's "no time known").
+  /// False under a day header, which already names the date: the line under
+  /// the amount then shows the time ("4:12 PM"), or no time for a midnight
+  /// row (the app's "no time known").
   final bool showDate;
 
   const TransactionTile({
@@ -95,107 +96,42 @@ class TransactionTile extends StatelessWidget {
         : 'Settled · $names';
   }
 
-  /// The "note · date" line (or "note · time" under a day header).
+  /// Line two of an unseen row: [text] (the category and any note the title
+  /// did not use) ending in " · new", or "new" alone when [text] is null.
   ///
-  /// Both flexible so neither can push the other off the line entirely: a
-  /// rigid date used to leave a squeezed note zero width (an orphan "·"
-  /// before the date) at large font scales. Unused flex space just trails
-  /// off, since the line is left-aligned. The " · " is rigid and can alone
-  /// be wider than the line (73px of 52 at 320dp and 2x in tests). So the
-  /// note and it drop out, leaving the date the whole line, once the
-  /// date's 2/5 share of what is left after the " · " can't hold even a
-  /// "…".
-  ///
-  /// [isNew] ends the line with " · new" as its own rigid text, so the note
-  /// and date ellipsize before "new" does. Where even that is wider than
-  /// the line, "new" alone takes the line (TalkBack still reads the note
-  /// and date); where "new" itself can't fit, the line is as without it.
-  /// The dot before the line carries "New" for TalkBack, so the text
-  /// leaves it out. [date] may be null only with [isNew].
-  Widget _noteAndDate(
-    String? note,
-    String? date,
-    TextStyle? lineStyle, {
-    bool isNew = false,
-  }) => LayoutBuilder(
+  /// " · new" is its own rigid text, so [text] ellipsizes before "new"
+  /// does. Where even that is wider than the line, "new" alone takes the
+  /// line (TalkBack still reads [text]); where "new" itself can't fit, the
+  /// line is [text] alone. The dot before the line carries "New" for
+  /// TalkBack, so the text leaves it out.
+  Widget _secondLine(String? text, TextStyle? lineStyle) => LayoutBuilder(
     builder: (context, constraints) {
-      var width = constraints.maxWidth;
-      final read = [?note, ?date].join(' · ');
-      var withNew = isNew;
-      if (withNew) {
-        final full = read.isEmpty ? 'new' : ' · new';
-        final fullWidth = _textWidth(context, full, lineStyle);
-        if (fullWidth <= width) {
-          width -= fullWidth;
-        } else if (_textWidth(context, 'new', lineStyle) <= width) {
-          return Semantics(
-            label: read,
-            child: ExcludeSemantics(
-              child: Text('new', maxLines: 1, style: lineStyle),
-            ),
-          );
-        } else {
-          withNew = false;
-        }
-      }
-      final suffix = withNew
-          ? ExcludeSemantics(
-              child: Text(
-                read.isEmpty ? 'new' : ' · new',
-                maxLines: 1,
-                style: lineStyle,
-              ),
-            )
-          : null;
-      if (date == null) {
-        return Row(
-          children: [
-            if (note != null)
-              Flexible(
-                child: Text(
-                  note,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: lineStyle,
-                ),
-              ),
-            ?suffix,
-          ],
+      final width = constraints.maxWidth;
+      final read = text ?? '';
+      final full = read.isEmpty ? 'new' : ' · new';
+      final withNew = _textWidth(context, full, lineStyle) <= width;
+      if (!withNew && _textWidth(context, 'new', lineStyle) <= width) {
+        return Semantics(
+          label: read,
+          child: ExcludeSemantics(
+            child: Text('new', maxLines: 1, style: lineStyle),
+          ),
         );
       }
-      String? shownNote;
-      if (note != null) {
-        final left = width - _textWidth(context, ' · ', lineStyle);
-        final ellipsis = _textWidth(context, '…', lineStyle);
-        if (left * 2 / 5 >= ellipsis) shownNote = note;
-      }
+      final suffix = withNew
+          ? ExcludeSemantics(child: Text(full, maxLines: 1, style: lineStyle))
+          : null;
       return Row(
         children: [
-          if (shownNote != null) ...[
+          if (text != null)
             Flexible(
-              flex: 3,
               child: Text(
-                shownNote,
+                text,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: lineStyle,
               ),
             ),
-            Text(' · ', style: lineStyle),
-          ],
-          Flexible(
-            flex: 2,
-            child: Text(
-              date,
-              // TalkBack still reads a note left out.
-              semanticsLabel: note != null && shownNote == null
-                  ? '$note · $date'
-                  : null,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: lineStyle,
-            ),
-          ),
           ?suffix,
         ],
       );
@@ -254,12 +190,11 @@ class TransactionTile extends StatelessWidget {
       counted: counted,
     );
 
-    // The category leads — the SMS sender (bank shortcode) used to headline
-    // every imported row and just repeated what the account view already
-    // knows. Second line: the user's note (when present) with the date after
-    // it; the full sender/SMS detail stays available in the edit sheet.
-    // A linked refund leads with what it refunds instead: the merchant of
-    // either row, else the purchase's category, always after "Refund · ".
+    // Merchant first: the alias, the alert's merchant, Paid to or the note;
+    // the category when the row names none. Line two carries the category
+    // and any note the title did not use. A linked refund leads with what it
+    // refunds instead: the merchant of either row, else the purchase's
+    // category, always after "Refund · ".
     final refundMerchant =
         refundFor?.merchant ??
         (refundFor == null
@@ -267,23 +202,22 @@ class TransactionTile extends StatelessWidget {
             : context.select<FinanceProvider, String?>(
                 (f) => f.merchantLabelFor(tx),
               ));
-    final title = refundFor == null
-        ? cat.label
-        : 'Refund · ${refundMerchant ?? refundFor.category}';
-    var note = tx.note.isEmpty ? null : tx.note.split('\n').first;
-    // An SMS row without a note names its merchant there instead (the
-    // user's alias when there is one). An alert with no merchant in it
-    // leaves the slot empty rather than show a generic "Payment". Not on a
-    // linked refund, whose title names the merchant already.
-    if (note == null &&
-        refundFor == null &&
-        tx.source == TxSource.sms &&
-        tx.smsText.isNotEmpty) {
-      note = context.select<FinanceProvider, String?>(
-        (f) => f.merchantLabelFor(tx),
-      );
-    }
-    // The refund line under the note: "₹500 refunded · 4 Oct" on the
+    final rowTitle = refundFor == null
+        ? context.select<FinanceProvider, String?>((f) => f.rowTitleFor(tx))
+        : null;
+    final title = refundFor != null
+        ? 'Refund · ${refundMerchant ?? refundFor.category}'
+        : rowTitle ?? cat.label;
+    final noteText = tx.note.split('\n').first.trim();
+    final extraNote = noteText.isNotEmpty && noteText != rowTitle
+        ? noteText
+        : null;
+    final String? second = refundFor != null
+        ? extraNote
+        : rowTitle == null
+        ? null
+        : [cat.label, ?extraNote].join(' · ');
+    // The refund line under line two: "₹500 refunded · 4 Oct" on the
     // purchase, "For 25 Sep purchase" on the refund. Days only: the time
     // would crowd the line.
     String day(DateTime d) => fmtDateCompact(DateTime(d.year, d.month, d.day));
@@ -294,11 +228,11 @@ class TransactionTile extends StatelessWidget {
         : refunded.sum >= tx.amount - 0.005
         ? 'Refunded in full · ${day(refunded.last)}'
         : '${fmtMoney(refunded.sum)} refunded · ${day(refunded.last)}';
-    // Compact (no year): the list already groups under month headers, and
-    // the full form crowded the note off the line at large font scales.
-    // Under a day header only the time is new, and a midnight row has none.
+    // The line under the amount: the date, compact (no year) as the list
+    // already groups under month headers. Under a day header only the time
+    // is new, and a midnight row has none.
     final midnight = tx.date.hour == 0 && tx.date.minute == 0;
-    final String? dateLabel = showDate
+    final String? timeLabel = showDate
         ? fmtDateCompact(tx.date)
         : midnight
         ? null
@@ -310,17 +244,15 @@ class TransactionTile extends StatelessWidget {
     // and "new" ends it, until the row is opened or marked seen.
     final isNew = tx.unseen;
     final Widget? line = isNew
-        ? _noteAndDate(note, dateLabel, lineStyle, isNew: true)
-        : switch ((note, dateLabel)) {
-            (null, null) => null,
-            (final onlyNote?, null) => Text(
-              onlyNote,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: lineStyle,
-            ),
-            (_, final date?) => _noteAndDate(note, date, lineStyle),
-          };
+        ? _secondLine(second, lineStyle)
+        : second == null
+        ? null
+        : Text(
+            second,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: lineStyle,
+          );
     final Widget? noteLine = line == null || !isNew
         ? line
         : Row(
@@ -333,8 +265,8 @@ class TransactionTile extends StatelessWidget {
               Expanded(child: line),
             ],
           );
-    // Large text stacks the amount under the category instead of beside
-    // it, so the category keeps the row's width.
+    // Large text stacks the amount under the title instead of beside it,
+    // so the merchant keeps the row's width.
     final stacked = isLargeTextScale(context);
 
     Widget amountBlock(CrossAxisAlignment align) => Column(
@@ -369,6 +301,13 @@ class TransactionTile extends StatelessWidget {
               ),
             ),
           ),
+        // The time under a day header, the date on an amount sort: under
+        // the amount, so line two belongs to the merchant and category.
+        if (timeLabel != null)
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(timeLabel, maxLines: 1, style: lineStyle),
+          ),
       ],
     );
 
@@ -390,8 +329,8 @@ class TransactionTile extends StatelessWidget {
         : BorderRadius.circular(16);
     // A grouped row is a little tighter: the shared card already sets the
     // rows apart.
+    // CategoryTileIcon draws the glyph at half the tile: 20 or 22.
     final iconSize = grouped ? 40.0 : 44.0;
-    final glyphSize = grouped ? 20.0 : 22.0;
 
     // Selection is otherwise only a border + icon swap, invisible to
     // assistive tech. `selected` is exposed only in selection mode so
@@ -413,54 +352,16 @@ class TransactionTile extends StatelessWidget {
           child: Row(
             children: [
               // Rounded-square category icon; flips to a check while
-              // selected, the fill easing over and the glyphs
-              // swapping with a small pop.
-              AnimatedContainer(
-                duration: selectMotion,
-                curve: Curves.easeOutCubic,
-                width: iconSize,
-                height: iconSize,
-                decoration: BoxDecoration(
-                  color: selected
-                      ? scheme.primary
-                      : cat.color.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: AnimatedSwitcher(
-                  duration: selectMotion,
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  transitionBuilder: (child, animation) => FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween(begin: 0.6, end: 1.0).animate(animation),
-                      child: child,
-                    ),
-                  ),
-                  // categoryGlyphColor: the raw dark-kit hue washed
-                  // out to 1.6–2.4:1 over its own tint on light
-                  // surfaces.
-                  child: selected
-                      ? Icon(
-                          Icons.check,
-                          key: const ValueKey(true),
-                          color: scheme.onPrimary,
-                          size: glyphSize,
-                        )
-                      : Icon(
-                          // A linked refund shows the undo glyph its review
-                          // card used, not its income category's.
-                          refundFor != null ? Icons.undo : cat.icon,
-                          key: const ValueKey(false),
-                          color: categoryGlyphColor(context, cat.color),
-                          size: glyphSize,
-                        ),
-                ),
+              // selected. A linked refund shows the undo glyph its review
+              // card used, not its income category's.
+              CategoryTileIcon(
+                category: cat,
+                size: iconSize,
+                selected: selected,
+                icon: refundFor != null ? Icons.undo : null,
               ),
               const SizedBox(width: 12),
-              // Category title over "note · date". The note shrinks and
-              // ellipsizes first so the date is always visible, however
-              // long the note.
+              // Merchant over category; the time sits under the amount.
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -491,7 +392,7 @@ class TransactionTile extends StatelessWidget {
                       ],
                     ),
                     // Large text: the amount on its own line, right
-                    // under the category it belongs to.
+                    // under the title.
                     if (stacked) ...[
                       const SizedBox(height: 2),
                       amountBlock(CrossAxisAlignment.start),
@@ -519,9 +420,9 @@ class TransactionTile extends StatelessWidget {
                         style: lineStyle,
                       ),
                     // Why a row listed on the 30th shows up in next
-                    // month's totals. Its own line, so the note and
-                    // date above never get squeezed for it. Moot on
-                    // a row that counts nowhere.
+                    // month's totals. Its own line, so line two above
+                    // never gets squeezed for it. Moot on a row that
+                    // counts nowhere.
                     if (tx.countIn != null && counted)
                       Text(
                         'Counts in ${fmtDateCompact(tx.countIn!)}',

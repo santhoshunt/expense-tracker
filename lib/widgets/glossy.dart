@@ -104,7 +104,7 @@ BoxDecoration _edgeLight(ColorScheme scheme, double radius) => BoxDecoration(
   ],
 );
 
-/// Primary-action pill — the app's FAB. A quiet fill with an accent edge
+/// The Cockpit pages' floating button. A quiet fill with an accent edge
 /// light rather than a solid accent fill,
 /// so it reads as the primary action without outshouting the page.
 ///
@@ -175,9 +175,8 @@ class GlassButton extends StatelessWidget {
                     Icon(icon, size: 22, color: scheme.onSurface),
                     if (extended) ...[
                       const SizedBox(width: 8),
-                      // Cross-fades when the label changes with the tab
-                      // ("Add" / "New account"); AnimatedSize eases the
-                      // width between them.
+                      // Cross-fades when the label changes; AnimatedSize
+                      // eases the width between them.
                       // Flexible: on a narrow screen with large text the
                       // label shortens rather than overflowing.
                       Flexible(
@@ -199,6 +198,69 @@ class GlassButton extends StatelessWidget {
                     ],
                   ],
                 ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The Home Add button: a 56dp circle in GlassButton's fill and edge light,
+/// docked in the nav bar's notch. Icon only; [tooltip] names it on
+/// long-press and to TalkBack.
+class GlassRoundButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  static const double size = 56;
+
+  const GlassRoundButton({
+    super.key,
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // excludeSemantics drops the InkWell's own tap action, so the node
+    // carries it, as on GlassButton.
+    return Semantics(
+      button: true,
+      label: tooltip,
+      onTap: onPressed,
+      excludeSemantics: true,
+      child: Tooltip(
+        message: tooltip,
+        excludeFromSemantics: true,
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            color: _tint(scheme, scheme.outlineVariant, 0.12),
+            borderRadius: BorderRadius.circular(size / 2),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.28),
+                blurRadius: 14,
+                offset: const Offset(0, 5),
+              ),
+            ],
+          ),
+          foregroundDecoration: _edgeLight(scheme, size / 2),
+          child: Material(
+            color: Colors.transparent,
+            shape: const CircleBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onPressed,
+              child: Center(
+                child: Icon(icon, size: 24, color: scheme.onSurface),
               ),
             ),
           ),
@@ -345,11 +407,16 @@ class ChipTabs<T> extends StatefulWidget {
   final T selected;
   final ValueChanged<T> onChanged;
 
+  /// Space inside the scroll view at each end: the strip scrolls to the
+  /// screen edge while the first pill lines up with the page.
+  final EdgeInsetsGeometry padding;
+
   const ChipTabs({
     super.key,
     required this.options,
     required this.selected,
     required this.onChanged,
+    this.padding = EdgeInsets.zero,
   });
 
   @override
@@ -415,6 +482,7 @@ class _ChipTabsState<T> extends State<ChipTabs<T>> {
     // off the screen. Five pills fit at 390dp.
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
+      padding: widget.padding,
       child: Row(
         spacing: 6,
         children: [

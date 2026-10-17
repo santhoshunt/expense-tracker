@@ -12,16 +12,21 @@ import '../utils/format.dart';
 import 'dispose_scope.dart';
 import 'info_tip.dart';
 import 'picker_sheet.dart';
+import 'undo_snackbar.dart';
 
 /// Create/edit dialog for a manual [Reminder]: name, how often it repeats,
 /// due day (and month), optional expected amount, expense category, and
-/// whether it adds the expense itself. Shared by Settings ("Reminders") and
-/// the dashboard's Upcoming card.
+/// whether it adds the expense itself. Shared by the Cockpit's Reminders
+/// tab and the dashboard's Next 7 days card.
 ///
 /// The [name], [dayOfMonth], [amount], [categoryId], [cycle] and
 /// [anchorMonth] prefill a NEW reminder (the Subscriptions list's "Make a
 /// reminder"); [existing] wins over them when editing. A given [onDate]
 /// (the heatmap's "Set a reminder") opens on Once with that date.
+///
+/// [allowDelete] adds Delete when editing, which removes the reminder with
+/// Undo. Only the Cockpit list passes it: opened from a sheet, a delete
+/// would leave the sheet showing a removed reminder.
 Future<void> showReminderEditor(
   BuildContext context, {
   Reminder? existing,
@@ -32,6 +37,7 @@ Future<void> showReminderEditor(
   SubscriptionCycle? cycle,
   int? anchorMonth,
   DateTime? onDate,
+  bool allowDelete = false,
 }) async {
   final finance = context.read<FinanceProvider>();
   final nameCtrl = TextEditingController(text: existing?.name ?? name ?? '');
@@ -63,6 +69,8 @@ Future<void> showReminderEditor(
     month = startOnce.month;
   }
   var autoAdd = existing?.autoAdd ?? false;
+  // Delete pops the editor first; the reminder then goes with Undo.
+  var deleteRequested = false;
   String? accountId = existing?.accountId;
   // Open accounts, plus a closed one this reminder already pays from, so a
   // rename does not quietly drop it.
@@ -320,20 +328,32 @@ Future<void> showReminderEditor(
                   const SizedBox(height: 8),
                   Text(
                     autoAdd
-                        ? 'Shows in Upcoming a week ahead, and records the '
-                              'expense on the due day when you open the app '
-                              'or a background import runs.'
-                        : 'Shows in Upcoming a week ahead, and notifies from '
-                              '2 days before, checked when you open the app '
-                              'and about every 6 hours. A bank SMS '
-                              'for this amount near the due day marks it paid; '
-                              'otherwise mark it paid from the Upcoming card.',
+                        ? 'Shows on the Next 7 days card a week ahead, and '
+                              'records the expense on the due day when you '
+                              'open the app or a background import runs.'
+                        : 'Shows on the Next 7 days card a week ahead, and '
+                              'notifies from 2 days before. Alerts are checked '
+                              'when the app opens and about every 6 hours '
+                              'while it is closed. A bank SMS for this amount '
+                              'near the due day marks it paid; otherwise mark '
+                              'it paid from the Next 7 days card.',
                     style: Theme.of(ctx).textTheme.bodySmall,
                   ),
                 ],
               ),
             ),
             actions: [
+              if (existing != null && allowDelete)
+                TextButton(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Theme.of(ctx).colorScheme.error,
+                  ),
+                  onPressed: () {
+                    deleteRequested = true;
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Delete'),
+                ),
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
                 child: const Text('Cancel'),
@@ -418,6 +438,19 @@ Future<void> showReminderEditor(
       ),
     ),
   );
+  if (deleteRequested && existing != null && context.mounted) {
+    // Undo returns the reminder to the position it held in the list rather
+    // than the end.
+    final index = finance.reminders.indexWhere((x) => x.id == existing.id);
+    finance.deleteReminder(existing.id);
+    showUndoSnackBar(
+      context,
+      'Deleted reminder "${existing.name}"',
+      () => finance.restoreReminder(existing, index: index),
+      icon: Icons.delete_outline,
+      tone: AppToastTone.removal,
+    );
+  }
 }
 
 /// The Repeats choices: Once first, then the repeating cycles.

@@ -6,15 +6,15 @@ import 'classifiers_screen.dart';
 import 'settings_screen.dart';
 
 /// The Dashboard's app-bar title: the shown month or year between its
-/// arrows; tapping the label opens the month picker. Driven by
-/// [AppNav.dashboardHeader], which the Dashboard keeps current.
+/// arrows, then a Year (or Month) button that switches the view; tapping
+/// the label opens the month picker. Driven by [AppNav.dashboardHeader],
+/// which the Dashboard keeps current.
 class DashboardMonthTitle extends StatelessWidget {
   const DashboardMonthTitle({super.key});
 
   @override
   Widget build(BuildContext context) {
     final header = AppNav.instance.dashboardHeader;
-    final scheme = Theme.of(context).colorScheme;
     return ListenableBuilder(
       listenable: header,
       builder: (context, _) => Row(
@@ -30,33 +30,33 @@ class DashboardMonthTitle extends StatelessWidget {
             icon: const Icon(Icons.chevron_left),
           ),
           Flexible(
-            child: InkWell(
-              borderRadius: BorderRadius.circular(AppRadius.control),
-              onTap: header.onPick == null ? null : () => header.onPick?.call(),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Shrinks rather than cutting the month short on a
-                    // narrow screen with large text.
-                    Flexible(
-                      child: FittedBox(
-                        fit: BoxFit.scaleDown,
-                        child: Text(
-                          header.label,
-                          maxLines: 1,
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.w600),
-                        ),
+            // The label is still the picker's button, without the ▾ so it
+            // keeps its width beside the switch.
+            child: Semantics(
+              button: true,
+              hint: header.yearMode ? 'Pick a year' : 'Pick a month',
+              child: InkWell(
+                borderRadius: BorderRadius.circular(AppRadius.control),
+                onTap: header.onPick == null
+                    ? null
+                    : () => header.onPick?.call(),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 8,
+                    horizontal: 4,
+                  ),
+                  // Shrinks rather than cutting the month short on a
+                  // narrow screen with large text.
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      header.label,
+                      maxLines: 1,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                    Icon(
-                      Icons.arrow_drop_down,
-                      size: 22,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -68,6 +68,22 @@ class DashboardMonthTitle extends StatelessWidget {
                 ? null
                 : () => header.onNext?.call(),
             icon: const Icon(Icons.chevron_right),
+          ),
+          // The Month or Year switch, in sight; the ⋮ entry with its tip
+          // stays.
+          Tooltip(
+            message: header.yearMode ? 'Show Month view' : 'Show Year view',
+            child: TextButton(
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                minimumSize: const Size(48, 40),
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+              ),
+              onPressed: header.onToggleView == null
+                  ? null
+                  : () => header.onToggleView?.call(),
+              child: Text(header.yearMode ? 'Month' : 'Year'),
+            ),
           ),
         ],
       ),
@@ -94,7 +110,7 @@ class SettingsButton extends StatelessWidget {
 
 /// The app bar's ⋮, the same two sections on every tab: "This page", the
 /// entries the shown [tab] publishes through [AppNav.pageMenu], then "App":
-/// Cockpit and People. A tab with no entries shows App alone. Settings is
+/// Cockpit and Who owes you. A tab with no entries shows App alone. Settings is
 /// its own button beside it ([SettingsButton]).
 class HomeMenu extends StatelessWidget {
   /// The shown home tab (a kHomeTab* index).
@@ -163,7 +179,7 @@ class HomeMenu extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
             ),
           ),
-          _item(Icons.people_outline, 'People', () => goPeople(context)),
+          _item(Icons.people_outline, 'Who owes you', () => goPeople(context)),
         ];
       },
     );

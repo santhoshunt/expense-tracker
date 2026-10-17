@@ -15,7 +15,7 @@ enum DashboardSection {
   monthlyBudget(DashboardPage.overview, 'Monthly budget', true),
   forecast(DashboardPage.overview, 'Month-end forecast', true),
   recap(DashboardPage.overview, "Last month's recap", true),
-  upcoming(DashboardPage.overview, 'Upcoming', true),
+  upcoming(DashboardPage.overview, 'Next 7 days', true),
   // After Upcoming, never between the monthly budget and the forecast:
   // those two merge into one card only when next to each other.
   bigBills(DashboardPage.overview, 'Big bills ahead', true),
@@ -23,7 +23,6 @@ enum DashboardSection {
   owed(DashboardPage.overview, 'Who owes you', true),
   // Trends
   pace(DashboardPage.trends, 'This month so far', true),
-  previousMonth(DashboardPage.trends, 'This month vs last month', true),
   usual(DashboardPage.trends, 'This month vs usual', false),
   categoryComparison(DashboardPage.trends, 'Categories vs usual', false),
   // Year view only, where the month comparisons above step aside: open,
@@ -45,8 +44,8 @@ enum DashboardSection {
   final DashboardPage page;
   final String label;
 
-  /// Trends and Breakdown open their first two sections, so each page fits
-  /// about one screen until more are opened. Trends' year comparison is open
+  /// Trends opens its first section, Breakdown its first two, so each page
+  /// fits about one screen until more are opened. Trends' year comparison is open
   /// too: it shows only in Year view, where the month sections above it
   /// step aside. Overview never folds.
   final bool openByDefault;

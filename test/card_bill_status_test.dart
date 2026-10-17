@@ -170,6 +170,38 @@ void main() {
         'Due 10 Sep · today',
       );
     });
+
+    test('the Overview leaves a billed cycle\'s statement date out', () {
+      final billed = cardBillStatus(card(stmtDay: 24), DateTime(2026, 9, 7))!;
+      expect(
+        cardBillSubtitle(billed, withStatement: false),
+        'Due 10 Sep · in 3 days',
+      );
+      // The other phases read the same either way.
+      final notBilled = cardBillStatus(card(stmtDay: 8), DateTime(2026, 9, 7))!;
+      expect(
+        cardBillSubtitle(notBilled, withStatement: false),
+        'Bill generates 8 Sep · due 10 Sep',
+      );
+    });
+
+    test('a paid cycle\'s next line leaves out the Paid its tag says', () {
+      expect(
+        cardBillNextLine(
+          cardBillStatus(
+            card(stmtDay: 24, paid: '2026-09'),
+            DateTime(2026, 9, 7),
+          )!,
+        ),
+        'Next bill 24 Sep · due 10 Oct',
+      );
+      expect(
+        cardBillNextLine(
+          cardBillStatus(card(paid: '2026-09'), DateTime(2026, 9, 7))!,
+        ),
+        'Next bill due 10 Oct',
+      );
+    });
   });
 
   test('non-card, missing dueDay, and closed cards return null', () {

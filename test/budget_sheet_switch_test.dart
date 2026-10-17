@@ -185,6 +185,9 @@ void main() {
     Future<FinanceProvider> threeBudgets() async {
       final p = FinanceProvider();
       await p.load();
+      // Records from months back, outside every budget: the previous-month
+      // chevron stops at the ledger's first month.
+      await spend(p, 'health', 50, monthsAgo(6));
       await spend(p, 'food', 400, monthsAgo(1));
       await spend(p, 'transport', 300, monthsAgo(1));
       // Fixed ids through a restore: addBudget mints ids from the clock,
@@ -219,14 +222,20 @@ void main() {
       expect(find.text('Eating out'), findsOneWidget);
       expect(find.text('Budget 1 of 3'), findsOneWidget);
       expect(button(tester, 'Previous budget').onPressed, isNull);
-      expect(find.text('${fmtMoney(400)} / ${fmtMoney(1000)}'), findsOneWidget);
+      expect(
+        find.text('${fmtMoneyWhole(400)} / ${fmtMoneyWhole(1000)}'),
+        findsOneWidget,
+      );
 
       await tester.tap(find.byTooltip('Next budget'));
       await tester.pumpAndSettle();
       expect(find.text('Getting around'), findsOneWidget);
       expect(find.text('Budget 2 of 3'), findsOneWidget);
       expect(find.text(fmtMonth(monthsAgo(1))), findsOneWidget);
-      expect(find.text('${fmtMoney(300)} / ${fmtMoney(1000)}'), findsOneWidget);
+      expect(
+        find.text('${fmtMoneyWhole(300)} / ${fmtMoneyWhole(1000)}'),
+        findsOneWidget,
+      );
 
       await tester.tap(find.byTooltip('Next budget'));
       await tester.pumpAndSettle();
@@ -310,6 +319,8 @@ void main() {
       final p = FinanceProvider();
       await p.load();
       // This month one category, last month four, two months ago none.
+      // The ledger starts before them, outside the budget.
+      await spend(p, 'health', 50, monthsAgo(3));
       await spend(p, 'food', 100, thisMonth);
       await spend(p, 'food', 400, monthsAgo(1));
       await spend(p, 'transport', 300, monthsAgo(1));
@@ -338,6 +349,8 @@ void main() {
     ) async {
       final p = FinanceProvider();
       await p.load();
+      // A year of records, so the window can page back.
+      await spend(p, 'health', 50, monthsAgo(12));
       await spend(p, 'food', 100, thisMonth);
       await p.addBudget(
         name: 'Eating out',
@@ -374,6 +387,30 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text(mmm.format(thisMonth)), findsOneWidget);
       expect(find.text(mmm.format(monthsAgo(11))), findsNothing);
+    });
+
+    testWidgets('the chart heading starts at the first month on record', (
+      tester,
+    ) async {
+      final p = FinanceProvider();
+      await p.load();
+      await spend(p, 'food', 100, monthsAgo(3));
+      await spend(p, 'food', 100, thisMonth);
+      await p.addBudget(
+        name: 'Eating out',
+        limit: 1000,
+        mode: BudgetMode.include,
+        categoryIds: {'food'},
+      );
+      await pumpSheet(tester, p, p.budgets.single, thisMonth);
+      final mmm = DateFormat('MMM');
+      expect(
+        find.text(
+          '4 months: ${mmm.format(monthsAgo(3))} to ${mmm.format(thisMonth)}',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('6 months:'), findsNothing);
     });
 
     testWidgets('the legend caps at five plus Other, which opens the rows', (

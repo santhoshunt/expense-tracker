@@ -12,7 +12,6 @@ import '../services/recurring_detector.dart' show RecurringHit;
 import '../services/reminder_schedule.dart';
 import '../utils/contrast.dart';
 import '../utils/format.dart';
-import '../utils/money_colors.dart';
 import 'reminder_editor_dialog.dart';
 
 /// Every big bill with its share a month, under the monthly figure and the
@@ -44,7 +43,6 @@ Future<void> showBigBillsSheet(
         final text = theme.textTheme;
         final scheme = theme.colorScheme;
         final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
-        final out = moneyColor(ctx, type: TxType.expense);
 
         // The reminder a bill came from; null for a marked subscription, or
         // when the reminder has gone.
@@ -84,7 +82,7 @@ Future<void> showBigBillsSheet(
                 Text('Big bills ahead', style: text.titleLarge),
                 const SizedBox(height: 12),
                 BigBillsHeadline(plan: plan),
-                Text('${fmtMoneyTidy(plan.yearly)} a year', style: muted),
+                Text('${fmtMoneyWhole(plan.yearly)} a year', style: muted),
                 const SizedBox(height: 16),
                 BigBillsStrip(plan: plan, height: 96),
                 const SizedBox(height: 16),
@@ -134,18 +132,17 @@ Future<void> showBigBillsSheet(
                                   FittedBox(
                                     fit: BoxFit.scaleDown,
                                     child: Text(
-                                      fmtMoneyTidy(b.amount),
+                                      fmtMoneyWhole(b.amount),
                                       maxLines: 1,
-                                      style: TextStyle(
+                                      style: const TextStyle(
                                         fontWeight: FontWeight.w600,
-                                        color: out,
                                       ),
                                     ),
                                   ),
                                   FittedBox(
                                     fit: BoxFit.scaleDown,
                                     child: Text(
-                                      '${fmtMoneyTidy(b.monthly)} a month',
+                                      '${fmtMoneyWhole(b.monthly)} a month',
                                       maxLines: 1,
                                       style: muted,
                                     ),
@@ -183,7 +180,7 @@ class BigBillsHeadline extends StatelessWidget {
       spacing: 8,
       children: [
         Text(
-          fmtMoneyTidy(plan.monthly),
+          fmtMoneyWhole(plan.monthly),
           style: text.titleLarge?.copyWith(
             fontWeight: FontWeight.w700,
             color: scheme.onSurface,
@@ -202,8 +199,9 @@ class BigBillsHeadline extends StatelessWidget {
 }
 
 /// One bar per month for the 12 months from this one, scaled to the
-/// largest, in the money-out red; a month with nothing due is a 2dp grey
-/// stub. Each month's initial sits under its bar, this month's in bold.
+/// largest: neutral bars, since a bill ahead is not money spent; a month
+/// with nothing due is a 2dp grey stub. A month's name shows only where a
+/// bill falls, and this month's, in bold.
 class BigBillsStrip extends StatelessWidget {
   final BigBillsPlan plan;
   final double height;
@@ -214,13 +212,12 @@ class BigBillsStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final red = moneyColor(context, type: TxType.expense);
-    final initial = DateFormat('MMMMM');
+    final short = DateFormat('MMM');
     final name = DateFormat('MMM yyyy');
     final largest = plan.months.fold(0.0, (m, e) => e.due > m ? e.due : m);
     final label = [
       for (final e in plan.months)
-        if (e.due > 0) '${name.format(e.month)} ${fmtMoneyTidy(e.due)}',
+        if (e.due > 0) '${name.format(e.month)} ${fmtMoneyWhole(e.due)}',
     ];
     return Semantics(
       label: label.isEmpty
@@ -245,7 +242,7 @@ class BigBillsStrip extends StatelessWidget {
                             heightFactor: (e.due / largest).clamp(0.06, 1.0),
                             child: DecoratedBox(
                               decoration: BoxDecoration(
-                                color: red,
+                                color: scheme.onSurfaceVariant,
                                 borderRadius: const BorderRadius.vertical(
                                   top: Radius.circular(3),
                                 ),
@@ -264,16 +261,20 @@ class BigBillsStrip extends StatelessWidget {
               for (final (i, e) in plan.months.indexed) ...[
                 if (i > 0) const SizedBox(width: 4),
                 Expanded(
-                  child: Text(
-                    initial.format(e.month),
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.clip,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                      fontWeight: i == 0 ? FontWeight.w700 : null,
-                    ),
-                  ),
+                  child: e.due > 0 || i == 0
+                      ? FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            short.format(e.month),
+                            textAlign: TextAlign.center,
+                            maxLines: 1,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                              fontWeight: i == 0 ? FontWeight.w700 : null,
+                            ),
+                          ),
+                        )
+                      : const SizedBox.shrink(),
                 ),
               ],
             ],

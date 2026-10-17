@@ -53,33 +53,6 @@ class _PeopleScreenState extends State<PeopleScreen> {
           // 16, the Settings and Cockpit card inset.
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
           children: [
-            // Left-aligned: stretched across the list, the whole row would
-            // open the tip.
-            Align(
-              alignment: Alignment.centerLeft,
-              child: InfoLabel(
-                label: Text('Owed to you', style: text.titleMedium),
-                tip: const InfoTip(
-                  title: 'Owed to you',
-                  message:
-                      'Each person on a split bill owes you their amount. '
-                      'Record what they pay back as Repaid to me (a transfer, '
-                      'never income); it pays off their oldest bills first, '
-                      'and part payments count. Splits without names are not '
-                      'counted. Mark a bill settled when it was paid outside '
-                      'the app.',
-                ),
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              owers == 0
-                  ? 'Nobody owes you anything right now.'
-                  : '${fmtMoney(finance.totalOwed)} from $owers '
-                        '${owers == 1 ? 'person' : 'people'}',
-              style: muted,
-            ),
-            const SizedBox(height: 12),
             FrostedPanel(
               radius: BorderRadius.circular(AppRadius.card),
               child: Padding(
@@ -87,6 +60,42 @@ class _PeopleScreenState extends State<PeopleScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // The total leads, in large type; the line above it
+                    // says who it is from, or that nobody owes anything.
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          InfoLabel(
+                            label: Text(
+                              owers == 0
+                                  ? 'Nobody owes you anything right now.'
+                                  : '$owers ${owers == 1 ? 'person owes' : 'people owe'} you',
+                              style: muted,
+                            ),
+                            tip: const InfoTip(
+                              title: 'Who owes you',
+                              message:
+                                  'Each person on a split bill owes you their '
+                                  'amount. Record what they pay back as Repaid '
+                                  'to me (a transfer, never income); it pays '
+                                  'off their oldest bills first, and part '
+                                  'payments count. Splits without names are '
+                                  'not counted. Mark a bill settled when it '
+                                  'was paid outside the app.',
+                            ),
+                          ),
+                          if (owers > 0)
+                            Text(
+                              fmtMoney(finance.totalOwed),
+                              style: text.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
                     if (all.isEmpty)
                       const EmptyState(
                         compact: true,
@@ -94,12 +103,6 @@ class _PeopleScreenState extends State<PeopleScreen> {
                         message:
                             'Tick Group split payment on an expense and add '
                             'who owes what.',
-                      )
-                    else if (owing.isEmpty)
-                      const EmptyState(
-                        compact: true,
-                        icon: Icons.check_circle_outline,
-                        message: 'Everyone is settled up.',
                       ),
                     for (final b in owing)
                       _PersonTile(balance: b, page: context),
@@ -207,7 +210,11 @@ Future<void> showPersonSheet(BuildContext context, String key) {
     isScrollControlled: true,
     useSafeArea: true,
     showDragHandle: true,
-    builder: (ctx) => _PersonSheet(personKey: key, page: context),
+    // Its own toast: an add sheet opened from a bill or repayment row
+    // closes with a toast while this sheet stays open over the page.
+    builder: (ctx) => ToastHost(
+      child: _PersonSheet(personKey: key, page: context),
+    ),
   );
 }
 
@@ -233,6 +240,8 @@ class _PersonSheetState extends State<_PersonSheet> {
     Navigator.pop(context);
     final id = await showAddTransactionSheet(
       page,
+      // Its own "Recorded a repayment" toast below says it better.
+      announceAdd: false,
       prefill: TxPrefill(
         categoryId: kRepaidToMeCategoryId,
         amount: b.owed > 0 ? b.owed : null,
@@ -306,8 +315,7 @@ class _PersonSheetState extends State<_PersonSheet> {
       );
     }
     final canLink = finance.repaymentCandidates(near: b.owed).isNotEmpty;
-    String billTitle(Tx t) =>
-        t.note.isNotEmpty ? t.note.split('\n').first : t.category.label;
+    String billTitle(Tx t) => finance.rowTitleFor(t) ?? t.category.label;
 
     return SafeArea(
       child: ListView(
@@ -350,7 +358,6 @@ class _PersonSheetState extends State<_PersonSheet> {
                   child: const Text('Settle'),
                 ),
                 onTap: () => showAddTransactionSheet(context, existing: s.bill),
-                onLongPress: () => _settle(b, bill: s.bill),
               ),
           ],
           const SizedBox(height: 12),
@@ -434,6 +441,7 @@ class _LinkPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
+    final finance = context.read<FinanceProvider>();
     return SafeArea(
       child: ConstrainedBox(
         constraints: BoxConstraints(
@@ -468,7 +476,7 @@ class _LinkPicker extends StatelessWidget {
                 subtitle: Text(
                   [
                     fmtDateCompact(t.date),
-                    if (t.note.isNotEmpty) t.note.split('\n').first,
+                    ?finance.rowTitleFor(t),
                     if (t.pending) 'to review',
                   ].join(' · '),
                   maxLines: 1,

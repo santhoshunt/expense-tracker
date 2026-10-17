@@ -91,7 +91,7 @@ void main() {
         textScale: scale,
       );
       await openDashboardView(tester, 'Trends');
-      await openDashboardSection(tester, 'previousMonth');
+      await openDashboardSection(tester, 'pace');
       final see = find.text('See chart').first;
       await tester.ensureVisible(see);
       await tester.pumpAndSettle();
@@ -131,19 +131,26 @@ void main() {
         size: const Size(400, 1400),
       );
       expect(find.text(fmtMoney(52340)), findsWidgets);
-      // Hit-testable: the folded details hold the same figure.
-      expect(find.text(fmtMoney(12062)).hitTestable(), findsOneWidget);
-      expect(find.text('${fmtMoney(12062)} due'), findsNothing);
+      // v1.43.0: a card's dues read as money out, "−₹X due", on the closed
+      // row (and on the net balance's Due line).
+      expect(find.text('−${fmtMoney(12062)}').hitTestable(), findsNWidgets(2));
+      expect(find.text(' due').hitTestable(), findsOneWidget);
+      expect(find.text('Due on 1 card'), findsOneWidget);
+      expect(find.text('In 1 bank'), findsOneWidget);
       expect(
         find.widgetWithText(TextButton, 'View transactions').hitTestable(),
         findsNothing,
       );
+      // The closed rows have a one-tap way to their transactions.
+      expect(find.byTooltip('View transactions'), findsNWidgets(2));
 
       // A tap opens the card, and it stays open after a rebuild.
       await tester.tap(find.text('HDFC'));
       await tester.pumpAndSettle();
       final view = find.widgetWithText(TextButton, 'View transactions');
       expect(view.hitTestable(), findsOneWidget);
+      // Open, the card keeps its own button and the row's goes.
+      expect(find.byTooltip('View transactions'), findsOneWidget);
       final s = tester
           .element(find.byType(AccountsScreen))
           .read<SettingsProvider>();

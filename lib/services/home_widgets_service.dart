@@ -8,9 +8,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../utils/contrast.dart';
+import '../utils/figma_palette.dart';
 import '../utils/format.dart';
 import 'big_bills.dart';
 import 'budget_widget_service.dart';
+import 'card_bill.dart';
 import 'recurring_detector.dart';
 import 'safe_to_spend.dart';
 import 'spend_comparison.dart';
@@ -68,6 +71,8 @@ class HomeWidgetsService {
   Future<void> sync(FinanceProvider finance, SettingsProvider settings) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     final now = DateTime.now();
+    // Read once: the glyph colours and the theme must agree on light.
+    final brightness = PlatformDispatcher.instance.platformBrightness;
     final json = jsonEncode(
       buildHomeWidgetSnapshot(
         finance,
@@ -75,14 +80,10 @@ class HomeWidgetsService {
         now,
         _recurring(finance, now),
         patterns: _patterns,
+        light: widgetThemeIsLight(settings, brightness),
       ),
     );
-    final theme = jsonEncode(
-      buildWidgetTheme(
-        settings,
-        PlatformDispatcher.instance.platformBrightness,
-      ),
-    );
+    final theme = jsonEncode(buildWidgetTheme(settings, brightness));
     if ('$json$theme' == _lastWritten) return;
     _lastWritten = '$json$theme';
     final prefs = await SharedPreferences.getInstance();
@@ -100,12 +101,15 @@ class HomeWidgetsService {
 
 /// The widgets' snapshot for [now]. Amounts are formatted here so the ₹
 /// grouping matches the app; the raw figures ride along for the bar.
+/// [light] is the widget theme's brightness ([widgetThemeIsLight]), which
+/// the category glyph colours are baked for.
 Map<String, dynamic> buildHomeWidgetSnapshot(
   FinanceProvider finance,
   SettingsProvider settings,
   DateTime now,
   List<RecurringHit> hits, {
   List<RecurringHit>? patterns,
+  bool light = false,
 }) {
   final month = DateTime(now.year, now.month);
   final spent = finance.expenseInMonth(month);
@@ -161,10 +165,10 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       'capLabel': fmtMoneyTidy(cap),
       'usualByDay': usualCumulativeByDay(finance, month),
     },
-    'upcoming': [for (final u in upcoming) _upcomingRow(u, hideIncome)],
+    'upcoming': [for (final u in upcoming) _upcomingRow(u, hideIncome, light)],
     'recent': [
       for (final t in finance.transactions.take(kRecentWidgetRows))
-        _recentRow(finance, t, hideIncome),
+        _recentRow(finance, t, hideIncome, light),
     ],
     'split': _split(finance, month),
     'today': {
@@ -248,10 +252,25 @@ String _signedLabel(double amount, TxType type, bool hideIncome) {
   return '$sign${fmtMoneyTidy(amount)}';
 }
 
-/// One Upcoming widget row. `kind` colours the amount; the widget works
-/// overdue out from the dates on the day it draws.
-Map<String, dynamic> _upcomingRow(UpcomingItem u, bool hideIncome) {
-  final transfer = u.categoryId != null && isTransferCategory(u.categoryId!);
+/// A category glyph colour as ARGB, by the app's contrast rule for the
+/// widget theme's surface ([light]); dark returns the colour as it is.
+int _glyph(Color c, bool light) => categoryGlyphColorOn(
+  c,
+  surface: light ? FigmaPaletteLight.surface : FigmaPalette.surface,
+  dark: !light,
+).toARGB32();
+
+/// One Upcoming widget row. `kind` colours the amount: a card bill is
+/// 'neutral' like a transfer, since paying it moves money between your own
+/// accounts. `color` is the category glyph colour; a card bill carries none
+/// and the widget colours its card by urgency. `urgentDays` is a threshold,
+/// not a flag: the widget marks the row urgent when the days until due, on
+/// the day it draws, are at or below it (a card bill within its urgent
+/// window, a reminder from its due day, a detected payment only overdue).
+Map<String, dynamic> _upcomingRow(UpcomingItem u, bool hideIncome, bool light) {
+  final transfer =
+      u.kind == UpcomingKind.cardBill ||
+      (u.categoryId != null && isTransferCategory(u.categoryId!));
   final kind = _kindOf(u.type, neutral: transfer);
   final amount = u.amount;
   return {
@@ -269,16 +288,27 @@ Map<String, dynamic> _upcomingRow(UpcomingItem u, bool hideIncome) {
     'icon': u.kind == UpcomingKind.cardBill
         ? 'card'
         : categoryById(u.categoryId ?? '', fallbackType: u.type).iconKey,
+    if (u.kind != UpcomingKind.cardBill)
+      'color': _glyph(
+        categoryById(u.categoryId ?? '', fallbackType: u.type).color,
+        light,
+      ),
+    'urgentDays': switch (u.kind) {
+      UpcomingKind.cardBill => kCardUrgentWindowDays,
+      UpcomingKind.reminder => 0,
+      UpcomingKind.recurring => -1,
+    },
   };
 }
 
 /// One Recent widget row: the category, the merchant when there is one,
 /// and the day and time, which Kotlin turns into "Today" or "Yesterday" on
-/// the day it draws.
+/// the day it draws. `color` is the category glyph colour for the icon.
 Map<String, dynamic> _recentRow(
   FinanceProvider finance,
   Tx t,
   bool hideIncome,
+  bool light,
 ) {
   // A linked refund is neither income nor spend: it cancels its purchase.
   final neutral =
@@ -297,6 +327,7 @@ Map<String, dynamic> _recentRow(
     'kind': kind,
     'unseen': t.unseen,
     'icon': t.category.iconKey,
+    'color': _glyph(t.category.color, light),
   };
 }
 

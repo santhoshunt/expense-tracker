@@ -5,16 +5,16 @@ import 'merchant_stats.dart';
 import 'spend_comparison.dart';
 
 /// Days at the start of a month that show last month's recap (on the
-/// dashboard's Overview). From the day after, Trends shows the running
-/// month's pace instead: by the 26th, last month's totals are old news.
+/// dashboard's Overview). From the day after, Trends' This month so far card
+/// covers the month: by the 26th, last month's totals are old news.
 const int kRecapDays = 7;
 
-/// Whether the dashboard shows last month's recap (true) or this month's
-/// pace (false) on [now].
+/// Whether the dashboard shows last month's recap (true) or leaves the
+/// month to Trends' This month so far card (false) on [now].
 bool showsRecap(DateTime now) => now.day <= kRecapDays;
 
-/// The clock the dashboard's recap and pace cards, its ⋮ recap entry and
-/// the recap sheet read. Widget tests swap it to pick a day of the month;
+/// The clock the dashboard's recap card, its ⋮ recap entry and the recap
+/// sheet read. Widget tests swap it to pick a day of the month;
 /// nothing else should.
 DateTime Function() recapClock = DateTime.now;
 
@@ -134,43 +134,6 @@ List<DateTime> recapMonths(Iterable<DateTime> monthsWithData, DateTime now) {
       if (DateTime(m.year, m.month).isBefore(thisMonth))
         DateTime(m.year, m.month),
   }.toList()..sort((a, b) => b.compareTo(a));
-}
-
-/// Budgets worth a line on the pace card: at or past this share of their
-/// limit.
-const double kPaceBudgetShare = 0.8;
-const int kPaceBudgetLines = 3;
-
-/// The running month so far, for Trends after [kRecapDays].
-class MonthPace {
-  /// Day-aligned: this month through today against last month through the
-  /// same day (see buildMonthComparison).
-  final MonthComparison comparison;
-
-  /// Up to [kPaceBudgetLines] budgets at or past [kPaceBudgetShare] of
-  /// their limit, fullest first.
-  final List<BudgetStanding> budgets;
-
-  const MonthPace({required this.comparison, required this.budgets});
-}
-
-/// This month's pace as of [now], or null when the month has no confirmed
-/// transactions yet.
-MonthPace? buildMonthPace(
-  FinanceProvider finance,
-  SettingsProvider settings, {
-  required DateTime now,
-}) {
-  final month = DateTime(now.year, now.month);
-  if (!finance.monthsWithData.contains(month)) return null;
-  final budgets = [
-    for (final s in _standings(finance, settings, month))
-      if (s.spent >= s.limit * kPaceBudgetShare) s,
-  ]..sort((a, b) => (b.spent / b.limit).compareTo(a.spent / a.limit));
-  return MonthPace(
-    comparison: buildMonthComparison(finance, month, now: now),
-    budgets: budgets.take(kPaceBudgetLines).toList(),
-  );
 }
 
 /// When the next recap notification is due: 09:00 local time on the first

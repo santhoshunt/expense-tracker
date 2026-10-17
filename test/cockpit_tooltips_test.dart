@@ -7,6 +7,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
+import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 import 'package:expense_tracker/utils/format.dart';
 
@@ -87,7 +88,7 @@ void main() {
     await pumpCockpit(tester, p);
 
     expect(find.text('YOUR RULES'), findsOneWidget);
-    expect(find.text('BUILT-IN'), findsOneWidget);
+    expect(find.textContaining('Built-in rules · '), findsOneWidget);
     await expectTip(tester, 'Your rules', 'Rules are checked top to bottom');
     expect(tipFinder('Built-in'), findsNothing);
 
@@ -126,15 +127,17 @@ void main() {
     );
   });
 
-  testWidgets('with only built-in rules the tip moves to Built-in', (
-    tester,
-  ) async {
+  testWidgets('with only built-in rules, Your rules keeps the tip and the '
+      'built-ins wait in a fold', (tester) async {
     final p = FinanceProvider();
     await p.load();
     await pumpCockpit(tester, p);
 
-    expect(find.text('YOUR RULES'), findsNothing);
-    await expectTip(tester, 'Built-in', 'Rules are checked top to bottom');
+    expect(find.text('YOUR RULES'), findsOneWidget);
+    expect(find.text('No rules of your own yet.'), findsOneWidget);
+    await expectTip(tester, 'Your rules', 'Rules are checked top to bottom');
+    expect(tipFinder('Built-in'), findsNothing);
+    expect(find.text('Restore built-in rules'), findsOneWidget);
   });
 
   testWidgets('import and transactions tabs explain their tools', (
@@ -144,30 +147,24 @@ void main() {
     await p.load();
     await pumpCockpit(tester, p, tab: kCockpitTabImport);
 
+    // The tester leads the tab; the core checks wait folded under it.
+    expect(find.text('Paste a bank SMS to see what import would do'), findsOne);
+    await expectTip(tester, 'Test a message', 'Shows what the parser does');
+    const check = 'The message must state an amount in Rs, INR or ₹.';
+    expect(find.text('Core checks · 4'), findsOneWidget);
+    expect(find.text(check).hitTestable(), findsNothing);
+    await tester.tap(find.text('Core checks · 4'));
+    await pumpThrough(tester);
+    expect(find.text(check).hitTestable(), findsOneWidget);
+
     expect(find.text('FLAGGED AS SPAM WHEN CONTAINING'), findsOneWidget);
     await expectTip(
       tester,
       'Flagged as spam when containing',
       'Flagged messages are still imported',
     );
-    // The tools row sits below every import rule, past the lazy list's
-    // build extent.
-    await tester.scrollUntilVisible(
-      find.text('Test a message'),
-      300,
-      scrollable: find
-          .descendant(
-            of: find.byType(ListView),
-            matching: find.byType(Scrollable),
-          )
-          .first,
-    );
-    await tester.pump();
-    await expectTip(tester, 'Test a message', 'Shows what the parser does');
 
-    // By its spoken label: the scroll above may have folded the FAB to its
-    // icon, which drops the visible text but keeps the label.
-    await tester.tap(find.bySemanticsLabel('New import rule'));
+    await tester.tap(find.text('New import rule'));
     await pumpThrough(tester);
     expect(
       find.text(
@@ -178,7 +175,7 @@ void main() {
     await tester.tap(find.text('Cancel'));
     await pumpThrough(tester);
 
-    await tester.tap(find.text('Review'));
+    await tester.tap(find.text('Results'));
     await pumpThrough(tester);
     await expectTip(
       tester,
@@ -205,15 +202,17 @@ void main() {
     await s.setMonthlyBudget(60000);
     await pumpCockpit(tester, p, settings: s, tab: kCockpitTabBudgets);
 
-    // Existing lookups by text still resolve to one widget each.
-    expect(find.text('Monthly cap'), findsOneWidget);
-    expect(find.text('Budget alerts'), findsOneWidget);
+    // The heading and the cap field's label; the alert switches moved to
+    // Settings, Notifications.
+    expect(find.text('Monthly cap'), findsNWidgets(2));
+    expect(find.text('Budget alerts'), findsNothing);
 
     final spent = p.budgetSpentInMonth(DateTime(now.year, now.month));
     expect(spent, 48677);
     final line =
-        'This month: ${fmtMoneyCompact(spent)} of ${fmtMoneyCompact(60000)} '
+        'This month: ${fmtMoneyTidy(spent)} of ${fmtMoneyTidy(60000)} '
         '(${(spent / 60000 * 100).round()}%)';
+    expect(line, startsWith('This month: ₹48,677 of ₹60,000'));
     await tester.tap(tipFinder('Monthly cap'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
@@ -223,16 +222,6 @@ void main() {
     await tester.tap(find.text('Got it'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-
-    await expectTip(tester, 'Budget alerts', 'Checks run only while');
-    await expectTip(tester, 'Payment reminders', 'Card bills notify once');
-    expect(
-      find.text(
-        'Card bills, your reminders and detected recurring payments, '
-        'checked when the app opens',
-      ),
-      findsOneWidget,
-    );
 
     await tester.tap(find.text('New budget'));
     await pumpThrough(tester);
@@ -260,9 +249,14 @@ void main() {
   ) async {
     final p = FinanceProvider();
     await p.load();
-    await pumpCockpit(tester, p, tab: kCockpitTabCategories);
+    await pumpCockpit(tester, p, tab: kCockpitTabGroups);
 
     await expectTip(tester, 'Groups', 'Groups add up their categories');
+
+    // A fresh app: a new home on the same MaterialApp keeps the old route.
+    await tester.pumpWidget(const SizedBox());
+    await pumpCockpit(tester, p, tab: kCockpitTabCategories);
+    expect(tipFinder('Groups'), findsNothing);
     await tester.tap(find.text('New category'));
     await pumpThrough(tester);
     await expectTip(tester, 'Direction', 'Changing direction re-types');
@@ -281,15 +275,69 @@ void main() {
     await pumpCockpit(tester, p, tab: kCockpitTabReminders);
 
     await expectTip(tester, 'Reminders', 'Reminders notify only when');
+    // The Overview card goes by its title, Next 7 days.
+    expect(find.textContaining('They show in Next 7 days'), findsOneWidget);
     await tester.tap(find.text('New reminder'));
     await pumpThrough(tester);
     await expectTip(tester, 'Due day', 'Days 29 to 31 fall');
     await expectTip(tester, 'Category', 'Sets the icon and colour');
     expect(
       find.textContaining(
-        'notifies from 2 days before, checked when you open the app',
+        'notifies from 2 days before. Alerts are checked when the app opens '
+        'and about every 6 hours while it is closed.',
       ),
       findsOneWidget,
     );
+    expect(
+      find.textContaining('mark it paid from the Next 7 days card.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Notifications page: one timing sentence, in its intro and '
+      'each alert tip', (tester) async {
+    tallSurface(tester);
+    final p = FinanceProvider();
+    await p.load();
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: p),
+          ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
+        ],
+        child: const MaterialApp(home: NotificationsPage()),
+      ),
+    );
+    await pumpThrough(tester);
+
+    const timing =
+        'Alerts are checked when the app opens and about every 6 hours '
+        'while it is closed.';
+    expect(find.text(timing), findsOneWidget);
+    expect(find.text('Budget alerts'), findsOneWidget);
+    // No cap and no custom budget yet: the switch says what it needs.
+    expect(
+      find.text('Set a cap or a custom budget to enable alerts'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Card bills, your reminders and detected recurring payments'),
+      findsOneWidget,
+    );
+    for (final (title, start) in const [
+      ('Budget alerts', 'Each alert fires at most once'),
+      ('Unusual spending alerts', 'A category alerts once a month'),
+      ('Payment reminders', 'Card bills notify once'),
+    ]) {
+      final tip = tipFinder(title);
+      await tester.tap(tip);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.textContaining(start), findsOneWidget);
+      expect(find.textContaining(timing), findsNWidgets(2), reason: title);
+      await tester.tap(find.text('Got it'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+    }
   });
 }

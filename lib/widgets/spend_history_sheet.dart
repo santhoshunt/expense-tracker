@@ -44,10 +44,27 @@ Future<void> showSpendHistorySheet(
     builder: (_) => Builder(
       builder: (ctx) {
         final finance = ctx.watch<FinanceProvider>();
+        // Months before the ledger's first month are not on record: their
+        // bars would read as months of nothing. A category's own empty
+        // months after that are real information and stay.
+        final first = finance.firstTransactionDate;
+        final kept = first == null
+            ? months
+            : [
+                for (final m in months)
+                  if (!m.isBefore(DateTime(first.year, first.month))) m,
+              ];
+        final shown = kept.isEmpty ? [months.last] : kept;
+        final label = yearView || shown.length == months.length
+            ? windowLabel
+            : shown.length == 1
+            ? fmtMonth(shown.last)
+            : '${DateFormat(shown.first.year == shown.last.year ? 'MMM' : 'MMM yyyy').format(shown.first)} '
+                  'to ${fmtMonth(shown.last)}';
         final h = buildSpendHistory(
           finance,
           subject: subject,
-          months: months,
+          months: shown,
           now: DateTime.now(),
         );
         final theme = Theme.of(ctx);
@@ -104,7 +121,7 @@ Future<void> showSpendHistorySheet(
                             overflow: TextOverflow.ellipsis,
                           ),
                           const SizedBox(height: 2),
-                          Text(windowLabel, style: muted),
+                          Text(label, style: muted),
                         ],
                       ),
                     ),
@@ -123,7 +140,7 @@ Future<void> showSpendHistorySheet(
                   )
                 else
                   MonthlyBarChart(
-                    months: months,
+                    months: shown,
                     seriesOf: (m) {
                       final i = h.months.indexOf(m);
                       return i < 0 ? 0.0 : h.amounts[i];
@@ -136,29 +153,36 @@ Future<void> showSpendHistorySheet(
                   tiles: [
                     FigureTile(
                       title: 'Usual month',
-                      value: usual == null ? null : fmtMoney(usual),
+                      value: usual == null ? null : fmtMoneyWhole(usual),
                       none: 'Not enough months yet',
                       // The Categories vs usual card counts a running month
                       // to today's date, so its figure can differ.
-                      note: 'Middle of up to $kUsualWindowMonths whole months',
+                      note:
+                          'Middle of up to $kUsualWindowMonths full months on '
+                          'record',
                     ),
                     FigureTile(
                       title: 'Biggest',
-                      value: biggestMonth == null ? null : fmtMoney(h.biggest),
+                      value: biggestMonth == null
+                          ? null
+                          : fmtMoneyWhole(h.biggest),
                       none: 'None yet',
                       note: biggestMonth == null
                           ? null
                           : mmmYyyy.format(biggestMonth),
                     ),
                     if (yearView)
-                      FigureTile(title: 'Year total', value: fmtMoney(h.total))
+                      FigureTile(
+                        title: 'Year total',
+                        value: fmtMoneyWhole(h.total),
+                      )
                     else
                       // The shown month, which is not always this one.
                       FigureTile(
                         title: h.anchorRunning
                             ? 'This month so far'
                             : 'In ${DateFormat('MMMM').format(h.anchor)}',
-                        value: fmtMoney(h.anchorAmount),
+                        value: fmtMoneyWhole(h.anchorAmount),
                         note: mmmYyyy.format(h.anchor),
                       ),
                   ],
@@ -174,8 +198,8 @@ Future<void> showSpendHistorySheet(
                     },
                   ),
                 ],
-                // The same rename as a long-press on a Top merchants row,
-                // in sight here.
+                // The same rename as the ⋮ menu on a Top merchants row, in
+                // sight here.
                 if (identity != null) ...[
                   const SizedBox(height: 8),
                   OutlinedButton.icon(

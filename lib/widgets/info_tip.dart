@@ -32,6 +32,7 @@ class InfoTip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final target = InfoTipTarget.of(context);
     // Its own node, with its own tap: otherwise the label merges into the
     // heading beside it and TalkBack cannot reach the tip.
     return Semantics(
@@ -46,13 +47,13 @@ class InfoTip extends StatelessWidget {
       child: Material(
         type: MaterialType.transparency,
         child: InkResponse(
-          radius: 18,
+          radius: target / 2 + 2,
           onTap: () => _open(context),
-          // 32dp target around a 16dp glyph: sits inside a heading row
-          // without pushing its height.
+          // A 32dp target around a 16dp glyph by default: sits inside a
+          // heading row without pushing its height. [InfoTipTarget] grows it.
           child: SizedBox(
-            width: 32,
-            height: 32,
+            width: target,
+            height: target,
             child: Icon(
               Icons.info_outline,
               size: 16,
@@ -65,6 +66,20 @@ class InfoTip extends StatelessWidget {
   }
 
   void _open(BuildContext context) => openInfoTip(context, this);
+}
+
+/// The touch target of the InfoTips below it, in dp: 48 inside headers
+/// that fold on tap, where a near miss would fold the card. 32 elsewhere.
+class InfoTipTarget extends InheritedWidget {
+  const InfoTipTarget({super.key, required this.size, required super.child});
+
+  final double size;
+
+  static double of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<InfoTipTarget>()?.size ?? 32;
+
+  @override
+  bool updateShouldNotify(InfoTipTarget oldWidget) => oldWidget.size != size;
 }
 
 /// Opens [tip]'s bubble pointing at the widget [anchorContext] belongs to:

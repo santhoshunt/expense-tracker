@@ -86,10 +86,15 @@ void main() {
       expect(tester.takeException(), isNull);
       await select(tester, 'coffeerun');
       expect(tester.takeException(), isNull);
-      // The count is the number alone, level with the Clear button.
+      // The count is the number and a drop-down arrow, level with the
+      // Clear button: a menu of Select all shown and Select none.
       expect(find.text('1'), findsOneWidget);
       expect(find.text('selected'), findsNothing);
-      expect(find.bySemanticsLabel('1 selected'), findsOneWidget);
+      expect(
+        find.bySemanticsLabel(RegExp(r'^1 selected\. Select all or none')),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('Select all or none'), findsOneWidget);
       expect(
         tester.getCenter(find.text('1')).dy,
         moreOrLessEquals(
@@ -147,7 +152,7 @@ void main() {
     }
   });
 
-  testWidgets('More lists four actions, and Pair only with two selected', (
+  testWidgets('More lists three actions, and Pair only with two selected', (
     tester,
   ) async {
     final p = await seeded();
@@ -155,9 +160,11 @@ void main() {
     await select(tester, 'coffeerun');
     await tester.tap(find.byTooltip('More actions'));
     await tester.pumpAndSettle();
-    for (final key in ['select-all', 'tags', 'subscription', 'date-time']) {
+    for (final key in ['tags', 'subscription', 'date-time']) {
       expect(find.byKey(ValueKey('bulk-more-$key')), findsOneWidget);
     }
+    // Select all shown moved to the count's menu.
+    expect(find.byKey(const ValueKey('bulk-more-select-all')), findsNothing);
     expect(find.byKey(const ValueKey('bulk-more-pair')), findsNothing);
     await tester.tapAt(const Offset(4, 4));
     await tester.pumpAndSettle();
@@ -167,6 +174,30 @@ void main() {
     await tester.tap(find.byTooltip('More actions'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('bulk-more-pair')), findsOneWidget);
+  });
+
+  testWidgets('the count menu selects all shown, then none, keeping the bar', (
+    tester,
+  ) async {
+    final p = await seeded();
+    await pump(tester, p);
+    await select(tester, 'coffeerun');
+    await tester.tap(find.byTooltip('Select all or none'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('bulk-count-all')));
+    await tester.pumpAndSettle();
+    expect(find.text('2'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Select all or none'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('bulk-count-none')));
+    await tester.pumpAndSettle();
+    // Nothing picked, but the bar stays until Close.
+    expect(find.text('0'), findsOneWidget);
+    expect(find.byTooltip('Clear selection'), findsOneWidget);
+    await tester.tap(find.byTooltip('Clear selection'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Clear selection'), findsNothing);
   });
 
   testWidgets('bulk Count in moves the month figure, and Undo restores', (

@@ -394,8 +394,15 @@ void main() {
     await tester.tap(foodRow);
     await tester.pumpAndSettle();
 
-    // The tap opens the category's history; its button opens the rows.
-    expect(find.text('12 months to ${fmtMonth(month)}'), findsOneWidget);
+    // The tap opens the category's history; its button opens the rows. The
+    // records start this month, so the window is this month alone.
+    expect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text(fmtMonth(month)),
+      ),
+      findsOneWidget,
+    );
     await tester.tap(find.text('View transactions'));
     await tester.pumpAndSettle();
 
@@ -478,7 +485,7 @@ void main() {
     // The header count is static in both states — animating it (an
     // AnimatedOpacity fade) rendered the glyphs in halves on Impeller.
     final header = find
-        .ancestor(of: find.text('Upcoming'), matching: find.byType(Row))
+        .ancestor(of: find.text('Next 7 days'), matching: find.byType(Row))
         .first;
     final count = find.descendant(of: header, matching: find.text('1'));
     expect(count, findsOneWidget);
@@ -494,19 +501,19 @@ void main() {
     final fold = find.byType(AnimatedFold).first;
     expect(tester.getSize(fold).height, greaterThan(50));
 
-    await tester.tap(find.text('Upcoming'));
+    await tester.tap(find.text('Next 7 days'));
     await tester.pumpAndSettle();
     expect(tester.getSize(fold).height, lessThan(1));
     expect(count, findsOneWidget);
 
-    await tester.tap(find.text('Upcoming'));
+    await tester.tap(find.text('Next 7 days'));
     await tester.pumpAndSettle();
     expect(tester.getSize(fold).height, greaterThan(50));
     expect(find.text('HDFC Card bill'), findsOneWidget);
     expect(count, findsOneWidget);
   });
 
-  testWidgets('review cards collapse; Discard all discards with Undo', (
+  testWidgets('the review sheet folds spam; Discard all discards with Undo', (
     tester,
   ) async {
     Tx pendingTx(String id, double amount, {bool spam = false}) => Tx(
@@ -531,42 +538,36 @@ void main() {
     await tester.pumpWidget(app(p));
     await tester.tap(find.text('Transactions').last);
     await tester.pumpAndSettle();
-
-    expect(find.textContaining('Imported from SMS · 2'), findsOneWidget);
-    expect(find.textContaining('Suspected spam · 1'), findsOneWidget);
-
-    Finder foldOf(String headerSub) => find
-        .descendant(
-          of: find
-              .ancestor(
-                of: find.textContaining(headerSub),
-                matching: find.byType(Card),
-              )
-              .first,
-          matching: find.byType(AnimatedFold),
-        )
-        .first;
-
-    // Both cards fold to their headers and re-expand.
-    final pendingFold = foldOf('Imported from SMS');
-    expect(tester.getSize(pendingFold).height, greaterThan(50));
-    await tester.tap(find.textContaining('Imported from SMS'));
+    // No review card on the tab: the message button opens the sheet.
+    expect(find.text('Imported from SMS'), findsNothing);
+    await tester.tap(find.byTooltip('Review imports'));
     await tester.pumpAndSettle();
-    expect(tester.getSize(pendingFold).height, lessThan(1));
 
-    final spamFold = foldOf('Suspected spam');
-    await tester.tap(find.textContaining('Suspected spam'));
-    await tester.pumpAndSettle();
-    expect(tester.getSize(spamFold).height, lessThan(1));
+    expect(find.text('Imported from SMS'), findsOneWidget);
+    expect(find.text('2 to review · 1 suspected spam'), findsOneWidget);
+    expect(find.text('Suspected spam · 1'), findsOneWidget);
 
-    await tester.tap(find.textContaining('Imported from SMS'));
+    // Spam waits folded while imports wait, and unfolds on a tap.
+    AnimatedFold spamFold() => tester.widget<AnimatedFold>(
+      find
+          .descendant(
+            of: find
+                .ancestor(
+                  of: find.text('Suspected spam · 1'),
+                  matching: find.byType(Card),
+                )
+                .first,
+            matching: find.byType(AnimatedFold),
+          )
+          .first,
+    );
+    expect(spamFold().collapsed, isTrue);
+    await tester.tap(find.text('Suspected spam · 1'));
     await tester.pumpAndSettle();
-    expect(tester.getSize(pendingFold).height, greaterThan(50));
+    expect(spamFold().collapsed, isFalse);
 
-    // Discard all: dialog → queue emptied (spam untouched) → Undo restores.
-    // It sits under the list, which may be below the cards' capped area.
-    await tester.ensureVisible(find.text('Discard all'));
-    await tester.pumpAndSettle();
+    // Discard all: dialog → imports gone (spam untouched) → the sheet stays
+    // on the spam, and its own toast offers Undo.
     await tester.tap(find.text('Discard all'));
     await tester.pumpAndSettle();
     expect(find.text('Discard all 2 imports?'), findsOneWidget);
@@ -575,6 +576,8 @@ void main() {
 
     expect(p.pendingTransactions.where((t) => !t.suspectedSpam), isEmpty);
     expect(p.pendingTransactions.where((t) => t.suspectedSpam), hasLength(1));
+    expect(find.text('Imported from SMS'), findsOneWidget);
+    expect(find.text('Discard all'), findsNothing);
 
     await tester.tap(find.text('Undo'));
     await tester.pumpAndSettle();
@@ -641,8 +644,8 @@ void main() {
 
     await tester.tap(find.text('Transactions').last);
     await tester.pumpAndSettle();
-    // The search field's sort, filter and export button opens Filters.
-    await tester.tap(find.byTooltip('Sort, filter and export'));
+    // The Filters chip under the search opens the sheet.
+    await tester.tap(find.text('Filters'));
     await tester.pumpAndSettle();
 
     // Select Transport, then search for something it doesn't match.
@@ -685,14 +688,14 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('the SMS import button shows on the Transactions tab only', (
+  testWidgets('the message button shows on the Transactions tab only', (
     tester,
   ) async {
     final p = FinanceProvider();
     await p.load();
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
-    final sms = find.byTooltip('Import from SMS');
+    final sms = find.byTooltip('Review imports');
 
     expect(sms, findsNothing, reason: 'Dashboard');
     await tester.tap(find.text('Transactions').last);
@@ -729,21 +732,21 @@ void main() {
       of: find.byType(NavigationBar),
       matching: find.text('2'),
     );
-    // On the Dashboard, where the SMS button (and its badge) is gone.
-    expect(find.byTooltip('Import from SMS'), findsNothing);
+    // On the Dashboard, where the message button (and its badge) is gone.
+    expect(find.byTooltip('Review imports'), findsNothing);
     expect(navCount, findsOneWidget);
 
     await tester.tap(find.text('Accounts').last);
     await tester.pumpAndSettle();
     expect(navCount, findsOneWidget);
 
-    // Selected, the tab keeps it, and the SMS button shows its own.
+    // Selected, the tab keeps it, and the message button shows its own.
     await tester.tap(find.text('Transactions').last);
     await tester.pumpAndSettle();
     expect(navCount, findsOneWidget);
     expect(
       find.descendant(
-        of: find.byTooltip('Import from SMS'),
+        of: find.byTooltip('Review imports'),
         matching: find.text('2'),
       ),
       findsOneWidget,
@@ -897,18 +900,13 @@ void main() {
     expect(find.text('5 – 10 Jul 2026'), findsOneWidget);
 
     // Dismissing the chip clears the range.
-    await tester.tap(
-      find.descendant(
-        of: find.widgetWithText(InputChip, '5 – 10 Jul 2026'),
-        matching: find.byTooltip('Delete'),
-      ),
-    );
+    await tester.tap(find.byTooltip('Remove 5 – 10 Jul 2026'));
     await tester.pumpAndSettle();
     expect(find.text('early'), findsOneWidget);
     expect(find.text('late'), findsOneWidget);
   });
 
-  testWidgets('long-pressing a category row opens a prefilled budget', (
+  testWidgets('Set budget in a category row\'s ⋮ opens a prefilled budget', (
     tester,
   ) async {
     final p = FinanceProvider();
@@ -924,27 +922,32 @@ void main() {
     await tester.pumpAndSettle();
     await openDashboardView(tester, 'Breakdown');
 
-    // Only the category rows carry a long-press (the donut legend above
-    // them shows the same label without one). The list is lazy, so scroll
-    // until the row itself is built.
-    final row = find
-        .ancestor(
-          of: find.text('Food & Dining'),
-          matching: find.byWidgetPredicate(
-            (w) => w is InkWell && w.onLongPress != null,
-          ),
-        )
-        .first;
+    // Only the category rows carry a ⋮ (the donut above them has no
+    // legend). The list is lazy, so scroll until the row itself is built.
+    final menu = find.descendant(
+      of: find
+          .ancestor(
+            of: find.text('Food & Dining'),
+            matching: find.byWidgetPredicate(
+              (w) => w is InkWell && w.onTap != null,
+            ),
+          )
+          .first,
+      matching: find.byTooltip('More'),
+    );
     // Scroll until the row itself is built. By hand, not
     // scrollUntilVisible: the By group row below can mount in the same
     // scroll step, and that helper needs exactly one match.
-    for (var i = 0; i < 20 && row.evaluate().isEmpty; i++) {
+    for (var i = 0; i < 20 && menu.evaluate().isEmpty; i++) {
       await tester.drag(verticalScrollable(), const Offset(0, -300));
       await tester.pumpAndSettle();
     }
-    await tester.ensureVisible(row);
+    await tester.ensureVisible(menu);
     await tester.pumpAndSettle();
-    await tester.longPress(row);
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    expect(find.text('See history'), findsOneWidget);
+    await tester.tap(find.text('Set budget'));
     await tester.pumpAndSettle();
 
     expect(find.text('New budget'), findsOneWidget);
@@ -966,8 +969,11 @@ void main() {
     // The row now shows the cap beside the spend.
     expect(find.textContaining(' / ₹'), findsOneWidget);
 
-    // A second long-press edits that budget instead of creating another.
-    await tester.longPress(row);
+    // The menu now edits that budget instead of creating another.
+    await tester.tap(menu);
+    await tester.pumpAndSettle();
+    expect(find.text('Set budget'), findsNothing);
+    await tester.tap(find.text('Edit budget'));
     await tester.pumpAndSettle();
     expect(find.text('Edit budget'), findsOneWidget);
   });
@@ -1018,7 +1024,7 @@ void main() {
     expect(find.text('Months of $year'), findsOneWidget);
     expect(find.text('Last 6 months'), findsNothing);
     expect(
-      find.text('This month vs last month'),
+      find.text('This month so far'),
       findsNothing,
       reason: 'a month comparison has no meaning over a year',
     );
@@ -1029,8 +1035,14 @@ void main() {
     expect(find.text('Spending heatmap'), findsNothing);
 
     // Back to Month: the menu now offers the year's PDF and Month view, and
-    // the month-only sections return.
-    await tester.tap(find.byTooltip('More'));
+    // the month-only sections return. The app bar's ⋮: Breakdown rows have
+    // their own.
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byTooltip('More'),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(find.text('Year report (PDF)'), findsOneWidget);
     await tester.tap(find.text('Month view'));
@@ -1122,11 +1134,11 @@ void main() {
     // The label is the tip; the figure under it opens the rows.
     await tester.tap(statFigure('Saved'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(InputChip, label), findsOneWidget);
+    expect(find.byTooltip('Remove $label'), findsOneWidget);
     expect(find.text('Recurring deposit'), findsOneWidget);
   });
 
-  testWidgets('long-pressing a Top merchant renames it everywhere', (
+  testWidgets('Rename in a Top merchant\'s ⋮ renames it everywhere', (
     tester,
   ) async {
     final now = DateTime.now();
@@ -1157,7 +1169,7 @@ void main() {
         .ancestor(
           of: find.text('Fd No 12345'),
           matching: find.byWidgetPredicate(
-            (w) => w is InkWell && w.onLongPress != null,
+            (w) => w is InkWell && w.onTap != null,
           ),
         )
         .first;
@@ -1167,7 +1179,14 @@ void main() {
       scrollable: verticalScrollable(),
     );
     await tester.pumpAndSettle();
-    await tester.longPress(row);
+    // No long-press any more: the row's ⋮ holds Rename.
+    expect(tester.widget<InkWell>(row).onLongPress, isNull);
+    await tester.tap(
+      find.descendant(of: row, matching: find.byTooltip('More')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('See history'), findsOneWidget);
+    await tester.tap(find.text('Rename'));
     await tester.pumpAndSettle();
 
     expect(find.text('Rename merchant'), findsOneWidget);

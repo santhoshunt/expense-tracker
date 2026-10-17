@@ -130,6 +130,53 @@ void main() {
       );
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('figures are whole rupees, as on the Trends card', (
+      tester,
+    ) async {
+      final series = ComparisonSeries(
+        month: DateTime(2026, 10),
+        previousMonth: DateTime(2026, 9),
+        days: 31,
+        today: 10,
+        actual: [for (var d = 1; d <= 10; d++) d * 120.25],
+        predicted: [for (var d = 10; d <= 31; d++) d * 1525.24],
+        lastMonth: [for (var d = 1; d <= 30; d++) d * 100.5],
+        usual: null,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => showComparisonChartSheet(
+                    context,
+                    series: series,
+                    startOnUsual: false,
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      // 31 x ₹1,525.24 is ₹47,282.44.
+      expect(
+        find.textContaining('Forecast ${fmtMoneyWhole(47282.44)}'),
+        findsWidgets,
+      );
+      expect(
+        find.textContaining('So far ${fmtMoneyWhole(1202.5)}'),
+        findsWidgets,
+      );
+      // No figure carries paise.
+      expect(find.textContaining(RegExp(r'₹[\d,]+\.\d')), findsNothing);
+    });
   });
 
   group('folds', () {
@@ -192,7 +239,9 @@ void main() {
   });
 
   group('budget rows', () {
-    testWidgets('fit 320dp at text x2, the overshoot in red', (tester) async {
+    testWidgets('fit 320dp at text x2, the overshoot in plain text', (
+      tester,
+    ) async {
       tester.platformDispatcher.textScaleFactorTestValue = 2;
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final p = FinanceProvider();
@@ -221,10 +270,11 @@ void main() {
         scrollable: verticalScrollable(),
       );
       expect(tester.takeException(), isNull);
+      // The ring carries the red; the figure stays in the text colour.
       final ctx = tester.element(over);
       expect(
         tester.widget<Text>(over).style?.color,
-        Theme.of(ctx).colorScheme.error,
+        Theme.of(ctx).colorScheme.onSurface,
       );
       expect(
         find.text('${fmtMoneyTidy(1200)} of ${fmtMoneyTidy(600)} · 200%'),
@@ -334,7 +384,9 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('a long-press still asks to hide it', (tester) async {
+    testWidgets('a long-press no longer hides: it acts as the tap', (
+      tester,
+    ) async {
       await pumpDashboard(tester, await seeded());
       final row = find.text('Netflix');
       await tester.scrollUntilVisible(
@@ -344,7 +396,9 @@ void main() {
       );
       await tester.longPress(row);
       await tester.pumpAndSettle();
-      expect(find.text('Hide "Netflix"?'), findsOneWidget);
+      // No hide question; Hide waits in the row's sheet.
+      expect(find.text('Hide "Netflix"?'), findsNothing);
+      expect(find.text('Hide'), findsOneWidget);
     });
   });
 

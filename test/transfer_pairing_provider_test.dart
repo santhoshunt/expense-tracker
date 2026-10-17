@@ -288,7 +288,8 @@ void main() {
     expect(
       csv.split('\r\n').first,
       endsWith(
-        ',pairId,tags,people,repaidBy,countIn,walletCounted,unseen,refundOf',
+        ',pairId,tags,people,repaidBy,countIn,walletCounted,unseen,refundOf,'
+        'payee',
       ),
     );
     final rows = BackupService.txsFromCsv(csv);

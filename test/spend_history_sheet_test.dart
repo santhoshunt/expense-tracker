@@ -103,17 +103,45 @@ void main() {
   ) async {
     await open(tester, await ledger());
     expect(find.text('Food & Dining'), findsOneWidget);
-    expect(find.text('12 months to Dec 2025'), findsOneWidget);
-    expect(find.byType(MonthlyBarChart), findsOneWidget);
+    // The records start in March: the months before it are left out, and
+    // the window says so.
+    expect(find.text('12 months to Dec 2025'), findsNothing);
+    expect(find.text('Mar to December 2025'), findsOneWidget);
+    expect(
+      tester.widget<MonthlyBarChart>(find.byType(MonthlyBarChart)).months,
+      [for (var m = 3; m <= 12; m++) DateTime(2025, m)],
+    );
     expect(find.text('Usual month'), findsOneWidget);
-    expect(find.text('Middle of up to 6 whole months'), findsOneWidget);
+    expect(
+      find.text('Middle of up to 6 full months on record'),
+      findsOneWidget,
+    );
     expect(find.text('Biggest'), findsOneWidget);
-    expect(find.text(fmtMoney(1200)), findsOneWidget);
+    expect(find.text(fmtMoneyWhole(1200)), findsOneWidget);
     expect(find.text('Mar 2025'), findsOneWidget);
     // December 2025 is over, so the tile names it rather than "so far".
     expect(find.text('In December'), findsOneWidget);
     expect(find.text('This month so far'), findsNothing);
-    expect(find.text(fmtMoney(450)), findsOneWidget);
+    expect(find.text(fmtMoneyWhole(450)), findsOneWidget);
+  });
+
+  testWidgets('a ledger older than the window keeps the window label', (
+    tester,
+  ) async {
+    final p = await ledger();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'transport',
+      amount: 90,
+      note: 'test bus',
+      date: DateTime(2024, 6, 3),
+    );
+    await open(tester, p);
+    expect(find.text('12 months to Dec 2025'), findsOneWidget);
+    expect(
+      tester.widget<MonthlyBarChart>(find.byType(MonthlyBarChart)).months,
+      months,
+    );
   });
 
   testWidgets('View transactions closes the sheet and calls back once', (
@@ -158,7 +186,7 @@ void main() {
       onViewTransactions: () => calls++,
     );
     expect(find.text('Year total'), findsOneWidget);
-    expect(find.text(fmtMoney(2450)), findsOneWidget);
+    expect(find.text(fmtMoneyWhole(2450)), findsOneWidget);
     expect(find.text('In December'), findsNothing);
     expect(find.text('View transactions'), findsOneWidget);
   });

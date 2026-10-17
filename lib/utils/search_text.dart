@@ -12,8 +12,8 @@ String normalizeSearchText(String s) =>
 
 /// Everything a free-text search may match on one row, already normalized.
 ///
-/// Beyond the note, SMS body and sender this carries the category label, the
-/// account name, the merchant label (plus any user alias), the tags, the
+/// Beyond the note, the payee, SMS body and sender this carries the category
+/// label, the account name, the merchant label (plus any user alias), the tags, the
 /// people on a split or the payer of a repayment, and the amount in
 /// several spellings: "125000", "125000.00", the formatted "₹1,25,000.00",
 /// the Indian grouping "1,25,000" and the Western "125,000.00", so a typed
@@ -21,6 +21,7 @@ String normalizeSearchText(String s) =>
 String searchHaystack(Tx t, {String? accountName, String? merchantAlias}) {
   final parts = <String>[
     t.note,
+    t.payee,
     t.smsBody,
     t.sender,
     t.category.label,

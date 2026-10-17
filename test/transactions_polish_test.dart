@@ -12,9 +12,10 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
+import 'package:expense_tracker/widgets/review_sheet.dart';
 
-/// Transactions screen motion: the sticky month header, the review cards
-/// folding away, and the selection bar folding in on a long-press.
+/// Transactions screen motion: the sticky month header, the review sheet
+/// closing once emptied, and the selection bar folding in on a long-press.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -241,9 +242,7 @@ void main() {
     expect(find.text('Jump to month'), findsNothing);
   });
 
-  testWidgets('the review card folds away once its queue empties', (
-    tester,
-  ) async {
+  testWidgets('the review sheet closes once its queue empties', (tester) async {
     SharedPreferences.setMockInitialValues({
       'transactions_v1': jsonEncode([
         Tx(
@@ -259,22 +258,89 @@ void main() {
     });
     final p = FinanceProvider();
     await p.load();
-    await tester.pumpWidget(screen(p));
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: p),
+          ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: TextButton(
+                  onPressed: () => showReviewSheet(context),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
 
-    final title = find.textContaining('Imported from SMS · 1');
-    final card = find.byKey(const ValueKey('pending-card'));
+    final title = find.text('Imported from SMS');
     expect(title, findsOneWidget);
-    expect(tester.getSize(card).height, greaterThan(40));
+    expect(find.text('1 to review'), findsOneWidget);
 
-    await p.confirmAllPending();
+    // Confirming the last row closes the sheet; its Undo waits on the
+    // page, since the sheet's own toast would close with it.
+    await tester.tap(find.byTooltip('Confirm'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(title, findsOneWidget, reason: 'still folding away');
-
+    expect(title, findsOneWidget, reason: 'still sliding away');
     await tester.pumpAndSettle();
     expect(title, findsNothing);
-    expect(tester.getSize(card).height, 0, reason: 'takes no space');
+    expect(p.pendingTransactions, isEmpty);
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(p.pendingTransactions, hasLength(1));
+  });
+
+  testWidgets('opened empty, the review sheet stays on its empty state', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: p),
+          ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: TextButton(
+                  onPressed: () => showReviewSheet(context),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    // A second call while open does not stack a second sheet.
+    showReviewSheet(tester.element(find.text('open')));
+    await tester.pumpAndSettle();
+    expect(find.text('Imported from SMS'), findsOneWidget);
+    expect(
+      find.text(
+        'Nothing to review. New alerts land here when the app is unsure.',
+      ),
+      findsOneWidget,
+    );
+    // No SMS import registered here: the empty state has no button.
+    expect(find.text('Import from SMS'), findsNothing);
+    await tester.tap(find.byTooltip('Close'));
+    await tester.pumpAndSettle();
+    expect(find.text('Imported from SMS'), findsNothing);
   });
 
   testWidgets('a long-press enters selection and shows the bar', (

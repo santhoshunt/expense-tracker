@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 
@@ -135,16 +136,45 @@ void main() {
     expect(find.byIcon(Icons.chevron_right), findsWidgets);
   });
 
-  testWidgets('Category order is the row and the page title', (tester) async {
+  testWidgets('category order moved from Settings to the first row of the '
+      'Categories tab, which picks it from a sheet', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await pumpSettings(tester);
-    expect(find.text('Categories and rules'), findsNothing);
-    await tester.tap(find.text('Category order'));
+    expect(find.text('Category order'), findsNothing);
+
+    final finance = FinanceProvider();
+    await finance.load();
+    final settings = SettingsProvider();
+    await settings.load();
+    // A fresh app: a new home on the same MaterialApp keeps the old route.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: finance),
+          ChangeNotifierProvider.value(value: settings),
+        ],
+        child: const MaterialApp(
+          home: ClassifiersScreen(initialTab: kCockpitTabCategories),
+        ),
+      ),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
-    expect(find.widgetWithText(AppBar, 'Category order'), findsOneWidget);
-    // The heading no longer repeats the title.
-    expect(find.text('Category order'), findsOneWidget);
-    expect(find.text('In the add and edit sheets'), findsOneWidget);
+
+    expect(find.text('Order in add sheets'), findsOneWidget);
+    expect(find.text('Most used first'), findsOneWidget);
+    await tester.tap(find.text('Order in add sheets'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(
+      find.textContaining('Sets the order of the category list'),
+      findsOne,
+    );
+    await tester.tap(find.text('A to Z'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(settings.categoryOrder, CategoryOrder.alphabetical);
+    expect(find.text('A to Z'), findsOneWidget, reason: 'the row follows');
   });
 }

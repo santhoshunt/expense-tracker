@@ -18,11 +18,15 @@ import '../services/import_health.dart' show kImportHealthKey;
 import '../services/recurring_detector.dart';
 import '../services/refund_matching.dart';
 import '../services/reminder_schedule.dart';
+import '../services/review_queue.dart';
 import '../services/sms_parser.dart';
 import '../services/transfer_pairing.dart';
 import '../utils/dates.dart';
 import '../utils/figma_palette.dart';
 import '../utils/fiscal_year.dart';
+
+/// Most Paid to suggestions [FinanceProvider.recentPayees] offers.
+const int kRecentPayeeLimit = 8;
 
 /// What [FinanceProvider.recordCardPayment] did, so a snackbar Undo can
 /// reverse all of it: delete [txId] (which unlinks the pair), restore
@@ -44,6 +48,30 @@ typedef DeletedBudget = ({
   int index,
   String alertKey,
   int? alertLevel,
+});
+
+/// What [FinanceProvider.deleteCategory] changed, so a snackbar Undo can
+/// hand it to [FinanceProvider.restoreCategory]: the category and its place
+/// in the custom list, pre-delete copies of the rows it moved and of the
+/// reminders it remapped, the rules it removed with their old positions
+/// (ascending), its group, and the budgets that listed it.
+typedef DeletedCategory = ({
+  TxCategory category,
+  int index,
+  List<Tx> movedRows,
+  List<(int, ClassifierRule)> removedRules,
+  String? groupId,
+  List<String> budgetIds,
+  List<Reminder> remindersBefore,
+});
+
+/// What [FinanceProvider.deleteGroup] removed, so a snackbar Undo can hand
+/// it to [FinanceProvider.restoreGroup]: the group, its list position and
+/// the ids of the categories assigned to it.
+typedef DeletedGroup = ({
+  CategoryGroup group,
+  int index,
+  List<String> memberIds,
 });
 
 /// Income / expense / savings totals for one month, plus the per-category
@@ -161,6 +189,13 @@ class _Derived {
 
   /// Row id to [FinanceProvider.merchantLabelFor], null included.
   final Map<String, String?> merchantLabels = {};
+
+  /// Row id to [FinanceProvider.rowTitleFor], null included.
+  final Map<String, String?> rowTitles = {};
+
+  /// Per type, [FinanceProvider.recentPayees]: the Add sheet's Paid to
+  /// suggestions.
+  final Map<TxType, List<String>> recentPayees = {};
   Map<String, List<Tx>>? byAccount;
 
   /// [byAccount] with each linked debit card's rows also on its bank, in
@@ -217,6 +252,11 @@ class _Derived {
 
   /// [FinanceProvider.refundReviewIds], filtered to rows still waiting.
   Set<String>? refundReview;
+
+  /// [FinanceProvider.reviewQueue], and the dismissed-suggestion count it was
+  /// built with.
+  ReviewQueue? reviewQueue;
+  int reviewQueueDismissed = -1;
 }
 
 /// The refund links that hold, from one pass over the confirmed rows.
@@ -1875,6 +1915,7 @@ class FinanceProvider extends ChangeNotifier {
     String? repaidBy,
     DateTime? countIn,
     bool walletCounted = false,
+    String payee = '',
   }) async {
     final id = _newId();
     _transactions.add(
@@ -1893,6 +1934,7 @@ class FinanceProvider extends ChangeNotifier {
           repaidBy: repaidBy,
           countIn: Tx.normalizeCountIn(countIn, date),
           walletCounted: walletCounted,
+          payee: normalizePayee(payee),
         ),
       ),
     );
@@ -2332,11 +2374,84 @@ class FinanceProvider extends ChangeNotifier {
     return out;
   }
 
+  /// Everything the review sheet lists: imports to review, suspected spam,
+  /// every transfer suggestion and the refund suggestions, with the rows no
+  /// suggestion shows. The review sheet, the message icon badge and the
+  /// Transactions nav badge all read it. Built once per change and kept
+  /// while the [dismissed] count stays the same.
+  ReviewQueue reviewQueue(Set<String> dismissed) {
+    final cached = _d.reviewQueue;
+    if (cached != null && _d.reviewQueueDismissed == dismissed.length) {
+      return cached;
+    }
+    _d.reviewQueueDismissed = dismissed.length;
+    final all = pendingTransactions;
+    final reviewIds = refundReviewIds;
+    if (all.isEmpty && reviewIds.isEmpty) {
+      return _d.reviewQueue = ReviewQueue.empty;
+    }
+    final pending = [
+      for (final t in all)
+        if (!t.suspectedSpam) t,
+    ];
+    final spam = [
+      for (final t in all)
+        if (t.suspectedSpam) t,
+    ];
+    final pairs = pending.isEmpty
+        ? const <PairSuggestion>[]
+        : suggestTransferPairs(
+            [...all, ...transactions],
+            dismissed: dismissed,
+            accountFor: accountForKey,
+          );
+    bool open(Tx t) =>
+        t.type == TxType.income &&
+        t.refundOf == null &&
+        t.pairId == null &&
+        !isTransferCategory(t.categoryId);
+    final paired = {
+      for (final s in pairs) ...[s.out.id, s.incoming.id],
+    };
+    final refunds = [
+      for (final s in refundSuggestions([
+        for (final t in pending)
+          if (open(t)) t,
+        if (reviewIds.isNotEmpty)
+          for (final t in transactions)
+            if (reviewIds.contains(t.id) && open(t)) t,
+      ], dismissed))
+        if (!paired.contains(s.refund.id)) s,
+    ];
+    final shown = {
+      ...paired,
+      for (final s in refunds) ...[s.refund.id, s.purchase.id],
+    };
+    return _d.reviewQueue = ReviewQueue(
+      pending: pending,
+      spam: spam,
+      pairs: pairs,
+      refunds: refunds,
+      rows: [
+        for (final t in pending)
+          if (!shown.contains(t.id)) t,
+      ],
+    );
+  }
+
+  /// What the message icon badge and the Transactions nav badge show:
+  /// [ReviewQueue.badgeCount], without building the queue when nothing
+  /// waits.
+  int reviewCount(Set<String> dismissed) =>
+      pendingCount == 0 && refundReviewIds.isEmpty
+      ? 0
+      : reviewQueue(dismissed).badgeCount;
+
   /// Ids of past income rows the one-time pass found a likely purchase
   /// for, as stored; [refundReviewIds] filters them.
   final Set<String> _refundReviewIds = {};
 
-  /// Past income rows the review card asks about ("Looks like a refund"):
+  /// Past income rows the review sheet asks about ("Looks like a refund"):
   /// those the one-time refund pass found a likely purchase for, still
   /// confirmed income with no link.
   Set<String> get refundReviewIds => _d.refundReview ??= () {
@@ -2519,13 +2634,57 @@ class FinanceProvider extends ChangeNotifier {
   /// The undo half of [mergeRules]: puts back a full pre-merge snapshot.
   /// Wholesale, not per-rule — restoring N rules through [restoreRule] is
   /// order-dependent and would misplace priorities.
-  Future<void> restoreRules(List<ClassifierRule> snapshot) async {
+  ///
+  /// With [reapply] false only the list comes back and past rows are left
+  /// as they are: the undo of [restoreDefaultRules], which never re-sorted
+  /// them, and where a re-sort could drop pending rows for good.
+  Future<void> restoreRules(
+    List<ClassifierRule> snapshot, {
+    bool reapply = true,
+  }) async {
     _rules
       ..clear()
       ..addAll(snapshot);
+    if (!reapply) {
+      notifyListeners();
+      await _persist(rules: true);
+      return;
+    }
     _reapplyRulesToHistory();
     notifyListeners();
     await _persist(rules: true, tx: true);
+  }
+
+  /// Puts every built-in rule back as it first was: removes the built-ins,
+  /// edited or not, and seeds them again after the user's own rules. Past
+  /// rows are not re-sorted, as with first-run seeding and [deleteRule]; the
+  /// next rule add, edit or merge does that. Returns how many built-ins were
+  /// added, reset or removed (one of the user's own rules takes its place),
+  /// 0 when they already were as seeded.
+  Future<int> restoreDefaultRules() async {
+    final before = [
+      for (final r in _rules)
+        if (r.isBuiltIn) r,
+    ];
+    _rules.removeWhere((r) => r.isBuiltIn);
+    _seedDefaultRules();
+    var changed = 0;
+    for (final r in _rules) {
+      if (!r.isBuiltIn) continue;
+      final same = before.any(
+        (b) =>
+            b.id == r.id &&
+            b.pattern == r.pattern &&
+            b.categoryId == r.categoryId,
+      );
+      if (!same) changed++;
+    }
+    for (final b in before) {
+      if (!_rules.any((r) => r.id == b.id)) changed++;
+    }
+    notifyListeners();
+    await _persist(rules: true);
+    return changed;
   }
 
   /// First rule that matches [text] AND can apply to a row of [type]: spam
@@ -2662,7 +2821,33 @@ class FinanceProvider extends ChangeNotifier {
   /// (any existing category — rows are re-typed to match it, like a category
   /// direction change), otherwise to the row-type's "Other" fallback. Rules
   /// targeting the deleted category are removed either way.
-  Future<void> deleteCategory(String id, {String? moveTo}) async {
+  ///
+  /// Returns what [restoreCategory] needs to undo the delete.
+  Future<DeletedCategory> deleteCategory(String id, {String? moveTo}) async {
+    // The snapshot is taken before anything changes.
+    final index = customCategories.indexWhere((c) => c.id == id);
+    final category = index == -1 ? categoryById(id) : customCategories[index];
+    final snapshot = (
+      category: category,
+      index: index,
+      movedRows: [
+        for (final t in _transactions)
+          if (t.categoryId == id) t,
+      ],
+      removedRules: [
+        for (final (i, r) in _rules.indexed)
+          if (r.categoryId == id) (i, r),
+      ],
+      groupId: _groupAssignments[id],
+      budgetIds: [
+        for (final b in _budgets)
+          if (b.categoryIds.contains(id)) b.id,
+      ],
+      remindersBefore: [
+        for (final r in _reminders)
+          if (r.categoryId == id) r,
+      ],
+    );
     final target = moveTo == null || moveTo == id
         ? null
         : allCategories.where((c) => c.id == moveTo).firstOrNull;
@@ -2705,6 +2890,52 @@ class FinanceProvider extends ChangeNotifier {
       groups: detached.groups,
       budgets: detached.budgets,
       reminders: remindersChanged,
+    );
+    return snapshot;
+  }
+
+  /// The undo half of [deleteCategory]. The category goes back first, so the
+  /// split rules see it when its rows return. Rows, rules and reminders come
+  /// back as their pre-delete copies by id, skipping any deleted meanwhile;
+  /// group and budget membership return only into a group or budget still
+  /// present.
+  Future<void> restoreCategory(DeletedCategory d) async {
+    final id = d.category.id;
+    if (allCategories.any((c) => c.id == id)) return;
+    final customs = [...customCategories];
+    customs.insert(d.index.clamp(0, customs.length), d.category);
+    setCustomCategories(customs);
+    for (final snap in d.movedRows) {
+      final i = _transactions.indexWhere((t) => t.id == snap.id);
+      if (i != -1) _transactions[i] = _sanitizeSplit(snap);
+    }
+    for (final (index, rule) in d.removedRules) {
+      if (_rules.any((r) => r.id == rule.id)) continue;
+      _rules.insert(index.clamp(0, _rules.length), rule);
+    }
+    final groupId = d.groupId;
+    if (groupId != null && _groups.any((g) => g.id == groupId)) {
+      _groupAssignments[id] = groupId;
+    }
+    for (var i = 0; i < _budgets.length; i++) {
+      if (!d.budgetIds.contains(_budgets[i].id)) continue;
+      _budgets[i] = _budgets[i].copyWith(
+        categoryIds: {..._budgets[i].categoryIds, id},
+      );
+    }
+    for (final before in d.remindersBefore) {
+      final i = _reminders.indexWhere((r) => r.id == before.id);
+      if (i != -1) _reminders[i] = before;
+    }
+    _clearOrphanPairs();
+    notifyListeners();
+    await _persist(
+      categories: true,
+      rules: true,
+      tx: true,
+      groups: true,
+      budgets: true,
+      reminders: true,
     );
   }
 
@@ -2822,9 +3053,38 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Deletes a group; its member categories become ungrouped ("Other").
   /// Budgets are untouched — they reference category ids, not groups.
-  Future<void> deleteGroup(String id) async {
+  ///
+  /// Returns what [restoreGroup] needs to undo the delete, or null when no
+  /// group had [id].
+  Future<DeletedGroup?> deleteGroup(String id) async {
+    final index = _groups.indexWhere((g) => g.id == id);
+    if (index == -1) return null;
+    final snapshot = (
+      group: _groups[index],
+      index: index,
+      memberIds: [
+        for (final e in _groupAssignments.entries)
+          if (e.value == id) e.key,
+      ],
+    );
     _groups.removeWhere((g) => g.id == id);
     _groupAssignments.removeWhere((_, gid) => gid == id);
+    notifyListeners();
+    await _persist(groups: true);
+    return snapshot;
+  }
+
+  /// The undo half of [deleteGroup]: the group returns at its old position,
+  /// with the members that still exist and were not put in another group
+  /// meanwhile.
+  Future<void> restoreGroup(DeletedGroup d) async {
+    if (_groups.any((g) => g.id == d.group.id)) return;
+    _groups.insert(d.index.clamp(0, _groups.length), d.group);
+    for (final memberId in d.memberIds) {
+      if (!allCategories.any((c) => c.id == memberId)) continue;
+      if (_groupAssignments.containsKey(memberId)) continue;
+      _groupAssignments[memberId] = d.group.id;
+    }
     notifyListeners();
     await _persist(groups: true);
   }
@@ -2957,6 +3217,42 @@ class FinanceProvider extends ChangeNotifier {
     final identity = merchantIdentityOf(t);
     return identity == null ? null : _merchantAliases[identity];
   }
+
+  /// What [t]'s list row leads with ([rowTitleOf]), the user's alias first;
+  /// null when the row names none and shows its category instead. Cached per
+  /// row until the next change, as [merchantLabelFor] is. The ledger, the
+  /// review sheet and the Classify results all name rows through this.
+  String? rowTitleFor(Tx t) {
+    final cache = _d.rowTitles;
+    if (cache.containsKey(t.id)) return cache[t.id];
+    return cache[t.id] = rowTitleOf(t, alias: merchantAlias);
+  }
+
+  /// The Add sheet's Paid to suggestions for [type]: newest first, at most
+  /// [kRecentPayeeLimit], distinct ignoring case, from confirmed manual
+  /// non-transfer rows. A row with no payee offers its note's first line
+  /// when the note names a merchant and fits [kMaxPayeeLength], so repeat
+  /// payees from before Paid to existed show at once.
+  List<String> recentPayees(TxType type) => _d.recentPayees[type] ??= () {
+    final out = <String>[];
+    final seen = <String>{};
+    for (final t in transactions) {
+      if (t.source != TxSource.manual ||
+          t.type != type ||
+          isTransferCategory(t.categoryId)) {
+        continue;
+      }
+      var name = t.payee.trim();
+      if (name.isEmpty && merchantIdentityOf(t) != null) {
+        final line = t.note.split('\n').first.trim();
+        if (line.characters.length <= kMaxPayeeLength) name = line;
+      }
+      if (name.isEmpty || !seen.add(name.toLowerCase())) continue;
+      out.add(name);
+      if (out.length == kRecentPayeeLimit) break;
+    }
+    return List<String>.unmodifiable(out);
+  }();
 
   /// Sets (or, with a null/blank [name], removes) the alias for [identity].
   Future<void> setMerchantAlias(String identity, String? name) async {
@@ -3391,16 +3687,26 @@ class FinanceProvider extends ChangeNotifier {
   /// patterns the user already has. Appended after any existing user rules
   /// so user rules keep priority (first match wins). Called from first-run
   /// seeding in [load] and from [clearAll] with `includeConfig`.
+  ///
+  /// A built-in is skipped when a rule with the same normalized pattern is a
+  /// spam rule or targets the built-in's direction: a user's opposite
+  /// direction twin ("swiggy" as income) must not keep the built-in out, or
+  /// the rule pair splits. A rule already holding the built-in's id also
+  /// skips it, so two rules never share an id.
   void _seedDefaultRules() {
-    final existing = _rules.map((r) => r.pattern.toLowerCase()).toSet();
     kDefaultKeywordCategories.forEach((pattern, categoryId) {
-      if (existing.contains(pattern)) return;
+      final id = 'builtin_${pattern.replaceAll(' ', '_')}';
+      final norm = normalizedRulePattern(pattern);
+      final type = categoryById(categoryId).type;
+      final taken = _rules.any(
+        (r) =>
+            r.id == id ||
+            (normalizedRulePattern(r.pattern) == norm &&
+                (r.isSpamRule || categoryById(r.categoryId).type == type)),
+      );
+      if (taken) return;
       _rules.add(
-        ClassifierRule(
-          id: 'builtin_${pattern.replaceAll(' ', '_')}',
-          pattern: pattern,
-          categoryId: categoryId,
-        ),
+        ClassifierRule(id: id, pattern: pattern, categoryId: categoryId),
       );
     });
   }
@@ -5873,6 +6179,7 @@ class FinanceProvider extends ChangeNotifier {
     }
     // copyWith normalizes: trims, dedupes and caps whatever the file held.
     if (t.tags.isNotEmpty) t = t.copyWith(tags: t.tags);
+    if (t.payee.isNotEmpty) t = t.copyWith(payee: normalizePayee(t.payee));
     var tx = _sanitizeSplit(t);
     final known = allCategories.any((c) => c.id == tx.categoryId);
     if (known) {
@@ -6127,7 +6434,8 @@ class FinanceProvider extends ChangeNotifier {
     // `acctKinds` may hold `'debit'`.
     // v27: transactions may carry `refundOf` (the purchase a refund pays
     // back).
-    'version': 27,
+    // v28: transactions may carry `payee` (Paid to on a manual entry).
+    'version': 28,
     'transactions': _transactions
         .map((t) => t.toJson()..remove('smsBody'))
         .toList(),
@@ -6712,21 +7020,27 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// Confirms all pending imports EXCEPT suspected spam — those must be
-  /// reviewed one at a time.
-  Future<void> confirmAllPending() async {
+  /// reviewed one at a time. Returns the rows as they were before (still
+  /// `pending: true`), empty when none waited; the caller offers Undo
+  /// through [restoreEditedTransactions], which puts them back in review.
+  Future<List<Tx>> confirmAllPending() async {
+    final before = <Tx>[];
     for (var i = 0; i < _transactions.length; i++) {
       if (_transactions[i].pending && !_transactions[i].suspectedSpam) {
+        before.add(_transactions[i]);
         _transactions[i] = _transactions[i].copyWith(pending: false);
       }
     }
+    if (before.isEmpty) return before;
     notifyListeners();
     await _persist(tx: true);
+    return before;
   }
 
   /// The reject counterpart of [confirmAllPending]: removes every pending
   /// import EXCEPT suspected spam and returns the removed rows (still
-  /// `pending: true`) so the caller can offer Undo via
-  /// [restoreTransactions] — the rows then rejoin the review queue.
+  /// `pending: true`). Both return rows for Undo: here the caller restores
+  /// them via [restoreTransactions], and they rejoin the review sheet.
   Future<List<Tx>> discardAllPending() async {
     final removed = [
       for (final t in _transactions)

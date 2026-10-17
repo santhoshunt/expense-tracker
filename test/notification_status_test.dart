@@ -8,17 +8,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:expense_tracker/models/spend_budget.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
-import 'package:expense_tracker/screens/home_screen.dart';
-import 'package:expense_tracker/services/drive_backup_service.dart';
+import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 
+/// The Cockpit on its Budgets tab, whose button opens Settings,
+/// Notifications.
 Widget app(FinanceProvider provider) => MultiProvider(
   providers: [
     ChangeNotifierProvider.value(value: provider),
-    ChangeNotifierProvider(create: (_) => SettingsProvider()),
-    Provider<DriveBackupService>(create: (_) => DriveBackupService()),
+    ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
   ],
-  child: const MaterialApp(home: HomeScreen()),
+  child: const MaterialApp(
+    home: ClassifiersScreen(initialTab: kCockpitTabBudgets),
+  ),
 );
 
 void main() {
@@ -97,24 +99,17 @@ void main() {
     await tester.pump(const Duration(milliseconds: 700));
   }
 
-  /// Home → ⋯ → Cockpit → Plan, which opens on its Budgets tab (the section
-  /// moved out of Settings).
-  Future<void> openBudgetsTab(WidgetTester tester) async {
-    await tester.tap(find.byTooltip('More'));
+  /// Cockpit, Budgets → Notification settings: the alert switches moved
+  /// to Settings, Notifications.
+  Future<void> openNotifications(WidgetTester tester) async {
     await pumpThrough(tester);
-    await tester.tap(find.text('Cockpit').last);
+    await tester.tap(find.text('Notification settings'));
     await pumpThrough(tester);
-    await tester.tap(find.text('Plan'));
-    await pumpThrough(tester);
+    expect(find.widgetWithText(AppBar, 'Notifications'), findsOneWidget);
   }
 
-  /// The Budgets tab's own list, found inside the TabBarView.
-  Finder tabScrollable() => find
-      .descendant(
-        of: find.byType(TabBarView),
-        matching: find.byType(Scrollable),
-      )
-      .first;
+  /// The Notifications page's list.
+  Finder tabScrollable() => find.byType(Scrollable).first;
 
   Future<FinanceProvider> withBudget() async {
     final p = FinanceProvider();
@@ -136,12 +131,43 @@ void main() {
         NotificationStatus.appBlocked;
     final p = await withBudget();
     await tester.pumpWidget(app(p));
-    await openBudgetsTab(tester);
+    await openNotifications(tester);
     final hint = find.textContaining('turned off for this app');
     await tester.scrollUntilVisible(hint, 300, scrollable: tabScrollable());
     expect(hint, findsOneWidget);
     expect(find.text('Request'), findsOneWidget);
     expect(find.text('Allow'), findsNothing);
+  });
+
+  testWidgets('with only Payment reminders on, a block still warns', (
+    tester,
+  ) async {
+    NotificationService.statusOverride = () async =>
+        NotificationStatus.appBlocked;
+    final p = FinanceProvider();
+    await p.load();
+    final s = SettingsProvider();
+    await s.load();
+    await s.setUnusualAlerts(false);
+    await s.setWeeklyDigest(false);
+    // No cap and no custom budget, so Budget alerts cannot count.
+    expect(s.monthlyBudget, 0);
+    expect(s.upcomingReminders, isTrue);
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: p),
+          ChangeNotifierProvider.value(value: s),
+        ],
+        child: const MaterialApp(
+          home: ClassifiersScreen(initialTab: kCockpitTabBudgets),
+        ),
+      ),
+    );
+    await openNotifications(tester);
+    final hint = find.textContaining('turned off for this app');
+    await tester.scrollUntilVisible(hint, 300, scrollable: tabScrollable());
+    expect(hint, findsOneWidget);
   });
 
   testWidgets('plugin failure is reported as such, with no button', (
@@ -151,7 +177,7 @@ void main() {
         NotificationStatus.unavailable;
     final p = await withBudget();
     await tester.pumpWidget(app(p));
-    await openBudgetsTab(tester);
+    await openNotifications(tester);
     final hint = find.textContaining('could not be initialised');
     await tester.scrollUntilVisible(hint, 300, scrollable: tabScrollable());
     expect(hint, findsOneWidget);
@@ -162,7 +188,7 @@ void main() {
     NotificationService.statusOverride = () async => NotificationStatus.enabled;
     final p = await withBudget();
     await tester.pumpWidget(app(p));
-    await openBudgetsTab(tester);
+    await openNotifications(tester);
     await tester.scrollUntilVisible(
       find.text('Budget alerts'),
       300,

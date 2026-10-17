@@ -83,20 +83,21 @@ class _ComparisonChartBody extends StatelessWidget {
       return <String>[
         if (s.predicted != null)
           [
-            'So far ${fmtMoney(soFar)}',
+            'So far ${fmtMoneyWhole(soFar)}',
             if (refToday != null)
               usual
-                  ? 'usually ${fmtMoney(refToday)} by day ${s.today}'
-                  : '$prevName by day ${s.today} ${fmtMoney(refToday)}',
+                  ? 'usually ${fmtMoneyWhole(refToday)} by day ${s.today}'
+                  : '$prevName by day ${s.today} ${fmtMoneyWhole(refToday)}',
           ].join(' · ')
         else
-          'All of $monthName ${fmtMoney(soFar)}',
+          'All of $monthName ${fmtMoneyWhole(soFar)}',
         [
-          if (s.forecastTotal != null) 'Forecast ${fmtMoney(s.forecastTotal!)}',
+          if (s.forecastTotal != null)
+            'Forecast ${fmtMoneyWhole(s.forecastTotal!)}',
           if (ref != null && ref.isNotEmpty)
             usual
-                ? 'a usual month ${fmtMoney(ref.last)}'
-                : 'all of $prevName ${fmtMoney(ref.last)}',
+                ? 'a usual month ${fmtMoneyWhole(ref.last)}'
+                : 'all of $prevName ${fmtMoneyWhole(ref.last)}',
         ].join(' · '),
       ].where((l) => l.isNotEmpty).toList();
     }
@@ -483,11 +484,11 @@ class _ComparisonChartPainter extends CustomPainter {
         rect: Offset.zero & size,
         properties: SemanticsProperties(
           label: [
-            'Spent ${fmtMoney(soFar)} by day ${s.today}',
+            'Spent ${fmtMoneyWhole(soFar)} by day ${s.today}',
             if (s.forecastTotal != null)
-              'forecast ${fmtMoney(s.forecastTotal!)} by month end',
+              'forecast ${fmtMoneyWhole(s.forecastTotal!)} by month end',
             if (ref != null && ref.isNotEmpty)
-              '$referenceName ${fmtMoney(ref.last)} in all',
+              '$referenceName ${fmtMoneyWhole(ref.last)} in all',
           ].join(', '),
           textDirection: TextDirection.ltr,
         ),

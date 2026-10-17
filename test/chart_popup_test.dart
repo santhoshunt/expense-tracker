@@ -316,18 +316,19 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
 
-    expect(find.text('${fmtMoney(800)} / ${fmtMoney(1000)}'), findsOneWidget);
     expect(
-      find.text('${fmtMoneyCompact(200)} left this month'),
+      find.text('${fmtMoneyWhole(800)} / ${fmtMoneyWhole(1000)}'),
       findsOneWidget,
     );
+    expect(find.text('${fmtMoneyWhole(200)} left this month'), findsOneWidget);
 
-    // The bars, not the (keyed) limit line drawn over them; the last is
-    // this month, the one before it last month.
+    // The bars, not the (keyed) limit line drawn over them. Months before
+    // the records start draw none, so the first is last month's.
     final bars = find.byWidgetPredicate(
       (w) => w is AnimatedFractionallySizedBox && w.key == null,
     );
-    final bar = bars.at(4);
+    expect(bars, findsNWidgets(2));
+    final bar = bars.first;
     await tester.ensureVisible(bar);
     await tester.pumpAndSettle();
     await tester.tap(bar);
@@ -335,10 +336,13 @@ void main() {
 
     expect(find.byType(ChartPopup), findsNothing);
     expect(find.text(fmtMonth(lastMonth)), findsOneWidget);
-    expect(find.text('${fmtMoney(300)} / ${fmtMoney(1000)}'), findsOneWidget);
+    expect(
+      find.text('${fmtMoneyWhole(300)} / ${fmtMoneyWhole(1000)}'),
+      findsOneWidget,
+    );
     expect(
       find.text(
-        '${fmtMoneyCompact(700)} left in '
+        '${fmtMoneyWhole(700)} left in '
         '${DateFormat('MMM').format(lastMonth)}',
       ),
       findsOneWidget,

@@ -32,6 +32,9 @@ object QuickActions {
     /** The This week widgets: the digest on the current week. */
     const val OPEN_WEEKLY_DIGEST = "open_weekly_digest"
 
+    /** The This week widget's review count: the review sheet. */
+    const val OPEN_REVIEW = "open_review"
+
     /** Opens the enabled launcher entry with [action].
      *
      * The component comes from getLaunchIntentForPackage, never from
@@ -61,7 +64,8 @@ object QuickActions {
         return when (val action = intent.getStringExtra(EXTRA)) {
             ADD_EXPENSE, ADD_INCOME, IMPORT_SMS, OPEN_BUDGET, OPEN_BUDGETS,
             OPEN_PACE, OPEN_UPCOMING, OPEN_TODAY, OPEN_BREAKDOWN,
-            OPEN_TRANSACTIONS, OPEN_BIG_BILLS, OPEN_WEEKLY_DIGEST -> action
+            OPEN_TRANSACTIONS, OPEN_BIG_BILLS, OPEN_WEEKLY_DIGEST,
+            OPEN_REVIEW -> action
             else -> null
         }
     }

@@ -75,9 +75,10 @@ String? recurringKeyOf(Tx t) {
   return identity == null ? null : '${t.type.name}|$identity';
 }
 
-/// The direction-less half of [recurringKeyOf]: the normalized merchant (or
-/// note) text, or null when the row carries none. Merchant aliases key on
-/// this so one rename covers a payee's debits and refunds alike.
+/// The direction-less half of [recurringKeyOf]: the normalized merchant
+/// text, else the payee typed in Paid to, else the user's note; null when the
+/// row carries none. Merchant aliases key on this so one rename covers a
+/// payee's debits and refunds alike.
 String? merchantIdentityOf(Tx t) {
   if (t.suspectedSpam || isTransferCategory(t.categoryId)) return null;
   // Never key on t.sender — it is the bank's DLT channel, so every debit
@@ -86,10 +87,10 @@ String? merchantIdentityOf(Tx t) {
       ? SmsTxnParser.merchantOf(t.smsText).toLowerCase()
       : '';
   if (identity.isEmpty) {
-    identity = t.note
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]+'), ' ')
-        .trim();
+    identity = _identityText(t.payee);
+    // A payee of one or two characters is too short to key on; the note
+    // steps in, as it does for no payee.
+    if (identity.length < 3) identity = _identityText(t.note);
   }
   if (identity.length < 3) return null;
   // An identity with no letters is a phone number, VPA number or bank
@@ -98,6 +99,11 @@ String? merchantIdentityOf(Tx t) {
   if (!identity.contains(RegExp('[a-z]'))) return null;
   return identity;
 }
+
+/// Typed text as an identity: lowercased, every run of other characters one
+/// space, trimmed. A payee and a note with the same words match.
+String _identityText(String s) =>
+    s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
 
 /// Lookup from a merchant identity ([merchantIdentityOf]) to the user's
 /// chosen display name; null when the payee has no alias.
@@ -271,26 +277,55 @@ String merchantDisplayLabel(Tx t, {MerchantAliasLookup? alias}) =>
 
 /// [merchantDisplayLabel] without its "Payment" fallback: null when the row
 /// names no merchant, so a "category · merchant" title can drop the part
-/// rather than compare against the fallback text.
+/// rather than compare against the fallback text. The payee is returned as
+/// typed; an alert's merchant and the note are title-cased.
 String? merchantLabelOrNull(Tx t, {MerchantAliasLookup? alias}) {
   if (alias != null) {
     final identity = merchantIdentityOf(t);
     final named = identity == null ? null : alias(identity);
     if (named != null && named.isNotEmpty) return named;
   }
-  var raw = t.source == TxSource.sms
-      ? SmsTxnParser.merchantOf(t.smsText)
-      : t.note.trim();
-  // Mirror recurringKeyOf: an SMS row without an extractable merchant is
-  // identified (and therefore labeled) by the user's note.
-  if (raw.isEmpty) raw = t.note.trim();
-  if (raw.isEmpty) return null;
-  return raw
-      .split(RegExp(r'\s+'))
-      .map(
-        (w) => w.length <= 1
-            ? w.toUpperCase()
-            : '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}',
-      )
-      .join(' ');
+  // Mirror recurringKeyOf: the alert's merchant, then the payee, then the
+  // user's note.
+  if (t.source == TxSource.sms) {
+    final m = SmsTxnParser.merchantOf(t.smsText);
+    if (m.isNotEmpty) return _titleCase(m);
+  }
+  final payee = t.payee.trim();
+  final note = t.note.trim();
+  // A payee too short to key on gives way to the note, as in
+  // merchantIdentityOf.
+  if (payee.isNotEmpty && (_identityText(payee).length >= 3 || note.isEmpty)) {
+    return payee;
+  }
+  return note.isEmpty ? null : _titleCase(note);
 }
+
+/// What a list row leads with: the user's alias for its merchant, the
+/// merchant an alert names, the payee typed in Paid to, or the note's first
+/// line as typed; null when the row names none.
+String? rowTitleOf(Tx t, {MerchantAliasLookup? alias}) {
+  if (alias != null) {
+    final identity = merchantIdentityOf(t);
+    final named = identity == null ? null : alias(identity);
+    if (named != null && named.isNotEmpty) return named;
+  }
+  if (t.source == TxSource.sms) {
+    final m = SmsTxnParser.merchantOf(t.smsText);
+    if (m.isNotEmpty) return _titleCase(m);
+  }
+  final payee = t.payee.trim();
+  if (payee.isNotEmpty) return payee;
+  final line = t.note.split('\n').first.trim();
+  return line.isEmpty ? null : line;
+}
+
+/// Alert bodies shout in ALL CAPS: each word capitalised, the rest lower.
+String _titleCase(String raw) => raw
+    .split(RegExp(r'\s+'))
+    .map(
+      (w) => w.length <= 1
+          ? w.toUpperCase()
+          : '${w[0].toUpperCase()}${w.substring(1).toLowerCase()}',
+    )
+    .join(' ');

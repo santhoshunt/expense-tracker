@@ -249,7 +249,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(p.transactions, hasLength(2));
       expect(inSheet(find.text('Undo')), findsNothing);
-      expect(inSheet(find.text(fmtMoney(3000))), findsOneWidget);
+      expect(inSheet(find.text(fmtMoneyWhole(3000))), findsOneWidget);
     });
 
     testWidgets('the bar goes after 5 seconds', (tester) async {

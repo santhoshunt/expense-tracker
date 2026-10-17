@@ -178,7 +178,7 @@ void main() {
       recapClock = () => DateTime(now.year, now.month, 3, 10);
       await tapNotification(tester);
       // Back from Trends: its comparison is gone, the recap is showing.
-      expect(find.text('This month vs last month'), findsNothing);
+      expect(find.text('This month so far'), findsNothing);
       expect(find.byType(MonthlyRecapCard), findsOneWidget);
     });
 
@@ -201,7 +201,8 @@ void main() {
       await settings.setSectionOpen(DashboardSection.pace, false);
       await settle(tester);
       expect(find.byType(MonthPaceCard).hitTestable(), findsNothing);
-      expect(find.text('This month vs last month'), findsOneWidget);
+      // Folded to its heading.
+      expect(find.text('This month so far'), findsOneWidget);
     });
   });
 
@@ -266,6 +267,41 @@ void main() {
     });
   });
 
+  testWidgets('the Upcoming widget opens a folded Next 7 days for the visit', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    await pumpHome(
+      tester,
+      seed: (p) => p.addReminder(
+        name: 'Test rent',
+        dayOfMonth: now.day,
+        expectedAmount: 500,
+        categoryId: 'bills',
+      ),
+    );
+    final settings = tester
+        .element(find.byType(HomeScreen))
+        .read<SettingsProvider>();
+    // Folded by the user.
+    await settings.toggleSection('upcoming');
+    await settle(tester);
+    final row = find.text('Test rent');
+    expect(row.hitTestable(), findsNothing);
+
+    LaunchActions.instance.pending.value = LaunchAction.openUpcoming;
+    await settle(tester);
+    await tester.pumpAndSettle();
+    expect(row.hitTestable(), findsOneWidget, reason: 'open for the visit');
+    expect(settings.isSectionCollapsed('upcoming'), isTrue);
+
+    // A header tap ends the visit: folded again, the stored choice kept.
+    await tester.tap(find.text('Next 7 days'));
+    await tester.pumpAndSettle();
+    expect(row.hitTestable(), findsNothing);
+    expect(settings.isSectionCollapsed('upcoming'), isTrue);
+  });
+
   testWidgets("an unusual spending alert opens the category's history on "
       'its own month', (tester) async {
     final now = DateTime.now();
@@ -310,7 +346,14 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('12 months to ${fmtMonth(alerted)}'), findsOneWidget);
+    // The records start in the alert's month: the window is that month.
+    expect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text(fmtMonth(alerted)),
+      ),
+      findsOneWidget,
+    );
     expect(
       find.text('In ${DateFormat('MMMM').format(alerted)}'),
       findsOneWidget,

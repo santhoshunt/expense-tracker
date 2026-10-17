@@ -80,7 +80,7 @@ void main() {
       await p.setManualBalance(card, 12000);
       await pumpDashboard(tester, p);
 
-      await openTip(tester, 'Net balance');
+      await openTip(tester, 'Net balance today');
       expect(
         find.textContaining('Savings, wallet and closed accounts'),
         findsOneWidget,
@@ -119,7 +119,7 @@ void main() {
       );
       await pumpDashboard(tester, p);
 
-      await openTip(tester, 'Available balance');
+      await openTip(tester, 'Available balance today');
       expect(
         find.text(
           '${fmtMoney(10000)} in − ${fmtMoney(2500)} out = ${fmtMoney(7500)}',
@@ -223,13 +223,12 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('the projection is worked with its real inputs', (
-      tester,
-    ) async {
-      await show(
-        tester,
-        PreviousMonthCard(
-          comparison: made(
+    // The This month so far heading's tip shows this example while there is
+    // no Month-end forecast to show instead.
+    test('the projection is worked with its real inputs', () {
+      expect(
+        projectionExample(
+          made(
             previous: const SpendCompare(
               actual: 30000,
               reference: 25000,
@@ -239,14 +238,8 @@ void main() {
             ),
           ),
         ),
-      );
-      await tapTip(tester, 'This month vs last month');
-      expect(
-        find.text(
-          '${fmtMoney(30000)} so far × (${fmtMoney(40000)} ÷ '
-          '${fmtMoney(25000)}) = ${fmtMoney(48000)} projected',
-        ),
-        findsOneWidget,
+        '${fmtMoney(30000)} so far × (${fmtMoney(40000)} ÷ '
+        '${fmtMoney(25000)}) = ${fmtMoney(48000)} projected',
       );
     });
 
@@ -372,18 +365,16 @@ void main() {
       await p.addAccount(name: 'RD', type: AccountType.savings);
       await pumpAccounts(tester, p);
 
-      expect(
-        find.text('Net across 2 bank and card accounts'),
-        findsOneWidget,
-        reason: 'the savings account is not part of the net figure',
-      );
+      // The net card spells out its sum: one line per kind, and the
+      // savings account is not part of it.
+      expect(find.text('In 1 bank'), findsOneWidget);
+      expect(find.text(fmtMoney(50000)), findsWidgets);
+      expect(find.text('Due on 1 card'), findsOneWidget);
+      expect(find.text('−${fmtMoney(12000)}'), findsWidgets);
       await tester.tap(find.bySemanticsLabel('About Net balance'));
       await tester.pumpAndSettle();
       expect(
-        find.text(
-          '${fmtMoney(50000)} in banks − ${fmtMoney(12000)} on cards = '
-          '${fmtMoney(38000)}',
-        ),
+        find.textContaining('Savings, asset and wallet accounts are not'),
         findsOneWidget,
       );
       expect(find.text('Balance breakdown'), findsNothing);

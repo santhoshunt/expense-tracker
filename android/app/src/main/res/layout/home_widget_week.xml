@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- This week (4x2): the usual week by today, what is spent so far, a bar
      per day (a bitmap drawn in HomeWidgets.kt with the day initials under
-     the bars) and the gap to usual with the review count. Where the height
-     cannot hold every line at the user's font size, HomeWidgets.thisWeek
-     hides the title row first, then the gap line, rather than clip the
-     figure. -->
+     the bars), the gap to usual, and the review count, which opens the
+     review sheet on its own. Where the height cannot hold every line at
+     the user's font size, HomeWidgets.thisWeek hides the title row first,
+     then the gap line, rather than clip the figure. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/hw_root"
     android:layout_width="match_parent"
@@ -87,15 +87,40 @@
                 android:importantForAccessibility="no"
                 android:scaleType="fitXY" />
 
-            <TextView
-                android:id="@+id/hw_sub"
+            <LinearLayout
+                android:id="@+id/hw_sub_row"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:ellipsize="end"
-                android:maxLines="1"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/hw_sub"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp" />
+
+                <!-- A 44dp tap target. The row centres its children and
+                     both texts are 13sp, so the centred count stays level
+                     with hw_sub. -->
+                <TextView
+                    android:id="@+id/hw_review"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:maxLines="1"
+                    android:minHeight="44dp"
+                    android:paddingStart="8dp"
+                    android:paddingVertical="8dp"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+            </LinearLayout>
         </LinearLayout>
 
         <TextView

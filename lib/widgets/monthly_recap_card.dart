@@ -1,13 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../models/transaction.dart' show TxType;
 import '../services/monthly_recap.dart';
 import '../services/spend_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
-import '../utils/money_colors.dart';
 import '../utils/text_scale.dart';
 import 'dashboard_fold.dart';
 import 'delta_note.dart';
@@ -16,19 +14,33 @@ import 'status_dot.dart';
 
 /// "This month so far"'s tip; the Trends fold heading shows it too.
 const String kPaceTipMessage =
-    'Spending from the 1st to today, against the same days '
-    'of last month, so a half-finished month is not '
-    'measured against a whole one. Budgets show here once '
-    'they reach 80% of their limit. For the first $kRecapDays days, '
-    'last month\'s recap shows on the Overview instead.';
+    'Spending from the 1st to today, against the same days of last month, '
+    'so a half-finished month is not measured against a whole one. On track '
+    'for is the Month-end forecast: spent so far, plus bills still due, plus '
+    'your usual everyday spending for the days left. Without an everyday '
+    'estimate it is a floor and reads At least. See chart opens both months '
+    'day by day.';
+
+/// The monthly recap's tip, on the card's own title or on the Overview
+/// label above it.
+const InfoTip kMonthlyRecapTip = InfoTip(
+  title: 'Monthly recap',
+  message:
+      "Last month's totals, shown for the first $kRecapDays days of the "
+      "month; after that, Trends' This month so far card covers the month. "
+      "It updates if you edit last month's transactions. A notification on "
+      "the 1st says when a new one is ready. Any month's recap also opens "
+      'from the ⋮ menu.',
+);
 
 /// Last month's recap, shown on the Overview for the first [kRecapDays]
 /// days: spent and saved, then the top categories, the biggest merchant
 /// and any budget that ended over. No income: the card is about spending.
 ///
-/// It steps aside on its own for [MonthPaceCard]; [onDone] puts it away
-/// sooner. The links reuse the dashboard's deep-link callbacks, scoped to
-/// its month.
+/// It steps aside on its own once [kRecapDays] pass, when Trends' This
+/// month so far card ([MonthPaceCard]) covers the month; [onDone] puts it
+/// away sooner. The links reuse the dashboard's deep-link callbacks, scoped
+/// to its month.
 class MonthlyRecapCard extends StatelessWidget {
   final MonthlyRecap recap;
   final void Function(String categoryId, DateTime month)? onViewCategory;
@@ -69,7 +81,7 @@ class MonthlyRecapCard extends StatelessWidget {
     final showDelta = compare.state == CompareState.ok;
     final deltaText = compare.negligible
         ? 'About the same as $prevShort'
-        : '${deltaPhrase(compare)} than $prevShort';
+        : deltaPhrase(compare, than: ' than $prevShort');
     final merchant = recap.topMerchant;
 
     // No margin: the Overview spaces its cards itself, and the default 4dp
@@ -90,16 +102,7 @@ class MonthlyRecapCard extends StatelessWidget {
             if (showTitle) ...[
               InfoLabel(
                 label: Text('$monthName recap', style: text.titleMedium),
-                tip: const InfoTip(
-                  title: 'Monthly recap',
-                  message:
-                      "Last month's totals, shown for the first $kRecapDays "
-                      "days of the month; after that, this month's pace "
-                      "takes its place. It updates if you edit last month's "
-                      'transactions. A notification on the 1st says when a '
-                      "new one is ready. Any month's recap also opens from "
-                      'the ⋮ menu.',
-                ),
+                tip: kMonthlyRecapTip,
               ),
               const SizedBox(height: 8),
             ],
@@ -109,14 +112,17 @@ class MonthlyRecapCard extends StatelessWidget {
                 Expanded(
                   child: _Stat(
                     label: 'Spent',
-                    value: fmtMoney(recap.spent),
+                    value: fmtMoneyWhole(recap.spent),
                     note: showDelta ? deltaText : null,
                     noteCompare: compare,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: _Stat(label: 'Saved', value: fmtMoney(recap.saved)),
+                  child: _Stat(
+                    label: 'Saved',
+                    value: fmtMoneyWhole(recap.saved),
+                  ),
                 ),
               ],
             ),
@@ -141,7 +147,7 @@ class MonthlyRecapCard extends StatelessWidget {
               for (final e in recap.topCategories)
                 _AmountRow(
                   label: e.key.label,
-                  amount: fmtMoney(e.value),
+                  amount: fmtMoneyWhole(e.value),
                   style: muted,
                   onTap: onViewCategory == null
                       ? null
@@ -158,7 +164,7 @@ class MonthlyRecapCard extends StatelessWidget {
                         recap.month,
                       ),
                 child: Text(
-                  '${merchant.label} ${fmtMoney(merchant.total)} '
+                  '${merchant.label} ${fmtMoneyWhole(merchant.total)} '
                   '(${merchant.count} '
                   '${merchant.count == 1 ? 'payment' : 'payments'})',
                   style: muted,
@@ -183,19 +189,31 @@ class MonthlyRecapCard extends StatelessWidget {
   }
 }
 
-/// This month so far, shown on Trends once the recap steps aside:
-/// spending through today against the same days of last month, and the
-/// budgets close to or past their limit.
+/// Trends' month against the one before it, for any month in Month view:
+/// spending through today (or the whole month once it has ended) against
+/// the same days of the previous month, the gap between them, and while the
+/// month runs where it is heading, from the Month-end forecast when there
+/// is one.
 class MonthPaceCard extends StatelessWidget {
-  final MonthPace pace;
-  final void Function(String budgetId, DateTime month)? onViewBudget;
-  final void Function(DateTime month)? onViewSpending;
+  final MonthComparison comparison;
+
+  /// The Month-end forecast's total; null falls back to the comparison's
+  /// own projection.
+  final double? forecastTotal;
+
+  /// The forecast has no everyday estimate, so its total is a floor and
+  /// reads "At least".
+  final bool forecastIsFloor;
+
+  /// Opens the day-by-day chart sheet. Null leaves the button out.
+  final VoidCallback? onSeeChart;
 
   const MonthPaceCard({
     super.key,
-    required this.pace,
-    this.onViewBudget,
-    this.onViewSpending,
+    required this.comparison,
+    this.forecastTotal,
+    this.forecastIsFloor = false,
+    this.onSeeChart,
   });
 
   @override
@@ -203,11 +221,13 @@ class MonthPaceCard extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
     final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
-    final c = pace.comparison;
+    final c = comparison;
     final month = c.month;
     final monthName = DateFormat('MMMM').format(month);
     final short = DateFormat('MMM').format(month);
     final prevShort = DateFormat('MMM').format(c.previousMonth);
+    final prevLong = DateFormat('MMMM').format(c.previousMonth);
+    final byDay = c.partial ? ' by this day' : '';
     final prev = c.vsPrevious;
     final compared = prev.state != CompareState.notEnoughHistory;
     // Both bars share one scale, so their lengths compare.
@@ -223,6 +243,23 @@ class MonthPaceCard extends StatelessWidget {
     final window = c.partial
         ? '1 to ${c.throughDay} $short against $prevWindow'
         : 'All of $short against all of $prevShort';
+    // Where the month is heading: the forecast's total when there is one,
+    // so Trends and the Overview give the same figure.
+    final projected = c.partial ? (forecastTotal ?? prev.actualFull) : null;
+    final hasFull = compared && prev.referenceFull > 0;
+    String? projection;
+    if (projected != null) {
+      projection =
+          (forecastIsFloor
+              ? 'At least ${fmtMoneyWhole(projected)} by month end'
+              : 'On track for ${fmtMoneyWhole(projected)}') +
+          (hasFull
+              ? ', against ${fmtMoneyWhole(prev.referenceFull)} in all of '
+                    '$prevLong'
+              : '');
+    } else if (c.partial && hasFull) {
+      projection = 'All of $prevLong: ${fmtMoneyWhole(prev.referenceFull)}';
+    }
 
     // No margin, as the recap card.
     return Card(
@@ -237,60 +274,120 @@ class MonthPaceCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // A fold heading above carries the tip already; on its own the
-            // title is the tip.
-            if (DashboardFoldScope.of(context))
-              Text('$monthName so far', style: text.titleMedium)
-            else
+            // A fold heading above carries the title and tip already; on its
+            // own the title is the tip.
+            if (!DashboardFoldScope.of(context))
               InfoLabel(
-                label: Text('$monthName so far', style: text.titleMedium),
-                tip: const InfoTip(
-                  title: 'This month so far',
+                label: Text(
+                  c.partial ? '$monthName so far' : monthName,
+                  style: text.titleMedium,
+                ),
+                tip: InfoTip(
+                  title: c.partial ? 'This month so far' : monthName,
                   message: kPaceTipMessage,
                 ),
               ),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                fmtMoneyWhole(prev.actual),
+                style: text.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
             Text(
               compared
                   ? window
                   : 'Not enough of $prevShort on record to compare',
               style: muted,
             ),
-            const SizedBox(height: 10),
-            _PaceBar(
-              label: short,
-              amount: prev.actual,
-              max: top,
-              color: scheme.primary,
-            ),
-            if (compared) ...[
-              const SizedBox(height: 6),
-              _PaceBar(
-                label: prevShort,
-                amount: prev.reference,
-                max: top,
-                color: scheme.outline,
+            if (prev.empty) ...[
+              const SizedBox(height: 8),
+              Text(
+                c.partial
+                    ? 'Nothing recorded this month or in $prevLong.'
+                    : 'Nothing recorded in $monthName or in $prevLong.',
+                style: muted,
               ),
-              if (prev.state == CompareState.ok) ...[
-                const SizedBox(height: 8),
-                DeltaNote(
-                  text: prev.negligible
-                      ? 'About the same as $prevShort by this day'
-                      : '${deltaPhrase(prev)} than $prevShort by this day',
-                  delta: prev.delta,
-                  style: text.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+            ] else ...[
+              const SizedBox(height: 10),
+              _PaceBar(
+                label: short,
+                amount: prev.actual,
+                max: top,
+                color: scheme.primary,
+              ),
+              if (compared) ...[
+                const SizedBox(height: 6),
+                _PaceBar(
+                  label: prevShort,
+                  amount: prev.reference,
+                  max: top,
+                  color: scheme.outline,
                 ),
               ],
-            ],
-            if (pace.budgets.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Divider(height: 1, color: scheme.outlineVariant),
-              const SizedBox(height: 4),
-              for (final b in pace.budgets)
-                _BudgetLine(
-                  standing: b,
-                  month: month,
-                  onViewBudget: onViewBudget,
-                  onViewSpending: onViewSpending,
+              switch (prev.state) {
+                CompareState.ok => Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: DeltaNote(
+                    text: prev.negligible
+                        ? 'About the same as $prevShort$byDay'
+                        : deltaPhrase(prev, than: ' than $prevShort$byDay'),
+                    delta: prev.delta,
+                    style: text.bodySmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                CompareState.newThisMonth => Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    c.partial
+                        ? 'All of it new. Nothing in $prevLong by this day.'
+                        : 'All of it new. Nothing in all of $prevLong.',
+                    style: muted,
+                  ),
+                ),
+                CompareState.noneThisMonth => Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    c.partial
+                        ? 'Nothing yet this month. $prevLong had reached '
+                              '${fmtMoneyWhole(prev.reference)} by now.'
+                        : 'Nothing in $monthName. $prevLong came to '
+                              '${fmtMoneyWhole(prev.reference)}.',
+                    style: muted,
+                  ),
+                ),
+                CompareState.notEnoughHistory => const SizedBox.shrink(),
+              },
+              if (projection != null) ...[
+                Divider(height: 20, color: scheme.outlineVariant),
+                Text(projection, style: muted),
+              ],
+              if (onSeeChart case final see?)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: see,
+                    // The label shortens rather than overflowing at large
+                    // text on a narrow phone.
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            'See chart',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Icon(Icons.chevron_right, size: 18),
+                      ],
+                    ),
+                  ),
                 ),
             ],
           ],
@@ -320,7 +417,7 @@ class _PaceBar extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final share = max <= 0 ? 0.0 : (amount / max).clamp(0.0, 1.0);
     return Semantics(
-      label: '$label ${fmtMoney(amount)}',
+      label: '$label ${fmtMoneyWhole(amount)}',
       excludeSemantics: true,
       // Caps on the label and amount so the bar keeps a share of the row: at
       // a large font size on a narrow phone the two texts alone overflowed
@@ -369,7 +466,7 @@ class _PaceBar extends StatelessWidget {
                 fit: BoxFit.scaleDown,
                 alignment: AlignmentDirectional.centerEnd,
                 child: Text(
-                  fmtMoney(amount),
+                  fmtMoneyWhole(amount),
                   textAlign: TextAlign.end,
                   style: text.bodySmall?.copyWith(fontWeight: FontWeight.w600),
                 ),
@@ -433,20 +530,18 @@ class _BudgetLine extends StatelessWidget {
               ),
             ),
             TextSpan(
-              text: '${fmtMoney(b.spent)} of ${fmtMoney(b.limit)} · ',
+              text: '${fmtMoneyWhole(b.spent)} of ${fmtMoneyWhole(b.limit)} · ',
               style: TextStyle(
                 color: over ? scheme.onSurface : scheme.onSurfaceVariant,
               ),
             ),
-            // The overshoot in the money-out red.
+            // The overshoot in plain text: the red dot leads the line.
             TextSpan(
               text: over
-                  ? 'over by ${fmtMoney(b.spent - b.limit)}'
-                  : '${fmtMoney(b.limit - b.spent)} left',
+                  ? 'over by ${fmtMoneyWhole(b.spent - b.limit)}'
+                  : '${fmtMoneyWhole(b.limit - b.spent)} left',
               style: TextStyle(
-                color: over
-                    ? moneyColor(context, type: TxType.expense)
-                    : scheme.onSurfaceVariant,
+                color: over ? scheme.onSurface : scheme.onSurfaceVariant,
               ),
             ),
           ],

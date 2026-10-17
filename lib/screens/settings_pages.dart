@@ -232,6 +232,9 @@ class _SmsImportPage extends StatelessWidget {
     final autoImport = context.select<SettingsProvider, AutoImportFrequency>(
       (s) => s.autoImport,
     );
+    final filters = context.select<FinanceProvider, int>(
+      (f) => f.importRules.length,
+    );
 
     return SettingsGroupPage(
       title: 'SMS import',
@@ -252,13 +255,13 @@ class _SmsImportPage extends StatelessWidget {
                 'Scans your SMS inbox when you open or return to the '
                 'app, as often as this setting allows. Daily: the first '
                 'open each day. Weekly: 7 days after the last automatic '
-                'scan. Daily and Weekly also check every 6 hours with the '
-                'app closed. Every SMS: each new SMS is imported about a '
+                'scan. Daily and Weekly also scan about every 6 hours with '
+                'the app closed. Every SMS: each new SMS is imported about a '
                 'minute after it arrives, even with the app closed, and it '
                 'needs the Receive SMS permission too. The first scan '
                 'reaches back 30 days. It needs SMS permission; without '
                 'it, the scan is skipped. New rows wait in the review '
-                'queue, and duplicates are skipped. When more than 5 are '
+                'sheet, and duplicates are skipped. When more than 5 are '
                 'waiting, a notification says how many.',
           ),
         ),
@@ -267,7 +270,7 @@ class _SmsImportPage extends StatelessWidget {
           selected: autoImport,
           onChanged: (f) => _choose(context, f),
           // The heading's tip has the detail: background checks, the
-          // permission, the review queue.
+          // permission, the review sheet.
           subtitle: (f) => switch (f) {
             AutoImportFrequency.off => 'Never scans on its own',
             AutoImportFrequency.everyOpen =>
@@ -280,7 +283,44 @@ class _SmsImportPage extends StatelessWidget {
           },
         ),
         const SizedBox(height: 12),
+        // The import rules, on the Cockpit's Import tab.
+        FrostedPanel(
+          radius: BorderRadius.circular(AppRadius.card),
+          child: ListTile(
+            leading: const Icon(Icons.block),
+            title: const Text('SMS filters'),
+            subtitle: Text(
+              'What gets ignored or flagged · $filters '
+              '${filters == 1 ? 'rule' : 'rules'}',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => goCockpitImport(context),
+          ),
+        ),
+        const SizedBox(height: 12),
         const _NotificationCaptureTile(),
+      ],
+    );
+  }
+}
+
+/// Settings, Notifications: the alert switches, with the one sentence on
+/// when alerts are checked.
+class NotificationsPage extends StatelessWidget {
+  const NotificationsPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsGroupPage(
+      title: 'Notifications',
+      children: [
+        Text(
+          'Alerts are checked when the app opens and about every 6 hours '
+          'while it is closed.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 12),
+        const NotificationSwitches(),
       ],
     );
   }
@@ -345,56 +385,6 @@ class _PrivacyPage extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         const _PrivacySection(),
-      ],
-    );
-  }
-}
-
-/// Category order for the add and edit sheets. Cockpit opens from the
-/// home screen's ⋮ menu.
-class _CategoryOrderPage extends StatelessWidget {
-  const _CategoryOrderPage();
-
-  @override
-  Widget build(BuildContext context) {
-    final categoryOrder = context.select<SettingsProvider, CategoryOrder>(
-      (s) => s.categoryOrder,
-    );
-
-    return SettingsGroupPage(
-      title: 'Category order',
-      children: [
-        // The page title names the setting; the heading says where the
-        // order shows, and keeps the tip with its Edit categories link.
-        _PageHeading(
-          label: Text(
-            'In the add and edit sheets',
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          tip: const InfoTip(
-            title: 'Category order',
-            link: InfoLink(
-              prompt: 'Want different categories?',
-              label: 'Edit categories',
-              onTap: goCockpitCategories,
-            ),
-            message:
-                'Sets the order of the category list when you add or edit '
-                'a transaction. The first category in the list is picked '
-                'by default for a new transaction. "Most used" ranks by the '
-                'amounts of the last three months.',
-          ),
-        ),
-        _RadioSetting<CategoryOrder>(
-          options: [for (final o in CategoryOrder.values) (o, o.label)],
-          selected: categoryOrder,
-          onChanged: (o) =>
-              context.read<SettingsProvider>().setCategoryOrder(o),
-          subtitle: (o) => switch (o) {
-            CategoryOrder.mostUsed => 'By amount over the last three months',
-            CategoryOrder.alphabetical => 'By name, however often each is used',
-          },
-        ),
       ],
     );
   }

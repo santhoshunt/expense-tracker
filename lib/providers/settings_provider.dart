@@ -15,7 +15,7 @@ import '../utils/figma_palette.dart';
 /// (background_import.dart).
 enum AutoImportFrequency {
   off('Off'),
-  everyOpen('Launch'),
+  everyOpen('On open'),
   daily('Daily'),
   weekly('Weekly'),
   everySms('Every SMS');
@@ -164,7 +164,9 @@ class SettingsProvider extends ChangeNotifier {
   bool get alert90 => _alert90;
   bool get alertOver => _alertOver;
 
-  /// Notify on open when a card bill or detected recurring payment is due.
+  /// Notify when a card bill, a reminder or a detected recurring payment is
+  /// due. Checked when the app opens and about every 6 hours while it is
+  /// closed.
   bool get upcomingReminders => _upcomingReminders;
 
   /// Notify when a category's month so far runs well past its usual month
@@ -178,9 +180,8 @@ class SettingsProvider extends ChangeNotifier {
   /// Recurring-detection keys the user hid from the Upcoming card.
   Set<String> get hiddenUpcoming => Set.unmodifiable(_upcomingHidden);
 
-  /// Collapsible sections folded to their headers ('upcoming',
-  /// 'pending_review', 'spam_review'). Per-device UI state — deliberately
-  /// not in the backup block.
+  /// Collapsible sections folded to their headers ('upcoming'). Per-device
+  /// UI state, deliberately not in the backup block.
   bool isSectionCollapsed(String id) => _collapsedSections.contains(id);
 
   /// Account cards opened to their full details; every other card shows

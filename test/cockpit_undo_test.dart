@@ -55,6 +55,14 @@ void main() {
     await pumpThrough(tester);
   }
 
+  /// Opens the row showing [rowText] in its editor and taps Delete there.
+  Future<void> deleteInEditor(WidgetTester tester, String rowText) async {
+    await tester.tap(find.text(rowText));
+    await pumpThrough(tester);
+    await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+    await pumpThrough(tester);
+  }
+
   /// Seeds stored budgets with fixed ids: addBudget's ids come from the
   /// clock alone, so back-to-back adds could collide.
   Future<FinanceProvider> withBudgets(
@@ -91,8 +99,7 @@ void main() {
     expect(prefs.getInt(alertKey), 90);
 
     await pumpCockpit(tester, p, kCockpitTabBudgets);
-    await tester.tap(find.byTooltip('Delete budget').at(1));
-    await pumpThrough(tester);
+    await deleteInEditor(tester, 'Travel');
 
     expect(find.byType(AlertDialog), findsNothing);
     expect(find.text('Deleted budget "Travel"'), findsOneWidget);
@@ -119,8 +126,7 @@ void main() {
     final id = p.budgets.single.id;
 
     await pumpCockpit(tester, p, kCockpitTabBudgets);
-    await tester.tap(find.byTooltip('Delete budget'));
-    await pumpThrough(tester);
+    await deleteInEditor(tester, 'Food');
     expect(p.budgets, isEmpty);
     expect(find.text('No custom budgets yet.'), findsOneWidget);
 
@@ -148,8 +154,7 @@ void main() {
     final ids = [for (final r in p.reminders) r.id];
 
     await pumpCockpit(tester, p, kCockpitTabReminders);
-    await tester.tap(find.byTooltip('Delete reminder').at(1));
-    await pumpThrough(tester);
+    await deleteInEditor(tester, 'Internet');
 
     expect(find.byType(AlertDialog), findsNothing);
     expect(find.text('Deleted reminder "Internet"'), findsOneWidget);
@@ -163,5 +168,128 @@ void main() {
       ids,
       reason: 'back in the middle, not appended',
     );
+  });
+
+  testWidgets('rows carry no delete button; a new item has no Delete', (
+    tester,
+  ) async {
+    final p = await withBudgets(['Food']);
+    await pumpCockpit(tester, p, kCockpitTabBudgets);
+    expect(find.byIcon(Icons.delete_outline), findsNothing);
+    expect(find.byIcon(Icons.chevron_right), findsOneWidget);
+
+    await tester.tap(find.text('New budget'));
+    await pumpThrough(tester);
+    expect(find.text('New budget'), findsWidgets);
+    expect(find.text('Delete'), findsNothing);
+  });
+
+  testWidgets('category Delete asks where rows go, then Undo puts back the '
+      'category, its rows, rules, group and budgets', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    final id = await p.addCategory(
+      label: 'Pets',
+      type: TxType.expense,
+      icon: Icons.pets,
+      color: Colors.teal,
+    );
+    const groupId = 'grp_wants'; // a starter group
+    await p.assignCategoryToGroup(id, groupId);
+    await p.addRule('petshop', id);
+    await p.addBudget(
+      name: 'Animals',
+      limit: 2000,
+      mode: BudgetMode.include,
+      categoryIds: {id},
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: id,
+      amount: 450,
+      note: 'Food for the dog',
+      date: DateTime.now().subtract(const Duration(days: 2)),
+    );
+    final rulesBefore = [for (final r in p.rules) r.id];
+
+    await pumpCockpit(tester, p, kCockpitTabCategories);
+    await tester.tap(find.text('Pets'));
+    await pumpThrough(tester);
+    await tester.tap(find.text('Delete'));
+    await pumpThrough(tester);
+    // The move-to dialog stays, with a red Delete.
+    expect(find.text('Delete "Pets"?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+    await pumpThrough(tester);
+
+    expect(
+      find.text('Deleted category "Pets" · 1 transaction moved to Other'),
+      findsOneWidget,
+    );
+    expect(customCategories.any((c) => c.id == id), isFalse);
+    expect(p.transactions.single.categoryId, isNot(id));
+
+    await tester.tap(find.text('Undo'));
+    await pumpThrough(tester);
+
+    expect(customCategories.any((c) => c.id == id), isTrue);
+    expect(p.transactions.single.categoryId, id);
+    expect([for (final r in p.rules) r.id], rulesBefore);
+    expect(p.groupIdOf(id), groupId);
+    expect(p.budgets.single.categoryIds, contains(id));
+  });
+
+  testWidgets('group Delete removes it at once, and Undo puts back its '
+      'members', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    // A starter group, holding Shopping among others.
+    const groupId = 'grp_wants';
+    expect(p.groupIdOf('shopping'), groupId);
+    final order = [for (final g in p.groups) g.id];
+
+    await pumpCockpit(tester, p, kCockpitTabGroups);
+    expect(find.text('Add group'), findsNothing);
+    expect(find.text('New group'), findsOneWidget);
+    await deleteInEditor(tester, 'Wants');
+
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Deleted group "Wants"'), findsOneWidget);
+    expect(p.groups.where((g) => g.id == groupId), isEmpty);
+    expect(p.groupIdOf('shopping'), isNull);
+
+    await tester.tap(find.text('Undo'));
+    await pumpThrough(tester);
+
+    expect([for (final g in p.groups) g.id], order);
+    expect(p.groupIdOf('shopping'), groupId);
+  });
+
+  testWidgets('rule and import rule Delete live in their editors, with '
+      'Undo', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addRule('amma', 'food');
+    final rulesBefore = [for (final r in p.rules) r.id];
+
+    await pumpCockpit(tester, p, kCockpitTabRules);
+    await deleteInEditor(tester, 'contains "amma"');
+    expect(find.text('Deleted rule "amma"'), findsOneWidget);
+    expect(p.rules.any((r) => r.pattern == 'amma'), isFalse);
+    await tester.tap(find.text('Undo'));
+    await pumpThrough(tester);
+    expect([for (final r in p.rules) r.id], rulesBefore);
+
+    final rule = p.importRules.first;
+    final importBefore = [for (final r in p.importRules) r.id];
+    // A fresh app: a new home on the same MaterialApp keeps the old route.
+    await tester.pumpWidget(const SizedBox());
+    await pumpCockpit(tester, p, kCockpitTabImport);
+    await deleteInEditor(tester, 'contains "${rule.pattern}"');
+    expect(find.text('Deleted rule "${rule.pattern}"'), findsOneWidget);
+    expect(p.importRules.any((r) => r.id == rule.id), isFalse);
+    await tester.tap(find.text('Undo'));
+    await pumpThrough(tester);
+    expect([for (final r in p.importRules) r.id], importBefore);
   });
 }

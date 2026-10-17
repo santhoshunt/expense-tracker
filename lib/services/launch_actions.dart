@@ -8,6 +8,9 @@ enum LaunchAction {
   addExpense,
   importSms,
   openRecap,
+
+  /// The "Transactions to review" notification and the This week widget's
+  /// review count: the review sheet over Transactions.
   openReview,
   openBudget,
   openBudgets,
@@ -90,6 +93,7 @@ class LaunchActions {
     'add_income' => LaunchAction.addIncome,
     'open_transactions' => LaunchAction.openTransactions,
     'open_big_bills' => LaunchAction.openBigBills,
+    'open_review' => LaunchAction.openReview,
     // The widget names no week: it always opens the current one.
     'open_weekly_digest' => LaunchAction.openThisWeek,
     _ => null,

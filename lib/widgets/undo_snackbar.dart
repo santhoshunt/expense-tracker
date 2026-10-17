@@ -130,7 +130,7 @@ void _showToast(
   final hasAction = actionLabel != null && onAction != null;
   // The action can be tapped again during the exit animation.
   var fired = false;
-  messenger.showSnackBar(
+  final controller = messenger.showSnackBar(
     SnackBar(
       duration: duration,
       // With no SnackBarAction, Flutter no longer keeps an actionable toast
@@ -216,6 +216,74 @@ void _showToast(
       ),
     ),
   );
+  // A ToastHost lets its strip take taps while this pill shows. State.context
+  // throws once the messenger is unmounted.
+  if (messenger.mounted) {
+    messenger.context.findAncestorStateOfType<_ToastHostState>()?._shown(
+      controller,
+    );
+  }
+}
+
+/// Gives a sheet or dialog its own toast: the app's pill drawn on top of
+/// it, in a strip at its bottom that takes taps only while a pill shows.
+///
+/// Use it on a sheet or dialog that shows a toast while it stays open. Never
+/// use it on one that toasts after closing: the host's messenger goes with
+/// it, and the toast with them; that toast belongs on the page's messenger.
+class ToastHost extends StatefulWidget {
+  const ToastHost({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<ToastHost> createState() => _ToastHostState();
+}
+
+class _ToastHostState extends State<ToastHost> {
+  /// The newest pill shown on this host's messenger, until it closes; the
+  /// strip ignores taps while there is none. Only the newest counts:
+  /// clearSnackBars drops older queued pills without completing their
+  /// `closed` futures, so a count of open pills could stick above zero
+  /// and leave the strip blocking taps.
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _latest;
+
+  void _shown(ScaffoldFeatureController<SnackBar, SnackBarClosedReason> c) {
+    setState(() => _latest = c);
+    c.closed.whenComplete(() {
+      if (mounted && identical(_latest, c)) setState(() => _latest = null);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // A strip, not a Scaffold filling the host: a full Scaffold would stretch
+    // a short sheet to full height and its Material would swallow every tap.
+    return ScaffoldMessenger(
+      child: Stack(
+        fit: StackFit.passthrough,
+        children: [
+          widget.child,
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height:
+                MediaQuery.textScalerOf(context).scale(96) +
+                MediaQuery.viewPaddingOf(context).bottom,
+            child: IgnorePointer(
+              ignoring: _latest == null,
+              child: const Scaffold(
+                backgroundColor: Colors.transparent,
+                resizeToAvoidBottomInset: false,
+                body: SizedBox.shrink(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// The app's delete model: destructive taps act immediately and offer a
@@ -234,11 +302,27 @@ void showUndoSnackBar(
   VoidCallback onUndo, {
   required IconData icon,
   AppToastTone tone = AppToastTone.change,
+}) => showUndoSnackBarOn(
+  ScaffoldMessenger.of(context),
+  message,
+  onUndo,
+  icon: icon,
+  tone: tone,
+);
+
+/// [showUndoSnackBar] on a given messenger: a sheet that closes as it
+/// offers Undo sends the toast to the page it was opened from.
+void showUndoSnackBarOn(
+  ScaffoldMessengerState messenger,
+  String message,
+  VoidCallback onUndo, {
+  required IconData icon,
+  AppToastTone tone = AppToastTone.change,
 }) {
   // Every delete comes through here, so this is the one place it is felt.
   if (tone == AppToastTone.removal) Haptics.thud();
-  showAppToast(
-    context,
+  showAppToastOn(
+    messenger,
     message,
     tone: tone,
     icon: icon,

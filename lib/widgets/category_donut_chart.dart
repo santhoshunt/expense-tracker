@@ -11,7 +11,7 @@ import 'info_tip.dart';
 import 'motion.dart';
 
 /// Donut chart of spending by category, drawn with CustomPaint (no chart
-/// dependency), with a wrap legend below.
+/// dependency), with a wrap legend below unless [showLegend] is false.
 ///
 /// Tapping a slice lifts it, dims the rest and opens its figures in a popup.
 /// When the figures change (another month), the slices ease from the old
@@ -37,6 +37,13 @@ class CategoryDonutChart extends StatefulWidget {
   /// alone, so a sheet stepping through months keeps its height.
   final bool emptyRing;
 
+  /// False leaves the legend out: a host that lists every category below
+  /// the chart (the dashboard's By category) needs no second list.
+  final bool showLegend;
+
+  /// The ring's height in dp.
+  final double chartHeight;
+
   const CategoryDonutChart({
     super.key,
     required this.data,
@@ -44,6 +51,8 @@ class CategoryDonutChart extends StatefulWidget {
     this.onCategoryHistory,
     this.emptyText = 'No spending this month',
     this.emptyRing = false,
+    this.showLegend = true,
+    this.chartHeight = 180,
   });
 
   @override
@@ -274,7 +283,7 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
       return Column(
         children: [
           SizedBox(
-            height: 180,
+            height: widget.chartHeight,
             child: CustomPaint(
               size: Size.infinite,
               painter: _DonutPainter(
@@ -310,7 +319,7 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
     }
     if (total <= 0) {
       return SizedBox(
-        height: 160,
+        height: widget.chartHeight - 20,
         child: Center(child: Text(widget.emptyText)),
       );
     }
@@ -318,7 +327,7 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
     return Column(
       children: [
         SizedBox(
-          height: 180,
+          height: widget.chartHeight,
           child: LayoutBuilder(
             builder: (paintContext, constraints) {
               final size = constraints.biggest;
@@ -351,79 +360,81 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
             },
           ),
         ),
-        const SizedBox(height: 12),
-        // Two columns, largest first, read across: the shares line up on the
-        // right of each column, so they compare at a glance. A long label
-        // wraps onto a second line rather than being cut, and a narrow card
-        // (large text) drops to one column. Rows are 28dp, a target a finger
-        // can hit without spreading eleven categories down the card.
-        LayoutBuilder(
-          builder: (context, constraints) {
-            const gap = 16.0;
-            // The 280dp threshold grows with the text: at 1.3x on a 320dp
-            // phone two columns broke "Education" mid-word.
-            final scale = MediaQuery.textScalerOf(context).scale(1);
-            final columns = constraints.maxWidth >= 280 * scale ? 2 : 1;
-            final width = columns == 1
-                ? constraints.maxWidth
-                : (constraints.maxWidth - gap) / 2;
-            return Wrap(
-              spacing: gap,
-              children: [
-                for (final (i, e) in data.indexed)
-                  SizedBox(
-                    width: width,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(8),
-                      onTap: switch (widget.onCategoryHistory ??
-                          widget.onCategoryTap) {
-                        final open? => () => open(e.key.id),
-                        null => null,
-                      },
-                      child: Container(
-                        constraints: const BoxConstraints(minHeight: 28),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 4,
-                          vertical: 4,
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Centred on the first line of a wrapped label.
-                            Padding(
-                              padding: const EdgeInsets.only(top: 4),
-                              child: Container(
-                                width: 10,
-                                height: 10,
-                                decoration: BoxDecoration(
-                                  color: colors[i],
-                                  shape: BoxShape.circle,
+        if (widget.showLegend) ...[
+          const SizedBox(height: 12),
+          // Two columns, largest first, read across: the shares line up on the
+          // right of each column, so they compare at a glance. A long label
+          // wraps onto a second line rather than being cut, and a narrow card
+          // (large text) drops to one column. Rows are 28dp, a target a finger
+          // can hit without spreading eleven categories down the card.
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const gap = 16.0;
+              // The 280dp threshold grows with the text: at 1.3x on a 320dp
+              // phone two columns broke "Education" mid-word.
+              final scale = MediaQuery.textScalerOf(context).scale(1);
+              final columns = constraints.maxWidth >= 280 * scale ? 2 : 1;
+              final width = columns == 1
+                  ? constraints.maxWidth
+                  : (constraints.maxWidth - gap) / 2;
+              return Wrap(
+                spacing: gap,
+                children: [
+                  for (final (i, e) in data.indexed)
+                    SizedBox(
+                      width: width,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: switch (widget.onCategoryHistory ??
+                            widget.onCategoryTap) {
+                          final open? => () => open(e.key.id),
+                          null => null,
+                        },
+                        child: Container(
+                          constraints: const BoxConstraints(minHeight: 28),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 4,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Centred on the first line of a wrapped label.
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Container(
+                                  width: 10,
+                                  height: 10,
+                                  decoration: BoxDecoration(
+                                    color: colors[i],
+                                    shape: BoxShape.circle,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                e.key.label,
-                                style: theme.textTheme.bodySmall,
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  e.key.label,
+                                  style: theme.textTheme.bodySmall,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${(e.value / total * 100).toStringAsFixed(0)}%',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.onSurface,
+                              const SizedBox(width: 8),
+                              Text(
+                                '${(e.value / total * 100).toStringAsFixed(0)}%',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurface,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
-              ],
-            );
-          },
-        ),
+                ],
+              );
+            },
+          ),
+        ],
       ],
     );
   }

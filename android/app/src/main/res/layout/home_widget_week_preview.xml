@@ -75,13 +75,34 @@
             android:scaleType="fitXY"
             android:src="@drawable/widget_preview_week_strip" />
 
-        <TextView
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
-            android:maxLines="1"
-            android:text="₹550 less than usual · 2 to review"
-            android:textColor="#FFFFFF"
-            android:textSize="13sp" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:maxLines="1"
+                android:text="₹550 less than usual"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:maxLines="1"
+                android:minHeight="44dp"
+                android:paddingStart="8dp"
+                android:paddingVertical="8dp"
+                android:text="2 to review"
+                android:textColor="#4A90E2"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+        </LinearLayout>
     </LinearLayout>
 </FrameLayout>

@@ -53,6 +53,9 @@ class UpcomingItem {
     this.reminder,
     this.hideKey,
   });
+
+  /// A card bill whose current cycle was marked paid.
+  bool get paid => cardStatus?.phase == CardBillPhase.paid;
 }
 
 /// Whether [h]'s next occurrence was marked paid by hand (its alert never

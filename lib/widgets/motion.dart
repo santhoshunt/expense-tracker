@@ -69,17 +69,22 @@ class MorphingAmount extends StatelessWidget {
   final String prefix;
   final Alignment alignment;
 
+  /// How [value] reads: [fmtMoney] by default, [fmtMoneyWhole] on the
+  /// Dashboard.
+  final String Function(double) format;
+
   const MorphingAmount({
     super.key,
     required this.value,
     this.style,
     this.prefix = '',
     this.alignment = Alignment.centerLeft,
+    this.format = fmtMoney,
   });
 
   @override
   Widget build(BuildContext context) {
-    final text = '$prefix${fmtMoney(value)}';
+    final text = '$prefix${format(value)}';
     return AnimatedSwitcher(
       duration: motionDuration(context, const Duration(milliseconds: 380)),
       switchInCurve: Curves.easeOutCubic,

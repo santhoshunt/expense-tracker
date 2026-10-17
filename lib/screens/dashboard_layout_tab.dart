@@ -82,9 +82,9 @@ class DashboardLayoutTab extends StatelessWidget {
         padding: const EdgeInsets.only(bottom: 12),
         child: Text(
           folds
-              ? 'Drag to reorder. Tap Open or Folded to choose how a section '
-                    'starts. Hidden sections leave the dashboard until you '
-                    'show them again.'
+              ? 'Drag to reorder. The arrow sets whether a section starts '
+                    'open or folded. Hidden sections leave the dashboard '
+                    'until you show them again.'
               : 'Drag to reorder. Hidden sections leave the dashboard until '
                     'you show them again.',
           style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
@@ -129,28 +129,20 @@ class DashboardLayoutTab extends StatelessWidget {
                 ),
               ),
               title: Text(s.label),
-              subtitle: !folds
-                  ? null
-                  : shown
-                  ? Align(
-                      alignment: Alignment.centerLeft,
-                      child: _StartsOpen(section: s),
-                    )
-                  // As tall as the Open/Folded target, so switching Show
-                  // does not move the rows below under the finger.
-                  : const SizedBox(
-                      height: 48,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text('Hidden'),
-                      ),
+              // The fold arrow stays, disabled, while the section is
+              // hidden, so the switch beside it never moves.
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (folds) _StartsOpen(section: s, enabled: shown),
+                  Semantics(
+                    label: 'Show ${s.label}',
+                    child: Switch(
+                      value: shown,
+                      onChanged: (v) => settings.setSectionHidden(s, !v),
                     ),
-              trailing: Semantics(
-                label: 'Show ${s.label}',
-                child: Switch(
-                  value: shown,
-                  onChanged: (v) => settings.setSectionHidden(s, !v),
-                ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -160,12 +152,14 @@ class DashboardLayoutTab extends StatelessWidget {
   }
 }
 
-/// Whether a section starts open or folded on the dashboard, as a small
-/// outlined button under its name. The same stored state as tapping the
-/// section's heading there, so the two always agree.
+/// Whether a section starts open or folded on the dashboard, as a 48dp
+/// arrow beside its switch: up while it starts open, down while it starts
+/// folded. The same stored state as tapping the section's heading there, so
+/// the two always agree. Disabled while the section is hidden.
 class _StartsOpen extends StatelessWidget {
   final DashboardSection section;
-  const _StartsOpen({required this.section});
+  final bool enabled;
+  const _StartsOpen({required this.section, required this.enabled});
 
   @override
   Widget build(BuildContext context) {
@@ -173,55 +167,20 @@ class _StartsOpen extends StatelessWidget {
       (s) => s.sectionOpen(section),
     );
     final settings = context.read<SettingsProvider>();
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
     void toggle() => settings.setSectionOpen(section, !open);
+    // One button for a screen reader, named by the section: the tooltip
+    // alone would not say which section it folds.
     return Semantics(
       container: true,
       button: true,
+      enabled: enabled,
       label: '${section.label}, starts ${open ? 'open' : 'folded'}',
       excludeSemantics: true,
-      onTap: toggle,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: toggle,
-        // A 48dp tall target around the 32dp outlined box.
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 48),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            widthFactor: 1,
-            child: Container(
-              constraints: const BoxConstraints(minHeight: 32),
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: scheme.outlineVariant),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    open ? Icons.expand_less : Icons.expand_more,
-                    size: 18,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 4),
-                  Flexible(
-                    child: Text(
-                      open ? 'Open' : 'Folded',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: text.labelMedium?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
+      onTap: enabled ? toggle : null,
+      child: IconButton(
+        tooltip: open ? 'Starts open' : 'Starts folded',
+        icon: Icon(open ? Icons.expand_less : Icons.expand_more),
+        onPressed: enabled ? toggle : null,
       ),
     );
   }

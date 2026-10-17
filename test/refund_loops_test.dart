@@ -281,7 +281,7 @@ void main() {
         refund(),
         row('pay', TxType.income, 'salary', 5000, DateTime(2026, 10, 12)),
       ]);
-      expect(csv.split('\r\n').first, endsWith(',unseen,refundOf'));
+      expect(csv.split('\r\n').first, endsWith(',unseen,refundOf,payee'));
       final back = {for (final t in BackupService.txsFromCsv(csv)) t.id: t};
       expect(back['back']!.refundOf, 'buy');
       expect(back['pay']!.refundOf, isNull);
@@ -289,9 +289,10 @@ void main() {
 
     test('an older file without the column still imports', () {
       final csv = BackupService.buildCsvOf([refund()]);
+      // Drops the last two columns, refundOf and the later payee.
       final old = [
         for (final line in csv.split('\r\n'))
-          line.substring(0, line.lastIndexOf(',')),
+          line.substring(0, line.lastIndexOf(',', line.lastIndexOf(',') - 1)),
       ].join('\r\n');
       expect(old.split('\r\n').first, endsWith(',unseen'));
       final t = BackupService.txsFromCsv(old).single;

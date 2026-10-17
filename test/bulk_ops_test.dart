@@ -112,12 +112,14 @@ void main() {
       expect(s.isSectionCollapsed('upcoming'), isFalse);
 
       await s.toggleSection('upcoming');
-      await s.toggleSection('pending_review');
+      // Any id persists on its own; the review folds that used these ids
+      // went with the review card in v1.43.0.
+      await s.toggleSection('demo_section');
       final s2 = SettingsProvider();
       await s2.load();
       expect(s2.isSectionCollapsed('upcoming'), isTrue);
-      expect(s2.isSectionCollapsed('pending_review'), isTrue);
-      expect(s2.isSectionCollapsed('spam_review'), isFalse);
+      expect(s2.isSectionCollapsed('demo_section'), isTrue);
+      expect(s2.isSectionCollapsed('other_section'), isFalse);
 
       await s2.toggleSection('upcoming');
       expect(s2.isSectionCollapsed('upcoming'), isFalse);

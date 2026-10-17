@@ -30,7 +30,9 @@ import '../widgets/hue_color_picker.dart';
 import '../widgets/glossy.dart';
 import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
+import '../widgets/notification_switches.dart';
 import 'app_nav.dart';
+import 'classifiers_screen.dart';
 
 part 'settings_pages.dart';
 
@@ -112,7 +114,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         : hueColorName(settings.accent);
     final smsImport = switch (settings.autoImport) {
       AutoImportFrequency.off => 'Automatic import off',
-      AutoImportFrequency.everyOpen => 'Every launch',
       final f => f.label,
     };
     final privacy = [
@@ -120,10 +121,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (settings.hideIncome) 'Income hidden',
     ].join(' · ');
     final large = isLargeTextScale(context);
-    final categoryOrder = switch (settings.categoryOrder) {
-      CategoryOrder.mostUsed => 'Most used first',
-      CategoryOrder.alphabetical => 'A to Z',
-    };
+    // Budget alerts count as on only with a cap or a custom budget to
+    // watch, as their switch on the Notifications page shows.
+    final hasLimit =
+        settings.monthlyBudget > 0 ||
+        context.select<FinanceProvider, bool>(
+          (f) => f.budgets.any((b) => b.limit > 0),
+        );
+    final notificationsOn = [
+      settings.budgetAlerts && hasLimit,
+      settings.unusualAlerts,
+      settings.weeklyDigest,
+      settings.upcomingReminders,
+    ].where((on) => on).length;
+    final notifications = notificationsOn == 0
+        ? 'All off'
+        : '$notificationsOn of 4 on';
     // Backup shows the last backup once it has loaded. About has no stored
     // value to show: the version loads on its own page.
     final groups = <(IconData, String, String, WidgetBuilder)>[
@@ -140,6 +153,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           smsImport,
           (_) => const _SmsImportPage(),
         ),
+      // On every device: the alerts need no SMS access.
+      (
+        Icons.notifications_outlined,
+        'Notifications',
+        notifications,
+        (_) => const NotificationsPage(),
+      ),
       (
         Icons.cloud_outlined,
         'Backup and data',
@@ -147,12 +167,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
         (_) => const _BackupDataPage(),
       ),
       (Icons.lock_outline, 'Privacy', privacy, (_) => const _PrivacyPage()),
-      (
-        Icons.category_outlined,
-        'Category order',
-        categoryOrder,
-        (_) => const _CategoryOrderPage(),
-      ),
       (
         Icons.info_outline,
         'About',
@@ -167,8 +181,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         appBar: AppBar(title: const Text('Settings')),
         body: ListView(
           padding: _settingsPadding(context),
-          // One grouped card: the rows touch, a hairline between them.
+          // The Cockpit on its own card on top, then one grouped card: the
+          // rows touch, a hairline between them.
           children: [
+            GroupedSurface(
+              first: true,
+              last: true,
+              child: ListTile(
+                leading: large ? null : const Icon(Icons.tune),
+                title: const Text('Cockpit'),
+                subtitle: const Text(
+                  'Rules, categories, budgets, dashboard layout',
+                ),
+                trailing: large ? null : const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ClassifiersScreen()),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
             for (final (i, (icon, title, value, page)) in groups.indexed)
               GroupedSurface(
                 first: i == 0,
@@ -958,41 +990,49 @@ class _NotificationCaptureTileState extends State<_NotificationCaptureTile>
               : Icons.notifications_off_outlined,
           color: granted ? scheme.primary : scheme.onSurfaceVariant,
         ),
-        title: InfoLabel(
-          icon: true,
-          label: const Text('Capture RCS alerts'),
-          tip: InfoTip(
-            title: 'Capture RCS alerts',
-            message:
-                'Picks up bank alerts from messaging-app notifications that '
-                'mention an amount in ₹, Rs or INR, which the SMS scan cannot '
-                'see. It works even when automatic import is Off: captured '
-                'alerts import each time you open the app. To stop it, revoke '
-                'notification access in Android settings.',
-            link: InfoLink(
-              prompt: 'Change what this app can read?',
-              label: 'Open notification access',
-              onTap: (_) => _source.openAccessSettings(),
-            ),
-          ),
-        ),
+        title: const Text('Capture RCS alerts'),
         subtitle: Text(
           granted
-              ? 'On. New bank alerts are captured as they arrive and added '
-                    'on the next import. Older messages cannot be backfilled '
-                    '(${_lastCaptureLabel()}). Tap for diagnostics.'
-              : 'RCS chats (verified senders like "Yes Bank") are not '
-                    'readable as SMS. Grant notification access to capture '
-                    'them as they arrive. No backfill of older messages.',
+              ? 'On · ${_lastCaptureLabel()} · tap for diagnostics'
+              : 'Off · tap to allow notification access',
           style: Theme.of(context).textTheme.bodySmall,
         ),
-        trailing: granted
-            ? null
-            : FilledButton(
-                onPressed: () => _source.openAccessSettings(),
-                child: const Text('Enable'),
+        // The explanation sits in the tip, beside the row's chevron.
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // 48dp, so a near miss on the tip does not open Android
+            // settings through the row.
+            InfoTipTarget(
+              size: 48,
+              child: InfoTip(
+                title: 'Capture RCS alerts',
+                message:
+                    "RCS chats from verified senders, such as a bank's chat "
+                    'alerts, cannot be read as SMS. With notification access, '
+                    'the app picks up bank alerts from messaging-app '
+                    'notifications that mention an amount in ₹, Rs or INR as '
+                    'they arrive. Older messages are not backfilled. It works '
+                    'even when automatic import is Off: captured alerts import '
+                    'each time you open the app. To stop it, revoke '
+                    'notification access in Android settings.',
+                link: InfoLink(
+                  prompt: 'Change what this app can read?',
+                  label: 'Open notification access',
+                  onTap: (_) => _source.openAccessSettings(),
+                ),
               ),
-        onTap: granted ? _showDiagnostics : null,
+            ),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+        // Still checking access: a tap does nothing until the row knows
+        // which of the two it opens.
+        onTap: _hasAccess == null
+            ? null
+            : granted
+            ? _showDiagnostics
+            : () => _source.openAccessSettings(),
       ),
     );
   }

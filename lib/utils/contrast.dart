@@ -56,7 +56,22 @@ Color accentTextFor(Color accent, Brightness brightness) {
 /// non-text threshold against that tint. Dark mode returns [base] as-is.
 Color categoryGlyphColor(BuildContext context, Color base) {
   final scheme = Theme.of(context).colorScheme;
-  if (scheme.brightness == Brightness.dark) return base;
-  final tint = Color.alphaBlend(base.withValues(alpha: 0.15), scheme.surface);
+  return categoryGlyphColorOn(
+    base,
+    surface: scheme.surface,
+    dark: scheme.brightness == Brightness.dark,
+  );
+}
+
+/// [categoryGlyphColor] without a BuildContext, for a glyph on [surface]
+/// in a [dark] or light theme. The home-screen widgets bake their category
+/// colours with it, against the widget theme's surface.
+Color categoryGlyphColorOn(
+  Color base, {
+  required Color surface,
+  required bool dark,
+}) {
+  if (dark) return base;
+  final tint = Color.alphaBlend(base.withValues(alpha: 0.15), surface);
   return darkenForContrast(base, tint, 3.0);
 }

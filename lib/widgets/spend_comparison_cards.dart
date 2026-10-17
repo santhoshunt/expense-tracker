@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import '../providers/settings_provider.dart' show CategorySort;
 import '../screens/app_nav.dart' show goCockpitRules;
@@ -14,15 +13,14 @@ import 'dashboard_fold.dart';
 import 'info_tip.dart';
 import 'show_all_list.dart';
 
-/// The dashboard's three spending comparisons: this month against the last
-/// one, against what a month usually costs, and the same question per
-/// category. Each renders a whole section (heading plus card) so the
-/// dashboard call site stays one line.
+/// The dashboard's two spending comparisons and the category one: this month
+/// against what a month usually costs, this year against last year, and the
+/// usual question per category. (This month against the last one is
+/// MonthPaceCard, in monthly_recap_card.dart.) Each renders a whole section
+/// (heading plus card) so the dashboard call site stays one line.
 ///
 /// All the arithmetic is in services/spend_comparison.dart; these widgets
 /// only choose colours and words for the state they are handed.
-
-final DateFormat _monthName = DateFormat('MMMM');
 
 /// Spending more than the reference is the warning colour, less is the
 /// income green, and a difference under a rupee is neither.
@@ -33,21 +31,13 @@ Color _toneFor(BuildContext context, double delta) {
       : AppColors.of(context).green;
 }
 
-const _previousTitle = 'This month vs last month';
-const _previousTip =
-    'While the month is running, compares spending up to the same day '
-    'of last month. On track for is the Month-end forecast: spent so far, '
-    'plus the bills still due, plus your usual everyday spending for the '
-    'days left. Before there is enough history to estimate everyday '
-    "spending, it is this month's spending scaled by how last month went "
-    'on. Tap the card for the chart.';
-
 const _usualTitle = 'This month vs usual';
 const _usualTip =
     '"Usual" is the middle value of up to 6 complete months before '
     'this one, so one unusual month does not move it the way an average '
     'would. While the month is running, both sides count only up to '
-    "today's date. It needs at least 2 complete months.";
+    "today's date. It needs at least 2 complete months; a month with under "
+    "a quarter of the others' middle spend is left out as missing records.";
 
 const _categoryTitle = 'Categories vs usual';
 const _categoryTip =
@@ -60,15 +50,6 @@ const _categoryTip =
 /// The cards' tips, for a dashboard fold heading: inside a fold the cards
 /// leave theirs out, so each section carries its tip on the heading,
 /// folded or open.
-InfoTip previousMonthTip(
-  MonthComparison comparison, {
-  String? Function()? forecastExample,
-}) => InfoTip(
-  title: _previousTitle,
-  message: _previousTip,
-  example: forecastExample ?? () => projectionExample(comparison),
-);
-
 InfoTip usualTip(MonthComparison comparison) => InfoTip(
   title: _usualTitle,
   message: _usualTip,
@@ -129,91 +110,6 @@ List<CategoryCompare> sortCategoryCompares(
   }
 }
 
-class PreviousMonthCard extends StatelessWidget {
-  final MonthComparison comparison;
-
-  /// The Month-end forecast's total while the month runs: what On track
-  /// for shows. Null falls back to the comparison's own projection.
-  final double? forecastTotal;
-
-  /// The forecast's sum, for the tip; null shows the projection's.
-  final String? Function()? forecastExample;
-
-  /// Opens the comparison chart.
-  final VoidCallback? onTap;
-
-  const PreviousMonthCard({
-    super.key,
-    required this.comparison,
-    this.forecastTotal,
-    this.forecastExample,
-    this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final c = comparison.vsPrevious;
-    final name = _monthName.format(comparison.previousMonth);
-    const tip = _previousTip;
-
-    // Records that start part-way through last month (or later) leave no
-    // fair "same day" figure; say so rather than compare a few days.
-    final example = forecastExample ?? () => projectionExample(comparison);
-    if (c.state == CompareState.notEnoughHistory) {
-      final projected = forecastTotal ?? c.actualFull;
-      final muted = Theme.of(context).textTheme.bodySmall;
-      return _Section(
-        title: 'This month vs last month',
-        tip: tip,
-        example: example,
-        onTap: onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '$name is not fully on record, so there is no fair comparison '
-              'yet.',
-              style: muted,
-            ),
-            if (comparison.partial && projected != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                'This month is on track for '
-                '${fmtMoney(projected)}.',
-                style: muted,
-              ),
-            ],
-          ],
-        ),
-      );
-    }
-
-    return _Section(
-      title: 'This month vs last month',
-      tip: tip,
-      example: example,
-      onTap: onTap,
-      child: _CompareBody(
-        comparison: comparison,
-        compare: c,
-        forecastTotal: forecastTotal,
-        referenceLine: comparison.partial
-            ? '$name reached ${fmtMoney(c.reference)} by the same day'
-            : '$name: ${fmtMoney(c.reference)}',
-        projectionLine: (projected) =>
-            'On track for $projected, against '
-            '${fmtMoney(c.referenceFull)} in all of $name',
-        fullReferenceLine: 'All of $name: ${fmtMoney(c.referenceFull)}',
-        emptyLine: 'Nothing recorded this month or in $name.',
-        newLine: 'All of it new. Nothing in $name by this day.',
-        noneLine:
-            'Nothing yet this month. $name had reached '
-            '${fmtMoney(c.reference)} by now.',
-      ),
-    );
-  }
-}
-
 /// The "This month vs last month" projection worked with its real inputs,
 /// mirroring `_project` in services/spend_comparison.dart: the reference
 /// month's curve when it has one, the flat daily pace otherwise. Null when
@@ -234,16 +130,21 @@ String? projectionExample(MonthComparison comparison) {
 /// The shortfall note shown instead of a "usual" figure while fewer than
 /// [kMinUsualMonths] complete months are on record.
 String usualShortfallNote(int months) =>
-    'A usual figure needs at least $kMinUsualMonths complete months to '
-    'mean anything. There '
-    '${months == 1 ? 'is 1 month' : 'are $months months'} on record so '
+    'A usual figure needs at least $kMinUsualMonths complete months with '
+    'enough spending to mean anything. There '
+    '${months == 1 ? 'is 1 such month' : 'are $months such months'} so '
     'far, so this fills in as you keep importing.';
 
 class UsualSpendCard extends StatelessWidget {
   final MonthComparison comparison;
 
-  /// As [PreviousMonthCard.forecastTotal].
+  /// The Month-end forecast's total while the month runs: what On track
+  /// for shows. Null falls back to the comparison's own projection.
   final double? forecastTotal;
+
+  /// The forecast has no everyday estimate, so its total is a floor and
+  /// reads "At least".
+  final bool forecastIsFloor;
 
   /// Opens the comparison chart.
   final VoidCallback? onTap;
@@ -252,6 +153,7 @@ class UsualSpendCard extends StatelessWidget {
     super.key,
     required this.comparison,
     this.forecastTotal,
+    this.forecastIsFloor = false,
     this.onTap,
   });
 
@@ -288,31 +190,36 @@ class UsualSpendCard extends StatelessWidget {
         comparison: comparison,
         compare: c,
         forecastTotal: forecastTotal,
+        forecastIsFloor: forecastIsFloor,
         referenceLine: comparison.partial
-            ? 'Usually ${fmtMoney(c.reference)} by this day'
-            : 'Usually ${fmtMoney(c.reference)} in a month',
-        projectionLine: (projected) =>
-            'On track for $projected, against a usual '
-            '${fmtMoney(c.referenceFull)} a month',
+            ? 'Usually ${fmtMoneyWhole(c.reference)} by this day'
+            : 'Usually ${fmtMoneyWhole(c.reference)} in a month',
+        projectionLine: (projected, floor) => floor
+            ? 'At least $projected by month end, against a usual '
+                  '${fmtMoneyWhole(c.referenceFull)} a month'
+            : 'On track for $projected, against a usual '
+                  '${fmtMoneyWhole(c.referenceFull)} a month',
         fullReferenceLine:
-            'Usually ${fmtMoney(c.referenceFull)} in a full month',
+            'Usually ${fmtMoneyWhole(c.referenceFull)} in a full month',
         emptyLine: 'Nothing recorded this month, and nothing usually.',
         newLine: 'All of it new. You do not usually spend by this day.',
         noneLine:
             'Nothing yet this month. You usually reach '
-            '${fmtMoney(c.reference)} by now.',
+            '${fmtMoneyWhole(c.reference)} by now.',
       ),
     );
   }
 }
 
-/// Shared body of the two headline cards: amount, signed difference, the
-/// bar, and the projected full month while one is still running.
+/// The usual card's body: amount, signed difference, the bar, and the
+/// projected full month while one is still running.
 class _CompareBody extends StatelessWidget {
   final MonthComparison comparison;
   final SpendCompare compare;
   final String referenceLine;
-  final String Function(String projected) projectionLine;
+
+  /// The projected line; [floor] says the figure is a floor ("At least").
+  final String Function(String projected, bool floor) projectionLine;
 
   /// Stands in for [projectionLine] on the first few days of a month, when
   /// there is no projection yet but the full reference month is still worth
@@ -325,10 +232,14 @@ class _CompareBody extends StatelessWidget {
   /// Stands in for the comparison's own projection while the month runs.
   final double? forecastTotal;
 
+  /// [forecastTotal] is a floor: the forecast has no everyday estimate.
+  final bool forecastIsFloor;
+
   const _CompareBody({
     required this.comparison,
     required this.compare,
     this.forecastTotal,
+    this.forecastIsFloor = false,
     required this.referenceLine,
     required this.projectionLine,
     required this.fullReferenceLine,
@@ -364,7 +275,7 @@ class _CompareBody extends StatelessWidget {
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      fmtMoney(compare.actual),
+                      fmtMoneyWhole(compare.actual),
                       style: text.headlineSmall?.copyWith(
                         fontWeight: FontWeight.w700,
                       ),
@@ -436,7 +347,13 @@ class _CompareBody extends StatelessWidget {
         if (comparison.partial)
           if (projected != null) ...[
             const Divider(height: 20),
-            Text(projectionLine(fmtMoney(projected)), style: muted),
+            Text(
+              projectionLine(
+                fmtMoneyWhole(projected),
+                forecastIsFloor && forecastTotal != null,
+              ),
+              style: muted,
+            ),
           ] else if (compare.referenceFull > 0) ...[
             const Divider(height: 20),
             Text(fullReferenceLine, style: muted),
@@ -641,7 +558,7 @@ class _CategoryCompareRow extends StatelessWidget {
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            fmtMoney(compare.actual),
+                            fmtMoneyWhole(compare.actual),
                             style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
                         ),
@@ -667,8 +584,9 @@ class _CategoryCompareRow extends StatelessWidget {
                           text: switch (compare.state) {
                             CompareState.newThisMonth => 'New this month',
                             CompareState.noneThisMonth =>
-                              'Nothing yet, usually ${fmtMoney(compare.usual)}',
-                            _ => 'Usually ${fmtMoney(compare.usual)}',
+                              'Nothing yet, usually '
+                                  '${fmtMoneyWhole(compare.usual)}',
+                            _ => 'Usually ${fmtMoneyWhole(compare.usual)}',
                           },
                         ),
                       ),
@@ -678,7 +596,7 @@ class _CategoryCompareRow extends StatelessWidget {
                         // the colour.
                         Text(
                           '${compare.delta > 0 ? '+' : '−'}'
-                          '${fmtMoney(compare.delta.abs())}',
+                          '${fmtMoneyWhole(compare.delta.abs())}',
                           style: text.bodySmall?.copyWith(
                             color: scheme.onSurface,
                             fontWeight: FontWeight.w600,
@@ -705,7 +623,7 @@ const _yearTip =
     'Red means more than last year, green less.';
 
 /// The "This year vs last year" tip, for a dashboard fold heading (see
-/// [previousMonthTip]).
+/// [usualTip]).
 InfoTip yearComparisonTip(YearComparison c) => InfoTip(
   title: _yearTitle,
   message: _yearTip,
@@ -781,9 +699,10 @@ class YearComparisonCard extends StatelessWidget {
 
     final headline = c.negligible
         ? 'About the same as last year'
-        : '${deltaPhrase(c)} than last year';
+        : deltaPhrase(c, than: ' than last year');
     final figures =
-        'This year ${fmtMoney(c.actual)}, last year ${fmtMoney(c.reference)}'
+        'This year ${fmtMoneyWhole(c.actual)}, last year '
+        '${fmtMoneyWhole(c.reference)}'
         '${comparison.partial ? ' by the same day' : ''}';
 
     return _Section(
@@ -890,7 +809,7 @@ class _YearCategoryRow extends StatelessWidget {
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            fmtMoney(compare.actual),
+                            fmtMoneyWhole(compare.actual),
                             style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
                         ),
@@ -905,8 +824,8 @@ class _YearCategoryRow extends StatelessWidget {
                           CompareState.newThisMonth => 'Nothing last year',
                           CompareState.noneThisMonth =>
                             'Nothing this year, '
-                                '${fmtMoney(compare.usual)} last year',
-                          _ => 'Last year ${fmtMoney(compare.usual)}',
+                                '${fmtMoneyWhole(compare.usual)} last year',
+                          _ => 'Last year ${fmtMoneyWhole(compare.usual)}',
                         }, style: muted),
                       ),
                       if (showDelta) ...[
@@ -919,7 +838,7 @@ class _YearCategoryRow extends StatelessWidget {
                         const SizedBox(width: 2),
                         Text(
                           '${compare.delta > 0 ? '+' : '−'}'
-                          '${fmtMoney(compare.delta.abs())}',
+                          '${fmtMoneyWhole(compare.delta.abs())}',
                           style: text.bodySmall?.copyWith(
                             fontWeight: FontWeight.w600,
                           ),

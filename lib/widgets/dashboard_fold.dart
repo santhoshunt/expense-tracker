@@ -3,21 +3,23 @@ import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
 import 'animated_fold.dart';
 import 'grouped_surface.dart';
+import 'info_tip.dart';
 import 'motion.dart';
 
 /// One Trends or Breakdown section: a heading row that folds its cards
-/// away and, while folded, says in one line what they hold ("Swiggy
+/// away and, while folded, says in a line or two what they hold ("Swiggy
 /// ₹4.2K"), so a long page reads at a glance and opens where wanted.
 ///
 /// Folded sections are rows of one card shared with their folded neighbours
-/// ([first] and [last] round its ends), the summary at the heading's right.
+/// ([first] and [last] round its ends), the summary under the title.
 /// An open section is a card of its own (both set), its cards lying flat
 /// inside it, with [gapAbove] over it; the run after it starts with that
 /// gap too.
 class DashboardFold extends StatelessWidget {
   final String title;
 
-  /// Shown at the heading's right while folded; null shows the title alone.
+  /// Shown under the title while folded, up to two lines; null shows the
+  /// title alone.
   final String? summary;
 
   /// The section's info tip, beside the title, only while open: the folded
@@ -83,54 +85,54 @@ class DashboardFold extends StatelessWidget {
                 onTap: () => onChanged(!open),
                 child: ConstrainedBox(
                   constraints: const BoxConstraints(minHeight: 52),
+                  // 2dp above and below: an open heading's 48dp tip keeps the
+                  // row at 52dp.
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(
                       AppSpace.card,
-                      6,
+                      2,
                       AppSpace.card - 4,
-                      6,
+                      2,
                     ),
                     child: Row(
                       children: [
-                        // Title left, summary right: each may take up to
-                        // half and the rest of the row falls between them,
-                        // so a short title leaves the summary its room.
+                        // The title on its line, the summary under it: each
+                        // gets the row's whole width.
                         Expanded(
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              Flexible(
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Flexible(
-                                      child: Text(
-                                        title,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: text.titleSmall?.copyWith(
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                              Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: text.titleSmall?.copyWith(
+                                        fontWeight: FontWeight.w600,
                                       ),
                                     ),
-                                    if (open) ?tip,
-                                  ],
-                                ),
+                                  ),
+                                  // A near miss on the "i" would fold the
+                                  // section: 48dp here.
+                                  if (open && tip != null)
+                                    InfoTipTarget(size: 48, child: tip!),
+                                ],
                               ),
-                              if (!open && line != null) ...[
-                                const SizedBox(width: 12),
-                                Flexible(
+                              if (!open && line != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
                                   child: Text(
                                     line,
-                                    maxLines: 1,
+                                    maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
-                                    textAlign: TextAlign.end,
                                     style: text.bodySmall?.copyWith(
                                       color: scheme.onSurfaceVariant,
                                     ),
                                   ),
                                 ),
-                              ],
                             ],
                           ),
                         ),

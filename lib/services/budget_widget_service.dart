@@ -66,6 +66,17 @@ class BudgetWidgetService {
   }
 }
 
+/// Whether the widgets draw in the light palette: the rule
+/// [buildWidgetTheme] uses ([ThemeMode.system] resolves against
+/// [platformBrightness]).
+bool widgetThemeIsLight(
+  SettingsProvider settings,
+  Brightness platformBrightness,
+) =>
+    settings.mode == ThemeMode.light ||
+    (settings.mode == ThemeMode.system &&
+        platformBrightness == Brightness.light);
+
 /// The widget's colours as ARGB ints, following the app: the chosen dark
 /// palette, or the light palette when the app shows light
 /// ([ThemeMode.system] resolves against [platformBrightness] at sync time),
@@ -80,10 +91,7 @@ Map<String, int> buildWidgetTheme(
   SettingsProvider settings,
   Brightness platformBrightness,
 ) {
-  final light =
-      settings.mode == ThemeMode.light ||
-      (settings.mode == ThemeMode.system &&
-          platformBrightness == Brightness.light);
+  final light = widgetThemeIsLight(settings, platformBrightness);
   final p = settings.palette.colors;
   final accent = settings.accent;
   final surface = light ? FigmaPaletteLight.surface : p.surface;

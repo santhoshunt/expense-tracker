@@ -5,18 +5,23 @@ import '../models/dashboard_layout.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import 'classifiers_screen.dart';
 import 'people_screen.dart';
+import 'settings_screen.dart';
 import 'transactions_screen.dart';
 
-/// What the Dashboard puts in Home's app bar: the shown month or year with
-/// its arrows. Its ⋮ entries go through [PageMenu]. The Dashboard owns the
-/// month and Year view state and [update]s this after each change; Home's
-/// bar listens. Null callbacks leave their control disabled.
+/// What the Dashboard puts in Home's app bar: the month or year, its arrows
+/// and the Month or Year switch. Its ⋮ entries go through [PageMenu]. The
+/// Dashboard owns the month and Year view state and [update]s this after
+/// each change; Home's bar listens. Null callbacks leave their control
+/// disabled.
 class DashboardHeader extends ChangeNotifier {
   String label = '';
   bool yearMode = false;
   VoidCallback? onPrev;
   VoidCallback? onNext;
   VoidCallback? onPick;
+
+  /// Switches between Month and Year view.
+  VoidCallback? onToggleView;
 
   /// The Dashboard State whose callbacks the fields hold.
   Object? _owner;
@@ -32,6 +37,7 @@ class DashboardHeader extends ChangeNotifier {
     required VoidCallback? onPrev,
     required VoidCallback? onNext,
     required VoidCallback onPick,
+    VoidCallback? onToggleView,
   }) {
     final changed =
         owner != _owner ||
@@ -39,6 +45,7 @@ class DashboardHeader extends ChangeNotifier {
         yearMode != this.yearMode ||
         (onPrev == null) != (this.onPrev == null) ||
         (onNext == null) != (this.onNext == null) ||
+        (onToggleView == null) != (this.onToggleView == null) ||
         this.onPick == null;
     _owner = owner;
     this.label = label;
@@ -46,6 +53,7 @@ class DashboardHeader extends ChangeNotifier {
     this.onPrev = onPrev;
     this.onNext = onNext;
     this.onPick = onPick;
+    this.onToggleView = onToggleView;
     if (changed) notifyListeners();
   }
 
@@ -59,6 +67,7 @@ class DashboardHeader extends ChangeNotifier {
     onPrev = null;
     onNext = null;
     onPick = null;
+    onToggleView = null;
   }
 }
 
@@ -134,6 +143,7 @@ class AppNav {
   void Function(int tab)? _setHomeTab;
   void Function(TxFilterRequest request)? _openTransactions;
   VoidCallback? _importSms;
+  VoidCallback? _openReview;
 
   Object? _accountsOwner;
   void Function(AccountType? type)? _showAccountType;
@@ -150,11 +160,13 @@ class AppNav {
     required void Function(int tab) setTab,
     required void Function(TxFilterRequest request) openTransactions,
     VoidCallback? importSms,
+    VoidCallback? openReview,
   }) {
     _homeOwner = owner;
     _setHomeTab = setTab;
     _openTransactions = openTransactions;
     _importSms = importSms;
+    _openReview = openReview;
   }
 
   /// Only the registering screen may detach, so a newer one survives an
@@ -165,6 +177,7 @@ class AppNav {
     _setHomeTab = null;
     _openTransactions = null;
     _importSms = null;
+    _openReview = null;
   }
 
   void attachAccounts(
@@ -266,6 +279,12 @@ class AppNav {
     _importSms?.call();
   }
 
+  /// The review sheet over the Transactions tab, pushed routes closed.
+  void openReview(BuildContext context) {
+    _toRoot(context);
+    _openReview?.call();
+  }
+
   /// Cockpit tab [tab] (a kCockpitTab* id): switches in place when
   /// already on the Cockpit group page that holds it, otherwise opens that
   /// group's page on the tab. From another group's page it goes over that
@@ -305,6 +324,8 @@ void goCockpitTransactions(BuildContext c) =>
     AppNav.instance.openCockpit(c, kCockpitTabTransactions);
 void goCockpitCategories(BuildContext c) =>
     AppNav.instance.openCockpit(c, kCockpitTabCategories);
+void goCockpitGroups(BuildContext c) =>
+    AppNav.instance.openCockpit(c, kCockpitTabGroups);
 void goCockpitBudgets(BuildContext c) =>
     AppNav.instance.openCockpit(c, kCockpitTabBudgets);
 void goCockpitSubscriptions(BuildContext c) =>
@@ -322,11 +343,20 @@ void goCockpitDashboard(BuildContext c, DashboardPage page) =>
 void goDashboard(BuildContext c) =>
     AppNav.instance.openHomeTab(c, kHomeTabDashboard);
 
-/// All transactions, filters cleared (the review and spam cards sit on top).
+/// All transactions, filters cleared.
 void goAllTransactions(BuildContext c) =>
     AppNav.instance.openTransactions(c, const TxFilterRequest());
+
+/// The review sheet over the Transactions tab.
+void goReview(BuildContext c) => AppNav.instance.openReview(c);
 void goAccounts(BuildContext c) => AppNav.instance.openAccounts(c);
 void goNewReminder(BuildContext c) => showReminderEditor(c);
+
+/// Settings, Notifications: the alert switches, pushed over whatever is
+/// open.
+void goNotificationSettings(BuildContext c) => Navigator.of(
+  c,
+).push(MaterialPageRoute<void>(builder: (_) => const NotificationsPage()));
 
 /// Who owes you, pushed over whatever is open.
 void goPeople(BuildContext c) => Navigator.of(

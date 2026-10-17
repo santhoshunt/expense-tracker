@@ -172,12 +172,14 @@ void main() {
       withProviders(p, const ClassifiersScreen(initialTab: kCockpitTabTags)),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Organise'), findsOneWidget);
+    expect(find.text('Groups and tags'), findsOneWidget);
     expect(find.text('Goa trip'), findsOneWidget);
-    expect(find.textContaining('spent · 1 row'), findsOneWidget);
+    expect(find.textContaining('spent · 1 transaction · '), findsOneWidget);
 
-    await tester.longPress(find.text('Goa trip'));
+    // A tap opens the editor, which also offers the tag's transactions.
+    await tester.tap(find.text('Goa trip'));
     await tester.pumpAndSettle();
+    expect(find.text('See 1 transaction'), findsOneWidget);
     await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
     expect(row(p, 'beachshack').tags, isEmpty);
@@ -188,9 +190,8 @@ void main() {
     expect(row(p, 'beachshack').tags, ['Goa trip']);
   });
 
-  testWidgets('the edit button renames, merges and colours a tag, with Undo', (
-    tester,
-  ) async {
+  testWidgets('a tap opens the editor, which renames, merges and colours a '
+      'tag, with Undo', (tester) async {
     final p = await seeded();
     await p.setTagsForMany({row(p, 'coffeerun').id}, add: {'Work'});
     await tester.pumpWidget(
@@ -198,12 +199,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(
-      find.descendant(
-        of: find.widgetWithText(ListTile, 'Goa trip'),
-        matching: find.byTooltip('Edit tag'),
-      ),
-    );
+    expect(find.byTooltip('Edit tag'), findsNothing);
+    await tester.tap(find.text('Goa trip'));
     await tester.pumpAndSettle();
     expect(find.text('Edit tag'), findsOneWidget);
     final name = find.widgetWithText(TextField, 'Name');

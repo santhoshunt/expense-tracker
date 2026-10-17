@@ -28,7 +28,8 @@ enum EverydayBasis {
   /// This month's own everyday pace, before enough usual months exist.
   pace,
 
-  /// Too little on record to estimate; the forecast is a floor.
+  /// Too little on record to estimate, or an estimate of nothing; the
+  /// forecast is a floor.
   none,
 }
 
@@ -224,6 +225,17 @@ MonthForecast? computeMonthForecast(
       basis = EverydayBasis.pace;
       perDay = sum / paceDays;
     }
+  }
+  // An estimate that rounds to nothing is no basis: the forecast is then a
+  // floor. That covers a total under a rupee and a daily figure that shows
+  // as "about ₹0 a day" in whole rupees. On the month's last day nothing is
+  // left to estimate, so it stays.
+  if (basis != EverydayBasis.none &&
+      daysAfter > 0 &&
+      (perDay * daysAfter < 1 || perDay < 0.5)) {
+    basis = EverydayBasis.none;
+    perDay = 0;
+    usualMonths = 0;
   }
 
   return MonthForecast(

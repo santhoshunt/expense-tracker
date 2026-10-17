@@ -13,10 +13,10 @@ import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/grouped_surface.dart';
 
-/// The decluttered Transactions screen: sort, filters and export behind one
-/// tune button in the search field, a day header over each day's rows under
-/// a date sort, the rows of a day drawn as one card, and the review card's
-/// tip shown only while the card is open.
+/// The decluttered Transactions screen: the sort and Filters chips under
+/// the search (v1.43.0), a day header over each day's rows under a date
+/// sort, its total on the rows' amount edge, the rows of a day drawn as one
+/// card, and no review card on the tab.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -39,11 +39,8 @@ void main() {
         ),
       );
 
-  final tune = find.byTooltip('Sort, filter and export');
-
-  Badge tuneBadge(WidgetTester tester) => tester.widget<Badge>(
-    find.ancestor(of: find.byIcon(Icons.tune), matching: find.byType(Badge)),
-  );
+  final sortChip = find.byIcon(Icons.swap_vert);
+  final filtersChip = find.byIcon(Icons.tune);
 
   /// Two rows on 1 July (lunch after coffee) and one on 2 July.
   Future<FinanceProvider> seeded() async {
@@ -73,78 +70,69 @@ void main() {
     return p;
   }
 
-  /// The sort chips head the Filters sheet; a pick applies at once, and
-  /// Apply closes the sheet.
+  /// The sort chip opens Sort by; a pick applies and closes it.
   Future<void> sortBy(WidgetTester tester, String label) async {
-    await tester.tap(tune);
+    await tester.tap(sortChip);
     await tester.pumpAndSettle();
-    final chip = find.widgetWithText(ChoiceChip, label);
-    await tester.ensureVisible(chip);
-    await tester.pumpAndSettle();
-    await tester.tap(chip);
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
+    await tester.tap(find.text(label).last);
     await tester.pumpAndSettle();
   }
 
   final day1 = DateFormat('EEE d MMM').format(DateTime(2026, 7, 1));
   final day2 = DateFormat('EEE d MMM').format(DateTime(2026, 7, 2));
 
-  testWidgets('the tune button opens Filters with the sort at the top and '
-      'Export CSV at the bottom; the badge marks an active filter', (
-    tester,
-  ) async {
+  testWidgets('the sort chip names the sort and opens Sort by; Filters '
+      'counts what is on; the sheet holds filters only', (tester) async {
     tester.view.physicalSize = const Size(400, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     final p = await seeded();
     await tester.pumpWidget(screen(p));
     await tester.pumpAndSettle();
-    expect(tuneBadge(tester).isLabelVisible, isFalse);
+    expect(find.text('Newest first'), findsOneWidget);
+    expect(find.text('Filters'), findsOneWidget);
+    // No button in the search field any more.
+    expect(find.byTooltip('Sort, filter and export'), findsNothing);
 
-    // One tap: straight into the Filters sheet.
-    await tester.tap(tune);
+    // Filters opens the sheet: no sort, no export.
+    await tester.tap(filtersChip);
     await tester.pumpAndSettle();
     final sheet = find.byType(BottomSheet);
     Finder inSheet(Finder f) => find.descendant(of: sheet, matching: f);
     expect(inSheet(find.text('Filters')), findsOneWidget);
     expect(inSheet(find.text('Clear all')), findsOneWidget);
-    expect(inSheet(find.text('Sort by')), findsOneWidget);
-    final current = tester.widget<ChoiceChip>(
-      find.widgetWithText(ChoiceChip, 'Date · newest first'),
-    );
-    expect(current.selected, isTrue, reason: 'the current sort');
-    // Sort heads the sheet, above Date; Export CSV ends it.
-    double top(Finder f) => tester.getTopLeft(f).dy;
-    expect(
-      top(inSheet(find.text('Sort by'))),
-      lessThan(top(find.text('Date'))),
-    );
-    final export = inSheet(find.text('Export CSV'));
-    await tester.ensureVisible(export);
-    await tester.pumpAndSettle();
-    expect(export, findsOneWidget);
-    expect(top(export), greaterThan(top(find.text('Amount range'))));
-
-    // A sort pick applies at once: the day headers go with a date sort.
-    await tester.ensureVisible(
-      find.widgetWithText(ChoiceChip, 'Amount · high to low'),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.widgetWithText(ChoiceChip, 'Amount · high to low'));
-    await tester.pumpAndSettle();
-    expect(find.text(day1), findsNothing);
+    expect(inSheet(find.text('Sort by')), findsNothing);
+    expect(inSheet(find.text('Export CSV')), findsNothing);
     await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
     await tester.pumpAndSettle();
     expect(sheet, findsNothing);
-    expect(find.text(day1), findsNothing);
 
-    // A month deep-link is a filter: the button marks it.
+    // The sort chip: Sort by over the four sorts; a pick applies.
+    await tester.tap(sortChip);
+    await tester.pumpAndSettle();
+    expect(find.text('Sort by'), findsOneWidget);
+    for (final label in [
+      'Date · newest first',
+      'Date · oldest first',
+      'Amount · high to low',
+      'Amount · low to high',
+    ]) {
+      expect(find.text(label), findsOneWidget, reason: label);
+    }
+    await tester.tap(find.text('Amount · high to low'));
+    await tester.pumpAndSettle();
+    expect(find.text('Sort by'), findsNothing);
+    expect(find.text(day1), findsNothing);
+    expect(find.text('Largest first'), findsOneWidget);
+
+    // A month deep-link is a filter: the chip counts it.
     await tester.pumpWidget(
       screen(p, req: TxFilterRequest(month: DateTime(2026, 7)), token: 1),
     );
     await tester.pumpAndSettle();
-    expect(tuneBadge(tester).isLabelVisible, isTrue);
+    expect(find.text('Filters · 1'), findsOneWidget);
+    expect(find.bySemanticsLabel('1 filter on'), findsOneWidget);
+    expect(find.bySemanticsLabel('1 filters on'), findsNothing);
   });
 
   testWidgets('day headers with the day total show under a date sort only', (
@@ -163,6 +151,14 @@ void main() {
     expect(top(find.text(day2)), lessThan(top(find.text('snack'))));
     expect(top(find.text('snack')), lessThan(top(find.text(day1))));
     expect(top(find.text(day1)), lessThan(top(find.text('lunch'))));
+    // The day's total ends where the row amounts end.
+    expect(
+      tester.getTopRight(find.text(fmtMoneyTidy(-30))).dx,
+      moreOrLessEquals(
+        tester.getTopRight(find.text('−${fmtMoney(30)}')).dx,
+        epsilon: 0.5,
+      ),
+    );
 
     await sortBy(tester, 'Amount · high to low');
     expect(find.text(day1), findsNothing);
@@ -214,7 +210,9 @@ void main() {
     expect(find.text('Today'), findsOneWidget);
   });
 
-  testWidgets('the review card shows its tip only while open', (tester) async {
+  testWidgets('imports to review wait in the review sheet, not on the tab', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({
       'transactions_v1': jsonEncode([
         Tx(
@@ -232,22 +230,7 @@ void main() {
     await p.load();
     await tester.pumpWidget(screen(p));
     await tester.pumpAndSettle();
-
-    final card = find.byKey(const ValueKey('pending-card'));
-    final tip = find.descendant(
-      of: card,
-      matching: find.byIcon(Icons.info_outline),
-    );
-    final title = find.textContaining('Imported from SMS · 1');
-    final header = find.ancestor(of: title, matching: find.byType(InkWell));
-    expect(tip, findsOneWidget);
-    final openHeight = tester.getSize(header.first).height;
-
-    // The title folds the card, and the tip goes with the fold.
-    await tester.tap(title);
-    await tester.pumpAndSettle();
-    expect(tip, findsNothing);
-    expect(title, findsOneWidget);
-    expect(tester.getSize(header.first).height, openHeight);
+    expect(find.textContaining('Imported from SMS'), findsNothing);
+    expect(find.text('row p1'), findsNothing);
   });
 }

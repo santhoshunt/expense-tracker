@@ -112,7 +112,7 @@ void main() {
       expect(find.byTooltip('Settings'), findsOneWidget);
     });
 
-    testWidgets('⋯ holds the page entries, then Cockpit and People', (
+    testWidgets('⋯ holds the page entries, then Cockpit and Who owes you', (
       tester,
     ) async {
       await pumpHome(tester);
@@ -124,7 +124,7 @@ void main() {
         'Customise page',
         'App',
         'Cockpit',
-        'People',
+        'Who owes you',
       ]) {
         expect(find.text(label), findsWidgets, reason: label);
       }
@@ -143,6 +143,44 @@ void main() {
       await openMenu(tester);
       expect(find.text('Month view'), findsOneWidget);
       expect(find.text('Year report (PDF)'), findsOneWidget);
+    });
+
+    testWidgets('the Year button beside the arrows switches the view', (
+      tester,
+    ) async {
+      await pumpHome(tester);
+      final toYear = find.descendant(
+        of: find.byType(AppBar),
+        matching: find.widgetWithText(TextButton, 'Year'),
+      );
+      expect(toYear, findsOneWidget);
+      expect(find.byTooltip('Show Year view'), findsOneWidget);
+      // The label no longer carries a ▾; it still opens the picker.
+      expect(find.byIcon(Icons.arrow_drop_down), findsNothing);
+      await tester.tap(toYear);
+      await settle(tester);
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.text('${now.year}'),
+        ),
+        findsOneWidget,
+      );
+      final toMonth = find.descendant(
+        of: find.byType(AppBar),
+        matching: find.widgetWithText(TextButton, 'Month'),
+      );
+      expect(toMonth, findsOneWidget);
+      expect(find.byTooltip('Show Month view'), findsOneWidget);
+      await tester.tap(toMonth);
+      await settle(tester);
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.text(fmtMonth(DateTime(now.year, now.month))),
+        ),
+        findsOneWidget,
+      );
     });
 
     testWidgets('About Year view opens the tip', (tester) async {
@@ -177,7 +215,7 @@ void main() {
       expect(find.byWidgetPredicate((w) => w is UnderlineTabs), findsOneWidget);
       await tester.tap(find.text('Trends'));
       await settle(tester);
-      expect(find.text('This month vs last month'), findsWidgets);
+      expect(find.text('This month so far'), findsWidgets);
     });
   });
 
@@ -199,7 +237,7 @@ void main() {
       }
       expect(rows, hasLength(1), reason: 'one row');
       // The figure opens the month's spending; the label is its tip.
-      await tester.tap(find.text(fmtMoney(420)).first);
+      await tester.tap(find.text(fmtMoneyWhole(420)).first);
       await settle(tester);
       expect(find.text('test food'), findsOneWidget);
     });
@@ -247,6 +285,9 @@ void main() {
         300,
         scrollable: verticalScrollable(),
       );
+      // Clear of the docked Add button's bar at the bottom edge.
+      await tester.drag(verticalScrollable(), const Offset(0, -200));
+      await settle(tester);
       for (final name in ['Eating out', 'Rides', 'Gadgets']) {
         expect(find.text(name), findsOneWidget, reason: name);
       }
@@ -280,10 +321,14 @@ void main() {
           await spend(p, 'food', 3000, DateTime(now.year, now.month, 1));
         },
       );
-      final budget = find.text('Monthly budget');
-      expect(budget, findsOneWidget);
+      // The label above the card; the card holds the budget bar's legend
+      // and, under a hairline, the forecast.
+      expect(find.text('Monthly budget'), findsOneWidget);
       final card = find
-          .ancestor(of: budget, matching: find.byType(FrostedPanel))
+          .ancestor(
+            of: find.text('Spent, confirmed'),
+            matching: find.byType(FrostedPanel),
+          )
           .first;
       expect(
         find.descendant(of: card, matching: find.text('Month-end forecast')),

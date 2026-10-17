@@ -11,6 +11,7 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
+import 'package:expense_tracker/utils/format.dart';
 
 import 'dashboard_test_utils.dart';
 
@@ -83,7 +84,14 @@ void main() {
     final p = await ledger(1200);
     await pump(tester, p, await settings(), const DashboardScreen());
     expect(find.text('Month-end forecast'), findsOneWidget);
-    expect(find.text('Spent so far'), findsOneWidget);
+    // The forecast's row; the This week row says Spent so far too.
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('presence-month-forecast')),
+        matching: find.text('Spent so far'),
+      ),
+      findsOneWidget,
+    );
     expect(find.textContaining('under your'), findsNothing);
     expect(find.textContaining('over your'), findsNothing);
   });
@@ -107,9 +115,9 @@ void main() {
       ),
     );
     await pump(tester, p, await settings(), const DashboardScreen());
-    await tester.tap(find.text('Bills due (1)'));
+    await tester.tap(find.text('Due this month (1)'));
     await tester.pumpAndSettle();
-    expect(find.text('Bills still due'), findsOneWidget);
+    expect(find.text('Due this month'), findsOneWidget);
     expect(find.text('Broadband'), findsOneWidget);
     expect(find.textContaining('· reminder'), findsOneWidget);
 
@@ -144,16 +152,20 @@ void main() {
       ),
     );
     await pump(tester, p, await settings(), const DashboardScreen());
-    await tester.tap(find.text('Bills due (1)'));
+    await tester.tap(find.text('Due this month (1)'));
     await tester.pumpAndSettle();
     expect(find.text('Added for you on the day'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Paid'), findsNothing);
   });
 
-  testWidgets('says how far under or over the cap', (tester) async {
+  testWidgets('the budget card says once how far under or over the cap', (
+    tester,
+  ) async {
     final p = await ledger(1200);
     await pump(tester, p, await settings(cap: 50000), const DashboardScreen());
-    expect(find.textContaining('under your'), findsOneWidget);
+    expect(find.text('${fmtMoneyWhole(48800)} left'), findsOneWidget);
+    // The forecast shares the card and leaves the verdict to it.
+    expect(find.textContaining('under your'), findsNothing);
 
     final over = await ledger(90000);
     await pump(
@@ -162,7 +174,20 @@ void main() {
       await settings(cap: 50000),
       const DashboardScreen(),
     );
-    expect(find.textContaining('over your'), findsOneWidget);
+    // (The stored ledger keeps the first row too: over by its sum.)
+    expect(find.textContaining(' over the cap'), findsOneWidget);
+    expect(find.textContaining('over your'), findsNothing);
+  });
+
+  testWidgets('with the budget hidden, the forecast says it instead', (
+    tester,
+  ) async {
+    final p = await ledger(1200);
+    final s = await settings(cap: 50000);
+    await s.setSectionHidden(DashboardSection.monthlyBudget, true);
+    await pump(tester, p, s, const DashboardScreen());
+    expect(find.textContaining('under your'), findsOneWidget);
+    expect(find.textContaining(' left'), findsNothing);
   });
 
   testWidgets('the Year view drops it', (tester) async {

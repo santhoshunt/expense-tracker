@@ -27,10 +27,17 @@ class SafeToSpend {
 
   final double billsDue;
 
+  /// How many bills [billsDue] adds up.
+  final int billsCount;
+
   /// Spend this month other than today's (rows dated later in the month
   /// included), and today's.
   final double spentBeforeToday;
   final double spentToday;
+
+  /// The part of that spend on rows still waiting for review, today's
+  /// included.
+  final double pendingSpent;
 
   /// The cap it was worked out against.
   final double cap;
@@ -46,12 +53,18 @@ class SafeToSpend {
     required this.dailyAllowance,
     required this.remainingAfterToday,
     required this.billsDue,
+    required this.billsCount,
     required this.spentBeforeToday,
     required this.spentToday,
+    required this.pendingSpent,
     required this.cap,
     required this.daysLeft,
     required this.today,
   });
+
+  /// This month's spend, waiting rows included, plus the bills due: what
+  /// the cap is measured against.
+  double get committed => spentBeforeToday + spentToday + billsDue;
 
   /// Spend and the bills due together pass the cap: nothing is left.
   bool get over => remainingAfterToday < 0;
@@ -200,14 +213,15 @@ SafeToSpend? computeSafeToSpend(
   final today = DateTime(now.year, now.month, now.day);
   final month = DateTime(now.year, now.month);
   final last = daysInMonth(now.year, now.month);
-  final bills = billsDue(
+  final dueList = billsDue(
     finance,
     patterns: patterns,
     hidden: hidden,
     from: today.subtract(const Duration(days: 7)),
     to: DateTime(now.year, now.month, last),
     now: now,
-  ).fold(0.0, (s, b) => s + b.amount);
+  );
+  final bills = dueList.fold(0.0, (s, b) => s + b.amount);
   var pendingMonth = 0.0;
   var pendingToday = 0.0;
   for (final t in finance.pendingTransactions) {
@@ -230,8 +244,10 @@ SafeToSpend? computeSafeToSpend(
     dailyAllowance: daily,
     remainingAfterToday: cap - monthSpent - bills,
     billsDue: bills,
+    billsCount: dueList.length,
     spentBeforeToday: before,
     spentToday: todaySpent,
+    pendingSpent: pendingMonth,
     cap: cap,
     daysLeft: daysLeft,
     today: now.day,

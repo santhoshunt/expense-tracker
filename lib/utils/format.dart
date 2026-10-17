@@ -74,6 +74,10 @@ String fmtMoneyTidy(double v) {
   return s.endsWith('.00') ? s.substring(0, s.length - 3) : s;
 }
 
+/// Whole rupees, rounded: the Dashboard's figures. Paise belong to
+/// transaction lists.
+String fmtMoneyWhole(double v) => _signed(v, _wholeRupees);
+
 String fmtDate(DateTime d) => _date.format(d);
 String fmtDateTime(DateTime d) => _dateTime.format(d);
 String fmtTime(DateTime d) => _time.format(d);
@@ -118,6 +122,22 @@ String fmtCountIn(DateTime d) {
 }
 
 final DateFormat _weekdayDayMonth = DateFormat('EEE d MMM');
+final DateFormat _weekdayDayMonthYear = DateFormat('EEE d MMM yyyy');
+
+/// A review list's day label: Today, Yesterday, "Thu 15 Oct", with the year
+/// outside the current one.
+String fmtDayHeading(DateTime day, {DateTime? now}) {
+  final n = now ?? DateTime.now();
+  final today = DateTime(n.year, n.month, n.day);
+  final d = DateTime(day.year, day.month, day.day);
+  if (d == today) return 'Today';
+  if (d == DateTime(today.year, today.month, today.day - 1)) {
+    return 'Yesterday';
+  }
+  return d.year == n.year
+      ? _weekdayDayMonth.format(d)
+      : _weekdayDayMonthYear.format(d);
+}
 
 /// A due date [days] ahead as words: "today", "tomorrow", "in 5 days".
 /// Callers say "Overdue" themselves for a negative count.

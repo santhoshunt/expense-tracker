@@ -94,11 +94,13 @@ void main() {
     await pump(tester, day: 3);
     expect(find.byType(MonthlyRecapCard), findsOneWidget);
     expect(find.byType(MonthPaceCard), findsNothing);
-    expect(inRecap(find.text('$lastName recap')), findsOneWidget);
+    // The title is the section label above the card.
+    expect(find.text('$lastName recap'), findsOneWidget);
+    expect(inRecap(find.text('$lastName recap')), findsNothing);
     // Spent, and the only top category's row.
-    expect(inRecap(find.text(fmtMoney(400))), findsNWidgets(2));
+    expect(inRecap(find.text(fmtMoneyWhole(400))), findsNWidgets(2));
     expect(inRecap(find.text('Income')), findsNothing);
-    expect(inRecap(find.text(fmtMoney(3000))), findsNothing);
+    expect(inRecap(find.text(fmtMoneyWhole(3000))), findsNothing);
     expect(inRecap(find.byIcon(Icons.close)), findsNothing);
 
     // Under another month's totals it would read as that month's: browsing
@@ -120,9 +122,11 @@ void main() {
     expect(find.byType(MonthlyRecapCard), findsNothing);
   });
 
-  testWidgets('the recap week keeps the pace off Trends', (tester) async {
+  testWidgets('the recap week still shows this month so far on Trends', (
+    tester,
+  ) async {
     await pump(tester, day: 3, view: 'Trends');
-    expect(find.byType(MonthPaceCard), findsNothing);
+    expect(find.byType(MonthPaceCard), findsOneWidget);
     expect(find.byType(MonthlyRecapCard), findsNothing);
   });
 
@@ -134,24 +138,41 @@ void main() {
     final pace = find.byType(MonthPaceCard);
     expect(pace, findsOneWidget);
     Finder inPace(Finder f) => find.descendant(of: pace, matching: f);
-    expect(inPace(find.text('$thisName so far')), findsOneWidget);
-    expect(inPace(find.textContaining('1 to 20')), findsOneWidget);
-    expect(inPace(find.text(fmtMoney(250))), findsOneWidget);
-    expect(inPace(find.text(fmtMoney(400))), findsOneWidget);
-    // First on the page, above last month's comparison.
+    // The fold's heading names it; the card leaves its own title out.
+    expect(find.text('This month so far'), findsOneWidget);
+    expect(inPace(find.text('$thisName so far')), findsNothing);
+    // The comparison runs on the real clock (recapClock moves only the
+    // recap): through today, or the whole month on its last day.
+    final day = DateTime.now().day;
+    final lastDay = DateTime(now.year, now.month + 1, 0).day;
+    expect(
+      inPace(find.textContaining(day < lastDay ? '1 to $day ' : 'All of ')),
+      findsOneWidget,
+    );
+    // The headline and this month's bar.
+    expect(inPace(find.text(fmtMoneyWhole(250))), findsNWidgets(2));
+    expect(inPace(find.text(fmtMoneyWhole(400))), findsOneWidget);
+    // First on the page, above the usual-month comparison.
     expect(
       tester.getTopLeft(pace).dy,
-      lessThan(tester.getTopLeft(find.text('This month vs last month')).dy),
+      lessThan(tester.getTopLeft(find.text('This month vs usual')).dy),
     );
 
-    // It is about today's month: browsing back puts it away, and coming
-    // back brings it back.
+    // Another month names both sides, and coming back gives this month's
+    // heading again.
     await tester.tap(find.byTooltip('Previous month'));
     await tester.pumpAndSettle();
-    expect(find.byType(MonthPaceCard), findsNothing);
+    expect(find.byType(MonthPaceCard), findsOneWidget);
+    expect(
+      find.text(
+        '$lastName vs '
+        '${DateFormat('MMMM').format(DateTime(now.year, now.month - 2))}',
+      ),
+      findsOneWidget,
+    );
     await tester.tap(find.byTooltip('Next month'));
     await tester.pumpAndSettle();
-    expect(find.byType(MonthPaceCard), findsOneWidget);
+    expect(find.text('This month so far'), findsOneWidget);
 
     await toggleYearView(tester);
     expect(find.byType(MonthPaceCard), findsNothing, reason: 'Year view');
@@ -198,7 +219,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(
-      inRecap(find.textContaining('over by ${fmtMoney(300)}')),
+      inRecap(find.textContaining('over by ${fmtMoneyWhole(300)}')),
       findsOneWidget,
     );
     // A RenderFlex overflow would have failed the test by now.

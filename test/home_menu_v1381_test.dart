@@ -19,7 +19,7 @@ import 'package:expense_tracker/widgets/glossy.dart';
 import 'package:expense_tracker/widgets/lock_gate.dart';
 
 /// v1.38.1: the ⋮ menu has the same two sections on every tab, "This page"
-/// (what the tab publishes) and then "App" (Cockpit, People; Settings
+/// (what the tab publishes) and then "App" (Cockpit, Who owes you; Settings
 /// moved to its own bar button in v1.42.0);
 /// import toasts give the counted and waiting figures. Names and amounts
 /// are made up.
@@ -107,7 +107,7 @@ void main() {
         'Month report (PDF)',
         'Customise page',
         'Cockpit',
-        'People',
+        'Who owes you',
       ]) {
         expect(tile(label), findsOneWidget, reason: label);
       }
@@ -214,13 +214,13 @@ void main() {
       expect(find.text('This page'), findsNothing);
       expect(find.byType(PopupMenuDivider), findsNothing);
       expect(find.text('App'), findsOneWidget);
-      expect(tile('People'), findsOneWidget);
+      expect(tile('Who owes you'), findsOneWidget);
     });
 
-    testWidgets('People opens the People page', (tester) async {
+    testWidgets('Who owes you opens the People page', (tester) async {
       await pumpMenu(tester, kHomeTabDashboard);
       await openMenu(tester);
-      await tester.tap(tile('People'));
+      await tester.tap(tile('Who owes you'));
       await settle(tester);
       expect(find.byType(PeopleScreen), findsOneWidget);
     });

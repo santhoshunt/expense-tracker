@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Upcoming (4x2): the next three still due, nearest first, each with
-     its category icon, the due day (overdue in red) and the amount (income
-     due in green). Fixed rows rather than a collection view, so nothing
-     scrolls: HomeWidgets.upcoming shows as many of the three as the
-     height holds at the user's font size. -->
+     its category icon in the category colour, the due day with a red dot
+     when urgent, and the amount at the right edge (money out red, income
+     green, card bills plain). Fixed rows rather than a collection view,
+     so nothing scrolls: HomeWidgets.upcoming shows as many of the three
+     as the height holds at the user's font size. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/hw_root"
     android:layout_width="match_parent"
@@ -81,6 +82,16 @@
                 android:maxLines="1"
                 android:textColor="#B4C0C8"
                 android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/hw_amt1"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:maxLines="1"
+                android:textColor="#FF7CA3"
+                android:textSize="13sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <LinearLayout
@@ -119,6 +130,16 @@
                 android:maxLines="1"
                 android:textColor="#B4C0C8"
                 android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/hw_amt2"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:maxLines="1"
+                android:textColor="#FF7CA3"
+                android:textSize="13sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <LinearLayout
@@ -157,6 +178,16 @@
                 android:maxLines="1"
                 android:textColor="#B4C0C8"
                 android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/hw_amt3"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:maxLines="1"
+                android:textColor="#FF7CA3"
+                android:textSize="13sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <TextView

@@ -17,7 +17,6 @@ void main() {
       final l = DashboardPageLayout.defaults(DashboardPage.trends);
       expect(l.order, [
         DashboardSection.pace,
-        DashboardSection.previousMonth,
         DashboardSection.usual,
         DashboardSection.categoryComparison,
         DashboardSection.yearVsLast,
@@ -118,18 +117,20 @@ void main() {
     test('a section missing from a stored order returns at its place', () {
       // As if a later release added "usual" between these two. A 1.33
       // order also lacks "yearVsLast", which returns after its default
-      // neighbour, the category comparison.
+      // neighbour, the category comparison. "previousMonth", merged into
+      // "pace" in 1.43, drops out.
       final l = DashboardPageLayout.fromJson(DashboardPage.trends, {
         'order': ['sixMonths', 'pace', 'previousMonth', 'categoryComparison'],
+        'hidden': ['previousMonth'],
       });
       expect(l.order, [
         DashboardSection.sixMonths,
         DashboardSection.pace,
-        DashboardSection.previousMonth,
         DashboardSection.usual,
         DashboardSection.categoryComparison,
         DashboardSection.yearVsLast,
       ]);
+      expect(l.hidden, isEmpty);
     });
 
     test('wrongly-typed lists read as empty', () {

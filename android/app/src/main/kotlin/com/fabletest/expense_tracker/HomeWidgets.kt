@@ -47,6 +47,9 @@ object HomeWidgets {
     const val PURPOSE_INCOME = 4
     const val PURPOSE_IMPORT = 5
 
+    /** The This week widget's review count. */
+    const val PURPOSE_REVIEW = 6
+
     /** One request code per widget and purpose. Every tap is an ACTION_RUN
      * intent on the same activity, and intents differing only in extras are
      * the same PendingIntent: a shared code would let one widget's tap
@@ -298,12 +301,18 @@ object HomeWidgets {
 
     // --- Upcoming -----------------------------------------------------------
 
-    private class UpcomingRow(val row: Int, val icon: Int, val name: Int, val meta: Int)
+    private class UpcomingRow(
+        val row: Int,
+        val icon: Int,
+        val name: Int,
+        val meta: Int,
+        val amount: Int,
+    )
 
     private val upcomingRows = listOf(
-        UpcomingRow(R.id.hw_row1, R.id.hw_icon1, R.id.hw_name1, R.id.hw_meta1),
-        UpcomingRow(R.id.hw_row2, R.id.hw_icon2, R.id.hw_name2, R.id.hw_meta2),
-        UpcomingRow(R.id.hw_row3, R.id.hw_icon3, R.id.hw_name3, R.id.hw_meta3),
+        UpcomingRow(R.id.hw_row1, R.id.hw_icon1, R.id.hw_name1, R.id.hw_meta1, R.id.hw_amt1),
+        UpcomingRow(R.id.hw_row2, R.id.hw_icon2, R.id.hw_name2, R.id.hw_meta2, R.id.hw_amt2),
+        UpcomingRow(R.id.hw_row3, R.id.hw_icon3, R.id.hw_name3, R.id.hw_meta3, R.id.hw_amt3),
     )
 
     private fun upcoming(
@@ -341,32 +350,37 @@ object HomeWidgets {
             val o = rows.getOrNull(i)
             views.setViewVisibility(ids.row, if (o == null) View.GONE else View.VISIBLE)
             if (o == null) return@forEachIndexed
+            // Overdue and urgent from the dates on the day it draws, so a
+            // redraw after midnight is right without the app.
             val days = o.optLong("dueDay", today) - today
-            // Overdue from the dates on the day it draws, so a redraw after
-            // midnight is right without the app.
+            // A threshold, not a flag: urgency moves with the day it draws.
+            val urgent = days <= o.optInt("urgentDays", -1)
             val line = WidgetKit.Line()
+            if (urgent) line.add("● ", theme.over)
             when {
-                days < 0 -> line.add("● Overdue", theme.over, bold = true)
+                days < 0 -> line.add("Overdue", theme.over, bold = true)
                 days == 0L -> line.add("Today", theme.textSecondary)
                 days == 1L -> line.add("Tomorrow", theme.textSecondary)
-                else -> line.add(o.optString("dueLabel"), theme.textSecondary)
+                else -> line.add("In $days days", theme.textSecondary)
             }
-            if (!o.isNull("amountLabel")) {
-                val kind = o.optString("kind", "out")
-                line.add(" · ", theme.textSecondary)
-                // Income due ("in") in green with its plus; bills ("out")
-                // and "neutral" transfers plain: nothing has moved yet.
-                line.add(
-                    o.optString("amountLabel"),
-                    if (kind == "in") theme.safe else theme.textSecondary,
-                    bold = kind == "in"
-                )
+            // The amount at the right edge, coloured as the app does: money
+            // out red, income due green, card bills plain ("neutral").
+            val amount = if (o.isNull("amountLabel")) "" else o.optString("amountLabel")
+            views.setTextViewText(ids.amount, amount)
+            views.setViewVisibility(ids.amount, if (amount.isEmpty()) View.GONE else View.VISIBLE)
+            views.setTextColor(ids.amount, theme.moneyColor(o.optString("kind", "out")))
+            // The category colour; a card bill's card by urgency. A snapshot
+            // from before the colours draws grey.
+            val glyph = when {
+                o.optString("icon") == "card" -> if (urgent) theme.over else theme.warn
+                o.has("color") && !o.isNull("color") -> o.optLong("color").toInt()
+                else -> theme.textSecondary
             }
             views.setTextViewText(ids.name, o.optString("label"))
             views.setTextColor(ids.name, theme.text)
             views.setTextViewText(ids.meta, line.build())
             views.setImageViewResource(ids.icon, WidgetKit.icon(o.optString("icon")))
-            views.setInt(ids.icon, "setColorFilter", theme.textSecondary)
+            views.setInt(ids.icon, "setColorFilter", glyph)
         }
         views.setViewVisibility(R.id.hw_empty, if (rows.isEmpty()) View.VISIBLE else View.GONE)
         views.setTextViewText(
@@ -780,7 +794,14 @@ object HomeWidgets {
             views.setTextViewText(ids.amount, o.optString("amountLabel"))
             views.setTextColor(ids.amount, theme.moneyColor(o.optString("kind")))
             views.setImageViewResource(ids.icon, WidgetKit.icon(o.optString("icon")))
-            views.setInt(ids.icon, "setColorFilter", theme.textSecondary)
+            // The category colour ties the row to its ledger row; the name
+            // stays the merchant.
+            views.setInt(
+                ids.icon,
+                "setColorFilter",
+                if (o.has("color") && !o.isNull("color")) o.optLong("color").toInt()
+                else theme.textSecondary
+            )
             // The accent dot marks a row that counted at once and is not
             // opened yet; invisible, not gone, so the icons stay in line.
             views.setViewVisibility(
@@ -1104,12 +1125,17 @@ object HomeWidgets {
         // then the title row, as the height allows.
         val room = heightDp - 2 * PAD_V
         val core = WidgetKit.lineDp(context, 18f) + 4 + 24
-        val subDp = 2 + WidgetKit.lineDp(context, 13f)
+        // The review count is a 44dp tap target, so its row is at least that.
+        val subDp = 2 + if (w.toReview > 0) {
+            maxOf(WidgetKit.lineDp(context, 13f), 44f)
+        } else {
+            WidgetKit.lineDp(context, 13f)
+        }
         val showSub = core + subDp <= room
         val showTitle =
             core + WidgetKit.lineDp(context, 12f) + (if (showSub) subDp else 0f) <= room
         views.setViewVisibility(R.id.hw_head, if (showTitle) View.VISIBLE else View.GONE)
-        views.setViewVisibility(R.id.hw_sub, if (showSub) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.hw_sub_row, if (showSub) View.VISIBLE else View.GONE)
         // Money out in the expense red; nothing spent is a plain ₹0.
         val amount = WidgetKit.Line()
         if (w.spent >= 0.5) {
@@ -1131,11 +1157,16 @@ object HomeWidgets {
                 sub.add("${WidgetKit.rupees(w.spent - usual)} more than usual", theme.text)
             else -> sub.add("${WidgetKit.rupees(usual - w.spent)} less than usual", theme.text)
         }
-        if (w.toReview > 0) {
-            sub.add(" · ", theme.textSecondary)
-            sub.add("${w.toReview} to review", theme.accentText, bold = true)
-        }
         views.setTextViewText(R.id.hw_sub, sub.build())
+        // The review count has its own tap: it opens the review sheet, the
+        // rest of the widget the digest.
+        views.setViewVisibility(R.id.hw_review, if (w.toReview > 0) View.VISIBLE else View.GONE)
+        views.setTextViewText(R.id.hw_review, "${w.toReview} to review")
+        views.setTextColor(R.id.hw_review, theme.accentText)
+        views.setOnClickPendingIntent(
+            R.id.hw_review,
+            openApp(context, id, QuickActions.OPEN_REVIEW, PURPOSE_REVIEW)
+        )
         return views
     }
 

@@ -10,7 +10,6 @@ import '../services/recurring_detector.dart';
 import '../services/refund_matching.dart';
 import '../services/subscriptions.dart';
 import '../utils/format.dart';
-import '../utils/haptics.dart';
 import '../widgets/date_time_picker.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
@@ -31,25 +30,44 @@ class TxPrefill {
   const TxPrefill({required this.categoryId, this.amount, this.person});
 }
 
+/// A host sheet's way to show the edit sheet's Undo offer itself, with the
+/// arguments [showUndoSnackBarOn] takes. The host gives a removal its thud.
+typedef UndoableHost =
+    void Function(
+      String message,
+      VoidCallback undo, {
+      required IconData icon,
+      required AppToastTone tone,
+    });
+
 /// Opens the add sheet, or the edit sheet for [existing]. Completes with the
 /// new row's id after an add, and null otherwise (edit, delete, dismiss).
 /// [income] starts a new entry on Income with that side's usual first
 /// category (the Quick actions widget's "+ Income").
 ///
-/// [onUndoable] takes the Undo offer after a delete or Unpair in place of
-/// the app-level toast: a host sheet that stays open (the weekly digest)
-/// shows it on itself, where the toast would draw underneath.
+/// [onUndoable] takes the Undo offer of an action that closes the sheet (a
+/// delete, Unpair, an add or a confirming save) in place of the app-level
+/// toast: a host sheet that stays open (the weekly digest, the review
+/// sheet) shows it on itself, where the toast would draw underneath.
+///
+/// [announceAdd] shows "Added ..." with Undo after a new entry saves; a
+/// caller with its own toast for the add (the People page's repayment)
+/// turns it off.
 Future<String?> showAddTransactionSheet(
   BuildContext context, {
   Tx? existing,
   TxPrefill? prefill,
   bool income = false,
-  void Function(String message, IconData icon, VoidCallback undo)? onUndoable,
+  bool announceAdd = true,
+  UndoableHost? onUndoable,
 }) {
   // Opening a row that counted at once clears its "new" marker.
   if (existing != null && existing.unseen) {
     context.read<FinanceProvider>().markSeen(existing.id);
   }
+  // Toasts fired as the sheet closes go to the caller's messenger: the
+  // sheet's own goes with it.
+  final outer = ScaffoldMessenger.maybeOf(context);
   return showModalBottomSheet<String>(
     context: context,
     isScrollControlled: true,
@@ -59,13 +77,19 @@ Future<String?> showAddTransactionSheet(
     showDragHandle: true,
     // The builder's context, not the caller's: keyboard insets are delivered
     // to the sheet's own MediaQuery.
+    // ToastHost inside the inset padding, so its strip sits above the
+    // keyboard: in-sheet toasts (link results, Make rule) draw on top.
     builder: (ctx) => Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-      child: _AddTransactionForm(
-        existing: existing,
-        prefill: prefill,
-        income: income,
-        onUndoable: onUndoable,
+      child: ToastHost(
+        child: _AddTransactionForm(
+          existing: existing,
+          prefill: prefill,
+          income: income,
+          announceAdd: announceAdd,
+          outerMessenger: outer,
+          onUndoable: onUndoable,
+        ),
       ),
     ),
   );
@@ -98,13 +122,20 @@ class _AddTransactionForm extends StatefulWidget {
   final bool income;
 
   /// See [showAddTransactionSheet].
-  final void Function(String message, IconData icon, VoidCallback undo)?
-  onUndoable;
+  final UndoableHost? onUndoable;
+
+  /// See [showAddTransactionSheet].
+  final bool announceAdd;
+
+  /// The caller's messenger, for toasts fired as the sheet closes.
+  final ScaffoldMessengerState? outerMessenger;
 
   const _AddTransactionForm({
     this.existing,
     this.prefill,
     this.income = false,
+    this.announceAdd = true,
+    this.outerMessenger,
     this.onUndoable,
   });
 
@@ -137,6 +168,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   late final String _initialAmountText;
   late final TextEditingController _amountCtrl;
   late final TextEditingController _noteCtrl;
+
+  /// Paid to (Received from on income): [Tx.payee].
+  late final TextEditingController _payeeCtrl;
   late final TextEditingController _senderCtrl;
 
   /// The read-only Original SMS, held so its selection can become a rule.
@@ -167,8 +201,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   bool _subOn = false;
   SubscriptionCycle _subCycle = SubscriptionCycle.monthly;
 
-  /// The merchant the switch was touched for: editing the note to another
-  /// merchant drops the choice rather than carrying it over.
+  /// The merchant the switch was touched for: editing Paid to or the note to
+  /// another merchant drops the choice rather than carrying it over.
   String? _subTouchedKey;
 
   /// The user's Subscription choice when it differs from what the merchant
@@ -184,6 +218,19 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   }
 
   bool get isEditing => widget.existing != null;
+
+  /// Paid to shows on Expense and Income entries the user types: new ones
+  /// and edits of manual rows. An alert already names its merchant.
+  bool get _showsPayee =>
+      _kind != _EntryKind.transfer &&
+      (widget.existing == null || widget.existing!.source == TxSource.manual);
+
+  /// Sender shows when editing an SMS row, or a manual row that already
+  /// holds one; Paid to asks the same question on new entries.
+  bool get _showsSender =>
+      isEditing &&
+      (widget.existing!.source == TxSource.sms ||
+          widget.existing!.sender.trim().isNotEmpty);
 
   /// Re-entrancy latch: a save on a large ledger runs a multi-MB encode on
   /// an isolate before the sheet pops, and the buttons stayed live that
@@ -203,6 +250,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _categoryId,
     _amountCtrl.text,
     _noteCtrl.text,
+    _payeeCtrl.text,
     _senderCtrl.text,
     _isSplit.toString(),
     _shareCtrl.text,
@@ -291,6 +339,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       );
     }
     _noteCtrl = TextEditingController(text: e?.note ?? '');
+    _payeeCtrl = TextEditingController(text: e?.payee ?? '');
     _senderCtrl = TextEditingController(text: e?.sender ?? '');
     _smsCtrl = TextEditingController(text: e?.smsBody ?? '');
     _isSplit = e?.myShare != null;
@@ -316,7 +365,6 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     // holds something.
     _moreOpen =
         _tags.isNotEmpty ||
-        _senderCtrl.text.trim().isNotEmpty ||
         _countIn != null ||
         (!isEditing && _subscriptionShowsOn());
   }
@@ -328,14 +376,15 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     return key != null && _subscriptionNow(key).on;
   }
 
-  /// A new entry's "More details" fold: Tags, Subscription, Sender and
-  /// Count in. Editing shows them all, as it always has.
+  /// A new entry's "More details" fold: Tags, Subscription and Count in.
+  /// Editing shows them all, as it always has.
   late bool _moreOpen;
 
   @override
   void dispose() {
     _amountCtrl.dispose();
     _noteCtrl.dispose();
+    _payeeCtrl.dispose();
     _senderCtrl.dispose();
     _smsCtrl.dispose();
     _shareCtrl.dispose();
@@ -363,6 +412,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             type: _type,
             categoryId: _categoryId,
             note: _noteCtrl.text.trim(),
+            payee: _showsPayee ? normalizePayee(_payeeCtrl.text) : null,
           );
 
   /// The key a Subscription mark would use, or null when the switch has
@@ -654,6 +704,12 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     final refundOf = isEditing
         ? (_live(finance) ?? widget.existing!).refundOf
         : null;
+    // Transfers carry no payee; an SMS row keeps its own.
+    final payee = _kind == _EntryKind.transfer
+        ? ''
+        : _showsPayee
+        ? normalizePayee(_payeeCtrl.text)
+        : null;
 
     try {
       if (isEditing) {
@@ -667,6 +723,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             categoryId: _categoryId,
             amount: amount,
             note: _noteCtrl.text.trim(),
+            payee: payee,
             date: _date,
             sender: _senderCtrl.text.trim(),
             myShare: myShare,
@@ -696,6 +753,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           categoryId: _categoryId,
           amount: amount,
           note: _noteCtrl.text.trim(),
+          payee: payee ?? '',
           date: _date,
           sender: _senderCtrl.text.trim(),
           myShare: myShare,
@@ -723,6 +781,20 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         () => finance.restoreEditedTransactions([before]),
         icon: Icons.done_all,
         tone: AppToastTone.success,
+        closes: true,
+      );
+    }
+    // Every add says what it saved, with Undo. A Subscription mark made
+    // while adding belongs to the merchant and stays.
+    if (newId != null && widget.announceAdd && mounted) {
+      final id = newId;
+      _offerUndo(
+        'Added ${categoryById(_categoryId, fallbackType: _type).label} · '
+        '${fmtMoney(amount)}',
+        () => finance.deleteTransaction(id),
+        icon: Icons.add,
+        tone: AppToastTone.success,
+        closes: true,
       );
     }
     navigator.pop(newId);
@@ -748,28 +820,41 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       () =>
           finance.restoreEditedTransactions([tx, ?partner], reAddMissing: true),
       icon: Icons.delete_outline,
+      closes: true,
     );
     navigator.pop();
   }
 
-  /// Offers Undo for a delete, Unpair, Unlink, a link or a confirming save:
-  /// to [_AddTransactionForm.onUndoable] when the host takes it, else on
-  /// the app-level toast.
+  /// Offers Undo for a delete, Unpair, Unlink, a link, an add or a
+  /// confirming save. [closes] marks an offer made as the sheet pops: it
+  /// goes to [_AddTransactionForm.onUndoable] when the host takes it, else
+  /// to the caller's messenger, which outlives the sheet. The others leave
+  /// the sheet open and show on its own messenger, above it, host or not.
   void _offerUndo(
     String message,
     VoidCallback undo, {
     required IconData icon,
     AppToastTone tone = AppToastTone.removal,
+    bool closes = false,
   }) {
     final host = widget.onUndoable;
-    if (host == null) {
-      showUndoSnackBar(context, message, undo, icon: icon, tone: tone);
+    if (host == null || !closes) {
+      if (closes) {
+        showUndoSnackBarOn(
+          widget.outerMessenger ?? ScaffoldMessenger.of(context),
+          message,
+          undo,
+          icon: icon,
+          tone: tone,
+        );
+      } else {
+        showUndoSnackBar(context, message, undo, icon: icon, tone: tone);
+      }
       return;
     }
-    // showUndoSnackBar gives every removal its thud; this path keeps it.
-    if (tone == AppToastTone.removal) Haptics.thud();
     // The icon names what is undone: a bin for a delete, a link for Unpair.
-    host(message, icon, undo);
+    // The host shows the toast, so the removal thud is its to give.
+    host(message, undo, icon: icon, tone: tone);
   }
 
   /// "Paired transfer" line for a row linked to its other leg, with Unpair.
@@ -823,6 +908,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                 'Unpaired',
                 b == null ? () {} : () => finance.pairTransactions(a, b),
                 icon: Icons.link_off,
+                closes: true,
               );
               navigator.pop();
             },
@@ -1035,7 +1121,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     if (purchaseId == null || !mounted) return;
     final clean = _fingerprint() == _initialFingerprint;
     // A confirmed refund the one-time pass offered leaves its list on Link;
-    // Undo puts it back, as on the review card. Only one that was on it: a
+    // Undo puts it back, as on the review sheet. Only one that was on it: a
     // row linked by hand never joins.
     final wasInReview = finance.refundReviewIds.contains(refund.id);
     final linked = await finance.linkRefund(refund.id, purchaseId);
@@ -1127,6 +1213,60 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             ),
         ],
       ),
+    ];
+  }
+
+  /// Payees used before on this side, as one-tap chips: up to six, narrowed
+  /// by what is typed, leaving out an exact match.
+  List<Widget> _payeeSuggestions(BuildContext context) {
+    final typed = _payeeCtrl.text.trim().toLowerCase();
+    final names = [
+      for (final n in context.read<FinanceProvider>().recentPayees(_type))
+        if (n.toLowerCase() != typed && n.toLowerCase().contains(typed)) n,
+    ].take(6).toList();
+    if (names.isEmpty) return const [];
+    return [
+      const SizedBox(height: 4),
+      Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          for (final n in names)
+            ActionChip(
+              avatar: const Icon(Icons.history, size: 16),
+              label: Text(n),
+              onPressed: () => setState(() {
+                _payeeCtrl.text = n;
+                _payeeCtrl.selection = TextSelection.collapsed(
+                  offset: n.length,
+                );
+              }),
+            ),
+        ],
+      ),
+    ];
+  }
+
+  /// Paid to on Expense, Received from on Income, with the recent payees
+  /// under it. Nothing on a transfer or an SMS row ([_showsPayee]).
+  List<Widget> _payeeField(BuildContext context) {
+    if (!_showsPayee) return const [];
+    final income = _kind == _EntryKind.income;
+    return [
+      TextFormField(
+        controller: _payeeCtrl,
+        textCapitalization: TextCapitalization.words,
+        textInputAction: TextInputAction.next,
+        decoration: InputDecoration(
+          labelText: income ? 'Received from' : 'Paid to',
+          hintText: income
+              ? 'Person, employer or service'
+              : 'Shop, person or service',
+        ),
+        onChanged: (_) => setState(() {}),
+      ),
+      ..._payeeSuggestions(context),
+      const SizedBox(height: 16),
     ];
   }
 
@@ -1308,28 +1448,31 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // TalkBack says whether the fold is open.
-        Semantics(
-          button: true,
-          expanded: _moreOpen,
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('More details'),
-            subtitle: Text(
-              'Tags, subscription, sender, count in another date',
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-            trailing: AnimatedRotation(
-              turns: _moreOpen ? 0.5 : 0,
-              duration: motionDuration(
-                context,
-                const Duration(milliseconds: 200),
+        // TalkBack says whether the fold is open. Merged, so the flags land
+        // on the tile's own node rather than one above it.
+        MergeSemantics(
+          child: Semantics(
+            button: true,
+            expanded: _moreOpen,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('More details'),
+              subtitle: Text(
+                'Tags, subscription, count in another date',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
-              child: const Icon(Icons.expand_more),
+              trailing: AnimatedRotation(
+                turns: _moreOpen ? 0.5 : 0,
+                duration: motionDuration(
+                  context,
+                  const Duration(milliseconds: 200),
+                ),
+                child: const Icon(Icons.expand_more),
+              ),
+              onTap: () => setState(() => _moreOpen = !_moreOpen),
             ),
-            onTap: () => setState(() => _moreOpen = !_moreOpen),
           ),
         ),
         AnimatedSize(
@@ -1346,7 +1489,6 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                       _tagField(context),
                       const SizedBox(height: 16),
                       ..._subscriptionField(context),
-                      _senderField(),
                       _countInField(),
                     ],
                   ),
@@ -1455,7 +1597,12 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
-                    child: const Text('Save changes'),
+                    // A pending row's save confirms it, and the label says so.
+                    child: Text(
+                      widget.existing!.pending
+                          ? 'Save and confirm'
+                          : 'Save changes',
+                    ),
                   ),
                   const SizedBox(height: 16),
                   if (widget.existing!.pairId != null)
@@ -1570,6 +1717,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   onChanged: (_) => setState(() {}),
                 ),
                 const SizedBox(height: 16),
+                ..._payeeField(context),
                 // Hidden on a points wallet, unless the row is (or was, as
                 // the sheet opened) a split: it stays editable, in ₹, and an
                 // accidental untick can be undone.
@@ -1658,8 +1806,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   decoration: const InputDecoration(
                     labelText: 'Note (optional)',
                   ),
-                  // A manual entry's merchant is its note: the Subscription
-                  // switch below follows it.
+                  // Free text. The merchant is Paid to; on rows saved before
+                  // it existed, the note stands in.
                   onChanged: (_) => setState(() {}),
                 ),
                 const SizedBox(height: 16),
@@ -1688,7 +1836,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   ),
                   const SizedBox(height: 16),
                 ],
-                if (isEditing) ...[_senderField(), const SizedBox(height: 16)],
+                if (_showsSender) ...[
+                  _senderField(),
+                  const SizedBox(height: 16),
+                ],
                 Builder(
                   builder: (context) {
                     // watch, not read: an account created while the sheet is
