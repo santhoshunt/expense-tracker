@@ -239,9 +239,7 @@ void main() {
   });
 
   group('budget rows', () {
-    testWidgets('fit 320dp at text x2, the overshoot in red', (
-      tester,
-    ) async {
+    testWidgets('fit 320dp at text x2, the overshoot in red', (tester) async {
       tester.platformDispatcher.textScaleFactorTestValue = 2;
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final p = FinanceProvider();

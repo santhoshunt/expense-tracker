@@ -52,6 +52,8 @@ class BudgetsTab extends StatelessWidget {
         Align(
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
+            // Starts on the heading's left edge.
+            style: flushTextButtonStyle,
             icon: const Icon(Icons.notifications_outlined),
             label: const Text('Notification settings'),
             onPressed: () => goNotificationSettings(context),
@@ -192,10 +194,16 @@ class TagsTab extends StatelessWidget {
                     ),
                     title: Text(s.tag),
                     trailing: _rowChevron(context),
+                    // Each fact stays whole when the line wraps.
                     subtitle: Text(
-                      '${fmtMoneyTidy(s.spent)} spent · ${s.count} '
-                      '${s.count == 1 ? 'transaction' : 'transactions'} · '
-                      '${fmtDateRange(DateTimeRange(start: s.first, end: s.last))}',
+                      joinFacts([
+                        '${fmtMoneyTidy(s.spent)} spent',
+                        '${s.count} '
+                            '${s.count == 1 ? 'transaction' : 'transactions'}',
+                        fmtDateRange(
+                          DateTimeRange(start: s.first, end: s.last),
+                        ),
+                      ]),
                       style: text.bodySmall,
                     ),
                     // The editor also opens the tag's transactions.

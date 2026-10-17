@@ -591,22 +591,22 @@ class _BudgetTrendBars extends StatelessWidget {
           child: spent[i] == 0
               ? flatLine(selected: isSelected)
               : Align(
-            alignment: Alignment.bottomCenter,
-            child: AnimatedFractionallySizedBox(
-              duration: morph,
-              curve: Curves.easeOutCubic,
-              heightFactor: heightFactor,
-              child: AnimatedContainer(
-                duration: morph,
-                decoration: BoxDecoration(
-                  color: isSelected ? base : base.withValues(alpha: 0.35),
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(4),
+                  alignment: Alignment.bottomCenter,
+                  child: AnimatedFractionallySizedBox(
+                    duration: morph,
+                    curve: Curves.easeOutCubic,
+                    heightFactor: heightFactor,
+                    child: AnimatedContainer(
+                      duration: morph,
+                      decoration: BoxDecoration(
+                        color: isSelected ? base : base.withValues(alpha: 0.35),
+                        borderRadius: const BorderRadius.vertical(
+                          top: Radius.circular(4),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-          ),
         ),
       );
     }
@@ -632,9 +632,7 @@ class _BudgetTrendBars extends StatelessWidget {
               children: [
                 // A month before the records: a flat line, no tap, so the
                 // slot reads as no data rather than a blank.
-                Positioned.fill(
-                  child: slots(bar, blank: (_) => flatLine()),
-                ),
+                Positioned.fill(child: slots(bar, blank: (_) => flatLine())),
                 // The limit, on the same scale as the bars ([maxVal]
                 // includes it, so the line always fits). It ignores taps so
                 // the bars beneath it stay tappable.

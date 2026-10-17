@@ -82,6 +82,21 @@ class AppColors extends ThemeExtension<AppColors> {
   }
 }
 
+/// A text button flush with the content around it: no side padding, so
+/// its text (or icon) starts or ends on the same edge as the rows beside
+/// it. Still a 48dp tall target.
+final ButtonStyle flushTextButtonStyle = TextButton.styleFrom(
+  padding: EdgeInsets.zero,
+  minimumSize: const Size(48, 48),
+  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+);
+
+/// [flushTextButtonStyle] for a button at a row's end: a label shorter
+/// than the 48dp target sits at its end, not in its middle.
+final ButtonStyle flushEndTextButtonStyle = flushTextButtonStyle.copyWith(
+  alignment: AlignmentDirectional.centerEnd,
+);
+
 /// Colour for a budget used to [pct] (1.0 = the whole limit): green below
 /// 80%, orange from 80%, red above 95%. The one ladder behind every budget
 /// ring and bar, matching the home-screen widget (BudgetWidgetProvider.kt).

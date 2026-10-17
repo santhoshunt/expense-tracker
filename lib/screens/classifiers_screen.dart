@@ -260,9 +260,16 @@ class _CockpitHub extends StatelessWidget {
                     TextSpan(
                       children: [
                         for (final (j, part) in counts[g]!.indexed) ...[
-                          if (j > 0) const TextSpan(text: ' · '),
+                          // A no-break space before the dot: a line
+                          // breaks after it, never starts with it.
+                          if (j > 0) const TextSpan(text: ' · '),
                           TextSpan(
-                            text: part,
+                            // Each fact whole, so "Monthly cap set" never
+                            // leaves "set" alone on a line; the warning
+                            // keeps its own rule ("over" may wrap).
+                            text: g == CockpitGroup.plan && over > 0 && j == 0
+                                ? part
+                                : part.replaceAll(' ', ' '),
                             style: g == CockpitGroup.plan && over > 0 && j == 0
                                 ? TextStyle(
                                     color: scheme.error,
@@ -566,10 +573,13 @@ class _RulesTabState extends State<_RulesTab> {
   /// Ends the list, even with no built-in rule left, and sits under the
   /// empty state when every rule is gone.
   Widget _restoreBuiltinsButton({bool centered = false}) => Padding(
-    padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+    // The list's 16dp gutter and a flush button: the icon starts on the
+    // rows' icon column.
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
     child: Align(
       alignment: centered ? Alignment.center : Alignment.centerLeft,
       child: TextButton.icon(
+        style: flushTextButtonStyle,
         icon: const Icon(Icons.settings_backup_restore),
         label: const Text('Restore built-in rules'),
         onPressed: _confirmRestoreBuiltins,

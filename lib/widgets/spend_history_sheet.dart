@@ -254,15 +254,20 @@ class _TileRow extends StatelessWidget {
             constraints.maxWidth >=
             tiles.length * minTile + (tiles.length - 1) * _gap;
         if (across) {
-          return IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final (i, t) in tiles.indexed) ...[
-                  if (i > 0) const SizedBox(width: _gap),
-                  Expanded(child: t),
+          // Two title lines in every tile: "This month so far" wraps,
+          // and the figures should still share one line.
+          return FigureTileTitleLines(
+            lines: 2,
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final (i, t) in tiles.indexed) ...[
+                    if (i > 0) const SizedBox(width: _gap),
+                    Expanded(child: t),
+                  ],
                 ],
-              ],
+              ),
             ),
           );
         }

@@ -68,31 +68,33 @@ void main() {
     expect(find.text('Cockpit'), findsOneWidget);
     // Each count keeps its noun with a non-breaking space.
     const nb = ' ';
+    // v1.43.2: every space inside a fact is no-break.
     String n(int count, String one, String many) =>
-        '$count$nb${count == 1 ? one : many}';
+        '$count$nb${(count == 1 ? one : many).replaceAll(' ', nb)}';
     final hub = <(String, String, String)>[
       (
         'Categories and rules',
         // In the order of the name. Only the rule added above: built-ins
         // are not the user's own.
-        '${n(customCategories.length + kCategories.length, 'category', 'categories')} · '
-            '1${nb}rule · '
+        // v1.43.2: a no-break space before each dot.
+        '${n(customCategories.length + kCategories.length, 'category', 'categories')}$nb· '
+            '1${nb}rule$nb· '
             '${n(p.importRules.length, 'import rule', 'import rules')}',
         'Rules',
       ),
       (
         'Groups and tags',
-        '${n(p.groups.length, 'group', 'groups')} · 0${nb}tags',
+        '${n(p.groups.length, 'group', 'groups')}$nb· 0${nb}tags',
         'New group',
       ),
       // A passed limit leads the line.
       (
         'Budgets and bills',
-        '1${nb}budget over · 1${nb}budget · 1${nb}reminder · '
+        '1${nb}budget over$nb· 1${nb}budget$nb· 1${nb}reminder$nb· '
             '0${nb}subscriptions',
         'Budgets',
       ),
-      ('Dashboard layout', 'All sections shown', 'Overview'),
+      ('Dashboard layout', 'All${nb}sections${nb}shown', 'Overview'),
     ];
     for (final (title, count, _) in hub) {
       // The fourth row can sit below a short screen's fold.

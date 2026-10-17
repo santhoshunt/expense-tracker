@@ -2649,53 +2649,58 @@ class _WeekRow extends StatelessWidget {
                       color: scheme.primary,
                     ),
                     const SizedBox(width: 12),
-                    // The label shares its line with the amount only; the
-                    // usual-week line runs the full width under both, so
-                    // at 1.3x it no longer squeezes "Spent so far" onto
-                    // two lines.
+                    // The label sits centred against the two-line figure.
+                    // It keeps its own width, up to half the row, so at
+                    // 1.3x "Spent so far" stays on one line; the figures
+                    // shrink to fit what is left.
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  'Spent so far',
-                                  style: text.bodyMedium,
-                                ),
+                      child: LayoutBuilder(
+                        builder: (context, box) => Row(
+                          children: [
+                            ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth: box.maxWidth / 2,
                               ),
-                              const SizedBox(width: 8),
-                              FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: Text(
-                                  fmtMoneyWhole(digest.spent),
-                                  style: text.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          // Red over the usual week, green under.
-                          if (d != null)
-                            Align(
-                              alignment: AlignmentDirectional.centerEnd,
-                              child: FittedBox(
-                                fit: BoxFit.scaleDown,
-                                child: DeltaNote(
-                                  text: negligibleDelta(d)
-                                      ? 'About usual'
-                                      : '${fmtMoneyWhole(d.abs())} '
-                                            '${d > 0 ? 'over' : 'under'} usual',
-                                  delta: d,
-                                  style: text.bodySmall,
-                                  maxLines: 1,
-                                ),
+                              child: Text(
+                                'Spent so far',
+                                style: text.bodyMedium,
                               ),
                             ),
-                        ],
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: Text(
+                                      fmtMoneyWhole(digest.spent),
+                                      style: text.titleSmall?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  // Red over the usual week, green under.
+                                  if (d != null)
+                                    FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      child: DeltaNote(
+                                        text: negligibleDelta(d)
+                                            ? 'About usual'
+                                            : '${fmtMoneyWhole(d.abs())} '
+                                                  '${d > 0 ? 'over' : 'under'} '
+                                                  'usual',
+                                        delta: d,
+                                        style: text.bodySmall,
+                                        maxLines: 1,
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
@@ -4967,9 +4972,10 @@ class _ForecastBillRow extends StatelessWidget {
     final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
     final b = bill;
     final reminder = b.patternKey == null;
+    // Each fact stays whole when the line wraps.
     final when = paid
         ? 'Marked paid'
-        : [
+        : joinFacts([
             // A detected payment's date is the app's guess: expected, not
             // due.
             switch ((reminder, b.due.isBefore(today))) {
@@ -4980,7 +4986,7 @@ class _ForecastBillRow extends StatelessWidget {
               (false, false) => 'Expected ${fmtDateCompact(b.due)}',
             },
             reminder ? 'reminder' : 'regular payment',
-          ].join(' · ');
+          ]);
     final nameStyle = paid ? TextStyle(color: scheme.onSurfaceVariant) : null;
     return Padding(
       padding: const EdgeInsets.only(top: 8),
@@ -5032,6 +5038,8 @@ class _ForecastBillRow extends StatelessWidget {
                   // button's own, which Switch Access needs.
                   onTap: paid ? onUndo : onPaid,
                   child: TextButton(
+                    // Ends on the amounts' right edge.
+                    style: flushEndTextButtonStyle,
                     onPressed: paid ? onUndo : onPaid,
                     child: Text(paid ? 'Undo' : 'Paid'),
                   ),
@@ -5081,21 +5089,11 @@ class _BudgetRow extends StatelessWidget {
         color: color,
       ),
     );
-    // Name left, amount at the row's right end; at large text the amount
-    // goes under the name instead of squeezing it to nothing.
+    // Amount at the row's right end, centred against the ring and both
+    // lines; at large text it goes under the name instead of squeezing
+    // the name to nothing.
     final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
-    final Widget lineOne = scale > 1.6
-        ? Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [title, amount],
-          )
-        : Row(
-            children: [
-              Expanded(child: title),
-              const SizedBox(width: 8),
-              amount,
-            ],
-          );
+    final amountAtEnd = scale <= 1.6;
     final row = Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -5106,7 +5104,13 @@ class _BudgetRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                lineOne,
+                if (amountAtEnd)
+                  title
+                else
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [title, amount],
+                  ),
                 const SizedBox(height: 2),
                 // No-break spaces round the dot: a narrow line breaks
                 // before "₹6,000", never leaving the share alone.
@@ -5120,6 +5124,7 @@ class _BudgetRow extends StatelessWidget {
               ],
             ),
           ),
+          if (amountAtEnd) ...[const SizedBox(width: 8), amount],
         ],
       ),
     );

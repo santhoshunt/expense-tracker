@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/dashboard_layout.dart';
 import '../providers/settings_provider.dart';
+import '../utils/app_theme.dart';
 import '../widgets/glossy.dart';
 
 /// Cockpit, Dashboard: one page's sections in their order, each with a
@@ -95,6 +96,8 @@ class DashboardLayoutTab extends StatelessWidget {
         child: Align(
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
+            // Starts on the cards' left edge.
+            style: flushTextButtonStyle,
             icon: const Icon(Icons.restart_alt),
             label: const Text('Reset to default'),
             onPressed: () => _reset(context),

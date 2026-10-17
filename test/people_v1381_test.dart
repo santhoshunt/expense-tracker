@@ -53,7 +53,10 @@ void main() {
     tester,
   ) async {
     await pumpPeople(tester, await withDinner());
-    expect(find.text('1 open bill · oldest 7 Oct'), findsOneWidget);
+    expect(
+      find.text(joinFacts(['1 open bill', 'oldest 7 Oct'])),
+      findsOneWidget,
+    );
     expect(find.textContaining('9:00 PM'), findsNothing);
   });
 
@@ -90,7 +93,7 @@ void main() {
 
     // No avatar beside the name; the amount is below the subtitle.
     expect(find.byType(CircleAvatar), findsNothing);
-    final subtitle = find.text('1 open bill · oldest 7 Oct');
+    final subtitle = find.text(joinFacts(['1 open bill', 'oldest 7 Oct']));
     final amount = find.text(fmtMoney(800));
     expect(
       tester.getTopLeft(amount).dy,

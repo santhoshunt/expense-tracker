@@ -1,5 +1,26 @@
 import 'package:flutter/material.dart';
 
+/// How many lines each [FigureTile] title below it keeps, for tiles side
+/// by side; one when none is set.
+class FigureTileTitleLines extends InheritedWidget {
+  final int lines;
+
+  const FigureTileTitleLines({
+    super.key,
+    required this.lines,
+    required super.child,
+  });
+
+  static int of(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<FigureTileTitleLines>()
+          ?.lines ??
+      1;
+
+  @override
+  bool updateShouldNotify(FigureTileTitleLines old) => old.lines != lines;
+}
+
 /// One figure on a plain surface card: a muted [title], the figure, and an
 /// optional muted [note] under it. Shared by the spend history sheet and
 /// the weekly digest.
@@ -25,6 +46,7 @@ class FigureTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final titleLines = FigureTileTitleLines.of(context);
     final text = Theme.of(context).textTheme;
     final muted = text.bodySmall?.copyWith(
       color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -39,7 +61,28 @@ class FigureTile extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(title, style: muted),
+            // In a row of tiles every title keeps the same lines, so the
+            // figures under them share one line.
+            if (titleLines > 1)
+              Stack(
+                children: [
+                  Visibility(
+                    visible: false,
+                    maintainSize: true,
+                    maintainAnimation: true,
+                    maintainState: true,
+                    child: Text('\n' * (titleLines - 1), style: muted),
+                  ),
+                  Text(
+                    title,
+                    style: muted,
+                    maxLines: titleLines,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              )
+            else
+              Text(title, style: muted),
             const SizedBox(height: 4),
             if (value != null)
               // FittedBox, not Flexible: a long figure shrinks rather than

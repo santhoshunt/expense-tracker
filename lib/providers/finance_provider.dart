@@ -3229,15 +3229,16 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// The Add sheet's Paid to suggestions for [type]: newest first, at most
-  /// [kRecentPayeeLimit], distinct ignoring case, from confirmed manual
-  /// non-transfer rows. A row with no payee offers its note's first line
-  /// when the note names a merchant and fits [kMaxPayeeLength], so repeat
-  /// payees from before Paid to existed show at once.
+  /// [kRecentPayeeLimit], distinct ignoring case, from confirmed
+  /// non-transfer rows: manual ones, and imported ones given a payee. A
+  /// manual row with no payee offers its note's first line when the note
+  /// names a merchant and fits [kMaxPayeeLength], so repeat payees from
+  /// before Paid to existed show at once.
   List<String> recentPayees(TxType type) => _d.recentPayees[type] ??= () {
     final out = <String>[];
     final seen = <String>{};
     for (final t in transactions) {
-      if (t.source != TxSource.manual ||
+      if ((t.source != TxSource.manual && t.payee.trim().isEmpty) ||
           t.type != type ||
           isTransferCategory(t.categoryId)) {
         continue;

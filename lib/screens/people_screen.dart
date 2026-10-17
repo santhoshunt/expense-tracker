@@ -189,12 +189,12 @@ class _PersonTile extends StatelessWidget {
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(parts.join(' · '), style: text.bodySmall),
+                Text(joinFacts(parts), style: text.bodySmall),
                 const SizedBox(height: 2),
                 owed,
               ],
             )
-          : Text(parts.join(' · '), style: text.bodySmall),
+          : Text(joinFacts(parts), style: text.bodySmall),
       trailing: large ? null : owed,
       onTap: () => showPersonSheet(page, b.key),
     );

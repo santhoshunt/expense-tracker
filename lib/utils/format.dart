@@ -98,6 +98,19 @@ double? parseAmount(String raw) {
   return v != null && v.isFinite ? v : null;
 }
 
+/// [facts] joined by " · " for a detail line that may wrap: each fact keeps
+/// its words together, and a line breaks only after a dot, so no line
+/// starts with one or splits "3 transactions".
+String joinFacts(Iterable<String> facts) => facts
+    .map(
+      (f) => f
+          .replaceAll(' ', ' ')
+          // A line may break after a dash even before a no-break space;
+          // word joiners hold "23 Sep – 13 Oct" together.
+          .replaceAll('–', '⁠–⁠'),
+    )
+    .join(' · ');
+
 /// Date alone at midnight, date + time otherwise.
 ///
 /// Midnight is the app's "no time known" value — every transaction recorded

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../utils/app_theme.dart';
 import 'animated_fold.dart';
 
 /// Rows a capped list shows before "Show all".
@@ -52,6 +53,8 @@ class _ShowAllListState extends State<ShowAllList> {
         Align(
           alignment: Alignment.centerLeft,
           child: TextButton(
+            // Flush with the rows above it.
+            style: flushTextButtonStyle,
             onPressed: () => setState(() => _expanded = !_expanded),
             child: Text(
               _expanded

@@ -837,6 +837,8 @@ class _AccountCard extends StatelessWidget {
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
                             TextButton.icon(
+                              // Starts on the figures' left edge.
+                              style: flushTextButtonStyle,
                               onPressed: () => onView(account.id),
                               icon: const Icon(Icons.list_alt, size: 18),
                               label: const Text('View transactions'),

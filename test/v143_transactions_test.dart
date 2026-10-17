@@ -136,12 +136,12 @@ void main() {
       await settle(tester);
       final save = find.widgetWithText(FilledButton, 'Save and confirm');
       expect(save, findsOneWidget);
-      // An SMS row keeps its Sender field and has no Paid to.
+      // An SMS row keeps its Sender field and, since v1.43.2, has Paid to.
       expect(
         find.widgetWithText(TextFormField, 'Sender (optional)'),
         findsOneWidget,
       );
-      expect(find.widgetWithText(TextFormField, 'Paid to'), findsNothing);
+      expect(find.widgetWithText(TextFormField, 'Paid to'), findsOneWidget);
       await tester.tap(save);
       await settle(tester);
       await settle(tester);

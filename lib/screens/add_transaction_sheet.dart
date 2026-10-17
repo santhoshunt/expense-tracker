@@ -219,11 +219,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
 
   bool get isEditing => widget.existing != null;
 
-  /// Paid to shows on Expense and Income entries the user types: new ones
-  /// and edits of manual rows. An alert already names its merchant.
-  bool get _showsPayee =>
-      _kind != _EntryKind.transfer &&
-      (widget.existing == null || widget.existing!.source == TxSource.manual);
+  /// Paid to shows on every Expense and Income entry, imported rows too:
+  /// many alerts name no merchant, and a typed payee then titles the row.
+  bool get _showsPayee => _kind != _EntryKind.transfer;
 
   /// Sender shows when editing an SMS row, or a manual row that already
   /// holds one; Paid to asks the same question on new entries.
@@ -704,12 +702,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     final refundOf = isEditing
         ? (_live(finance) ?? widget.existing!).refundOf
         : null;
-    // Transfers carry no payee; an SMS row keeps its own.
+    // Transfers carry no payee.
     final payee = _kind == _EntryKind.transfer
         ? ''
-        : _showsPayee
-        ? normalizePayee(_payeeCtrl.text)
-        : null;
+        : normalizePayee(_payeeCtrl.text);
 
     try {
       if (isEditing) {
@@ -753,7 +749,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           categoryId: _categoryId,
           amount: amount,
           note: _noteCtrl.text.trim(),
-          payee: payee ?? '',
+          payee: payee,
           date: _date,
           sender: _senderCtrl.text.trim(),
           myShare: myShare,
@@ -1248,7 +1244,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   }
 
   /// Paid to on Expense, Received from on Income, with the recent payees
-  /// under it. Nothing on a transfer or an SMS row ([_showsPayee]).
+  /// under it. Nothing on a transfer ([_showsPayee]).
   List<Widget> _payeeField(BuildContext context) {
     if (!_showsPayee) return const [];
     final income = _kind == _EntryKind.income;

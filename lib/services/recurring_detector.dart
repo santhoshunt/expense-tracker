@@ -302,20 +302,22 @@ String? merchantLabelOrNull(Tx t, {MerchantAliasLookup? alias}) {
 }
 
 /// What a list row leads with: the user's alias for its merchant, the
-/// merchant an alert names, the payee typed in Paid to, or the note's first
-/// line as typed; null when the row names none.
+/// payee typed in Paid to, the merchant an alert names, or the note's first
+/// line as typed; null when the row names none. A typed payee comes before
+/// the alert's merchant, since on an imported row the user typed it to
+/// correct or fill in the alert.
 String? rowTitleOf(Tx t, {MerchantAliasLookup? alias}) {
   if (alias != null) {
     final identity = merchantIdentityOf(t);
     final named = identity == null ? null : alias(identity);
     if (named != null && named.isNotEmpty) return named;
   }
+  final payee = t.payee.trim();
+  if (payee.isNotEmpty) return payee;
   if (t.source == TxSource.sms) {
     final m = SmsTxnParser.merchantOf(t.smsText);
     if (m.isNotEmpty) return _titleCase(m);
   }
-  final payee = t.payee.trim();
-  if (payee.isNotEmpty) return payee;
   final line = t.note.split('\n').first.trim();
   return line.isEmpty ? null : line;
 }

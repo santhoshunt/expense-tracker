@@ -69,7 +69,10 @@ void main() {
     // Above the bar, which spans the full width again.
     final bar = tester.getRect(find.byType(NavigationBar));
     expect(tester.getRect(find.byType(GlassButton)).bottom, lessThan(bar.top));
-    expect(bar.width, tester.view.physicalSize.width / tester.view.devicePixelRatio);
+    expect(
+      bar.width,
+      tester.view.physicalSize.width / tester.view.devicePixelRatio,
+    );
 
     // Mid-screen is the list (the header cards sit above it).
     await tester.dragFrom(const Offset(400, 420), const Offset(0, -300));

@@ -297,12 +297,14 @@ void main() {
       );
       final left = find.text('${fmtMoneyTidy(3000)} left');
       expect(left, findsOneWidget);
-      // The amount sits at the right end of the name's line.
+      // v1.43.2: the amount sits at the row's right end, centred between
+      // the name and the line under it.
       expect(tester.getRect(left).right, greaterThan(300));
-      expect(
-        (tester.getCenter(left).dy - tester.getCenter(budgets).dy).abs(),
-        lessThan(4),
-      );
+      // The line checked above; its spaces round the dot are no-break.
+      final under = find.textContaining(RegExp(r'4,000\W+25%'));
+      final middle =
+          (tester.getCenter(budgets).dy + tester.getCenter(under).dy) / 2;
+      expect((tester.getCenter(left).dy - middle).abs(), lessThan(4));
       // One row each, stacked: the old grid set two side by side.
       final rides = tester.getTopLeft(find.text('Rides'));
       final eating = tester.getTopLeft(budgets);

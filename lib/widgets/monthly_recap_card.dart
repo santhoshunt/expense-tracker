@@ -371,6 +371,8 @@ class MonthPaceCard extends StatelessWidget {
                 Align(
                   alignment: Alignment.centerRight,
                   child: TextButton(
+                    // Ends on the figures' right edge.
+                    style: flushEndTextButtonStyle,
                     onPressed: see,
                     // The label shortens rather than overflowing at large
                     // text on a narrow phone.

@@ -1050,10 +1050,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         _chipScroll.position.ensureVisible(
           chipContext.findRenderObject()!,
           alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
-          duration: motionDuration(
-            context,
-            const Duration(milliseconds: 250),
-          ),
+          duration: motionDuration(context, const Duration(milliseconds: 250)),
           curve: Curves.easeOutCubic,
         );
       });

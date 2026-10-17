@@ -174,7 +174,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Groups and tags'), findsOneWidget);
     expect(find.text('Goa trip'), findsOneWidget);
-    expect(find.textContaining('spent · 1 transaction · '), findsOneWidget);
+    // v1.43.2: each fact keeps its words together (no-break spaces).
+    expect(find.textContaining('spent · 1 transaction · '), findsOneWidget);
 
     // A tap opens the editor, which also offers the tag's transactions.
     await tester.tap(find.text('Goa trip'));

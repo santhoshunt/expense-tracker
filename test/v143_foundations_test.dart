@@ -97,6 +97,18 @@ void main() {
         'City Metro recharge',
       );
       expect(rowTitleOf(manual()), isNull);
+      // An imported row: a typed payee names it before the alert does.
+      final sms = Tx(
+        id: 'sms1',
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 90,
+        note: '',
+        date: DateTime(2026, 10, 3, 13),
+        source: TxSource.sms,
+        smsBody: 'Rs.90.00 spent at DEMO KIOSK on 03-10-26. -Demo Bank',
+      );
+      expect(rowTitleOf(sms.copyWith(payee: 'Kappa Cafe')), 'Kappa Cafe');
       expect(
         rowTitleOf(
           manual(payee: 'Kappa Cafe'),
