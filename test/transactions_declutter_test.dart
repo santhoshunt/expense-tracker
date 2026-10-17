@@ -13,8 +13,8 @@ import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/grouped_surface.dart';
 
-/// The decluttered Transactions screen: the sort and Filters chips under
-/// the search (v1.43.0), a day header over each day's rows under a date
+/// The decluttered Transactions screen: the Sort and Filters buttons in
+/// the search field, a day header over each day's rows under a date
 /// sort, its total on the rows' amount edge, the rows of a day drawn as one
 /// card, and no review card on the tab.
 void main() {
@@ -39,8 +39,8 @@ void main() {
         ),
       );
 
-  final sortChip = find.byIcon(Icons.swap_vert);
-  final filtersChip = find.byIcon(Icons.tune);
+  final sortButton = find.byIcon(Icons.swap_vert);
+  final filtersButton = find.byIcon(Icons.tune);
 
   /// Two rows on 1 July (lunch after coffee) and one on 2 July.
   Future<FinanceProvider> seeded() async {
@@ -70,9 +70,9 @@ void main() {
     return p;
   }
 
-  /// The sort chip opens Sort by; a pick applies and closes it.
+  /// The Sort button opens Sort by; a pick applies and closes it.
   Future<void> sortBy(WidgetTester tester, String label) async {
-    await tester.tap(sortChip);
+    await tester.tap(sortButton);
     await tester.pumpAndSettle();
     await tester.tap(find.text(label).last);
     await tester.pumpAndSettle();
@@ -81,7 +81,7 @@ void main() {
   final day1 = DateFormat('EEE d MMM').format(DateTime(2026, 7, 1));
   final day2 = DateFormat('EEE d MMM').format(DateTime(2026, 7, 2));
 
-  testWidgets('the sort chip names the sort and opens Sort by; Filters '
+  testWidgets('the Sort button names the sort and opens Sort by; Filters '
       'counts what is on; the sheet holds filters only', (tester) async {
     tester.view.physicalSize = const Size(400, 900);
     tester.view.devicePixelRatio = 1;
@@ -89,13 +89,15 @@ void main() {
     final p = await seeded();
     await tester.pumpWidget(screen(p));
     await tester.pumpAndSettle();
-    expect(find.text('Newest first'), findsOneWidget);
-    expect(find.text('Filters'), findsOneWidget);
-    // No button in the search field any more.
+    expect(find.byTooltip('Sort: Newest first'), findsOneWidget);
+    expect(find.byTooltip('Filters'), findsOneWidget);
+    // Nothing on: no badge on Filters.
+    expect(find.byType(Badge), findsNothing);
+    // The old combined button stays gone.
     expect(find.byTooltip('Sort, filter and export'), findsNothing);
 
     // Filters opens the sheet: no sort, no export.
-    await tester.tap(filtersChip);
+    await tester.tap(filtersButton);
     await tester.pumpAndSettle();
     final sheet = find.byType(BottomSheet);
     Finder inSheet(Finder f) => find.descendant(of: sheet, matching: f);
@@ -107,8 +109,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(sheet, findsNothing);
 
-    // The sort chip: Sort by over the four sorts; a pick applies.
-    await tester.tap(sortChip);
+    // The Sort button: Sort by over the four sorts; a pick applies.
+    await tester.tap(sortButton);
     await tester.pumpAndSettle();
     expect(find.text('Sort by'), findsOneWidget);
     for (final label in [
@@ -123,14 +125,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Sort by'), findsNothing);
     expect(find.text(day1), findsNothing);
-    expect(find.text('Largest first'), findsOneWidget);
+    expect(find.byTooltip('Sort: Largest first'), findsOneWidget);
 
-    // A month deep-link is a filter: the chip counts it.
+    // A month deep-link is a filter: the button's badge counts it.
     await tester.pumpWidget(
       screen(p, req: TxFilterRequest(month: DateTime(2026, 7)), token: 1),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Filters · 1'), findsOneWidget);
+    expect(find.byTooltip('1 filter on'), findsOneWidget);
+    expect(
+      find.descendant(of: find.byType(Badge), matching: find.text('1')),
+      findsOneWidget,
+    );
     expect(find.bySemanticsLabel('1 filter on'), findsOneWidget);
     expect(find.bySemanticsLabel('1 filters on'), findsNothing);
   });

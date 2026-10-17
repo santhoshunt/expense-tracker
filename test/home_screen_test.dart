@@ -644,8 +644,8 @@ void main() {
 
     await tester.tap(find.text('Transactions').last);
     await tester.pumpAndSettle();
-    // The Filters chip under the search opens the sheet.
-    await tester.tap(find.text('Filters'));
+    // The Filters button in the search field opens the sheet.
+    await tester.tap(find.byTooltip('Filters'));
     await tester.pumpAndSettle();
 
     // Select Transport, then search for something it doesn't match.

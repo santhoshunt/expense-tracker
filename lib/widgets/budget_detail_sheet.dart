@@ -170,13 +170,6 @@ Future<void> showBudgetDetailSheet(
           final trend = [
             for (final m in months) finance.budgetSpentFor(budget, m),
           ];
-          // The window's months from the first one on record, for the
-          // chart's heading.
-          final fromFirst = [
-            for (final m in months)
-              if (firstMonth == null || !m.isBefore(firstMonth)) m,
-          ];
-          final onRecord = fromFirst.isEmpty ? months : fromFirst;
           String emptyText(DateTime m) =>
               'Nothing counted toward this budget in ${fmtMonth(m)}.';
 
@@ -366,8 +359,7 @@ Future<void> showBudgetDetailSheet(
                                 ),
                               ),
                               const SizedBox(height: 4),
-                              // Plain text either way: the ring carries the
-                              // colour.
+                              // In the ring's colour.
                               Text(
                                 over
                                     ? '${fmtMoneyWhole(spent - limit)} '
@@ -375,13 +367,54 @@ Future<void> showBudgetDetailSheet(
                                           '${shown == current ? '' : ' $when'}'
                                     : '${fmtMoneyWhole(limit - spent)} '
                                           'left $when',
-                                style: Theme.of(ctx).textTheme.bodySmall
-                                    ?.copyWith(color: scheme.onSurface),
+                                style: Theme.of(
+                                  ctx,
+                                ).textTheme.bodySmall?.copyWith(color: color),
                               ),
                             ],
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 20),
+                    // Above Where it went: that section holds the window's
+                    // tallest month, and below the chart the room it keeps
+                    // on a one-category month sits at the sheet's end.
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: InfoLabel(
+                        // Names its months: once the window pages back,
+                        // they are no longer the last six.
+                        label: Text(
+                          '${months.length} months: '
+                          '${DateFormat('MMM').format(months.first)} to '
+                          '${DateFormat('MMM').format(months.last)}',
+                          style: Theme.of(ctx).textTheme.titleSmall,
+                        ),
+                        tip: const InfoTip(
+                          title: '$kBudgetChartMonths months',
+                          message:
+                              "Each bar is that month's spending in this "
+                              'budget, with its amount above it when there '
+                              'is any. The line '
+                              'marks the limit. Months before your records '
+                              'start show a flat line. The six months stay '
+                              'put while you step through them; stepping '
+                              'past either end moves six months. Tap a bar '
+                              'to show that month.',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _BudgetTrendBars(
+                      months: months,
+                      spent: trend,
+                      limit: limit,
+                      selected: shown,
+                      firstMonth: firstMonth,
+                      // A bar shows its month: the sheet steps there, as
+                      // the chevrons do.
+                      onSelect: showMonth,
                     ),
                     const SizedBox(height: 20),
                     Text(
@@ -430,47 +463,6 @@ Future<void> showBudgetDetailSheet(
                       ],
                     ),
                     const SizedBox(height: 20),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: InfoLabel(
-                        // Names its months: once the window pages back,
-                        // they are no longer the last six. The empty slots
-                        // before the first month on record are left out.
-                        label: Text(
-                          onRecord.length == 1
-                              ? '1 month: '
-                                    '${DateFormat('MMM').format(onRecord.first)}'
-                              : '${onRecord.length} months: '
-                                    '${DateFormat('MMM').format(onRecord.first)} to '
-                                    '${DateFormat('MMM').format(onRecord.last)}',
-                          style: Theme.of(ctx).textTheme.titleSmall,
-                        ),
-                        tip: const InfoTip(
-                          title: '$kBudgetChartMonths months',
-                          message:
-                              "Each bar is that month's spending in this "
-                              'budget, coloured like the ring, with its '
-                              'amount above it when there is any. The line '
-                              'marks the limit. Months before your records '
-                              'start stay empty. The six months stay put '
-                              'while you step through them; stepping past '
-                              'either end moves six months. Tap a bar to '
-                              'show that month.',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _BudgetTrendBars(
-                      months: months,
-                      spent: trend,
-                      limit: limit,
-                      selected: shown,
-                      firstMonth: firstMonth,
-                      // A bar shows its month: the sheet steps there, as
-                      // the chevrons do.
-                      onSelect: showMonth,
-                    ),
-                    const SizedBox(height: 20),
                     if (onViewTransactions != null)
                       FilledButton.icon(
                         icon: const Icon(Icons.receipt_long_outlined, size: 18),
@@ -503,7 +495,8 @@ class _BudgetTrendBars extends StatelessWidget {
   final DateTime selected;
   final ValueChanged<DateTime> onSelect;
 
-  /// The ledger's first month; a slot before it stays empty and untappable.
+  /// The ledger's first month; a slot before it shows a flat line and its
+  /// month name, and takes no tap.
   final DateTime? firstMonth;
 
   const _BudgetTrendBars({
@@ -541,24 +534,47 @@ class _BudgetTrendBars extends StatelessWidget {
     bool before(int i) => firstMonth != null && months[i].isBefore(firstMonth!);
 
     // One row of six equal slots, so the value labels, the bars and the
-    // month labels line up column for column.
-    Widget slots(Widget Function(int i) cell) => Row(
+    // month labels line up column for column. [blank] builds a month
+    // before the records start; without it the slot is empty.
+    Widget slots(
+      Widget Function(int i) cell, {
+      Widget Function(int i)? blank,
+    }) => Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         for (var i = 0; i < months.length; i++) ...[
           if (i > 0) const SizedBox(width: 8),
-          Expanded(child: before(i) ? const SizedBox.shrink() : cell(i)),
+          Expanded(
+            child: !before(i)
+                ? cell(i)
+                : blank?.call(i) ?? const SizedBox.shrink(),
+          ),
         ],
       ],
+    );
+
+    Widget monthLabel(int i) => Center(
+      child: Text(
+        mmm.format(months[i]),
+        style: months[i] == selected ? selectedLabel : label,
+      ),
+    );
+
+    // A month with nothing to draw: a flat line along the base, brighter
+    // when it is the shown month.
+    Widget flatLine({bool selected = false}) => Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        height: 2,
+        color: selected ? scheme.onSurfaceVariant : scheme.outlineVariant,
+      ),
     );
 
     Widget bar(int i) {
       final heightFactor = maxVal == 0
           ? 0.0
           : (spent[i] / maxVal).clamp(0.02, 1.0);
-      final base = spent[i] == 0
-          ? scheme.surfaceContainerHigh
-          : barColor(spent[i]);
+      final base = barColor(spent[i]);
       final isSelected = months[i] == selected;
       // The whole column is the target: a short bar is too small to hit.
       return Semantics(
@@ -570,7 +586,11 @@ class _BudgetTrendBars extends StatelessWidget {
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () => onSelect(months[i]),
-          child: Align(
+          // Nothing spent: the same flat line as a month before the
+          // records, so every empty month reads alike.
+          child: spent[i] == 0
+              ? flatLine(selected: isSelected)
+              : Align(
             alignment: Alignment.bottomCenter,
             child: AnimatedFractionallySizedBox(
               duration: morph,
@@ -610,7 +630,11 @@ class _BudgetTrendBars extends StatelessWidget {
           Expanded(
             child: Stack(
               children: [
-                Positioned.fill(child: slots(bar)),
+                // A month before the records: a flat line, no tap, so the
+                // slot reads as no data rather than a blank.
+                Positioned.fill(
+                  child: slots(bar, blank: (_) => flatLine()),
+                ),
                 // The limit, on the same scale as the bars ([maxVal]
                 // includes it, so the line always fits). It ignores taps so
                 // the bars beneath it stay tappable.
@@ -647,14 +671,8 @@ class _BudgetTrendBars extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 4),
-          slots(
-            (i) => Center(
-              child: Text(
-                mmm.format(months[i]),
-                style: months[i] == selected ? selectedLabel : label,
-              ),
-            ),
-          ),
+          // Every slot is named, months before the records too.
+          slots(monthLabel, blank: monthLabel),
         ],
       ),
     );

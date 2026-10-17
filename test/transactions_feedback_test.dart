@@ -61,10 +61,10 @@ void main() {
     return p;
   }
 
-  // v1.43.0: the Filters chip under the search opens the sheet; the sort
-  // has its own chip.
+  // The Filters button in the search field opens the sheet; the sort has
+  // its own button beside it.
   final tune = find.byIcon(Icons.tune);
-  final sortChip = find.byIcon(Icons.swap_vert);
+  final sortButton = find.byIcon(Icons.swap_vert);
 
   /// One active filter chip: the 48dp box around the pill and its close.
   Finder filterChip(String label) =>
@@ -117,17 +117,16 @@ void main() {
     const label = 'Amount ₹500 to ₹2,000';
     final chip = filterChip(label);
     expect(find.text(label), findsOneWidget);
-    // Left-aligned with the first type pill above it (both start at the
-    // screen's 16dp gutter), not centred. The type strip itself runs edge
-    // to edge.
+    // Left-aligned with the type tabs above it (both start at the
+    // screen's 16dp gutter, as the search field does), not centred.
     expect(tester.getTopLeft(chip).dx, moreOrLessEquals(16, epsilon: 1));
     expect(
       tester.getTopLeft(find.text('All').first).dx,
       greaterThanOrEqualTo(16),
     );
     expect(
-      tester.getTopLeft(find.byWidgetPredicate((w) => w is ChipTabs)).dx,
-      moreOrLessEquals(0, epsilon: 1),
+      tester.getTopLeft(find.byWidgetPredicate((w) => w is UnderlineTabs)).dx,
+      moreOrLessEquals(16, epsilon: 1),
     );
     expect(find.text('dinner'), findsOneWidget);
     expect(find.text('tea'), findsNothing);
@@ -317,7 +316,7 @@ void main() {
     expect(find.text(fmtDateCompact(lunchDay)), findsNothing);
 
     // Any other sort has no day headers: the date comes back.
-    await tester.tap(sortChip);
+    await tester.tap(sortButton);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Amount · high to low'));
     await tester.pumpAndSettle();

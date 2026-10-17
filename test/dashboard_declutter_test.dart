@@ -285,7 +285,7 @@ void main() {
         300,
         scrollable: verticalScrollable(),
       );
-      // Clear of the docked Add button's bar at the bottom edge.
+      // Clear of the floating Add button at the bottom edge.
       await tester.drag(verticalScrollable(), const Offset(0, -200));
       await settle(tester);
       for (final name in ['Eating out', 'Rides', 'Gadgets']) {

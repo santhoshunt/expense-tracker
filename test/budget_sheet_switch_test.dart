@@ -389,9 +389,8 @@ void main() {
       expect(find.text(mmm.format(monthsAgo(11))), findsNothing);
     });
 
-    testWidgets('the chart heading starts at the first month on record', (
-      tester,
-    ) async {
+    testWidgets('the chart heading names all six months, and the months '
+        'before the records show their names', (tester) async {
       final p = FinanceProvider();
       await p.load();
       await spend(p, 'food', 100, monthsAgo(3));
@@ -406,11 +405,12 @@ void main() {
       final mmm = DateFormat('MMM');
       expect(
         find.text(
-          '4 months: ${mmm.format(monthsAgo(3))} to ${mmm.format(thisMonth)}',
+          '6 months: ${mmm.format(monthsAgo(5))} to ${mmm.format(thisMonth)}',
         ),
         findsOneWidget,
       );
-      expect(find.textContaining('6 months:'), findsNothing);
+      // Five months back is before the records start: named, not blank.
+      expect(find.text(mmm.format(monthsAgo(5))), findsOneWidget);
     });
 
     testWidgets('the legend caps at five plus Other, which opens the rows', (

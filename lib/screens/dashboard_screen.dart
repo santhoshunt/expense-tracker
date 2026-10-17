@@ -250,8 +250,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
       out.add(slot == null ? folded : KeyedSubtree(key: slot, child: folded));
     }
     out.add(_CustomiseRow(page: page, hidden: layout.hidden.length));
-    // Clears the half of the docked Add button that rises over the page.
-    out.add(const SizedBox(height: 48));
+    // Room for the last card to scroll clear of the floating Add button.
+    out.add(const SizedBox(height: 120));
     return out;
   }
 
@@ -1394,6 +1394,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       : finance.incomeInMonth(_month),
                   icon: Icons.arrow_downward,
                   color: colors.green,
+                  valueColor: moneyColor(context, type: TxType.income),
                   tip:
                       'Money in $period, not counting transfers between '
                       'your own accounts or pending imports.',
@@ -1408,6 +1409,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 value: monthExpense,
                 icon: Icons.arrow_upward,
                 color: scheme.error,
+                valueColor: moneyColor(context, type: TxType.expense),
                 tip:
                     'Confirmed spending $period. Transfers and card bill '
                     'payments are left out, and a split bill counts only your '
@@ -1679,8 +1681,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       title: 'Budgets',
                       message:
                           '"Only these" budgets count the picked categories; '
-                          '"All except" budgets count everything else. Same '
-                          'colours as the monthly budget. Tap a budget for its '
+                          '"All except" budgets count everything else. Tap a '
+                          'budget for its '
                           'categories, trend and transactions.',
                       link: InfoLink(
                         prompt: 'Need another limit?',
@@ -2647,40 +2649,50 @@ class _WeekRow extends StatelessWidget {
                       color: scheme.primary,
                     ),
                     const SizedBox(width: 12),
+                    // The label shares its line with the amount only; the
+                    // usual-week line runs the full width under both, so
+                    // at 1.3x it no longer squeezes "Spent so far" onto
+                    // two lines.
                     Expanded(
-                      child: Text('Spent so far', style: text.bodyMedium),
-                    ),
-                    const SizedBox(width: 8),
-                    // A cap, as the Owed card's total: a loose flex child
-                    // would leave a gap before the chevron.
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 180),
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              fmtMoneyWhole(digest.spent),
-                              style: text.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Spent so far',
+                                  style: text.bodyMedium,
+                                ),
                               ),
-                            ),
+                              const SizedBox(width: 8),
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  fmtMoneyWhole(digest.spent),
+                                  style: text.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                          // The arrow carries the colour; the words say by
-                          // how much.
+                          // Red over the usual week, green under.
                           if (d != null)
-                            FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: DeltaNote(
-                                text: negligibleDelta(d)
-                                    ? 'About usual'
-                                    : '${fmtMoneyWhole(d.abs())} '
-                                          '${d > 0 ? 'over' : 'under'} usual',
-                                delta: d,
-                                style: text.bodySmall,
-                                maxLines: 1,
+                            Align(
+                              alignment: AlignmentDirectional.centerEnd,
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: DeltaNote(
+                                  text: negligibleDelta(d)
+                                      ? 'About usual'
+                                      : '${fmtMoneyWhole(d.abs())} '
+                                            '${d > 0 ? 'over' : 'under'} usual',
+                                  delta: d,
+                                  style: text.bodySmall,
+                                  maxLines: 1,
+                                ),
                               ),
                             ),
                         ],
@@ -3043,9 +3055,7 @@ class _UpcomingCard extends StatelessWidget {
                                     'repeating (from SMS or your notes), including '
                                     'regular income. A repeat is spotted after 3 '
                                     'payments to the same merchant about a month '
-                                    'apart. Card icons: green paid, orange billed, '
-                                    'red due within 5 days or overdue. A paid card '
-                                    'shows a Paid tag in place of its amount. '
+                                    'apart. A paid card shows a Paid tag in place of its amount. '
                                     'Tap a spotted payment to see its transactions, '
                                     'make it a reminder or hide it. The Month-end '
                                     'forecast lists every bill due this month.',
@@ -3158,7 +3168,7 @@ class _UpcomingCard extends StatelessWidget {
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                               ),
-                                              // Urgent: a red dot, the text plain.
+                                              // Urgent: a red dot and red text.
                                               Row(
                                                 children: [
                                                   if (e.urgent) ...[
@@ -3173,9 +3183,14 @@ class _UpcomingCard extends StatelessWidget {
                                                       maxLines: 1,
                                                       overflow:
                                                           TextOverflow.ellipsis,
-                                                      style: Theme.of(
-                                                        context,
-                                                      ).textTheme.bodySmall,
+                                                      style: Theme.of(context)
+                                                          .textTheme
+                                                          .bodySmall
+                                                          ?.copyWith(
+                                                            color: e.urgent
+                                                                ? scheme.error
+                                                                : null,
+                                                          ),
                                                     ),
                                                   ),
                                                 ],
@@ -3739,6 +3754,7 @@ class _BalanceCard extends StatelessWidget {
   }
 
   Widget _balance(BuildContext context, ColorScheme scheme) {
+    final balance = _useAccounts ? finance.netWorth : finance.balance;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -3803,7 +3819,7 @@ class _BalanceCard extends StatelessWidget {
         ),
         const SizedBox(height: 2),
         // Morphs in place when the figure changes (edit, import, sync).
-        // The text colour, not accent: colour sits on markers, not figures.
+        // Red below zero, the text colour otherwise.
         // Scales down rather than cutting digits: a lakh figure at large
         // text is wider than a 320dp card.
         FittedBox(
@@ -3812,9 +3828,9 @@ class _BalanceCard extends StatelessWidget {
           alignment: Alignment.centerLeft,
           child: MorphingAmount(
             format: fmtMoneyWhole,
-            value: _useAccounts ? finance.netWorth : finance.balance,
+            value: balance,
             style: TextStyle(
-              color: scheme.onSurface,
+              color: balance < 0 ? scheme.error : scheme.onSurface,
               fontSize: AppFigure.hero,
               fontWeight: FontWeight.w700,
             ),
@@ -3826,8 +3842,8 @@ class _BalanceCard extends StatelessWidget {
 }
 
 /// One of the balance card's Income, Spent and Saved columns: a coloured
-/// marker icon, the label (its tip), and the figure in whole rupees in the
-/// text colour: the icon carries the colour. The label opens the tip; the
+/// marker icon, the label (its tip), and the figure in whole rupees, in its
+/// [valueColor] when it has one. The label opens the tip; the
 /// rest of the column opens the rows.
 class _StatColumn extends StatelessWidget {
   final String label;
@@ -3835,6 +3851,9 @@ class _StatColumn extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback? onTap;
+
+  /// The figure's money colour; none keeps the text colour.
+  final Color? valueColor;
 
   /// What the figure counts, behind the dotted label.
   final String tip;
@@ -3848,6 +3867,7 @@ class _StatColumn extends StatelessWidget {
     required this.tip,
     this.onTap,
     this.link,
+    this.valueColor,
   });
 
   @override
@@ -3880,8 +3900,8 @@ class _StatColumn extends StatelessWidget {
                 ),
               ],
             ),
-            // Plain text, no increment animation: animating on month change
-            // made the figures visibly "roll", which read as glitchy.
+            // No increment animation: animating on month change made the
+            // figures visibly "roll", which read as glitchy.
             FittedBox(
               fit: BoxFit.scaleDown,
               alignment: Alignment.centerLeft,
@@ -3892,7 +3912,7 @@ class _StatColumn extends StatelessWidget {
                 style: TextStyle(
                   fontSize: AppFigure.card,
                   fontWeight: FontWeight.w600,
-                  color: scheme.onSurface,
+                  color: valueColor ?? scheme.onSurface,
                 ),
               ),
             ),
@@ -3951,8 +3971,7 @@ class _BudgetCard extends StatelessWidget {
         'Spending against the monthly cap set in Cockpit, Budgets and bills, '
         'Budgets. The bar adds confirmed spending, imports still waiting for '
         'review and the bills due this month, not card bills or transfers. '
-        'The line marks the cap. Green below 80%, orange from 80%, red above '
-        '95%. Safe to spend today, at the top of the Overview, sets those '
+        'The line marks the cap. Safe to spend today, at the top of the Overview, sets those '
         'bills aside and spreads the rest over the days left.',
     example: () {
       final line =
@@ -4052,7 +4071,8 @@ class _BudgetCard extends StatelessWidget {
                     : () => _showForecastBills(context, bf),
               ),
             const SizedBox(height: 8),
-            _BudgetVerdict(text: verdict, over: over),
+            // Red once over; otherwise the bar's own green or orange.
+            _BudgetVerdict(text: verdict, tone: over ? scheme.error : color),
             if (f != null) ...[
               const SizedBox(height: 12),
               Divider(height: 1, color: scheme.outlineVariant),
@@ -4375,8 +4395,11 @@ class _BudgetLegendRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          // Up to half the row; a lakh figure at large text shrinks.
-          Flexible(
+          // Capped, not Flexible: a flex child kept the label to half the
+          // row, so "(3)" wrapped at 1.15x and the amount sat mid-card. A
+          // lakh figure at large text shrinks past the cap.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 140),
             child: FittedBox(
               fit: BoxFit.scaleDown,
               alignment: AlignmentDirectional.centerEnd,
@@ -4398,34 +4421,34 @@ class _BudgetLegendRow extends StatelessWidget {
   }
 }
 
-/// The budget's one verdict, outlined in its dot's colour: red over, green
-/// otherwise. The text stays plain.
+/// The budget's one verdict in its tone: green, orange as it nears the cap,
+/// red over.
 class _BudgetVerdict extends StatelessWidget {
   final String text;
-  final bool over;
 
-  const _BudgetVerdict({required this.text, required this.over});
+  /// Green, orange or red: the outline, the dot and the words.
+  final Color tone;
+
+  const _BudgetVerdict({required this.text, required this.tone});
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final dot = over ? scheme.error : AppColors.of(context).green;
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
       decoration: BoxDecoration(
-        border: Border.all(color: dot),
+        border: Border.all(color: tone),
         borderRadius: BorderRadius.circular(AppRadius.control),
       ),
       child: Row(
         children: [
-          StatusDot(color: dot),
+          StatusDot(color: tone),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               text,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
                 fontWeight: FontWeight.w700,
-                color: scheme.onSurface,
+                color: tone,
               ),
             ),
           ),
@@ -4447,6 +4470,7 @@ class _SafeTodayRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final ok = safe.leftToday >= 1;
+    final tone = ok ? AppColors.of(context).green : scheme.error;
     return Card(
       margin: EdgeInsets.zero,
       child: InkWell(
@@ -4461,16 +4485,16 @@ class _SafeTodayRow extends StatelessWidget {
             ),
             child: Row(
               children: [
-                StatusDot(
-                  color: ok ? AppColors.of(context).green : scheme.error,
-                ),
+                StatusDot(color: tone),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     ok
                         ? '${fmtMoneyWhole(safe.leftToday)} safe to spend today'
                         : 'Nothing safe to spend today',
-                    style: Theme.of(context).textTheme.titleSmall,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.titleSmall?.copyWith(color: tone),
                   ),
                 ),
                 Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
@@ -4718,8 +4742,7 @@ class _ForecastBody extends StatelessWidget {
           row('Everyday spending', f.everyday, detail: everydayHow),
         if (under != null && !compact && showCapLine) ...[
           const SizedBox(height: 8),
-          // The dot carries the colour, green under and red over; the
-          // figure stays plain.
+          // Green under, red over: the dot and the words.
           Row(
             children: [
               StatusDot(
@@ -4735,7 +4758,9 @@ class _ForecastBody extends StatelessWidget {
                       : '${fmtMoneyWhole(-under)} over your '
                             '${fmtMoneyWhole(f.cap!)} budget',
                   style: TextStyle(
-                    color: scheme.onSurface,
+                    color: under >= 0
+                        ? AppColors.of(context).green
+                        : scheme.error,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -5021,7 +5046,7 @@ class _ForecastBillRow extends StatelessWidget {
 
 /// A custom budget's line: a small ring (green, amber, red as
 /// [budgetColor]) with [icon] inside, then [title] and what is left or
-/// over (plain text: the ring carries the colour), then "₹4,200 of ₹6,000
+/// over in the ring's colour, then "₹4,200 of ₹6,000
 /// · 70%". At large text on a narrow phone the first line wraps under the
 /// name.
 class _BudgetRow extends StatelessWidget {
@@ -5050,9 +5075,10 @@ class _BudgetRow extends StatelessWidget {
       over
           ? '${fmtMoneyWhole(spent - limit)} over'
           : '${fmtMoneyWhole(limit - spent)} left',
+      // The ring's green, orange or red, on the words too.
       style: text.bodyMedium?.copyWith(
         fontWeight: FontWeight.w600,
-        color: scheme.onSurface,
+        color: color,
       ),
     );
     // Name left, amount at the row's right end; at large text the amount
@@ -5237,66 +5263,85 @@ class _CategoryRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      // Custom category names can be arbitrarily long.
-                      Expanded(
-                        child: Text(
-                          label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                  LayoutBuilder(
+                    builder: (context, box) => Row(
+                      children: [
+                        // Custom category names can be arbitrarily long.
+                        Expanded(
+                          child: Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      // Share of the section total (month expense for the
-                      // category list, group total for By group) — the bar
-                      // shows it visually, this makes it readable.
-                      Text(
-                        '${(fraction * 100).round()}%',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      // Over its budget, a red dot leads the figure, which
-                      // stays plain.
-                      if (over) ...[
-                        StatusDot(color: Theme.of(context).colorScheme.error),
-                        const SizedBox(width: 6),
-                      ],
-                      // Width-capped + scale-down, not Flexible: a loose
-                      // flex child leaves a trailing gap and the amount
-                      // drifts off the right edge (transaction-tile pattern).
-                      // 180 fits "₹X / ₹Y" at full size; only a huge font
-                      // still shrinks it.
-                      // Flexible too: at 320dp with large text the label,
-                      // share and a 180dp figure no longer fit, and the
-                      // figure must shrink rather than overflow.
-                      Flexible(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 180),
+                        const SizedBox(width: 8),
+                        // Width-capped + scale-down, not Flexible: a loose
+                        // flex child kept the name to half the line and left
+                        // a gap after the amount (transaction-tile pattern).
+                        // 180 fits "₹X / ₹Y" at full size; on a narrow line
+                        // the cap drops to 60% of it, so at 320dp with large
+                        // text the figure shrinks rather than overflowing.
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: box.maxWidth * 0.6 < 180
+                                ? box.maxWidth * 0.6
+                                : 180,
+                          ),
                           child: FittedBox(
                             fit: BoxFit.scaleDown,
+                            alignment: AlignmentDirectional.centerEnd,
                             child: Text(
                               budgetLimit == null
                                   ? fmtMoneyWhole(amount)
                                   : '${fmtMoneyWhole(amount)} / '
                                         '${fmtMoneyWhole(budgetLimit!)}',
-                              style: const TextStyle(
+                              // Red once over its budget.
+                              style: TextStyle(
                                 fontWeight: FontWeight.w600,
+                                color: over
+                                    ? Theme.of(context).colorScheme.error
+                                    : null,
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 4),
-                  AnimatedProgress(
-                    value: fraction,
-                    minHeight: 6,
-                    color: color,
-                    backgroundColor: color.withValues(alpha: 0.25),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: AnimatedProgress(
+                          value: fraction,
+                          minHeight: 6,
+                          color: color,
+                          backgroundColor: color.withValues(alpha: 0.25),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Share of the section total (month expense for the
+                      // category list, group total for By group): the bar
+                      // shows it visually, this makes it readable. On the
+                      // bar's line, so the name above keeps the width. A
+                      // fixed column fits "100%", so every bar ends at the
+                      // same point.
+                      SizedBox(
+                        width: MediaQuery.textScalerOf(context).scale(34),
+                        child: Text(
+                          '${(fraction * 100).round()}%',
+                          textAlign: TextAlign.end,
+                          maxLines: 1,
+                          softWrap: false,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

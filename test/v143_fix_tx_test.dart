@@ -467,7 +467,7 @@ void main() {
       await p.deleteGroup(group);
       await tester.pumpAndSettle();
       expect(find.textContaining('Group ·'), findsNothing);
-      expect(find.text('Filters'), findsOneWidget);
+      expect(find.byTooltip('Filters'), findsOneWidget);
       expect(find.text('Demo Kiosk'), findsOneWidget);
       expect(find.text('Sample Cab'), findsOneWidget);
     });
@@ -497,7 +497,7 @@ void main() {
       await p.deleteTag('Demo trip');
       await tester.pumpAndSettle();
       expect(find.textContaining('Tag ·'), findsNothing);
-      expect(find.text('Filters'), findsOneWidget);
+      expect(find.byTooltip('Filters'), findsOneWidget);
       expect(find.text('Sample Cab'), findsOneWidget);
     });
   });
@@ -548,10 +548,12 @@ void main() {
       ),
     );
 
+    // v1.43.1: the bar spans the full width again, so every label fits
+    // and shows at every scale.
     for (final (scale, behavior) in [
       (1.0, NavigationDestinationLabelBehavior.alwaysShow),
       (1.15, NavigationDestinationLabelBehavior.alwaysShow),
-      (1.3, NavigationDestinationLabelBehavior.onlyShowSelected),
+      (1.3, NavigationDestinationLabelBehavior.alwaysShow),
     ]) {
       testWidgets('at ${scale}x text the labels are $behavior', (tester) async {
         tester.view.physicalSize = const Size(360, 800);

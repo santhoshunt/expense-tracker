@@ -44,8 +44,7 @@ const _categoryTip =
     '"Usual" is the middle value of up to $kUsualWindowMonths complete '
     'months before this one, so one unusual month does not move it. A '
     'month with nothing in a category counts as zero. While the month is '
-    "running, both sides count only up to today's date. Red means more "
-    'than usual, green less.';
+    "running, both sides count only up to today's date.";
 
 /// The cards' tips, for a dashboard fold heading: inside a fold the cards
 /// leave theirs out, so each section carries its tip on the heading,
@@ -292,8 +291,7 @@ class _CompareBody extends StatelessWidget {
             ),
             const SizedBox(width: 12),
             if (compare.state == CompareState.ok)
-              // The trend icon carries the colour; the phrase stays in the
-              // plain text colour, like every amount.
+              // The trend icon and the phrase share the tone.
               // Flexible: at large text on a narrow phone the phrase wraps
               // instead of pushing past the card.
               Flexible(
@@ -314,8 +312,10 @@ class _CompareBody extends StatelessWidget {
                       child: Text(
                         deltaPhrase(compare),
                         textAlign: TextAlign.end,
+                        // The arrow's tone on the words too; plain when
+                        // about the same.
                         style: text.bodyMedium?.copyWith(
-                          color: scheme.onSurface,
+                          color: compare.negligible ? scheme.onSurface : tone,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -592,13 +592,13 @@ class _CategoryCompareRow extends StatelessWidget {
                       ),
                       if (compare.state == CompareState.ok &&
                           !compare.negligible)
-                        // The sign says which way; the bar above carries
-                        // the colour.
+                        // The sign says which way, the colour how it went:
+                        // red for more than usual, green for less.
                         Text(
                           '${compare.delta > 0 ? '+' : '−'}'
                           '${fmtMoneyWhole(compare.delta.abs())}',
                           style: text.bodySmall?.copyWith(
-                            color: scheme.onSurface,
+                            color: _toneFor(context, compare.delta),
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -619,8 +619,7 @@ class _CategoryCompareRow extends StatelessWidget {
 const _yearTitle = 'This year vs last year';
 const _yearTip =
     'Compares this year with the same months of last year. While the year '
-    "is running, both sides count up to today's date in the same month. "
-    'Red means more than last year, green less.';
+    "is running, both sides count up to today's date in the same month.";
 
 /// The "This year vs last year" tip, for a dashboard fold heading (see
 /// [usualTip]).
@@ -652,7 +651,7 @@ IconData _trendIcon(double delta) => negligibleDelta(delta)
 /// whose lines and bar labels are written for a month ("Through 15 Jun",
 /// "Full month").
 ///
-/// The tone sits on the trend icons only, never on the text.
+/// The headline and the trend icons share the tone.
 class YearComparisonCard extends StatelessWidget {
   final YearComparison comparison;
 
@@ -724,7 +723,10 @@ class YearComparisonCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   headline,
-                  style: text.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                  style: text.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: c.negligible ? null : _toneFor(context, c.delta),
+                  ),
                 ),
               ),
             ],

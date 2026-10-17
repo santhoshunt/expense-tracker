@@ -410,12 +410,16 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Filters · 2'), findsOneWidget);
+      expect(find.byTooltip('2 filters on'), findsOneWidget);
       expect(find.text('Clear all'), findsOneWidget);
+      // The strip scrolled to the chip the request added, so Clear all,
+      // at its start, is back off screen to the left.
+      await tester.ensureVisible(find.text('Clear all'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Clear all'));
       await tester.pumpAndSettle();
       expect(find.text('Clear all'), findsNothing);
-      expect(find.text('Filters'), findsOneWidget);
+      expect(find.byTooltip('Filters'), findsOneWidget);
       // The search stays: only the matching row shows.
       expect(find.text('Demo Kiosk'), findsOneWidget);
       expect(find.text('Sample Cab'), findsNothing);

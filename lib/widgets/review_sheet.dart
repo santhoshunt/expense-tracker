@@ -848,7 +848,8 @@ class _ReviewRow extends StatelessWidget {
       leading: CategoryTileIcon(category: cat),
       title: Text(
         title,
-        maxLines: large ? 2 : 1,
+        // Two lines at every size: SMS merchant names run long.
+        maxLines: 2,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w600),
       ),

@@ -9,7 +9,7 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/widgets/glossy.dart';
 
-/// v1.42.0: on Transactions, the type chips follow a page swipe once it
+/// v1.42.0: on Transactions, the type tabs follow a page swipe once it
 /// passes halfway, before the finger lifts (PageView.onPageChanged fires
 /// at the halfway point of a drag).
 void main() {
@@ -21,14 +21,15 @@ void main() {
     setBuiltinOverrides(const {});
   });
 
-  /// The selected chip's filter name ('all', 'income', ...).
+  /// The selected tab's filter name ('all', 'income', ...).
   String selectedChip(WidgetTester tester) {
-    final chips =
-        tester.widget(find.byWidgetPredicate((w) => w is ChipTabs)) as ChipTabs;
-    return (chips.selected as Enum).name;
+    final tabs =
+        tester.widget(find.byWidgetPredicate((w) => w is UnderlineTabs))
+            as UnderlineTabs;
+    return (tabs.selected as Enum).name;
   }
 
-  testWidgets('the chip changes mid-drag, past halfway', (tester) async {
+  testWidgets('the tab changes mid-drag, past halfway', (tester) async {
     tester.view.physicalSize = const Size(400, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);

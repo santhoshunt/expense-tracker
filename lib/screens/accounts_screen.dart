@@ -514,9 +514,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   ],
                 ];
                 return ListView.builder(
-                  // Clears the half of the docked Add button that rises
-                  // over the page.
-                  padding: const EdgeInsets.only(top: 4, bottom: 48),
+                  // Room for the last row to scroll clear of the floating
+                  // Add button.
+                  padding: const EdgeInsets.only(top: 4, bottom: 120),
                   itemCount: items.length,
                   itemBuilder: (context, i) => items[i],
                 );

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:intl/intl.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
@@ -63,6 +64,10 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _index = 0;
   bool _importing = false;
+
+  // The Add button folds to its icon while a list scrolls down, so it
+  // covers less of the rows; scrolling up or switching tab brings it back.
+  bool _fabExtended = true;
   final _smsImport = SmsImportService();
   final _budgetMonitor = BudgetMonitor();
   final _upcomingMonitor = UpcomingMonitor();
@@ -953,7 +958,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     if (openSettings == true) await _smsImport.openAppSettings();
   }
 
-  /// Every tab switch, by tap or by a link. Call inside setState.
+  /// Every tab switch, by tap or by a link, lands with the Add button
+  /// unfolded. Call inside setState.
   void _showTab(int i) {
     if (i != _index) {
       // Never the tab being shown: back must always land somewhere else.
@@ -963,6 +969,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ..add(_index);
     }
     _index = i;
+    _fabExtended = true;
   }
 
   /// Tabs left behind, newest last. Tab switches (a tap, a donut slice's
@@ -973,7 +980,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   void _back() {
     if (_tabHistory.isEmpty) return;
-    setState(() => _index = _tabHistory.removeLast());
+    setState(() {
+      _index = _tabHistory.removeLast();
+      _fabExtended = true;
+    });
+  }
+
+  /// Vertical drags only: the pagers and the stat-card strip scroll
+  /// sideways.
+  bool _onUserScroll(UserScrollNotification n) {
+    if (n.metrics.axis != Axis.vertical) return false;
+    final extend = switch (n.direction) {
+      ScrollDirection.reverse => false,
+      ScrollDirection.forward => true,
+      ScrollDirection.idle => _fabExtended,
+    };
+    if (extend != _fabExtended) setState(() => _fabExtended = extend);
+    return false;
   }
 
   @override
@@ -989,26 +1012,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final reviewCount = context.select<FinanceProvider, int>(
       (f) => f.reviewCount(dismissed),
     );
-    // The docked Add keeps 88dp, which leaves each tab about 90dp at 360dp.
-    // "Transactions" fits there up to 1.15x text and wraps mid-word by
-    // 1.3x, even alone, since each tab keeps its share of the width. So
-    // the bar's labels stop growing at this scale, and above it only the
-    // selected label shows. Tooltips still name every tab.
-    const labelsFitScale = 1.15;
-    final textScaler = MediaQuery.textScalerOf(context);
-    final labelsFit = textScaler.scale(1) <= labelsFitScale;
-    final barScaler = textScaler.clamp(maxScaleFactor: labelsFitScale);
-    // Scales with the bar's labels: any constant (68, then 76) clipped
-    // them again at a large enough scale.
-    final barHeight = barScaler.scale(76);
-    // Solid kit-style bar; the theme paints the accent rounded indicator.
-    // Transparent: the notched BottomAppBar around it paints the fill.
+    // Solid kit-style bar across the full width; the theme paints the
+    // accent rounded indicator.
     final navigationBar = NavigationBar(
-      height: barHeight,
-      backgroundColor: Colors.transparent,
-      labelBehavior: labelsFit
-          ? NavigationDestinationLabelBehavior.alwaysShow
-          : NavigationDestinationLabelBehavior.onlyShowSelected,
+      // Scales with the font setting: any constant (68, then 76) clips
+      // the always-shown labels again at a large enough scale.
+      height: MediaQuery.textScalerOf(context).scale(76),
+      // Each tab gets a third of the width, so every label fits.
+      labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
       selectedIndex: _index,
       onDestinationSelected: (i) {
         if (i != _index) Haptics.tick();
@@ -1095,60 +1106,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             children: [
               const _StorageWarningBanners(),
               Expanded(
-                child: _FadeThroughIndexedStack(
-                  index: _index,
-                  children: [
-                    _dashboardTab,
-                    _transactionsTabWidget,
-                    _accountsTab,
-                  ],
+                child: NotificationListener<UserScrollNotification>(
+                  onNotification: _onUserScroll,
+                  child: _FadeThroughIndexedStack(
+                    index: _index,
+                    children: [
+                      _dashboardTab,
+                      _transactionsTabWidget,
+                      _accountsTab,
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
-          floatingActionButton: GlassRoundButton(
+          // Floats over the page above the bar, labelled, and folds to its
+          // icon while a list scrolls down.
+          floatingActionButton: GlassButton(
             icon: Icons.add,
-            tooltip: onAccounts ? 'New account' : 'Add transaction',
+            label: onAccounts ? 'New account' : 'Add',
+            extended: _fabExtended,
             onPressed: () => onAccounts
                 ? showAddAccountDialog(context)
                 : showAddTransactionSheet(context),
           ),
-          // The Add button docks in a notch at the bar's right end; the tabs
-          // shift left to make room.
-          floatingActionButtonLocation: FloatingActionButtonLocation.endDocked,
-          bottomNavigationBar: BottomAppBar(
-            shape: const CircularNotchedRectangle(),
-            notchMargin: 6,
-            clipBehavior: Clip.antiAlias,
-            padding: EdgeInsets.zero,
-            height: barHeight,
-            elevation: 0,
-            color: Theme.of(context).navigationBarTheme.backgroundColor,
-            surfaceTintColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            child: Row(
-              children: [
-                Expanded(
-                  child: MediaQuery(
-                    data: MediaQuery.of(
-                      context,
-                    ).copyWith(textScaler: barScaler),
-                    child: navigationBar,
-                  ),
-                ),
-                const SizedBox(width: _kAddDockReserve),
-              ],
-            ),
-          ),
+          bottomNavigationBar: navigationBar,
         ),
       ),
     );
   }
 }
-
-/// Width kept free at the nav bar's right end for the docked Add button:
-/// twice the 44dp from the edge to its centre that endDocked uses.
-const double _kAddDockReserve = 88;
 
 /// Storage-health banners: a dismissible one when parts of the stored data
 /// couldn't be read at startup (each was skipped rather than bricking the

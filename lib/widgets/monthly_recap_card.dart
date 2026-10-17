@@ -512,8 +512,7 @@ class _BudgetLine extends StatelessWidget {
       child: Text.rich(
         TextSpan(
           children: [
-            // Over the limit, a red dot leads the line; the text keeps the
-            // plain colours.
+            // Over the limit, a red dot leads the line.
             if (over)
               WidgetSpan(
                 alignment: PlaceholderAlignment.middle,
@@ -535,13 +534,13 @@ class _BudgetLine extends StatelessWidget {
                 color: over ? scheme.onSurface : scheme.onSurfaceVariant,
               ),
             ),
-            // The overshoot in plain text: the red dot leads the line.
+            // The overshoot in red, after the red dot.
             TextSpan(
               text: over
                   ? 'over by ${fmtMoneyWhole(b.spent - b.limit)}'
                   : '${fmtMoneyWhole(b.limit - b.spent)} left',
               style: TextStyle(
-                color: over ? scheme.onSurface : scheme.onSurfaceVariant,
+                color: over ? scheme.error : scheme.onSurfaceVariant,
               ),
             ),
           ],

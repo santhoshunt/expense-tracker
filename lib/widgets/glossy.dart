@@ -207,69 +207,6 @@ class GlassButton extends StatelessWidget {
   }
 }
 
-/// The Home Add button: a 56dp circle in GlassButton's fill and edge light,
-/// docked in the nav bar's notch. Icon only; [tooltip] names it on
-/// long-press and to TalkBack.
-class GlassRoundButton extends StatelessWidget {
-  final IconData icon;
-  final String tooltip;
-  final VoidCallback onPressed;
-
-  static const double size = 56;
-
-  const GlassRoundButton({
-    super.key,
-    required this.icon,
-    required this.tooltip,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    // excludeSemantics drops the InkWell's own tap action, so the node
-    // carries it, as on GlassButton.
-    return Semantics(
-      button: true,
-      label: tooltip,
-      onTap: onPressed,
-      excludeSemantics: true,
-      child: Tooltip(
-        message: tooltip,
-        excludeFromSemantics: true,
-        child: Container(
-          width: size,
-          height: size,
-          decoration: BoxDecoration(
-            color: _tint(scheme, scheme.outlineVariant, 0.12),
-            borderRadius: BorderRadius.circular(size / 2),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.28),
-                blurRadius: 14,
-                offset: const Offset(0, 5),
-              ),
-            ],
-          ),
-          foregroundDecoration: _edgeLight(scheme, size / 2),
-          child: Material(
-            color: Colors.transparent,
-            shape: const CircleBorder(),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: onPressed,
-              child: Center(
-                child: Icon(icon, size: 24, color: scheme.onSurface),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Page tabs as plain labels with a short accent line under the selected
 /// one: quieter than the boxed segmented control it replaced, for the page
 /// switch at the top of a screen. With a [pager] the line follows `pager.page`
@@ -395,8 +332,7 @@ class UnderlineTabs<T> extends StatelessWidget {
   }
 }
 
-/// A row of outline pills for a filter with a few values (transaction type,
-/// account type). The selected pill gets an accent outline; the text stays
+/// A row of outline pills for a filter with a few values (account type). The selected pill gets an accent outline; the text stays
 /// in the plain text colours, never coloured on a fill.
 ///
 /// When the row scrolls sideways, the selected pill is kept in view: on

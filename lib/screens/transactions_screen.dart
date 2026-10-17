@@ -50,7 +50,7 @@ const _sortLabels = {
   _Sort.amountAsc: 'Amount · low to high',
 };
 
-/// The sort chip's short names.
+/// The sorts' short names, in the Sort button's tooltip.
 const _sortShort = {
   _Sort.dateDesc: 'Newest first',
   _Sort.dateAsc: 'Oldest first',
@@ -185,8 +185,8 @@ class _RowShape {
 class _TransactionsScreenState extends State<TransactionsScreen> {
   _Filter _filter = _Filter.all;
 
-  /// A chip tap's slide in progress: the pages it passes must not select
-  /// their chips on the way.
+  /// A tab tap's slide in progress: the pages it passes must not select
+  /// their tabs on the way.
   bool _sliding = false;
 
   void _setFilter(_Filter f) {
@@ -265,6 +265,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   final _searchCtrl = TextEditingController();
   late final PageController _pageCtrl = PageController();
 
+  // The active-filter strip: it scrolls a chip that just appeared into
+  // view, so a filter applied off screen still shows its chip.
+  final _chipScroll = ScrollController();
+  final _chipKeys = <String, GlobalKey>{};
+  Set<String> _shownChipIds = {};
+
   // One controller/listener per filter: an ItemScrollController cannot be
   // attached to two lists at once, and during a page drag two filters'
   // lists are alive simultaneously.
@@ -320,32 +326,40 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// One chip per active filter, each with a 48dp close target. Named chips
   /// so a deep-link (or a sheet Apply) always says WHAT is filtering the
   /// list and offers an inline way out; one short line, horizontally
-  /// scrollable at the call site.
-  List<Widget> _activeFilterChips(
+  /// scrollable at the call site. Each comes with an id naming its filter,
+  /// so the strip can tell which chip is new since the last build.
+  List<(String, Widget)> _activeFilterChips(
     FinanceProvider finance,
     Account? activeAccount,
   ) {
-    Widget chip({
+    (String, Widget) chip({
+      required String id,
       required Widget avatar,
       required String label,
       required VoidCallback onDeleted,
-    }) => _ActiveFilterChip(avatar: avatar, label: label, onRemove: onDeleted);
+    }) => (
+      id,
+      _ActiveFilterChip(avatar: avatar, label: label, onRemove: onDeleted),
+    );
 
     return [
       if (activeAccount != null)
         chip(
+          id: 'account',
           avatar: Icon(activeAccount.icon, size: 16),
           label: 'Account · ${activeAccount.displayName}',
           onDeleted: () => setState(() => _accountId = null),
         ),
       if (_monthFilter != null)
         chip(
+          id: 'month',
           avatar: const Icon(Icons.calendar_month, size: 16),
           label: 'Month · ${fmtMonth(_monthFilter!)}',
           onDeleted: () => setState(() => _monthFilter = null),
         ),
       if (_rangeFilter != null)
         chip(
+          id: 'range',
           avatar: const Icon(Icons.date_range, size: 16),
           label: _rangeLabel ?? fmtDateRange(_rangeFilter!),
           onDeleted: () => setState(() => _setRange(null)),
@@ -353,6 +367,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       for (final b in finance.budgets)
         if (_budgetFilter.contains(b.id))
           chip(
+            id: 'budget:${b.id}',
             avatar: const Icon(Icons.track_changes, size: 16),
             label: 'Budget · ${b.name}',
             onDeleted: () => setState(() => _budgetFilter.remove(b.id)),
@@ -360,12 +375,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       for (final g in finance.groups)
         if (_groupFilter.contains(g.id))
           chip(
+            id: 'group:${g.id}',
             avatar: const Icon(Icons.workspaces_outlined, size: 16),
             label: 'Group · ${g.label}',
             onDeleted: () => setState(() => _groupFilter.remove(g.id)),
           ),
       if (_groupFilter.contains(kUngroupedFilterKey))
         chip(
+          id: 'group:other',
           avatar: const Icon(Icons.category, size: 16),
           label: 'Group · Other',
           onDeleted: () =>
@@ -373,6 +390,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ),
       for (final id in _categoryFilter)
         chip(
+          id: 'cat:$id',
           avatar: Icon(
             categoryById(id).icon,
             size: 16,
@@ -384,6 +402,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       for (final u in finance.allTags)
         if (_tagFilter.contains(tagKey(u.tag)))
           chip(
+            id: 'tag:${tagKey(u.tag)}',
             avatar: const Icon(Icons.label_outline, size: 16),
             label: 'Tag · ${u.tag}',
             onDeleted: () => setState(() => _tagFilter.remove(tagKey(u.tag))),
@@ -391,6 +410,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       // One chip for both bounds: its ✕ clears the range.
       if (_minAmount != null || _maxAmount != null)
         chip(
+          id: 'amount',
           avatar: const Icon(Icons.currency_rupee, size: 16),
           label: _amountChipLabel(_minAmount, _maxAmount),
           onDeleted: () => setState(() {
@@ -424,7 +444,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _setRange(null);
   }
 
-  /// The sort picker under the search.
+  /// The sort picker, from the Sort button in the search field.
   Future<void> _openSort() async {
     final r = await showPickerSheet<_Sort>(
       context: context,
@@ -541,6 +561,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _jumpHideTimer?.cancel();
     _searchDebounce?.cancel();
     _searchCtrl.dispose();
+    _chipScroll.dispose();
     _pageCtrl.dispose();
     _jumping.dispose();
     super.dispose();
@@ -1003,11 +1024,40 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ? null
         : finance.accountById(_accountId!);
 
-    // Built once: the Filters chip counts exactly the chips the strip shows.
+    // Built once: the Filters badge counts exactly the chips the strip shows.
     // _pageDataFor above has already dropped the ids of deleted categories,
     // groups, budgets and tags, so every filter still on has its chip.
     final filterChips = _activeFilterChips(finance, activeAccount);
     final hasFilterChips = filterChips.isNotEmpty;
+    // The last chip in strip order that was not there last build: a
+    // deep-link adding a month and a category scrolls to the category.
+    final chipIds = [for (final (id, _) in filterChips) id];
+    final newChipId = chipIds.lastWhere(
+      (id) => !_shownChipIds.contains(id),
+      orElse: () => '',
+    );
+    _shownChipIds = chipIds.toSet();
+    _chipKeys.removeWhere((id, _) => !_shownChipIds.contains(id));
+    if (newChipId.isNotEmpty) {
+      final key = _chipKeys.putIfAbsent(newChipId, GlobalKey.new);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final chipContext = key.currentContext;
+        if (!mounted || chipContext == null || !_chipScroll.hasClients) {
+          return;
+        }
+        // The strip's own position: Scrollable.ensureVisible would scroll
+        // the ancestors too.
+        _chipScroll.position.ensureVisible(
+          chipContext.findRenderObject()!,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          duration: motionDuration(
+            context,
+            const Duration(milliseconds: 250),
+          ),
+          curve: Curves.easeOutCubic,
+        );
+      });
+    }
 
     // The bars above the list fold in and out (AnimatedPresence) so the
     // list slides instead of jumping. Each child is built only while it
@@ -1025,6 +1075,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             },
             filter: _filter,
             onFilter: _setFilter,
+            pager: _pageCtrl,
             sortLabel: _sortShort[_sort]!,
             onOpenSort: _openSort,
             filterCount: filterChips.length,
@@ -1039,14 +1090,16 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 // layout grew a row per filter and buried the list when
                 // several were active. 48dp tall: each close is a full tap
                 // target; Clear all leads once two filters are on.
-                // Left-aligned under the type chips: a narrower strip would
+                // Left-aligned under the type tabs: a narrower strip would
                 // otherwise sit centred. Each chip is capped at the strip's
                 // width, its label ellipsized, so its ✕ never runs off screen
-                // at large text.
+                // at large text. A chip that just appeared scrolls into
+                // view (see newChipId above).
                 : LayoutBuilder(
                     builder: (context, box) => Align(
                       alignment: AlignmentDirectional.centerStart,
                       child: SingleChildScrollView(
+                        controller: _chipScroll,
                         scrollDirection: Axis.horizontal,
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Row(
@@ -1058,8 +1111,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                   onTap: () => setState(_clearFilters),
                                 ),
                               ),
-                            for (final chip in filterChips)
+                            for (final (id, chip) in filterChips)
                               Padding(
+                                key: _chipKeys.putIfAbsent(id, GlobalKey.new),
                                 padding: const EdgeInsets.only(right: 8),
                                 child: ConstrainedBox(
                                   constraints: BoxConstraints(
@@ -1220,9 +1274,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     itemScrollController: _listCtrls[f],
                     itemPositionsListener: _listPositions[f],
                     itemCount: data.rows.length,
-                    // Clears the half of the docked Add button that rises
-                    // over the page.
-                    padding: const EdgeInsets.only(bottom: 48),
+                    // Room for the last row to scroll clear of the
+                    // floating Add button.
+                    padding: const EdgeInsets.only(bottom: 120),
                     itemBuilder: (_, i) {
                       final (month, tx) = data.rows[i];
                       if (month != null) {
@@ -2932,7 +2986,10 @@ class _BarAction extends StatelessWidget {
   }
 }
 
-/// Search, then the sort and Filters chips, then the type chips.
+/// The search field, its trailing end holding the clear, Sort and Filters
+/// buttons, then the type tabs (All, Income, Expenses, Transfers) as
+/// underline tabs, so they read as the page switch they are rather than
+/// another filter.
 class _SearchAndFilterBar extends StatelessWidget {
   final TextEditingController searchCtrl;
   final ValueChanged<String> onSearch;
@@ -2940,11 +2997,15 @@ class _SearchAndFilterBar extends StatelessWidget {
   final _Filter filter;
   final ValueChanged<_Filter> onFilter;
 
-  /// The current sort's short name, on the sort chip.
+  /// The pager behind the type tabs, one page per [_Filter] in order: the
+  /// tabs' line follows a swipe.
+  final PageController pager;
+
+  /// The current sort's short name, in the Sort button's tooltip.
   final String sortLabel;
   final VoidCallback onOpenSort;
 
-  /// How many filter chips are on: the Filters chip counts them.
+  /// How many filter chips are on: the Filters button's badge counts them.
   final int filterCount;
 
   /// The Filters sheet.
@@ -2956,6 +3017,7 @@ class _SearchAndFilterBar extends StatelessWidget {
     required this.onClearSearch,
     required this.filter,
     required this.onFilter,
+    required this.pager,
     required this.sortLabel,
     required this.onOpenSort,
     required this.filterCount,
@@ -2964,6 +3026,44 @@ class _SearchAndFilterBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final filtersOn = filterCount > 0;
+    final sortTip = 'Sort: $sortLabel';
+    final filtersTip = filterCount == 0
+        ? 'Filters'
+        : filterCount == 1
+        ? '1 filter on'
+        : '$filterCount filters on';
+    // A full 48dp target each, as the field's own prefix icon gets.
+    final buttonStyle = IconButton.styleFrom(fixedSize: const Size(48, 48));
+    // The tooltip only reaches assistive tech as a hint, so each button
+    // also carries its words as the label; the badge's digit stays out.
+    final sortButton = IconButton(
+      tooltip: sortTip,
+      style: buttonStyle,
+      icon: Semantics(
+        label: sortTip,
+        excludeSemantics: true,
+        child: const Icon(Icons.swap_vert),
+      ),
+      onPressed: onOpenSort,
+    );
+    final filtersButton = IconButton(
+      tooltip: filtersTip,
+      style: buttonStyle,
+      icon: Semantics(
+        label: filtersTip,
+        excludeSemantics: true,
+        // The badge is built only while a filter is on: no stray "0".
+        child: filtersOn
+            ? Badge(
+                label: Text('$filterCount'),
+                child: Icon(Icons.tune, color: scheme.primary),
+              )
+            : const Icon(Icons.tune),
+      ),
+      onPressed: onOpenFilters,
+    );
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
       child: Column(
@@ -2981,9 +3081,13 @@ class _SearchAndFilterBar extends StatelessWidget {
                 decoration: InputDecoration(
                   hintText: 'Search',
                   prefixIcon: const Icon(Icons.search),
-                  suffixIcon: value.text.isEmpty
-                      ? null
-                      : IconButton(
+                  // The ✕ while there is text, then Sort and Filters, which
+                  // always show.
+                  suffixIcon: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (value.text.isNotEmpty)
+                        IconButton(
                           tooltip: 'Clear search',
                           icon: const Icon(Icons.clear),
                           onPressed: () {
@@ -2993,52 +3097,20 @@ class _SearchAndFilterBar extends StatelessWidget {
                             onClearSearch();
                           },
                         ),
+                      sortButton,
+                      filtersButton,
+                    ],
+                  ),
                   isDense: true,
                 ),
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          // The current sort always shows; Filters says how many are on.
+          // The page switch, not a filter: plain labels over an accent line
+          // that follows the pager during a swipe. Inset like the search.
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            // Each chip may take up to half the row, then ellipsizes; the
-            // free room goes between them.
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Flexible(
-                  child: _ViewChip(
-                    icon: Icons.swap_vert,
-                    label: sortLabel,
-                    semanticLabel: 'Sort: $sortLabel',
-                    onTap: onOpenSort,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Flexible(
-                  child: _ViewChip(
-                    icon: Icons.tune,
-                    label: filterCount == 0
-                        ? 'Filters'
-                        : 'Filters · $filterCount',
-                    semanticLabel: filterCount == 0
-                        ? 'Filters'
-                        : filterCount == 1
-                        ? '1 filter on'
-                        : '$filterCount filters on',
-                    active: filterCount > 0,
-                    onTap: onOpenFilters,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Edge to edge: the strip scrolls off the screen's edge.
-          Align(
-            alignment: Alignment.centerLeft,
-            child: ChipTabs<_Filter>(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: UnderlineTabs<_Filter>(
               options: const [
                 (_Filter.all, 'All'),
                 (_Filter.income, 'Income'),
@@ -3047,79 +3119,10 @@ class _SearchAndFilterBar extends StatelessWidget {
               ],
               selected: filter,
               onChanged: onFilter,
+              pager: pager,
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// The sort and Filters chips: ChipTabs' outlined pill with a leading
-/// icon, 36dp tall in a 44dp target. [active] draws the accent outline.
-class _ViewChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String semanticLabel;
-  final bool active;
-  final VoidCallback onTap;
-
-  const _ViewChip({
-    required this.icon,
-    required this.label,
-    required this.semanticLabel,
-    required this.onTap,
-    this.active = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final color = active ? scheme.onSurface : scheme.onSurfaceVariant;
-    return Semantics(
-      button: true,
-      label: semanticLabel,
-      excludeSemantics: true,
-      onTap: onTap,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Material(
-            type: MaterialType.transparency,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(AppRadius.control * 2),
-              onTap: onTap,
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 36),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(AppRadius.control * 2),
-                  border: Border.all(
-                    color: active ? scheme.primary : scheme.outlineVariant,
-                    width: active ? 1.5 : 1,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(icon, size: 16, color: color),
-                    const SizedBox(width: 6),
-                    Flexible(
-                      child: Text(
-                        label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 13, color: color),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }

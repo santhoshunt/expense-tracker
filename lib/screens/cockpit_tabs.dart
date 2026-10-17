@@ -333,11 +333,14 @@ class _SubscriptionTile extends StatelessWidget {
     final category = categoryById(hit.categoryId, fallbackType: hit.type);
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
+    // No-break spaces: at large text "next 5 Nov" wraps whole rather than
+    // leaving "Nov" alone on the next line.
+    String keep(String s) => s.replaceAll(' ', ' ');
     final when = kind == _SubKind.active
-        ? 'next ${fmtDateCompact(hit.nextDue)}'
+        ? keep('next ${fmtDateCompact(hit.nextDue)}')
         : hit.type == TxType.expense
-        ? 'last paid ${fmtDateCompact(hit.lastDate)}'
-        : 'last received ${fmtDateCompact(hit.lastDate)}';
+        ? 'last paid ${keep(fmtDateCompact(hit.lastDate))}'
+        : 'last received ${keep(fmtDateCompact(hit.lastDate))}';
     final rise = item.priceRise;
     final cycle = context.select<FinanceProvider, SubscriptionCycle?>(
       (f) => f.subscriptionPinOf(hit.key),

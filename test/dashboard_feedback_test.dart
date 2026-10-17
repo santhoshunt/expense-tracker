@@ -239,7 +239,7 @@ void main() {
   });
 
   group('budget rows', () {
-    testWidgets('fit 320dp at text x2, the overshoot in plain text', (
+    testWidgets('fit 320dp at text x2, the overshoot in red', (
       tester,
     ) async {
       tester.platformDispatcher.textScaleFactorTestValue = 2;
@@ -270,11 +270,11 @@ void main() {
         scrollable: verticalScrollable(),
       );
       expect(tester.takeException(), isNull);
-      // The ring carries the red; the figure stays in the text colour.
+      // v1.43.1: the overshoot shares the ring's red.
       final ctx = tester.element(over);
       expect(
         tester.widget<Text>(over).style?.color,
-        Theme.of(ctx).colorScheme.onSurface,
+        Theme.of(ctx).colorScheme.error,
       );
       expect(
         find.text('${fmtMoneyTidy(1200)} of ${fmtMoneyTidy(600)} · 200%'),
