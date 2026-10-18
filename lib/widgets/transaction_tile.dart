@@ -181,13 +181,14 @@ class TransactionTile extends StatelessWidget {
           })
         : null;
     // Refunded in full: the purchase no longer counts, so its amount is
-    // muted and struck through.
+    // muted and struck through, as is every linked refund: the pair is
+    // money that went out and came back, neither income nor spend.
     final refundedInFull =
         refunded != null && refunded.sum >= tx.amount - 0.005;
+    final struck = refundedInFull || refundFor != null;
     // Money in green, money out red; a transfer plain, as it is neither,
-    // and an uncounted row muted. A linked refund is plain too: it is not
-    // income, it takes its purchase's spend down.
-    final amountColor = refundedInFull
+    // and an uncounted row muted.
+    final amountColor = struck
         ? scheme.onSurfaceVariant
         : moneyColor(
             context,
@@ -286,7 +287,7 @@ class TransactionTile extends StatelessWidget {
               color: amountColor,
               fontWeight: FontWeight.w700,
               fontSize: 15,
-              decoration: refundedInFull ? TextDecoration.lineThrough : null,
+              decoration: struck ? TextDecoration.lineThrough : null,
               decorationColor: amountColor,
             ),
           ),

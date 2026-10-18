@@ -129,9 +129,8 @@ void main() {
     expect(find.text(categoryById('other_income').label), findsNothing);
   });
 
-  testWidgets('a linked refund amount is plain, not income green', (
-    tester,
-  ) async {
+  testWidgets('a linked refund amount is muted and struck, not income '
+      'green', (tester) async {
     final p = FinanceProvider();
     await p.load();
     await p.restoreTransactions([
@@ -162,7 +161,13 @@ void main() {
     final green = AppColors.of(context).green;
     Color? colorOf(String text) =>
         tester.widget<Text>(find.text(text)).style?.color;
-    expect(colorOf('+${fmtMoney(900)}'), scheme.onSurface);
+    // v1.43.4: a refund pair counts as nothing, so the refund is muted and
+    // struck through like a purchase refunded in full.
+    expect(colorOf('+${fmtMoney(900)}'), scheme.onSurfaceVariant);
+    expect(
+      tester.widget<Text>(find.text('+${fmtMoney(900)}')).style?.decoration,
+      TextDecoration.lineThrough,
+    );
     expect(colorOf('+${fmtMoney(900)}'), isNot(green));
     expect(colorOf('+${fmtMoney(300)}'), green);
   });

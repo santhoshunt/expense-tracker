@@ -272,28 +272,30 @@ void main() {
       expect(p.expenseInMonth(sep), 1000);
     });
 
-    test(
-      'a purchase turned into a split or a transfer breaks the link',
-      () async {
-        final p = await loaded();
-        final buy = await purchase(p);
-        final back = await refund(p);
-        await p.linkRefund(back, buy);
+    test('a purchase turned into a split breaks the link; one filed as a '
+        'transfer keeps it', () async {
+      final p = await loaded();
+      final buy = await purchase(p);
+      final back = await refund(p);
+      await p.linkRefund(back, buy);
 
-        await p.updateTransaction(row(p, buy).copyWith(myShare: 750));
-        expect(p.isLinkedRefund(row(p, back)), isFalse);
-        expect(p.balance, naiveBalance(p) + 750);
+      await p.updateTransaction(row(p, buy).copyWith(myShare: 750));
+      expect(p.isLinkedRefund(row(p, back)), isFalse);
+      expect(p.balance, naiveBalance(p) + 750);
 
-        await p.updateTransaction(row(p, buy).copyWith(clearMyShare: true));
-        expect(p.isLinkedRefund(row(p, back)), isTrue);
+      await p.updateTransaction(row(p, buy).copyWith(clearMyShare: true));
+      expect(p.isLinkedRefund(row(p, back)), isTrue);
 
-        await p.updateTransaction(
-          row(p, buy).copyWith(categoryId: 'transfer_out'),
-        );
-        expect(p.isLinkedRefund(row(p, back)), isFalse);
-        expect(p.incomeInMonth(oct), 500);
-      },
-    );
+      // v1.43.4: any money out can take a refund, transfers too. The
+      // refund stays out of income and the transfer counts what is left.
+      await p.updateTransaction(
+        row(p, buy).copyWith(categoryId: 'transfer_out'),
+      );
+      expect(p.isLinkedRefund(row(p, back)), isTrue);
+      expect(p.incomeInMonth(oct), 0);
+      expect(p.expenseInMonth(sep), 0);
+      expect(p.transferOutInMonth(sep), 1000);
+    });
   });
 
   group('linkRefund', () {
@@ -308,11 +310,19 @@ void main() {
       expect(await p.linkRefund(sameDay, buy), isTrue);
     });
 
-    test('refuses transfers, splits and the wrong direction', () async {
+    test('a refund filed as a transfer links; refuses splits, repayments '
+        'and the wrong direction', () async {
       final p = await loaded();
       final buy = await purchase(p);
+      // v1.43.4: the category never matters. A transfer refund leaves the
+      // transfers and takes the purchase down.
       final moved = await refund(p, categoryId: 'transfer_in');
-      expect(await p.linkRefund(moved, buy), isFalse);
+      expect(await p.linkRefund(moved, buy), isTrue);
+      expect(p.transferInInMonth(oct), 0);
+      expect(p.expenseInMonth(sep), 1000);
+      // A friend's repayment settles a split, so it is never a refund.
+      final repaid = await refund(p, categoryId: kRepaidToMeCategoryId);
+      expect(await p.linkRefund(repaid, buy), isFalse);
 
       final split = await p.addTransaction(
         type: TxType.expense,

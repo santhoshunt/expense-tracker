@@ -1026,9 +1026,9 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       }
       return const [];
     }
-    if (tx.pairId != null || isTransferCategory(tx.categoryId)) {
-      return const [];
-    }
+    // A transfer pair's leg is linked already; any other category,
+    // transfers too, can be one side of a refund pair.
+    if (tx.pairId != null) return const [];
     if (tx.type == TxType.expense) {
       final refunds = finance.refundsOf(tx);
       if (refunds.isEmpty) return const [];
@@ -1083,7 +1083,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         : [
             for (final p in finance.transactions)
               if (p.type == TxType.expense &&
-                  !isTransferCategory(p.categoryId) &&
+                  p.pairId == null &&
+                  p.categoryId != kPaidForOthersCategoryId &&
                   p.myShare == null &&
                   finance.countsInTotals(p) &&
                   inWindow(p) &&

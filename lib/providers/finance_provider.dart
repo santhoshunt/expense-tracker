@@ -611,33 +611,39 @@ class FinanceProvider extends ChangeNotifier {
       // Only money moving OUT counts as saved — an income-typed row in this
       // category (import-reachable) would otherwise inflate `savings` and
       // make `balance` subtract money that actually came in.
+      // A linked refund is in no figure, whatever its category: it and the
+      // part of its purchase it pays back count as nothing.
+      if (t.type == TxType.income && isLinkedRefund(t)) continue;
+      // A money-out row counts only what its refunds left ([netAmountOf]).
+      final moved = netAmountOf(t);
       if (t.categoryId == kSavingsTransferCategoryId &&
           t.type == TxType.expense) {
         // Display figure: the Saved card shows savings whether or not the
         // category is (still) a transfer.
-        savingsOutflow += t.amount;
+        savingsOutflow += moved;
         // Balance figure: only while a transfer — un-transferred rows land
         // in `expense` below, and `balance = income − expense − savings`
         // must not subtract them twice.
-        if (isTransferCategory(t.categoryId)) savings += t.amount;
+        if (isTransferCategory(t.categoryId)) savings += moved;
       }
       if (isTransferCategory(t.categoryId)) {
+        // Refunded in full: no zero bucket in the transfer lists.
+        if (moved == 0 && t.amount > 0) continue;
         if (t.type == TxType.income) {
-          transferIn += t.amount;
+          transferIn += moved;
         } else {
-          transferOut += t.amount;
+          transferOut += moved;
           // Row-direction bucket for budget/group math — must agree with
           // countsTowardBudget's per-row type check.
           transfersOutBy[t.categoryId] =
-              (transfersOutBy[t.categoryId] ?? 0) + t.amount;
+              (transfersOutBy[t.categoryId] ?? 0) + moved;
         }
-        transfersBy[t.categoryId] = (transfersBy[t.categoryId] ?? 0) + t.amount;
+        transfersBy[t.categoryId] = (transfersBy[t.categoryId] ?? 0) + moved;
         continue; // byCategory stays transfer-free — income/expense untouched
       }
       if (t.type == TxType.income) {
-        // A linked refund is not income: it takes its purchase's spend
-        // down instead ([netSpendOf]), in the purchase's own period.
-        if (isLinkedRefund(t)) continue;
+        // (A linked refund left above: it takes its purchase down instead,
+        // in the purchase's own period.)
         income += t.amount;
       } else {
         // Group splits: only the user's own share is spend; the fronted
@@ -2199,12 +2205,14 @@ class FinanceProvider extends ChangeNotifier {
   // cleanup: a link that stops holding counts as income again.
 
   /// Worked out once per change from [_ordered]. A link holds when the
-  /// refund is a counted, non-transfer income row and its [Tx.refundOf]
-  /// names a confirmed, counted, non-transfer expense row that is not a
-  /// split. Refunds are taken oldest first (date, then insertion order)
-  /// while they fit in the purchase's amount; one that would take it past
-  /// the amount does not hold. Whole refunds only, so income and spend
-  /// always move by the same amount and [balance] never changes.
+  /// refund is a counted money-in row ([_isRefundRow]) and its
+  /// [Tx.refundOf] names a confirmed, counted money-out row that is not a
+  /// split ([_isRefundablePurchase]), in any categories. Refunds are taken
+  /// oldest first (date, then insertion order) while they fit in the
+  /// purchase's amount; one that would take it past the amount does not
+  /// hold. The refunded part of the pair counts as nothing: the refund
+  /// leaves every figure, and the purchase counts only what is left
+  /// ([netAmountOf]) in whatever figure its category feeds.
   _RefundLinks get _refundLinks => _d.refunds ??= () {
     final purchaseOf = <String, Tx>{};
     final refunded = <String, double>{};
@@ -2228,22 +2236,27 @@ class FinanceProvider extends ChangeNotifier {
     return _RefundLinks(purchaseOf, refunded, refundsOf);
   }();
 
-  /// The refund side of a link: confirmed income that counts, outside the
-  /// transfer categories (a transfer is never income, so taking it off a
-  /// purchase would move [balance]).
+  /// The refund side of a link: confirmed money in that counts, in any
+  /// category, transfers too: a refund pair is money that went out and came
+  /// back, neither income nor spend, whatever each row is filed as. Not a
+  /// transfer pair's leg, and not a friend's repayment, which settles a
+  /// split bill instead.
   bool _isRefundRow(Tx t) =>
       t.type == TxType.income &&
       !t.pending &&
-      !isTransferCategory(t.categoryId) &&
+      t.pairId == null &&
+      t.categoryId != kRepaidToMeCategoryId &&
       countsInTotals(t);
 
-  /// The purchase side: confirmed spend that counts, outside the transfer
-  /// categories, not a split.
+  /// The purchase side: confirmed money out that counts, in any category,
+  /// transfers too. Not a split or the friends' part of one, which carry
+  /// money owed back, and not a transfer pair's leg.
   bool _isRefundablePurchase(Tx p) =>
       p.type == TxType.expense &&
       !p.pending &&
       p.myShare == null &&
-      !isTransferCategory(p.categoryId) &&
+      p.pairId == null &&
+      p.categoryId != kPaidForOthersCategoryId &&
       countsInTotals(p);
 
   /// Whether [t] is a refund whose link holds: it is out of income, and
@@ -2292,6 +2305,16 @@ class FinanceProvider extends ChangeNotifier {
     return net < 0 ? 0 : net;
   }
 
+  /// [t]'s amount less its linked refunds, never below 0: what a money-out
+  /// row in a transfer or savings category still moves.
+  double netAmountOf(Tx t) {
+    if (t.type != TxType.expense) return t.amount;
+    final refunded = refundedFor(t);
+    if (refunded == 0) return t.amount;
+    final net = t.amount - refunded;
+    return net < 0 ? 0 : net;
+  }
+
   /// [refund] linked to [purchaseId]: confirmed, and counted when it sits
   /// on a wallet, so its income and the purchase's spend change together.
   Tx _linkedRefund(Tx refund, String purchaseId, {required bool unseen}) =>
@@ -2306,10 +2329,10 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Links refund [refundId] to purchase [purchaseId], confirming the
   /// refund. False, changing nothing, when the link would not hold: the
-  /// refund is not income or is a transfer, the purchase is not counted,
-  /// confirmed, non-transfer spend outside a split, the refund is dated
-  /// before the purchase's day, or the purchase has less than the refund's
-  /// amount left unrefunded.
+  /// refund is not a money-in row [_isRefundRow] accepts, the purchase is
+  /// not one [_isRefundablePurchase] accepts, the refund is dated before
+  /// the purchase's day, or the purchase has less than the refund's amount
+  /// left unrefunded.
   Future<bool> linkRefund(String refundId, String purchaseId) async {
     final ri = _transactions.indexWhere((t) => t.id == refundId);
     final pi = _transactions.indexWhere((t) => t.id == purchaseId);
@@ -2317,9 +2340,7 @@ class FinanceProvider extends ChangeNotifier {
     final current = _transactions[ri];
     final purchase = _transactions[pi];
     final linked = _linkedRefund(current, purchaseId, unseen: false);
-    if (linked.type != TxType.income ||
-        isTransferCategory(linked.categoryId) ||
-        !countsInTotals(linked) ||
+    if (!_isRefundRow(linked) ||
         !_isRefundablePurchase(purchase) ||
         refundDayGap(purchase, linked) < 0) {
       return false;

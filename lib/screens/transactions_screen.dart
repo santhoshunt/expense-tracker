@@ -1882,7 +1882,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   /// The selection as (refund, purchase) when it is exactly one money-in
-  /// and one money-out row, neither a transfer; null otherwise.
+  /// and one money-out row, in any categories, transfers too; null
+  /// otherwise.
   (Tx, Tx)? _refundPairIn(FinanceProvider finance) {
     if (_selected.length != 2) return null;
     final rows = [
@@ -1890,7 +1891,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         if (_selected.contains(t.id)) t,
     ];
     if (rows.length != 2) return null;
-    if (rows.any((t) => isTransferCategory(t.categoryId))) return null;
     final refund = rows.where((t) => t.type == TxType.income).firstOrNull;
     final purchase = rows.where((t) => t.type == TxType.expense).firstOrNull;
     if (refund == null || purchase == null) return null;
@@ -1904,28 +1904,73 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final pair = _refundPairIn(finance);
     if (pair == null) return;
     final (refund, purchase) = pair;
+    // The rows as they are, with the other leg of any transfer pair, for
+    // Undo and for a link that fails after the moves below.
+    final pairIds = {
+      if (refund.pairId != null) refund.pairId,
+      if (purchase.pairId != null) purchase.pairId,
+    };
+    final snapshot = [
+      for (final t in finance.transactions)
+        if (t.id == refund.id ||
+            t.id == purchase.id ||
+            (t.pairId != null && pairIds.contains(t.pairId)))
+          t,
+    ];
+    // Refusals the link cannot fix, said plainly. Categories never matter.
+    final String? refusal = refund.amount > purchase.amount + 0.005
+        ? 'More came back than went out, so it can\'t be this '
+              'purchase\'s refund.'
+        : purchase.myShare != null ||
+              purchase.categoryId == kPaidForOthersCategoryId
+        ? 'A group split can\'t take a refund: its friends\' part is '
+              'money owed back.'
+        : refund.categoryId == kRepaidToMeCategoryId
+        ? 'A friend\'s repayment settles a split bill, so it can\'t be '
+              'a refund.'
+        // A refund on such a wallet is counted when linked; the purchase
+        // must count already.
+        : !finance.countsInTotals(purchase)
+        ? 'A wallet purchase left out of the totals can\'t take a refund.'
+        : refund.date.isBefore(
+            DateTime(
+              purchase.date.year,
+              purchase.date.month,
+              purchase.date.day,
+            ),
+          )
+        ? 'The money back is dated before the purchase.'
+        : null;
+    if (refusal != null) {
+      showAppToast(context, refusal);
+      return;
+    }
+    // A transfer pair's leg leaves its pair first: a row is in one pair at
+    // a time. Its category stays as it is.
+    for (final id in pairIds) {
+      if (id != null) await finance.unpair(id);
+    }
     final linked = await finance.linkRefund(refund.id, purchase.id);
+    if (!linked && pairIds.isNotEmpty) {
+      await finance.restoreEditedTransactions(snapshot);
+    }
     if (!mounted) return;
     if (!linked) {
       showAppToast(
         context,
-        refund.amount > purchase.amount + 0.005
-            ? 'The money back is more than the purchase, so it can\'t '
-                  'be its refund.'
-            : 'Couldn\'t link: the money back must come on or after the '
-                  'purchase day, and a split or wallet purchase can\'t '
-                  'take a refund.',
+        'Couldn\'t link: the purchase already has refunds that leave '
+        'less than ${fmtMoney(refund.amount)}.',
       );
       return;
     }
     setState(_selected.clear);
-    // Undo puts the refund row back exactly as it was.
+    // Undo puts the rows back exactly as they were, pair and all.
     showUndoSnackBar(
       context,
       refund.amount >= purchase.amount - 0.005
           ? 'Linked as refund: the purchase no longer counts'
           : 'Linked as refund: ${fmtMoney(refund.amount)} comes off',
-      () => finance.restoreEditedTransactions([refund]),
+      () => finance.restoreEditedTransactions(snapshot),
       icon: Icons.undo,
     );
   }
