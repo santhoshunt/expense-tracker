@@ -1148,6 +1148,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     // Pairing is a two-row concept — the button only exists at
                     // exactly two selected.
                     onPair: _selected.length == 2 ? _bulkPair : null,
+                    onLinkRefund: _refundPairIn(finance) == null
+                        ? null
+                        : _bulkLinkRefund,
                     onDelete: _bulkDelete,
                     onClose: () => setState(() {
                       _selected.clear();
@@ -1875,6 +1878,55 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       'Paired as transfer',
       () => finance.unpair(pairId),
       icon: Icons.link,
+    );
+  }
+
+  /// The selection as (refund, purchase) when it is exactly one money-in
+  /// and one money-out row, neither a transfer; null otherwise.
+  (Tx, Tx)? _refundPairIn(FinanceProvider finance) {
+    if (_selected.length != 2) return null;
+    final rows = [
+      for (final t in finance.transactions)
+        if (_selected.contains(t.id)) t,
+    ];
+    if (rows.length != 2) return null;
+    if (rows.any((t) => isTransferCategory(t.categoryId))) return null;
+    final refund = rows.where((t) => t.type == TxType.income).firstOrNull;
+    final purchase = rows.where((t) => t.type == TxType.expense).firstOrNull;
+    if (refund == null || purchase == null) return null;
+    return (refund, purchase);
+  }
+
+  /// Files the selected money in as the selected purchase's refund: the
+  /// purchase then counts only what was not refunded.
+  Future<void> _bulkLinkRefund() async {
+    final finance = context.read<FinanceProvider>();
+    final pair = _refundPairIn(finance);
+    if (pair == null) return;
+    final (refund, purchase) = pair;
+    final linked = await finance.linkRefund(refund.id, purchase.id);
+    if (!mounted) return;
+    if (!linked) {
+      showAppToast(
+        context,
+        refund.amount > purchase.amount + 0.005
+            ? 'The money back is more than the purchase, so it can\'t '
+                  'be its refund.'
+            : 'Couldn\'t link: the money back must come on or after the '
+                  'purchase day, and a split or wallet purchase can\'t '
+                  'take a refund.',
+      );
+      return;
+    }
+    setState(_selected.clear);
+    // Undo puts the refund row back exactly as it was.
+    showUndoSnackBar(
+      context,
+      refund.amount >= purchase.amount - 0.005
+          ? 'Linked as refund: the purchase no longer counts'
+          : 'Linked as refund: ${fmtMoney(refund.amount)} comes off',
+      () => finance.restoreEditedTransactions([refund]),
+      icon: Icons.undo,
     );
   }
 
@@ -2661,7 +2713,7 @@ class _BulkCategorySheetState extends State<_BulkCategorySheet> {
   }
 }
 
-enum _MoreAction { tags, subscription, dateTime, pair }
+enum _MoreAction { tags, subscription, dateTime, linkRefund, pair }
 
 /// The count menu's two entries.
 enum _CountAction { all, none }
@@ -2685,6 +2737,10 @@ class _SelectionBar extends StatelessWidget {
 
   /// Null hides the menu item (shown only with exactly two rows selected).
   final VoidCallback? onPair;
+
+  /// Null hides the menu item: shown with one money-out and one money-in
+  /// row selected, to file the money in as the purchase's refund.
+  final VoidCallback? onLinkRefund;
   final VoidCallback onDelete;
   final VoidCallback onClose;
 
@@ -2699,6 +2755,7 @@ class _SelectionBar extends StatelessWidget {
     required this.onTags,
     required this.onSubscription,
     required this.onPair,
+    required this.onLinkRefund,
     required this.onDelete,
     required this.onClose,
   });
@@ -2812,6 +2869,8 @@ class _SelectionBar extends StatelessWidget {
                       onSubscription();
                     case _MoreAction.dateTime:
                       onDateTime();
+                    case _MoreAction.linkRefund:
+                      onLinkRefund?.call();
                     case _MoreAction.pair:
                       onPair?.call();
                   }
@@ -2830,6 +2889,16 @@ class _SelectionBar extends StatelessWidget {
                     Icons.edit_calendar_outlined,
                     'Date & time',
                   ),
+                  // A failed purchase and the money back: the purchase
+                  // stops counting. Above Pair as transfer, which would
+                  // turn both rows into transfers instead.
+                  if (onLinkRefund != null)
+                    _item(
+                      _MoreAction.linkRefund,
+                      'link-refund',
+                      Icons.undo,
+                      'Link as refund',
+                    ),
                   if (onPair != null)
                     _item(
                       _MoreAction.pair,

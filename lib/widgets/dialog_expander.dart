@@ -38,34 +38,44 @@ class DialogExpander extends StatelessWidget {
             // 48dp, Material's minimum tap target.
             child: ConstrainedBox(
               constraints: const BoxConstraints(minHeight: 48),
-              child: Row(
-                children: [
-                  Expanded(
-                    // The accent as text: lifted on the light theme so it
-                    // stays readable on a white dialog.
-                    child: Text(
-                      title,
-                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color: accentTextColor(context),
+              // The fields' own 16dp text inset, so the title lines up with
+              // their labels and the tap highlight frames it.
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    Expanded(
+                      // The accent as text: lifted on the light theme so it
+                      // stays readable on a white dialog.
+                      child: Text(
+                        title,
+                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                          color: accentTextColor(context),
+                        ),
                       ),
                     ),
-                  ),
-                  AnimatedRotation(
-                    turns: open ? 0.5 : 0,
-                    duration: motionDuration(context, AnimatedFold.duration),
-                    curve: Curves.easeOutCubic,
-                    child: Icon(
-                      Icons.expand_more,
-                      size: 20,
-                      color: scheme.onSurfaceVariant,
+                    AnimatedRotation(
+                      turns: open ? 0.5 : 0,
+                      duration: motionDuration(context, AnimatedFold.duration),
+                      curve: Curves.easeOutCubic,
+                      child: Icon(
+                        Icons.expand_more,
+                        size: 20,
+                        color: scheme.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
         ),
-        AnimatedFold(collapsed: !open, child: child),
+        // A gap under the header, so a field's floating label below it is
+        // never tucked under the header's highlight.
+        AnimatedFold(
+          collapsed: !open,
+          child: Padding(padding: const EdgeInsets.only(top: 12), child: child),
+        ),
       ],
     );
   }

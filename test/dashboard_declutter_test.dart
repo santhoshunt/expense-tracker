@@ -145,19 +145,20 @@ void main() {
       expect(find.text('Year report (PDF)'), findsOneWidget);
     });
 
-    testWidgets('the Year button beside the arrows switches the view', (
-      tester,
-    ) async {
+    testWidgets('v1.43.3: the app bar has no Year button; ⋮ switches the '
+        'view', (tester) async {
       await pumpHome(tester);
-      final toYear = find.descendant(
-        of: find.byType(AppBar),
-        matching: find.widgetWithText(TextButton, 'Year'),
+      expect(
+        find.descendant(
+          of: find.byType(AppBar),
+          matching: find.widgetWithText(TextButton, 'Year'),
+        ),
+        findsNothing,
       );
-      expect(toYear, findsOneWidget);
-      expect(find.byTooltip('Show Year view'), findsOneWidget);
-      // The label no longer carries a ▾; it still opens the picker.
+      // The label carries no ▾; it still opens the picker.
       expect(find.byIcon(Icons.arrow_drop_down), findsNothing);
-      await tester.tap(toYear);
+      await openMenu(tester);
+      await tester.tap(find.text('Year view'));
       await settle(tester);
       expect(
         find.descendant(
@@ -166,13 +167,8 @@ void main() {
         ),
         findsOneWidget,
       );
-      final toMonth = find.descendant(
-        of: find.byType(AppBar),
-        matching: find.widgetWithText(TextButton, 'Month'),
-      );
-      expect(toMonth, findsOneWidget);
-      expect(find.byTooltip('Show Month view'), findsOneWidget);
-      await tester.tap(toMonth);
+      await openMenu(tester);
+      await tester.tap(find.text('Month view'));
       await settle(tester);
       expect(
         find.descendant(

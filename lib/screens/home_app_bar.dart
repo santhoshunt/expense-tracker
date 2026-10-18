@@ -69,22 +69,7 @@ class DashboardMonthTitle extends StatelessWidget {
                 : () => header.onNext?.call(),
             icon: const Icon(Icons.chevron_right),
           ),
-          // The Month or Year switch, in sight; the ⋮ entry with its tip
-          // stays.
-          Tooltip(
-            message: header.yearMode ? 'Show Month view' : 'Show Year view',
-            child: TextButton(
-              style: TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                minimumSize: const Size(48, 40),
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              onPressed: header.onToggleView == null
-                  ? null
-                  : () => header.onToggleView?.call(),
-              child: Text(header.yearMode ? 'Month' : 'Year'),
-            ),
-          ),
+          // The Month or Year switch lives in ⋮ only (with its tip).
         ],
       ),
     );

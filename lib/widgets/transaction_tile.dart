@@ -180,15 +180,21 @@ class TransactionTile extends StatelessWidget {
             );
           })
         : null;
+    // Refunded in full: the purchase no longer counts, so its amount is
+    // muted and struck through.
+    final refundedInFull =
+        refunded != null && refunded.sum >= tx.amount - 0.005;
     // Money in green, money out red; a transfer plain, as it is neither,
     // and an uncounted row muted. A linked refund is plain too: it is not
     // income, it takes its purchase's spend down.
-    final amountColor = moneyColor(
-      context,
-      type: tx.type,
-      transfer: isTransferCategory(tx.categoryId) || refundFor != null,
-      counted: counted,
-    );
+    final amountColor = refundedInFull
+        ? scheme.onSurfaceVariant
+        : moneyColor(
+            context,
+            type: tx.type,
+            transfer: isTransferCategory(tx.categoryId) || refundFor != null,
+            counted: counted,
+          );
 
     // Merchant first: the alias, the alert's merchant, Paid to or the note;
     // the category when the row names none. Line two carries the category
@@ -225,7 +231,7 @@ class TransactionTile extends StatelessWidget {
         ? 'For ${day(refundFor.date)} purchase'
         : refunded == null
         ? null
-        : refunded.sum >= tx.amount - 0.005
+        : refundedInFull
         ? 'Refunded in full · ${day(refunded.last)}'
         : '${fmtMoney(refunded.sum)} refunded · ${day(refunded.last)}';
     // The line under the amount: the date, compact (no year) as the list
@@ -280,6 +286,8 @@ class TransactionTile extends StatelessWidget {
               color: amountColor,
               fontWeight: FontWeight.w700,
               fontSize: 15,
+              decoration: refundedInFull ? TextDecoration.lineThrough : null,
+              decorationColor: amountColor,
             ),
           ),
         ),

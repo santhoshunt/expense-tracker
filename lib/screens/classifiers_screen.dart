@@ -2282,7 +2282,7 @@ Future<void> showRuleDialog(
                   // twin is a second ordinary rule sharing the pattern; most
                   // rules need none, so it waits behind an expander.
                   if (categoryId != kSpamCategoryId) ...[
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 8),
                     DialogExpander(
                       title: categoryById(categoryId).type == TxType.income
                           ? 'Money out goes to another category'
