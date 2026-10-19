@@ -505,8 +505,8 @@ void main() {
       );
       expect(inSheet('Due'), findsOneWidget);
       expect(inSheet('Passport renewal'), findsOneWidget);
-      // No amount to show: no figure, not "₹0.00".
-      expect(inSheet(fmtMoney(0)), findsNothing);
+      // No amount to show: no figure, not "₹0".
+      expect(inSheet(fmtMoneyWhole(0)), findsNothing);
     });
 
     testWidgets('an empty day gone by opens nothing', (tester) async {

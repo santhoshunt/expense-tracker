@@ -5,6 +5,7 @@ import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/services/launch_actions.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 import 'package:expense_tracker/services/upcoming_monitor.dart';
 import 'package:expense_tracker/utils/dates.dart';
@@ -12,6 +13,9 @@ import 'package:expense_tracker/utils/dates.dart';
 class FakeNotifications implements NotificationService {
   bool enabled = true;
   final shown = <(int id, String title, String body)>[];
+
+  /// Each shown alert's payload, in step with [shown].
+  final payloads = <String?>[];
 
   @override
   Future<void> init() async {}
@@ -34,6 +38,7 @@ class FakeNotifications implements NotificationService {
     String? payload,
   }) async {
     shown.add((id, title, body));
+    payloads.add(payload);
   }
 
   @override
@@ -242,5 +247,30 @@ void main() {
       monitor.check(finance, settings),
     ]);
     expect(notifications.shown, hasLength(1));
+  });
+
+  test('card bill, reminder and recurring alerts open Next 7 days', () async {
+    final (finance, settings, _) = await cardFixture();
+    final now = DateTime.now();
+    await finance.addReminder(
+      name: 'Test water bill',
+      dayOfMonth: now.day,
+      expectedAmount: 300,
+      categoryId: 'bills',
+    );
+    for (final daysAgo in [90, 60, 30]) {
+      await finance.addTransaction(
+        type: TxType.expense,
+        categoryId: 'entertainment',
+        amount: 199,
+        note: 'Test streaming',
+        date: DateTime(now.year, now.month, now.day - daysAgo),
+      );
+    }
+    await monitor.check(finance, settings);
+    expect(notifications.shown, hasLength(3));
+    // The Upcoming widget's launch name: a tap lands where its tap does.
+    expect(notifications.payloads, List.filled(3, kUpcomingPayload));
+    expect(LaunchActions.fromName(kUpcomingPayload), LaunchAction.openUpcoming);
   });
 }

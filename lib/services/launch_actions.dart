@@ -157,6 +157,9 @@ class LaunchActions {
     return switch (payload) {
       kRecapPayload => LaunchAction.openRecap,
       kReviewPayload => LaunchAction.openReview,
+      kUpcomingPayload => LaunchAction.openUpcoming,
+      kBudgetPayload => LaunchAction.openBudget,
+      kBudgetsPayload => LaunchAction.openBudgets,
       _ => null,
     };
   }
@@ -227,3 +230,16 @@ const String kRecapPayload = 'recap';
 
 /// Payload on the "transactions to review" notification.
 const String kReviewPayload = 'review';
+
+// The alerts below carry the launch name of the home-screen widget for the
+// same card, so a tap lands where that widget's tap does.
+
+/// Payload on card bill, recurring payment and reminder alerts: the Next 7
+/// days card, as the Upcoming widget opens it.
+const String kUpcomingPayload = 'open_upcoming';
+
+/// Payload on a monthly budget alert: the Monthly budget card.
+const String kBudgetPayload = 'open_budget';
+
+/// Payload on a custom budget alert: the Budgets card.
+const String kBudgetsPayload = 'open_budgets';

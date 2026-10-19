@@ -193,7 +193,7 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       },
     // Left out with no big bills: the widget shows its empty line.
     if (!bigBills.isEmpty) 'bigBills': _bigBills(bigBills, month),
-    'week': _week(finance, now),
+    'week': _week(finance, settings, now),
   };
 }
 
@@ -218,8 +218,14 @@ Map<String, dynamic> _bigBills(BigBillsPlan plan, DateTime month) => {
 /// The This week widgets' block: the current week's spend day by day, and
 /// the usual week cut to each weekday, so the widget compares against the
 /// day it draws. Its `weekStart` tells a widget drawn after Sunday that
-/// the figures are last week's.
-Map<String, dynamic> _week(FinanceProvider finance, DateTime now) {
+/// the figures are last week's. `toReview` is everything the review sheet
+/// lists, whatever its date: the app's badge, and where the count's tap
+/// lands.
+Map<String, dynamic> _week(
+  FinanceProvider finance,
+  SettingsProvider settings,
+  DateTime now,
+) {
   final start = weekStartOf(now);
   final d = buildWeekDigest(finance, start, now: now);
   return {
@@ -228,7 +234,7 @@ Map<String, dynamic> _week(FinanceProvider finance, DateTime now) {
     'spentLabel': fmtMoneyTidy(d.spent),
     'byDay': d.byDay,
     'usualByDay': usualWeekByDay(finance, start),
-    'toReview': d.toReview,
+    'toReview': finance.reviewCount(settings.dismissedPairSuggestions),
   };
 }
 

@@ -375,6 +375,55 @@ void main() {
     );
   });
 
+  test('bill and budget alerts map to their widget taps', () {
+    for (final (payload, action) in [
+      (kUpcomingPayload, LaunchAction.openUpcoming),
+      (kBudgetPayload, LaunchAction.openBudget),
+      (kBudgetsPayload, LaunchAction.openBudgets),
+    ]) {
+      LaunchActions.instance.onNotificationPayload(payload);
+      expect(LaunchActions.instance.pending.value, action, reason: payload);
+      // The same action the home-screen widget's launch name gives.
+      expect(LaunchActions.fromName(payload), action, reason: payload);
+      LaunchActions.instance.pending.value = null;
+    }
+    // Other launch names are not notification payloads.
+    LaunchActions.instance.onNotificationPayload('add_expense');
+    expect(LaunchActions.instance.pending.value, isNull);
+  });
+
+  testWidgets('a bill alert tap opens a folded Next 7 days for the visit', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    await pumpHome(
+      tester,
+      seed: (p) => p.addReminder(
+        name: 'Test rent',
+        dayOfMonth: now.day,
+        expectedAmount: 500,
+        categoryId: 'bills',
+      ),
+    );
+    final settings = tester
+        .element(find.byType(HomeScreen))
+        .read<SettingsProvider>();
+    await settings.toggleSection('upcoming');
+    await settle(tester);
+    // Off the Dashboard, as a tap from the shade often finds the app.
+    await tester.tap(find.text('Transactions').last);
+    await settle(tester);
+    final row = find.text('Test rent');
+    expect(row.hitTestable(), findsNothing);
+
+    LaunchActions.instance.onNotificationPayload(kUpcomingPayload);
+    await settle(tester);
+    await tester.pumpAndSettle();
+    expect(row.hitTestable(), findsOneWidget, reason: 'open for the visit');
+    expect(settings.isSectionCollapsed('upcoming'), isTrue);
+    expect(LaunchActions.instance.pending.value, isNull);
+  });
+
   test('unknown native names and payloads are ignored', () {
     expect(LaunchActions.fromName('add_expense'), LaunchAction.addExpense);
     expect(LaunchActions.fromName('import_sms'), LaunchAction.importSms);

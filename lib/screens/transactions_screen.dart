@@ -337,10 +337,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       required Widget avatar,
       required String label,
       required VoidCallback onDeleted,
-    }) => (
-      id,
-      _ActiveFilterChip(avatar: avatar, label: label, onRemove: onDeleted),
-    );
+    }) =>
+        (id, OutlinedPill(leading: avatar, label: label, onRemove: onDeleted));
 
     return [
       if (activeAccount != null)
@@ -1101,10 +1099,21 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Row(
                           children: [
+                            // Clears every filter, not the search, the type
+                            // tab or the sort.
                             if (filterChips.length >= 2)
                               Padding(
                                 padding: const EdgeInsets.only(right: 8),
-                                child: _ClearFiltersChip(
+                                child: OutlinedPill(
+                                  leading: Icon(
+                                    Icons.filter_alt_off,
+                                    size: 16,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                                  label: 'Clear all',
+                                  semanticLabel: 'Clear all filters',
                                   onTap: () => setState(_clearFilters),
                                 ),
                               ),
@@ -3234,125 +3243,6 @@ class _SearchAndFilterBar extends StatelessWidget {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// One active filter: the compact pill drawn inside a 48dp row, its close
-/// button a 44 by 48dp target.
-class _ActiveFilterChip extends StatelessWidget {
-  final Widget avatar;
-  final String label;
-  final VoidCallback onRemove;
-
-  const _ActiveFilterChip({
-    required this.avatar,
-    required this.label,
-    required this.onRemove,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return SizedBox(
-      height: 48,
-      child: Stack(
-        alignment: AlignmentDirectional.centerStart,
-        children: [
-          Positioned.fill(
-            top: 8,
-            bottom: 8,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(AppRadius.control * 2),
-                border: Border.all(color: scheme.outlineVariant),
-              ),
-            ),
-          ),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(width: 10),
-              avatar,
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
-              ),
-              IconButton(
-                tooltip: 'Remove $label',
-                icon: const Icon(Icons.close, size: 16),
-                style: IconButton.styleFrom(
-                  fixedSize: const Size(44, 48),
-                  minimumSize: const Size(44, 48),
-                  padding: EdgeInsets.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                onPressed: onRemove,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Leads the filter strip once two filters are on: clears every filter,
-/// not the search, the type tab or the sort.
-class _ClearFiltersChip extends StatelessWidget {
-  final VoidCallback onTap;
-
-  const _ClearFiltersChip({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final radius = BorderRadius.circular(AppRadius.control * 2);
-    return Semantics(
-      button: true,
-      label: 'Clear all filters',
-      excludeSemantics: true,
-      onTap: onTap,
-      child: SizedBox(
-        height: 48,
-        child: Material(
-          type: MaterialType.transparency,
-          child: InkWell(
-            borderRadius: radius,
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: BoxDecoration(
-                  borderRadius: radius,
-                  border: Border.all(color: scheme.outlineVariant),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.filter_alt_off,
-                      size: 16,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Clear all',
-                      style: Theme.of(context).textTheme.labelLarge,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
       ),
     );
   }

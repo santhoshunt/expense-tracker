@@ -256,7 +256,7 @@ class _CategoryDonutChartState extends State<CategoryDonutChart>
       content: (_) => ChartPopup(
         title: entry.key.label,
         swatch: slice.color,
-        headline: fmtMoney(entry.value),
+        headline: fmtMoneyWhole(entry.value),
         footnote: '${share.toStringAsFixed(0)}% of spending',
         link: onTap == null
             ? null

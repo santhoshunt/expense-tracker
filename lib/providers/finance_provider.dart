@@ -253,10 +253,10 @@ class _Derived {
   /// [FinanceProvider.refundReviewIds], filtered to rows still waiting.
   Set<String>? refundReview;
 
-  /// [FinanceProvider.reviewQueue], and the dismissed-suggestion count it was
-  /// built with.
+  /// [FinanceProvider.reviewQueue], and a copy of the dismissed suggestion
+  /// keys it was built with.
   ReviewQueue? reviewQueue;
-  int reviewQueueDismissed = -1;
+  Set<String>? reviewQueueDismissed;
 }
 
 /// The refund links that hold, from one pass over the confirmed rows.
@@ -2399,13 +2399,14 @@ class FinanceProvider extends ChangeNotifier {
   /// every transfer suggestion and the refund suggestions, with the rows no
   /// suggestion shows. The review sheet, the message icon badge and the
   /// Transactions nav badge all read it. Built once per change and kept
-  /// while the [dismissed] count stays the same.
+  /// while [dismissed] holds the same keys: the settings getter hands out a
+  /// fresh copy on every call, so the set's identity says nothing.
   ReviewQueue reviewQueue(Set<String> dismissed) {
     final cached = _d.reviewQueue;
-    if (cached != null && _d.reviewQueueDismissed == dismissed.length) {
+    if (cached != null && setEquals(_d.reviewQueueDismissed, dismissed)) {
       return cached;
     }
-    _d.reviewQueueDismissed = dismissed.length;
+    _d.reviewQueueDismissed = Set.of(dismissed);
     final all = pendingTransactions;
     final reviewIds = refundReviewIds;
     if (all.isEmpty && reviewIds.isEmpty) {
@@ -2419,10 +2420,19 @@ class FinanceProvider extends ChangeNotifier {
       for (final t in all)
         if (t.suspectedSpam) t,
     ];
+    // Every pair has a pending leg and both legs share an amount, so only
+    // rows on a pending row's amount can pair. Whole amounts are kept or
+    // dropped, in order, which leaves the pairing's candidates as they
+    // were while skipping the per-row checks over the rest of the ledger.
+    int paise(Tx t) => (t.amount * 100).round();
+    final pendingAmounts = {for (final t in all) paise(t)};
     final pairs = pending.isEmpty
         ? const <PairSuggestion>[]
         : suggestTransferPairs(
-            [...all, ...transactions],
+            [
+              for (final t in [...all, ...transactions])
+                if (pendingAmounts.contains(paise(t))) t,
+            ],
             dismissed: dismissed,
             accountFor: accountForKey,
           );
@@ -2461,11 +2471,11 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// What the message icon badge and the Transactions nav badge show:
-  /// [ReviewQueue.badgeCount], without building the queue when nothing
-  /// waits.
-  int reviewCount(Set<String> dismissed) =>
-      pendingCount == 0 && refundReviewIds.isEmpty
-      ? 0
+  /// [ReviewQueue.badgeCount], without building the queue unless a past
+  /// refund waits. With none, every refund suggestion's refund row is a
+  /// pending one, so the count is the pending rows, spam included.
+  int reviewCount(Set<String> dismissed) => refundReviewIds.isEmpty
+      ? pendingCount
       : reviewQueue(dismissed).badgeCount;
 
   /// Ids of past income rows the one-time pass found a likely purchase
@@ -2608,10 +2618,17 @@ class FinanceProvider extends ChangeNotifier {
   /// rule order is match priority (first match wins), so it must come back
   /// exactly where it sat, not at the top like a new rule.
   Future<void> restoreRule(ClassifierRule rule, int index) async {
-    if (_rules.any((r) => r.id == rule.id)) return;
-    _rules.insert(index.clamp(0, _rules.length), rule);
+    if (!_reinsertRule(rule, index)) return;
     notifyListeners();
     await _persist(rules: true);
+  }
+
+  /// Puts [rule] back at [index], clamped to the list; false, and nothing
+  /// changed, when a rule with its id is already there.
+  bool _reinsertRule(ClassifierRule rule, int index) {
+    if (_rules.any((r) => r.id == rule.id)) return false;
+    _rules.insert(index.clamp(0, _rules.length), rule);
+    return true;
   }
 
   /// Folds several same-category rules into one whose conditions are the
@@ -2931,8 +2948,7 @@ class FinanceProvider extends ChangeNotifier {
       if (i != -1) _transactions[i] = _sanitizeSplit(snap);
     }
     for (final (index, rule) in d.removedRules) {
-      if (_rules.any((r) => r.id == rule.id)) continue;
-      _rules.insert(index.clamp(0, _rules.length), rule);
+      _reinsertRule(rule, index);
     }
     final groupId = d.groupId;
     if (groupId != null && _groups.any((g) => g.id == groupId)) {
@@ -3266,7 +3282,7 @@ class FinanceProvider extends ChangeNotifier {
       }
       var name = t.payee.trim();
       if (name.isEmpty && merchantIdentityOf(t) != null) {
-        final line = t.note.split('\n').first.trim();
+        final line = noteFirstLine(t.note);
         if (line.characters.length <= kMaxPayeeLength) name = line;
       }
       if (name.isEmpty || !seen.add(name.toLowerCase())) continue;
@@ -4449,15 +4465,8 @@ class FinanceProvider extends ChangeNotifier {
   /// Cards whose amount owed is unknowable until the user enters their total
   /// credit limit. Surfaced in the balance breakdown so the headline figure
   /// isn't silently optimistic.
-  int get cardsMissingLimit => _accounts
-      .where(
-        (a) =>
-            !a.isClosed &&
-            a.isCard &&
-            !isOrphanedAccount(a) &&
-            accountOutstanding(a) == null,
-      )
-      .length;
+  int get cardsMissingLimit =>
+      _cardTotalAccounts.where((a) => accountOutstanding(a) == null).length;
 
   // Closed accounts are skipped from every total below: a matured FD's last
   // stated value must not keep inflating the figures the user reads as
@@ -4465,19 +4474,31 @@ class FinanceProvider extends ChangeNotifier {
   // too: their rows moved to another account, so a set balance left on
   // them would count the same money twice.
 
+  /// Whether [a] is of a kind [bankBalanceTotal] sums: a bank, or a debit
+  /// card linked to none. A linked debit card's rows are in its bank's
+  /// balance already.
+  bool _isBankLike(Account a) =>
+      a.type == AccountType.bank ||
+      (a.isDebitCard && linkedAccountOf(a) == null);
+
+  /// The accounts [bankBalanceTotal] sums and [bankBalanceCount] counts.
+  Iterable<Account> get _bankTotalAccounts => _accounts.where(
+    (a) => !a.isClosed && _isBankLike(a) && !isOrphanedAccount(a),
+  );
+
+  /// The cards [cardOutstandingTotal] sums over, known outstanding or not.
+  Iterable<Account> get _cardTotalAccounts =>
+      _accounts.where((a) => !a.isClosed && a.isCard && !isOrphanedAccount(a));
+
   /// Sum of liquid bank-account balances (bank-stated where available).
   /// Savings/asset accounts are excluded — they are not spendable cash.
   /// A linked debit card adds nothing: its rows are in its bank's balance
   /// already. An unlinked one counts like a bank, so no money disappears.
-  double get bankBalanceTotal => _accounts
-      .where(
-        (a) =>
-            !a.isClosed &&
-            (a.type == AccountType.bank ||
-                (a.isDebitCard && linkedAccountOf(a) == null)) &&
-            !isOrphanedAccount(a),
-      )
-      .fold(0.0, (s, a) => s + accountBalance(a));
+  double get bankBalanceTotal =>
+      _bankTotalAccounts.fold(0.0, (s, a) => s + accountBalance(a));
+
+  /// How many accounts [bankBalanceTotal] sums.
+  int get bankBalanceCount => _bankTotalAccounts.length;
 
   /// Sum of savings/asset account values (RD, FD, stocks, gold…). Tracked
   /// separately because it is not liquid.
@@ -4492,9 +4513,19 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Sum of credit-card outstanding amounts (0 where unknown — see
   /// [cardsMissingLimit], which counts what this is silently omitting).
-  double get cardOutstandingTotal => _accounts
-      .where((a) => !a.isClosed && a.isCard && !isOrphanedAccount(a))
-      .fold(0.0, (s, a) => s + (accountOutstanding(a) ?? 0));
+  double get cardOutstandingTotal =>
+      _cardTotalAccounts.fold(0.0, (s, a) => s + (accountOutstanding(a) ?? 0));
+
+  /// How many cards add a known outstanding to [cardOutstandingTotal].
+  int get cardOutstandingCount =>
+      _cardTotalAccounts.where((a) => accountOutstanding(a) != null).length;
+
+  /// Open accounts of the kinds [netWorth] is made of: banks, debit cards
+  /// linked to none and credit cards. Emptied accounts and cards with no
+  /// known outstanding count here though no total adds them.
+  int get netAccountCount => _accounts
+      .where((a) => !a.isClosed && (_isBankLike(a) || a.isCard))
+      .length;
 
   /// Liquid money on hand: bank balances minus card outstanding. Savings/
   /// asset accounts are NOT included — they aren't spendable. The

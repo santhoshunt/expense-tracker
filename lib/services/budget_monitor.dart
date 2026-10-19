@@ -4,6 +4,7 @@ import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/format.dart';
 import 'budget.dart';
+import 'launch_actions.dart';
 import 'notification_ids.dart';
 import 'notification_service.dart';
 
@@ -62,10 +63,19 @@ class BudgetMonitor {
         }
       }
 
-      // Each entry: spend, cap, dedup key, notification id, and an optional
-      // budget name for the alert text.
+      // Each entry: spend, cap, dedup key, notification id, an optional
+      // budget name for the alert text, and the card a tap opens.
       final checks =
-          <({double spent, double cap, String key, int id, String? name})>[
+          <
+            ({
+              double spent,
+              double cap,
+              String key,
+              int id,
+              String? name,
+              String payload,
+            })
+          >[
             if (hasCap)
               (
                 spent: finance.budgetSpentInMonth(month),
@@ -73,6 +83,7 @@ class BudgetMonitor {
                 key: budgetAlertMonthKey(now),
                 id: NotificationIds.cap(now.month), // stable per month
                 name: null,
+                payload: kBudgetPayload,
               ),
             for (final b in customBudgets)
               (
@@ -83,6 +94,7 @@ class BudgetMonitor {
                 // 92000-based range ran over every fixed id from 93000 up.
                 id: NotificationIds.customBudget(b.id),
                 name: b.name,
+                payload: kBudgetsPayload,
               ),
           ];
 
@@ -110,7 +122,12 @@ class BudgetMonitor {
           money: fmtMoney,
           name: c.name,
         );
-        await notifications.show(id: c.id, title: text.title, body: text.body);
+        await notifications.show(
+          id: c.id,
+          title: text.title,
+          body: text.body,
+          payload: c.payload,
+        );
         await prefs.setInt(c.key, level);
       }
     } finally {

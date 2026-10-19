@@ -10,6 +10,7 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/import_health.dart';
 import 'package:expense_tracker/services/safe_to_spend.dart';
+import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/import_health_banner.dart';
 import 'package:expense_tracker/widgets/spending_heatmap.dart';
 
@@ -162,6 +163,41 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Due'), findsOneWidget);
       expect(find.text('Rent'), findsOneWidget);
+      // Whole rupees and plain, as every bill amount on the Dashboard.
+      final figure = find.text(fmtMoneyWhole(18000));
+      expect(figure, findsOneWidget);
+      expect(find.text(fmtMoney(18000)), findsNothing);
+      final sheet = tester.element(find.byType(BottomSheet));
+      expect(
+        tester.widget<Text>(figure).style?.color,
+        Theme.of(sheet).colorScheme.onSurface,
+      );
+    });
+
+    testWidgets("a spend day's sheet totals it in whole rupees", (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({});
+      final (p, s) = await providers();
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 1234.6,
+        note: 'Test dinner',
+        date: DateTime(2026, 9, 10, 20),
+      );
+      await tester.pumpWidget(app(p, s, SpendingHeatmap(month: month)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.bySemanticsLabel(RegExp(r'^10 ')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          '${fmtDate(DateTime(2026, 9, 10))} · ${fmtMoneyWhole(1234.6)} spent',
+        ),
+        findsOneWidget,
+      );
+      // The row itself keeps its paise, as transaction lists do.
+      expect(find.text('−${fmtMoney(1234.6)}'), findsOneWidget);
     });
 
     testWidgets('a day with neither cannot be tapped', (tester) async {

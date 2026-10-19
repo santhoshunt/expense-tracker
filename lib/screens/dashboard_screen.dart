@@ -66,7 +66,6 @@ import '../widgets/spend_history_sheet.dart';
 import '../widgets/tag_editor_dialog.dart';
 import '../widgets/weekly_digest_sheet.dart';
 import 'accounts_screen.dart' show showCardCycleDialog;
-import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
 import 'transactions_screen.dart' show TxFilterRequest;
 import '../widgets/status_dot.dart';
@@ -1046,8 +1045,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Widget budgetCard({MonthForecast? shared}) => Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _LabelRow(
-          text: DashboardSection.monthlyBudget.label,
+        SectionLabel(
+          DashboardSection.monthlyBudget.label,
           tip: _BudgetCard.tip(
             confirmed: confirmed,
             waiting: waiting,
@@ -1289,8 +1288,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
         const NoticeStack(),
         // First-run: the landing tab used to greet a new user with ₹0.00
         // everywhere and no hint of what to do next.
+        // The floating button adds; the card offers the import.
         if (!finance.hasTransactions) ...[
-          Card(
+          FrostedPanel(
+            key: const ValueKey('get-started'),
+            radius: BorderRadius.circular(AppRadius.card),
             child: Padding(
               padding: const EdgeInsets.all(AppSpace.card),
               child: Column(
@@ -1312,37 +1314,27 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'No transactions yet. Import your bank SMS, or add one by '
-                    'hand.',
+                    AppNav.instance.canImportSms
+                        ? 'No transactions yet. Import your bank SMS, or tap '
+                              'Add to enter one.'
+                        : 'No transactions yet. Tap Add to enter one.',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  // The two ways in, as buttons rather than directions to
-                  // icons elsewhere on the screen.
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      if (AppNav.instance.canImportSms)
-                        FilledButton.icon(
-                          onPressed: () => AppNav.instance.importSms(context),
-                          icon: const Icon(Icons.sms_outlined),
-                          label: const Text('Import SMS'),
-                        ),
-                      OutlinedButton.icon(
-                        onPressed: () => showAddTransactionSheet(context),
-                        icon: const Icon(Icons.add),
-                        label: const Text('Add transaction'),
-                      ),
-                    ],
-                  ),
+                  if (AppNav.instance.canImportSms) ...[
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: () => AppNav.instance.importSms(context),
+                      icon: const Icon(Icons.sms_outlined),
+                      label: const Text('Import SMS'),
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: AppSpace.gap),
         ],
         // Safe to spend today, once, at the top: with a cap, on the running
         // month in Month view, while the Monthly budget section shows. A tap
@@ -2421,9 +2413,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 'category count toward its group; other transfers are left '
                 'out.',
             link: InfoLink(
-              prompt: 'Change what is in each group?',
-              label: 'Edit groups',
-              onTap: goCockpitGroups,
+              prompt:
+                  "Change what is in each group? A category's group is set "
+                  'in its editor.',
+              label: 'Edit categories',
+              onTap: goCockpitCategories,
             ),
           ),
           body: () => [
@@ -3360,15 +3354,7 @@ class _UpcomingCard extends StatelessWidget {
               title: const Text('Delete'),
               onTap: () {
                 Navigator.pop(ctx);
-                final before = r;
-                finance.deleteReminder(r.id);
-                showUndoSnackBar(
-                  context,
-                  'Deleted reminder "${r.name}"',
-                  () => finance.restoreReminder(before),
-                  icon: Icons.delete_outline,
-                  tone: AppToastTone.removal,
-                );
+                deleteReminderWithUndo(context, r.id);
               },
             ),
             const SizedBox(height: 8),
@@ -3931,7 +3917,7 @@ class _StatColumn extends StatelessWidget {
 /// The monthly cap, one verdict: a bar stacking confirmed spending, rows
 /// waiting for review and (this month) the bills still due against the
 /// cap's line, a legend with each part, then what is left or over. Its
-/// label sits above it ([_LabelRow]); [tip] is that label's tip.
+/// label sits above it ([SectionLabel]); [tip] is that label's tip.
 class _BudgetCard extends StatelessWidget {
   /// Confirmed spending in the shown month.
   final double confirmed;
@@ -4086,63 +4072,6 @@ class _BudgetCard extends StatelessWidget {
             ],
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// A section label row with a figure at its right end: the Monthly budget
-/// label and its cap. Spaced and styled as [SectionLabel], whose text stays
-/// a plain [Text] so finders by text still land on it.
-class _LabelRow extends StatelessWidget {
-  final String text;
-  final InfoTip tip;
-  final String trailing;
-
-  const _LabelRow({
-    required this.text,
-    required this.tip,
-    required this.trailing,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final style = SectionLabel.style(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: TipTitle(
-                label: Text(
-                  text,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: style,
-                ),
-                tip: tip,
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          // Up to half the row; shrinks rather than overflowing at large
-          // text on a narrow phone.
-          Flexible(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: AlignmentDirectional.centerEnd,
-              child: Text(
-                trailing,
-                maxLines: 1,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -4596,9 +4525,11 @@ class _ForecastBody extends StatelessWidget {
           'still unpaid (due by the month end, or up to a week overdue; not '
           'card bills or transfers), plus what you usually spend on the days '
           'left, leaving bills out. Usual is the middle of your last complete '
-          'months (the lower, with only two); a month with under a quarter '
-          "of the others' middle spend counts as missing records. With fewer "
-          "than two, this month's own pace once $kMinDaysOfData of its days "
+          'months (the lower, with only two). A month whose everyday spending '
+          "after today's date is under a quarter of the middle month's counts "
+          'as missing records and is left out; in that check one big purchase '
+          'counts as no more than 4 typical ones. With fewer than two, this '
+          "month's own pace once $kMinDaysOfData of its days "
           'are on record. Without an estimate the figure is a floor and reads '
           'At least.',
       example: () {

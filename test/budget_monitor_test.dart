@@ -7,11 +7,15 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/budget.dart';
 import 'package:expense_tracker/services/budget_monitor.dart';
+import 'package:expense_tracker/services/launch_actions.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 
 class FakeNotifications implements NotificationService {
   bool enabled = true;
   final shown = <(int id, String title, String body)>[];
+
+  /// Each shown alert's payload, in step with [shown].
+  final payloads = <String?>[];
 
   @override
   Future<void> init() async {}
@@ -34,6 +38,7 @@ class FakeNotifications implements NotificationService {
     String? payload,
   }) async {
     shown.add((id, title, body));
+    payloads.add(payload);
   }
 
   @override
@@ -157,4 +162,18 @@ void main() {
       expect(prefs.getInt(key), isNull);
     },
   );
+
+  test('a tap opens the card the alert is about, as its widget does', () async {
+    final (finance, settings) = await fixture(cap: 1000, spent: 850);
+    await finance.addBudget(
+      name: 'Personal',
+      limit: 1000,
+      mode: BudgetMode.exclude,
+      categoryIds: const {},
+    );
+    await monitor.check(finance, settings);
+    expect(notifications.shown, hasLength(2));
+    // The cap first: the Monthly budget card. The custom budget: Budgets.
+    expect(notifications.payloads, [kBudgetPayload, kBudgetsPayload]);
+  });
 }

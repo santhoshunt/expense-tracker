@@ -141,6 +141,33 @@ void main() {
       expect(week['toReview'], 1);
     });
 
+    test(
+      'counts everything the review sheet lists, as the badge does',
+      () async {
+        final p = await ledger();
+        // Waiting since an earlier week: the sheet lists it, so the count
+        // the widget's tap leads to includes it.
+        await p.restoreTransaction(
+          Tx(
+            id: 'test-pending-old',
+            type: TxType.expense,
+            categoryId: 'food',
+            amount: 40,
+            note: 'test pending old',
+            date: DateTime(2026, 10, 1),
+            pending: true,
+          ),
+        );
+        final s = SettingsProvider();
+        await s.load();
+        final week = (await snapshot(p))['week'] as Map;
+        expect(week['toReview'], 2);
+        expect(week['toReview'], p.reviewCount(s.dismissedPairSuggestions));
+        // The digest keeps its week: only this week's waiting row.
+        expect(buildWeekDigest(p, monday, now: now).toReview, 1);
+      },
+    );
+
     test('is written with nulls before there is a usual week', () async {
       final p = FinanceProvider();
       await p.load();

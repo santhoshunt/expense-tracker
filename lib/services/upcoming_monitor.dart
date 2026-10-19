@@ -5,6 +5,7 @@ import '../providers/settings_provider.dart';
 import '../utils/dates.dart';
 import '../utils/format.dart';
 import 'card_bill.dart';
+import 'launch_actions.dart';
 import 'notification_ids.dart';
 import 'notification_service.dart';
 import 'recurring_detector.dart';
@@ -155,7 +156,12 @@ class UpcomingMonitor {
         // No permission → a show() is silently dropped. Bail WITHOUT
         // recording the marker so the reminder still fires once granted.
         if (!await notifications.areEnabled) return;
-        await notifications.show(id: c.id, title: c.title, body: c.body);
+        await notifications.show(
+          id: c.id,
+          title: c.title,
+          body: c.body,
+          payload: kUpcomingPayload,
+        );
         await prefs.setBool(c.key, true);
       }
     } finally {

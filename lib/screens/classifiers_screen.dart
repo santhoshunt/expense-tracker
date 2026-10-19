@@ -27,6 +27,7 @@ import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/keyboard_unfocus.dart';
 import '../widgets/motion.dart';
+import '../widgets/row_chevron.dart';
 import '../widgets/section_header.dart';
 import '../widgets/budget_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
@@ -1072,9 +1073,7 @@ class _RuleTile extends StatelessWidget {
       // Tap edits, and Delete lives in the editor. No chevron while
       // selecting, where a tap ticks the row, or at large text, where the
       // words need the width.
-      trailing: selectionMode || isLargeTextScale(context)
-          ? null
-          : Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
+      trailing: selectionMode ? null : rowChevron(context),
     );
   }
 }
@@ -1414,9 +1413,7 @@ class _ImportRuleTile extends StatelessWidget {
             : 'Flagged for individual review, still imported',
       ),
       // Tap edits, and Delete lives in the editor.
-      trailing: isLargeTextScale(context)
-          ? null
-          : Icon(Icons.chevron_right, size: 20, color: scheme.onSurfaceVariant),
+      trailing: rowChevron(context),
     );
   }
 }

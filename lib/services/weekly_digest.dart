@@ -33,7 +33,8 @@ class WeekDigest {
   /// Confirmed counted rows in the days shown, transfers included.
   final int count;
 
-  /// Imports waiting for review, dated in the week.
+  /// Imports waiting for review, dated in the week. The digest sheet's
+  /// line; the This week widget counts the whole review queue instead.
   final int toReview;
 
   /// 7 entries, Monday first; days after today are 0.

@@ -410,7 +410,7 @@ void main() {
   );
 
   test(
-    'a thin month stops the usual window; the pace fallback finds nothing',
+    'one big month keeps the normal one; the lower of two sets the estimate',
     () async {
       final p = await load();
       for (final (m, amount) in [(8, 1100.0), (9, 31000.0)]) {
@@ -418,21 +418,110 @@ void main() {
         await spend(p, DateTime(2026, m, 25, 10), amount);
       }
       final f = forecast(p);
-      // August's ₹1,500 is under a quarter of the two months' middle
-      // (₹16,450). The window runs back from September and breaks at
-      // August, so it holds September alone: too few months. The pace
-      // fallback finds nothing spent this month, an estimate of nothing,
-      // so the forecast is a floor.
-      expect(f.basis, EverydayBasis.none);
-      expect(f.usualMonths, 0);
-      expect(f.everyday, 0);
+      // The typical everyday row is ₹750, so for the missing-records test
+      // September's ₹31,000 counts as ₹3,000: ₹300 a day after the 20th
+      // against August's ₹100. A quarter of their middle is ₹50 a day, so
+      // August stays, and as the lower month it sets the estimate.
+      expect(f.basis, EverydayBasis.usual);
+      expect(f.usualMonths, 2);
+      expect(f.everyday, closeTo(1100, 0.01));
+    },
+  );
+
+  test('a month of rent and next to no everyday spend is left out', () async {
+    final p = await load();
+    // August: rent and ₹30 after the 20th. September: rent and ₹1,100.
+    for (final (m, amount) in [(8, 30.0), (9, 1100.0)]) {
+      await spend(p, DateTime(2026, m, 1, 10), 400);
+      await spend(p, DateTime(2026, m, 26, 10), amount);
+      await spend(
+        p,
+        DateTime(2026, m, 25, 11),
+        15000,
+        category: 'other_expense',
+      );
+    }
+    await p.restoreReminder(rent);
+    await spend(p, DateTime(2026, 10, 5, 10), 2000);
+    final f = forecast(p);
+    expect(f.billsDue, 15000);
+    // Without the rent, August's ₹2.73 a day after the 20th is under a
+    // quarter of the middle of it and September's ₹110 (₹14.10). August is
+    // left out, one month is too few, and this month's pace sets the
+    // estimate: ₹2,000 over 20 days for 11 days, not "about ₹3 a day".
+    expect(f.basis, EverydayBasis.pace);
+    expect(f.usualMonths, 0);
+    expect(f.everyday, closeTo(1100, 0.01));
+  });
+
+  /// A ₹199 streaming plan on the 5th and a ₹1,499 gym fee on the 7th of
+  /// each of [months]: monthly payments the forecast treats as bills.
+  Future<void> payments(FinanceProvider p, List<int> months) async {
+    for (final m in months) {
+      for (final (day, amount, note) in [
+        (5, 199.0, 'StreamBox'),
+        (7, 1499.0, 'FitClub'),
+      ]) {
+        await p.addTransaction(
+          type: TxType.expense,
+          categoryId: 'entertainment',
+          amount: amount,
+          note: note,
+          date: DateTime(2026, m, day, 8),
+        );
+      }
+    }
+  }
+
+  /// Everyday spend on the 3rd, 22nd, 26th and 28th of [m]: ₹1,800 after
+  /// the 20th.
+  Future<void> everydayMonth(FinanceProvider p, int m) async {
+    for (final (day, amount) in [
+      (3, 400.0),
+      (22, 600.0),
+      (26, 500.0),
+      (28, 700.0),
+    ]) {
+      await spend(p, DateTime(2026, m, day, 10), amount);
+    }
+  }
+
+  test('a month holding only bills is a records gap', () async {
+    final p = await load();
+    // Records start on 5 July, so July is a part-way first month. August
+    // holds only the two payments; September has everyday rows too.
+    await payments(p, [7, 8, 9, 10]);
+    await everydayMonth(p, 9);
+    await spend(p, DateTime(2026, 10, 2, 10), 2000);
+    final f = forecast(p);
+    // August's everyday spend after the 20th is ₹0 against September's ₹180
+    // a day, so August is no usual month and this month's pace sets the
+    // estimate, never "about ₹0 a day".
+    expect(f.basis, EverydayBasis.pace);
+    expect(f.everyday, closeTo(1100, 0.01));
+  });
+
+  test(
+    'a records gap between two full months leaves only itself out',
+    () async {
+      final p = await load();
+      await spend(p, DateTime(2026, 7, 1, 9), 100);
+      await payments(p, [7, 8, 9, 10]);
+      await everydayMonth(p, 7);
+      await everydayMonth(p, 9);
+      final f = forecast(p);
+      // August is out; July (₹163.64 a day after the 20th) and September
+      // (₹180) remain, and the lower one sets the estimate.
+      expect(f.basis, EverydayBasis.usual);
+      expect(f.usualMonths, 2);
+      expect(f.everyday, closeTo(1800, 0.01));
     },
   );
 
   test('with two usual months the lower one sets the estimate', () async {
     final p = await load();
-    // August's ₹1,500 and September's ₹3,400 are within 4x of each other,
-    // so both stay in the usual window.
+    // August's ₹1,100 a month after the 20th and September's ₹3,000 both
+    // reach a quarter of their middle, so both stay usual months.
     for (final (m, amount) in [(8, 1100.0), (9, 3000.0)]) {
       await spend(p, DateTime(2026, m, 1, 10), 400);
       await spend(p, DateTime(2026, m, 25, 10), amount);

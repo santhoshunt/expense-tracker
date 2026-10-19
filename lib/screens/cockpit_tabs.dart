@@ -22,6 +22,7 @@ import '../widgets/fold_section.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
+import '../widgets/row_chevron.dart';
 import '../widgets/tag_editor_dialog.dart';
 import '../utils/text_scale.dart';
 import '../widgets/glossy.dart';
@@ -193,7 +194,7 @@ class TagsTab extends StatelessWidget {
                           Theme.of(context).colorScheme.tertiary,
                     ),
                     title: Text(s.tag),
-                    trailing: _rowChevron(context),
+                    trailing: rowChevron(context),
                     // Each fact stays whole when the line wraps.
                     subtitle: Text(
                       joinFacts([
@@ -435,7 +436,7 @@ class _SubscriptionTile extends StatelessWidget {
           ? null
           : Row(
               mainAxisSize: MainAxisSize.min,
-              children: [?extra, ?_rowChevron(context)],
+              children: [?extra, ?rowChevron(context)],
             ),
     );
   }
@@ -618,16 +619,6 @@ class _SubscriptionTile extends StatelessWidget {
     }
   }
 }
-
-/// The trailing mark of a row that opens its editor on tap, dropped at
-/// large text so the words get the width.
-Widget? _rowChevron(BuildContext context) => isLargeTextScale(context)
-    ? null
-    : Icon(
-        Icons.chevron_right,
-        size: 20,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      );
 
 /// The monthly cap amount. Its alerts are on Settings, Notifications.
 class _MonthlyCapSection extends StatefulWidget {
@@ -867,7 +858,7 @@ class _CustomBudgetsSection extends StatelessWidget {
                   subtitle(b),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-                trailing: _rowChevron(context),
+                trailing: rowChevron(context),
               ),
           ],
         ),
@@ -960,7 +951,7 @@ class _RemindersSection extends StatelessWidget {
                     ? null
                     : Row(
                         mainAxisSize: MainAxisSize.min,
-                        children: [?unpaidButton(r), ?_rowChevron(context)],
+                        children: [?unpaidButton(r), ?rowChevron(context)],
                       ),
               ),
             if (finance.reminders.any(reminderIsBigBill))

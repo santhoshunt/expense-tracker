@@ -12,6 +12,7 @@ import '../widgets/dialog_expander.dart';
 import '../widgets/hue_color_picker.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dispose_scope.dart';
+import '../widgets/row_chevron.dart';
 import '../widgets/glossy.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/section_header.dart';
@@ -113,7 +114,7 @@ class _CategoriesTabState extends State<CategoriesTab> {
             subtitle: Text(
               order == CategoryOrder.mostUsed ? 'Most used first' : 'A to Z',
             ),
-            trailing: _rowChevron(context),
+            trailing: rowChevron(context),
             onTap: () => _pickOrder(order),
           ),
         ),
@@ -240,20 +241,10 @@ class _CategoriesTabState extends State<CategoriesTab> {
         style: Theme.of(context).textTheme.bodySmall,
       ),
       // Tap edits, and a custom category's Delete lives in the editor.
-      trailing: _rowChevron(context),
+      trailing: rowChevron(context),
     );
   }
 }
-
-/// The trailing mark of a row that opens its editor on tap, dropped at
-/// large text so the words get the width.
-Widget? _rowChevron(BuildContext context) => isLargeTextScale(context)
-    ? null
-    : Icon(
-        Icons.chevron_right,
-        size: 20,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      );
 
 /// "3 categories": how many categories [groupId] holds.
 String _memberCountLabel(FinanceProvider finance, String groupId) {
@@ -337,7 +328,7 @@ class GroupsTab extends StatelessWidget {
                       _memberCountLabel(finance, g.id),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
-                    trailing: _rowChevron(context),
+                    trailing: rowChevron(context),
                   ),
               ],
             ),

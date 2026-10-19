@@ -11,7 +11,10 @@ class SectionLabel extends StatelessWidget {
   final String text;
   final InfoTip? tip;
 
-  const SectionLabel(this.text, {super.key, this.tip});
+  /// A figure at the row's right end, such as the Monthly budget's cap.
+  final String? trailing;
+
+  const SectionLabel(this.text, {super.key, this.tip, this.trailing});
 
   /// The label's text style, for a header that builds its own row (the
   /// Upcoming fold) to match.
@@ -31,14 +34,34 @@ class SectionLabel extends StatelessWidget {
       style: style(context),
     );
     final tip = this.tip;
+    final name = tip == null ? label : TipTitle(label: label, tip: tip);
+    final trailing = this.trailing;
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 16, 4, 8),
       child: Row(
-        children: [
-          Flexible(
-            child: tip == null ? label : TipTitle(label: label, tip: tip),
-          ),
-        ],
+        children: trailing == null
+            ? [Flexible(child: name)]
+            : [
+                Expanded(
+                  child: Align(alignment: Alignment.centerLeft, child: name),
+                ),
+                const SizedBox(width: 12),
+                // Up to half the row; shrinks rather than overflowing at
+                // large text on a narrow phone.
+                Flexible(
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: AlignmentDirectional.centerEnd,
+                    child: Text(
+                      trailing,
+                      maxLines: 1,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
       ),
     );
   }

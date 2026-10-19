@@ -84,6 +84,11 @@ class MonthForecast {
 /// amount; other rows there are everyday shopping.
 const double kPinnedBillTolerance = 0.10;
 
+/// In the missing-records test of a usual month, one everyday row counts for
+/// at most this many typical (median) everyday rows, so one big purchase
+/// cannot set the bar a normal month is held to.
+const double kTypicalRowCap = 4;
+
 /// Whether [t] is a bill payment: a row of a pattern whose bill this
 /// month's forecast already holds ([billKeys], [recurringKeyOf]
 /// identities, mapped to the usual amount for a pinned merchant, whose row
@@ -188,20 +193,51 @@ MonthForecast? computeMonthForecast(
   var basis = EverydayBasis.none;
   var perDay = 0.0;
   var usualMonths = 0;
-  // The usual months' everyday spend per day after today's day-of-month.
-  // A month too short to have such days (February on the 30th) can't say.
-  final perDayUsual = <double>[];
-  for (final m in usualWindow(finance, month)) {
+  // The recorded months' everyday rows, and the typical one among them.
+  final rowsByMonth = [
+    for (final m in recordedMonthsBefore(finance, month))
+      (
+        m,
+        [
+          for (final t in finance.confirmedInMonth(m))
+            if (everyday(t) && finance.netSpendOf(t) > 0) t,
+        ],
+      ),
+  ];
+  final rowCap =
+      kTypicalRowCap *
+      median([
+        for (final (_, rows) in rowsByMonth)
+          for (final t in rows) finance.netSpendOf(t),
+      ]);
+  // Each month's everyday spend per day after today's day-of-month: in
+  // full for the estimate, and with every row capped at [rowCap] for the
+  // missing-records test. A month too short to have such days (February
+  // on the 30th) can't say.
+  final measured = <({double perDay, double capped})>[];
+  for (final (m, rows) in rowsByMonth) {
     final days = daysInMonth(m.year, m.month) - now.day;
     if (days <= 0) continue;
     var sum = 0.0;
-    for (final t in finance.confirmedInMonth(m)) {
-      if (t.effectiveDate.day > now.day && everyday(t)) {
-        sum += finance.netSpendOf(t);
-      }
+    var capped = 0.0;
+    for (final t in rows) {
+      if (t.effectiveDate.day <= now.day) continue;
+      final spend = finance.netSpendOf(t);
+      sum += spend;
+      capped += math.min(spend, rowCap);
     }
-    perDayUsual.add(sum / days);
+    measured.add((perDay: sum / days, capped: capped / days));
   }
+  // A month under a quarter of the middle one is missing records, judged on
+  // the days the estimate reads and with bills left out, so a month of rent
+  // and next to no everyday spend counts as one. It alone is left out: a
+  // few days at a month's end are a weaker sign than an empty month, which
+  // ends the run. With a middle of 0 nothing counts as missing.
+  final floor = kThinMonthShare * median([for (final x in measured) x.capped]);
+  final perDayUsual = [
+    for (final x in measured)
+      if (floor <= 0 || x.capped >= floor) x.perDay,
+  ];
   if (perDayUsual.length >= kMinUsualMonths) {
     basis = EverydayBasis.usual;
     // The middle of three or more; of two, the lower: their mean would let

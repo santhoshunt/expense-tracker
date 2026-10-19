@@ -332,6 +332,180 @@ class UnderlineTabs<T> extends StatelessWidget {
   }
 }
 
+/// The two shapes of [OutlinedPill].
+enum PillSize {
+  /// A pill at least 36dp tall in a target 4dp taller above and below,
+  /// with ink on the pill alone and a 13sp label weighted by
+  /// [OutlinedPill.active]: [ChipTabs].
+  tab,
+
+  /// A 32dp pill centred in a 48dp row, with a labelLarge label: the
+  /// Transactions filter strip. A tappable one inks the whole row.
+  strip,
+}
+
+/// An outline pill: a rounded border, accent and thicker while [active],
+/// round an optional [leading] icon and a one-line [label]. The text stays
+/// in the plain text colours, never coloured on a fill.
+class OutlinedPill extends StatelessWidget {
+  final String label;
+  final Widget? leading;
+  final bool active;
+  final PillSize size;
+
+  /// A tap anywhere in the target. Null for a pill that only names
+  /// something, like a filter chip whose [onRemove] is its action.
+  final VoidCallback? onTap;
+
+  /// A close button after the label: a 44 by 48dp target with the tooltip
+  /// "Remove <label>", the pill drawn behind the row ([PillSize.strip]).
+  final VoidCallback? onRemove;
+
+  /// When set, the pill is one button node with this name and [onTap].
+  final String? semanticLabel;
+
+  const OutlinedPill({
+    super.key,
+    required this.label,
+    this.leading,
+    this.active = false,
+    this.size = PillSize.strip,
+    this.onTap,
+    this.onRemove,
+    this.semanticLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final radius = BorderRadius.circular(AppRadius.control * 2);
+    final decoration = BoxDecoration(
+      borderRadius: radius,
+      border: Border.all(
+        color: active ? scheme.primary : scheme.outlineVariant,
+        width: active ? 1.5 : 1,
+      ),
+    );
+    final remove = onRemove;
+    final Widget pill;
+    if (size == PillSize.tab) {
+      pill = GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: _ink(
+            radius,
+            Container(
+              constraints: const BoxConstraints(minHeight: 36),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: decoration,
+              child: _withLeading(
+                Text(
+                  label,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+                    color: active ? scheme.onSurface : scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    } else if (remove != null) {
+      // The border sits behind the row, so the close button keeps its
+      // full height across the pill's edge.
+      pill = SizedBox(
+        height: 48,
+        child: Stack(
+          alignment: AlignmentDirectional.centerStart,
+          children: [
+            Positioned.fill(
+              top: 8,
+              bottom: 8,
+              child: DecoratedBox(decoration: decoration),
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(width: 10),
+                if (leading case final leading?) ...[
+                  leading,
+                  const SizedBox(width: 6),
+                ],
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Remove $label',
+                  icon: const Icon(Icons.close, size: 16),
+                  style: IconButton.styleFrom(
+                    fixedSize: const Size(44, 48),
+                    minimumSize: const Size(44, 48),
+                    padding: EdgeInsets.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  onPressed: remove,
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    } else {
+      pill = SizedBox(
+        height: 48,
+        child: _ink(
+          radius,
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: decoration,
+              child: _withLeading(
+                Text(label, style: Theme.of(context).textTheme.labelLarge),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    final name = semanticLabel;
+    if (name == null) return pill;
+    return Semantics(
+      button: true,
+      label: name,
+      excludeSemantics: true,
+      onTap: onTap,
+      child: pill,
+    );
+  }
+
+  /// [child] under a ripple clipped to the pill's corners.
+  Widget _ink(BorderRadius radius, Widget child) => Material(
+    type: MaterialType.transparency,
+    child: InkWell(borderRadius: radius, onTap: onTap, child: child),
+  );
+
+  /// [text] after [leading] and a 6dp gap, or alone.
+  Widget _withLeading(Widget text) {
+    final lead = leading;
+    if (lead == null) return text;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [lead, const SizedBox(width: 6), text],
+    );
+  }
+}
+
 /// A row of outline pills for a filter with a few values (account type). The selected pill gets an accent outline; the text stays
 /// in the plain text colours, never coloured on a fill.
 ///
@@ -409,7 +583,6 @@ class _ChipTabsState<T> extends State<ChipTabs<T>> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final options = widget.options;
     final selected = widget.selected;
     final keys = _keysFor(options.length);
@@ -432,53 +605,13 @@ class _ChipTabsState<T> extends State<ChipTabs<T>> {
               excludeSemantics: true,
               // A 36dp pill in a 44dp target: the 4dp above and below it take
               // the tap too. No taller: above the transaction list, with both
-              // review cards open, every row of height is the list's.
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
+              // review cards open, every row of height is the list's. The
+              // screen-reader tap above skips the haptic tick.
+              child: OutlinedPill(
+                size: PillSize.tab,
+                label: label,
+                active: value == selected,
                 onTap: () => _tap(value),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: Material(
-                    type: MaterialType.transparency,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(
-                        AppRadius.control * 2,
-                      ),
-                      onTap: () => _tap(value),
-                      child: Container(
-                        constraints: const BoxConstraints(minHeight: 36),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(
-                            AppRadius.control * 2,
-                          ),
-                          border: Border.all(
-                            color: value == selected
-                                ? scheme.primary
-                                : scheme.outlineVariant,
-                            width: value == selected ? 1.5 : 1,
-                          ),
-                        ),
-                        child: Text(
-                          label,
-                          maxLines: 1,
-                          style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: value == selected
-                                ? FontWeight.w600
-                                : FontWeight.w500,
-                            color: value == selected
-                                ? scheme.onSurface
-                                : scheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
               ),
             ),
         ],

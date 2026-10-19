@@ -91,7 +91,9 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(inPopup('Food'), findsOneWidget, reason: 'popup title');
-      expect(find.text(fmtMoney(600)), findsOneWidget);
+      // Whole rupees, as the Dashboard's other figures.
+      expect(inPopup(fmtMoneyWhole(600)), findsOneWidget);
+      expect(find.text(fmtMoney(600)), findsNothing);
       expect(find.text('60% of spending'), findsOneWidget);
 
       await tester.tap(find.text('See transactions'));

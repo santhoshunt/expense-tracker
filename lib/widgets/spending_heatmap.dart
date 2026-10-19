@@ -289,7 +289,7 @@ class SpendingHeatmap extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
                   child: Text(
                     total > 0
-                        ? '${fmtDate(day)} · ${fmtMoney(total)} spent'
+                        ? '${fmtDate(day)} · ${fmtMoneyWhole(total)} spent'
                         : fmtDate(day),
                     style: Theme.of(ctx).textTheme.titleSmall,
                   ),
@@ -358,14 +358,15 @@ class SpendingHeatmap extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                       // A reminder saved with no amount comes with 0: no
-                      // figure to show.
+                      // figure to show. Plain, as every bill amount is on
+                      // the Dashboard: it is owed, not yet spent.
                       trailing: b.amount == 0
                           ? null
                           : Text(
-                              fmtMoney(b.amount),
+                              fmtMoneyWhole(b.amount),
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
-                                color: moneyColor(ctx, type: TxType.expense),
+                                color: Theme.of(ctx).colorScheme.onSurface,
                               ),
                             ),
                     ),

@@ -170,38 +170,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
     final net = finance.netWorth;
     // The accounts the net figure is made of: savings and asset accounts
-    // are left out of it, so they are left out of the count too. An
-    // unlinked debit card counts like a bank; a linked one is its bank's.
-    final netAccounts = finance.openAccounts
-        .where(
-          (a) =>
-              a.type == AccountType.bank ||
-              a.isCard ||
-              (a.isDebitCard && finance.linkedAccountOf(a) == null),
-        )
-        .length;
-    // What each net line sums, exactly: bankBalanceTotal's accounts, and
-    // the cards cardOutstandingTotal adds a known outstanding for.
-    final open = finance.openAccounts.where(
-      (a) => !finance.isOrphanedAccount(a),
-    );
-    final bankCount = open
-        .where(
-          (a) =>
-              a.type == AccountType.bank ||
-              (a.isDebitCard && finance.linkedAccountOf(a) == null),
-        )
-        .length;
-    final cardCount = open
-        .where((a) => a.isCard && finance.accountOutstanding(a) != null)
-        .length;
+    // are left out of it, so they are left out of the count too.
+    final netAccounts = finance.netAccountCount;
+    // What each net line sums, exactly.
+    final bankCount = finance.bankBalanceCount;
+    final cardCount = finance.cardOutstandingCount;
     final cardDue = finance.cardOutstandingTotal;
-    const netTip = InfoTip(
-      title: 'Net balance',
-      message:
-          'Bank balances minus credit card outstanding. Savings, asset and '
-          'wallet accounts are not included.',
-    );
     final netLines = <_NetLine>[
       if (bankCount > 0)
         _NetLine(
@@ -283,12 +257,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                                   color: scheme.onSurfaceVariant,
                                 ),
                               ),
-                              tip: InfoTip(
-                                title: 'Net balance',
-                                message:
-                                    'Bank balances minus credit card '
-                                    'outstanding. Savings, asset and wallet '
-                                    'accounts are not included.',
+                              tip: _netTip(
                                 example: () =>
                                     '${fmtMoney(finance.bankBalanceTotal)} in '
                                     'banks − '
@@ -305,7 +274,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                                   ? _NetLine(
                                       label: InfoLabel(
                                         label: line.label,
-                                        tip: netTip,
+                                        tip: _netTip(),
                                       ),
                                       amount: line.amount,
                                       color: line.color,
@@ -587,11 +556,11 @@ class _AccountCard extends StatelessWidget {
     if (drawsFrom != null) {
       figure = '${fmtMoney(finance.accountSpentThisMonth(account))} this month';
     } else if (isCard) {
-      // No figure: name the same blocker the open card explains.
-      figure = owed != null
-          ? fmtMoney(owed)
-          : finance.accountProvenance(account).blocker ==
-                OutstandingBlocker.noAlert
+      // Read only when the outstanding is unknown, since a known one draws
+      // its own row below: name the same blocker the open card explains.
+      figure =
+          finance.accountProvenance(account).blocker ==
+              OutstandingBlocker.noAlert
           ? 'No balance yet'
           : 'Limit needed';
     } else {
@@ -893,6 +862,16 @@ class _WalletServiceHeader extends StatelessWidget {
     );
   }
 }
+
+/// The net balance tip, with the worked sum as its [example] where the
+/// card shows no lines to read it from.
+InfoTip _netTip({String? Function()? example}) => InfoTip(
+  title: 'Net balance',
+  message:
+      'Bank balances minus credit card outstanding. Savings, asset and '
+      'wallet accounts are not included.',
+  example: example,
+);
 
 /// One line under the net balance: what it is made of on the left, its
 /// figure on the right, in [color] (plain when null).

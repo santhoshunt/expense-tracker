@@ -148,8 +148,7 @@ void main() {
           amount: 1234567,
         ),
       ]);
-      // One row, so the first-run Get started card (which overflows at
-      // this size on its own) steps aside.
+      // One row, so the first-run Get started card steps aside.
       await p.addTransaction(
         type: TxType.expense,
         categoryId: 'food',

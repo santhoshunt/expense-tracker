@@ -439,18 +439,27 @@ Future<void> showReminderEditor(
     ),
   );
   if (deleteRequested && existing != null && context.mounted) {
-    // Undo returns the reminder to the position it held in the list rather
-    // than the end.
-    final index = finance.reminders.indexWhere((x) => x.id == existing.id);
-    finance.deleteReminder(existing.id);
-    showUndoSnackBar(
-      context,
-      'Deleted reminder "${existing.name}"',
-      () => finance.restoreReminder(existing, index: index),
-      icon: Icons.delete_outline,
-      tone: AppToastTone.removal,
-    );
+    deleteReminderWithUndo(context, existing.id);
   }
+}
+
+/// Deletes the reminder [id] and offers Undo, which puts back the stored
+/// copy as it was at the delete (a paid mark made since an editor opened
+/// included) at the position it held in the list, not at the end. Nothing
+/// happens when no reminder has [id].
+void deleteReminderWithUndo(BuildContext context, String id) {
+  final finance = context.read<FinanceProvider>();
+  final index = finance.reminders.indexWhere((x) => x.id == id);
+  if (index == -1) return;
+  final removed = finance.reminders[index];
+  finance.deleteReminder(id);
+  showUndoSnackBar(
+    context,
+    'Deleted reminder "${removed.name}"',
+    () => finance.restoreReminder(removed, index: index),
+    icon: Icons.delete_outline,
+    tone: AppToastTone.removal,
+  );
 }
 
 /// The Repeats choices: Once first, then the repeating cycles.

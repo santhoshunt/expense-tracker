@@ -29,7 +29,8 @@ const int kMinDaysForProjection = 5;
 const int kTopMoversShown = 5;
 
 /// A month under this share of the usual run's middle spend is missing
-/// records, not a quiet month, and ends the run.
+/// records, not a quiet month, and ends the run. The month-end forecast
+/// applies the same share to everyday spend instead.
 const double kThinMonthShare = 0.25;
 
 /// A rise above this fraction (100%) reads as "N times", not a percentage.
@@ -172,18 +173,15 @@ double median(List<double> values) {
       : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-/// The complete months behind [month] whose figures the ledger can support,
-/// oldest first.
+/// The unbroken run of complete months on record behind [month], newest
+/// first, up to [kUsualWindowMonths].
 ///
-/// Only the unbroken run of recorded months counts. A month holding no rows
-/// at all means missing records far more often than it means a month without
-/// a single transaction, and folding those zeros into the median would
-/// report a baseline that is an artefact of the import history rather than
-/// of spending. The run also stops at a first month the records join
-/// part-way through, for the same reason. A month with under a quarter of
-/// the run's middle spend is a gap in the records, not a quiet month, and
-/// stops the run too.
-List<DateTime> usualWindow(FinanceProvider finance, DateTime month) {
+/// A month holding no rows at all means missing records far more often than
+/// it means a month without a single transaction, and folding those zeros
+/// into a median would report a baseline that is an artefact of the import
+/// history rather than of spending. The run also stops at a first month the
+/// records join part-way through, for the same reason.
+List<DateTime> recordedMonthsBefore(FinanceProvider finance, DateTime month) {
   final first = finance.firstTransactionDate;
   if (first == null) return const [];
   final covered = {
@@ -199,6 +197,15 @@ List<DateTime> usualWindow(FinanceProvider finance, DateTime month) {
     if (m.isBefore(DateTime(first.year, first.month))) break;
     out.add(m);
   }
+  return out;
+}
+
+/// The complete months behind [month] whose figures the ledger can support,
+/// oldest first: [recordedMonthsBefore], where a month with under a quarter
+/// of the run's middle spend is a gap in the records, not a quiet month, and
+/// stops the run too.
+List<DateTime> usualWindow(FinanceProvider finance, DateTime month) {
+  final out = recordedMonthsBefore(finance, month);
   // `out` runs newest first. A thin month stops the run where it sits, the
   // way an empty one does; with a middle of 0 nothing counts as thin.
   final floor =

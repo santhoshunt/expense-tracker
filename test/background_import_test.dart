@@ -192,6 +192,8 @@ void main() {
       expect(import.runs, isEmpty, reason: 'Off imports nothing');
       expect(notes.shown, hasLength(1));
       expect(notes.shown.single.$2, contains('bill due today'));
+      // Posted from the background run, a tap still opens Next 7 days.
+      expect(notes.payloads, [kUpcomingPayload]);
 
       // A later run, or the app opening, does not repeat it.
       await runBackgroundImport(
@@ -229,6 +231,7 @@ void main() {
         notifications: notes,
       );
       expect(notes.shown, isNotEmpty);
+      expect(notes.payloads.first, kBudgetPayload);
     });
 
     test("the app's own engine runs its own checks instead", () async {

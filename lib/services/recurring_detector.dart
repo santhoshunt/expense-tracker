@@ -280,17 +280,12 @@ String merchantDisplayLabel(Tx t, {MerchantAliasLookup? alias}) =>
 /// rather than compare against the fallback text. The payee is returned as
 /// typed; an alert's merchant and the note are title-cased.
 String? merchantLabelOrNull(Tx t, {MerchantAliasLookup? alias}) {
-  if (alias != null) {
-    final identity = merchantIdentityOf(t);
-    final named = identity == null ? null : alias(identity);
-    if (named != null && named.isNotEmpty) return named;
-  }
+  final named = _aliasLabel(t, alias);
+  if (named != null) return named;
   // Mirror recurringKeyOf: the alert's merchant, then the payee, then the
   // user's note.
-  if (t.source == TxSource.sms) {
-    final m = SmsTxnParser.merchantOf(t.smsText);
-    if (m.isNotEmpty) return _titleCase(m);
-  }
+  final merchant = _alertMerchantLabel(t);
+  if (merchant != null) return merchant;
   final payee = t.payee.trim();
   final note = t.note.trim();
   // A payee too short to key on gives way to the note, as in
@@ -307,19 +302,35 @@ String? merchantLabelOrNull(Tx t, {MerchantAliasLookup? alias}) {
 /// the alert's merchant, since on an imported row the user typed it to
 /// correct or fill in the alert.
 String? rowTitleOf(Tx t, {MerchantAliasLookup? alias}) {
-  if (alias != null) {
-    final identity = merchantIdentityOf(t);
-    final named = identity == null ? null : alias(identity);
-    if (named != null && named.isNotEmpty) return named;
-  }
+  final named = _aliasLabel(t, alias);
+  if (named != null) return named;
   final payee = t.payee.trim();
   if (payee.isNotEmpty) return payee;
-  if (t.source == TxSource.sms) {
-    final m = SmsTxnParser.merchantOf(t.smsText);
-    if (m.isNotEmpty) return _titleCase(m);
-  }
-  final line = t.note.split('\n').first.trim();
+  final merchant = _alertMerchantLabel(t);
+  if (merchant != null) return merchant;
+  final line = noteFirstLine(t.note);
   return line.isEmpty ? null : line;
+}
+
+/// The first line of [note], trimmed: what a row or a payee suggestion
+/// shows of a note, which may run to several lines.
+String noteFirstLine(String note) => note.split('\n').first.trim();
+
+/// The user's [alias] for [t]'s merchant identity, or null when there is
+/// no lookup, no identity or no name for it.
+String? _aliasLabel(Tx t, MerchantAliasLookup? alias) {
+  if (alias == null) return null;
+  final identity = merchantIdentityOf(t);
+  final named = identity == null ? null : alias(identity);
+  return named == null || named.isEmpty ? null : named;
+}
+
+/// The merchant an imported alert names, title-cased; null for a manual
+/// row or an alert that names none.
+String? _alertMerchantLabel(Tx t) {
+  if (t.source != TxSource.sms) return null;
+  final m = SmsTxnParser.merchantOf(t.smsText);
+  return m.isEmpty ? null : _titleCase(m);
 }
 
 /// Alert bodies shout in ALL CAPS: each word capitalised, the rest lower.
