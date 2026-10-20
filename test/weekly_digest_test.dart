@@ -207,9 +207,41 @@ void main() {
     });
 
     test('Monday 09:00 books next Monday for this week', () {
-      final b = weeklyDigestBooking(DateTime(2026, 10, 12, 9), hasData: true);
+      final b = weeklyDigestBooking(
+        DateTime(2026, 10, 12, 9),
+        hasData: true,
+        keepLate: false,
+      );
       expect(b?.when, DateTime(2026, 10, 19, 9));
       expect(b?.week, DateTime(2026, 10, 12));
+    });
+
+    test('for 6 hours after Monday 09:00 the note is kept', () {
+      for (final at in [
+        DateTime(2026, 10, 12, 9),
+        DateTime(2026, 10, 12, 14, 59),
+      ]) {
+        final b = weeklyDigestBooking(at, hasData: true);
+        expect(b?.when, DateTime(2026, 10, 12, 9));
+        expect(b?.week, DateTime(2026, 10, 5));
+      }
+      final after = weeklyDigestBooking(
+        DateTime(2026, 10, 12, 15),
+        hasData: true,
+      );
+      expect(after?.when, DateTime(2026, 10, 19, 9));
+      expect(after?.week, DateTime(2026, 10, 12));
+    });
+
+    test('a late Monday across the year end keeps last week', () {
+      // Monday 4 Jan 2027 covers 28 Dec 2026 to 3 Jan 2027.
+      final b = weeklyDigestBooking(DateTime(2027, 1, 4, 10), hasData: true);
+      expect(b?.when, DateTime(2027, 1, 4, 9));
+      expect(b?.week, DateTime(2026, 12, 28));
+      expect(
+        weeklyDigestBooking(DateTime(2027, 1, 4, 10), hasData: false),
+        isNull,
+      );
     });
 
     test('mid-week books next Monday, across a month end too', () {

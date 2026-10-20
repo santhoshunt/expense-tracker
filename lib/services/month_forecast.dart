@@ -155,9 +155,15 @@ MonthForecast? computeMonthForecast(
   // usual amount are the bill.
   // The cycle a payment paid is one interval before the next due date:
   // its own month, or the next one for a bill paid early across a month
-  // end (paid 18 October for 2 November).
+  // end (paid 18 October for 2 November). A pinned cycle steps back whole
+  // calendar months, as SubscriptionCycle.nextAfter steps forward: its
+  // interval in days is approximate (91 days back from 31 January is
+  // 1 November, not 31 October).
   bool paidFor(RecurringHit h) {
-    final slot = h.nextDue.subtract(Duration(days: h.intervalDays));
+    final cycle = h.cycle;
+    final slot = cycle == null
+        ? h.nextDue.subtract(Duration(days: h.intervalDays))
+        : DateTime(h.nextDue.year, h.nextDue.month - cycle.months);
     return slot.year == now.year && slot.month == now.month;
   }
 

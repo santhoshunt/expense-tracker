@@ -472,14 +472,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// the first confirmed row of a month books it without a restart.
   Future<void> _scheduleRecap() async {
     if (!mounted) return;
-    final booking = recapBooking(
-      DateTime.now(),
-      context.read<FinanceProvider>().monthsWithData,
-    );
+    final now = DateTime.now();
+    final months = context.read<FinanceProvider>().monthsWithData;
+    var booking = recapBooking(now, months);
     final key = booking == null ? 'none' : '${booking.when}|${booking.month}';
     if (key == _bookedRecap) return;
     _bookedRecap = key;
     try {
+      // This morning's note with its time past: Android may still deliver
+      // it late, so it stays while booked. Once shown, the next one books;
+      // until then every call asks again.
+      if (booking != null && !booking.when.isAfter(now)) {
+        if (await NotificationService.isBooked(
+          NotificationService.recapNotificationId,
+        )) {
+          _bookedRecap = null;
+          return;
+        }
+        booking = recapBooking(now, months, keepLate: false);
+      }
       if (booking != null) {
         await NotificationService.instance.scheduleRecap(
           booking.when,
@@ -506,19 +517,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _scheduleWeeklyDigest() async {
     if (!mounted) return;
     final on = context.read<SettingsProvider>().weeklyDigest;
-    final booking = on
-        ? weeklyDigestBooking(
-            DateTime.now(),
-            hasData:
-                context.read<FinanceProvider>().firstTransactionDate != null,
-          )
-        : null;
+    final now = DateTime.now();
+    final hasData =
+        context.read<FinanceProvider>().firstTransactionDate != null;
+    var booking = on ? weeklyDigestBooking(now, hasData: hasData) : null;
     final key = booking == null
         ? 'none|$on'
         : '${booking.when}|${booking.week}|$on';
     if (key == _bookedWeekly) return;
     _bookedWeekly = key;
     try {
+      // As in [_scheduleRecap]: this morning's note stays while booked.
+      if (booking != null && !booking.when.isAfter(now)) {
+        if (await NotificationService.isBooked(
+          NotificationService.weeklyDigestNotificationId,
+        )) {
+          _bookedWeekly = null;
+          return;
+        }
+        booking = weeklyDigestBooking(now, hasData: hasData, keepLate: false);
+      }
       if (booking != null) {
         await NotificationService.instance.scheduleWeeklyDigest(
           booking.when,

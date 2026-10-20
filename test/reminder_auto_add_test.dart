@@ -192,10 +192,26 @@ void main() {
       sender: 'VM-HDFCBK',
     );
 
-    test('the same amount two days after the due day', () async {
+    // An alert pays a reminder once it counts: imported, then confirmed.
+    Future<void> pay(FinanceProvider p, List<ParsedTxn> rows) async {
+      await p.addImported(rows);
+      await p.confirmAllPending();
+    }
+
+    test('a pending alert pays nothing until it is confirmed', () async {
       final p = await fresh();
       await p.restoreReminder(plain());
       await p.addImported([debit(499, DateTime(2026, 9, 12, 10))]);
+      expect(p.transactions, isEmpty);
+      expect(p.reminders.single.lastPaidMonth, isNull);
+      await p.confirmTransaction(p.pendingTransactions.single.id);
+      expect(p.reminders.single.lastPaidMonth, '2026-09');
+    });
+
+    test('the same amount two days after the due day', () async {
+      final p = await fresh();
+      await p.restoreReminder(plain());
+      await pay(p, [debit(499, DateTime(2026, 9, 12, 10))]);
       expect(p.reminders.single.lastPaidMonth, '2026-09');
       final again = await fresh();
       expect(again.reminders.single.lastPaidMonth, '2026-09');
@@ -204,9 +220,9 @@ void main() {
     test('fifteen days early counts, sixteen days early does not', () async {
       final p = await fresh();
       await p.restoreReminder(plain());
-      await p.addImported([debit(499, DateTime(2026, 8, 25, 10))]);
+      await pay(p, [debit(499, DateTime(2026, 8, 25, 10))]);
       expect(p.reminders.single.lastPaidMonth, isNull);
-      await p.addImported([debit(499, DateTime(2026, 8, 26, 10))]);
+      await pay(p, [debit(499, DateTime(2026, 8, 26, 10))]);
       expect(p.reminders.single.lastPaidMonth, '2026-09');
     });
 
@@ -215,7 +231,7 @@ void main() {
       // Paid through August; September's bill (the 10th) is paid on the
       // 26th, 14 days before October's.
       await p.restoreReminder(plain().copyWith(lastPaidMonth: '2026-08'));
-      await p.addImported([debit(499, DateTime(2026, 9, 26, 10))]);
+      await pay(p, [debit(499, DateTime(2026, 9, 26, 10))]);
       expect(p.reminders.single.lastPaidMonth, '2026-08');
     });
 
@@ -224,7 +240,7 @@ void main() {
       () async {
         final p = await fresh();
         await p.restoreReminder(plain().copyWith(createdOn: '2026-08-20'));
-        await p.addImported([debit(499, DateTime(2026, 9, 26, 10))]);
+        await pay(p, [debit(499, DateTime(2026, 9, 26, 10))]);
         expect(p.reminders.single.lastPaidMonth, isNull);
       },
     );
@@ -244,7 +260,7 @@ void main() {
         ),
       );
       // 7 days after Broadband, 5 before Phone.
-      await p.addImported([debit(499, DateTime(2026, 10, 17, 10))]);
+      await pay(p, [debit(499, DateTime(2026, 10, 17, 10))]);
       final byId = {for (final r in p.reminders) r.id: r.lastPaidMonth};
       expect(byId['rem_net'], '2026-10');
       expect(byId['rem_phone'], '2026-09');
@@ -254,7 +270,7 @@ void main() {
       final p = await fresh();
       await p.restoreReminder(plain().copyWith(lastPaidMonth: '2026-08'));
       // October's bill paid 9 days early, listed before September's.
-      await p.addImported([
+      await pay(p, [
         debit(499, DateTime(2026, 10, 1, 10)),
         debit(499, DateTime(2026, 9, 10, 10)),
       ]);
@@ -269,7 +285,7 @@ void main() {
           DateTime(paid.year, paid.month, paid.day + days);
       final p = await fresh();
       await p.restoreReminder(plain().copyWith(dayOfMonth: plus(1).day));
-      await p.addImported([debit(499, paid)]);
+      await pay(p, [debit(499, paid)]);
       expect(p.reminders.single.lastPaidMonth, monthKey(plus(1)));
       // Another ₹499 bill, due 13 days after that payment.
       await p.restoreReminder(
@@ -305,7 +321,7 @@ void main() {
           b.label,
       ];
       expect(due(), ['Broadband']);
-      await p.addImported([debit(499, DateTime(2026, 8, 29, 10))]);
+      await pay(p, [debit(499, DateTime(2026, 8, 29, 10))]);
       expect(due(), isEmpty);
     });
 
@@ -366,14 +382,14 @@ void main() {
     test('a different amount does not', () async {
       final p = await fresh();
       await p.restoreReminder(plain());
-      await p.addImported([debit(520, DateTime(2026, 9, 10, 10))]);
+      await pay(p, [debit(520, DateTime(2026, 9, 10, 10))]);
       expect(p.reminders.single.lastPaidMonth, isNull);
     });
 
     test('an Add it for me reminder is never marked by SMS', () async {
       final p = await fresh();
       await p.restoreReminder(plain(autoAdd: true));
-      await p.addImported([debit(499, DateTime(2026, 9, 10, 10))]);
+      await pay(p, [debit(499, DateTime(2026, 9, 10, 10))]);
       expect(p.reminders.single.lastPaidMonth, isNull);
     });
 
@@ -402,14 +418,14 @@ void main() {
     test('a day-31 bill paid on the 1st of the next month', () async {
       final p = await fresh();
       await p.restoreReminder(plain().copyWith(dayOfMonth: 31));
-      await p.addImported([debit(499, DateTime(2026, 11, 1, 10))]);
+      await pay(p, [debit(499, DateTime(2026, 11, 1, 10))]);
       expect(p.reminders.single.lastPaidMonth, '2026-10');
     });
 
     test('an old alert never moves the mark back', () async {
       final p = await fresh();
       await p.restoreReminder(plain().copyWith(lastPaidMonth: '2026-09'));
-      await p.addImported([debit(499, DateTime(2026, 8, 10, 10))]);
+      await pay(p, [debit(499, DateTime(2026, 8, 10, 10))]);
       expect(p.reminders.single.lastPaidMonth, '2026-09');
     });
 
@@ -426,7 +442,7 @@ void main() {
           expectedAmount: 499,
         ),
       );
-      await p.addImported([debit(499, DateTime(2026, 9, 11, 10))]);
+      await pay(p, [debit(499, DateTime(2026, 9, 11, 10))]);
       final byId = {for (final r in p.reminders) r.id: r.lastPaidMonth};
       expect(byId['rem_net'], '2026-09');
       expect(byId['rem_other'], isNull);

@@ -352,6 +352,14 @@ Future<void> showGroupDialog(
   var color = existing?.color ?? kNoCategoryColor;
   // Delete pops the editor first; the group then goes with Undo.
   var deleteRequested = false;
+  // The other groups' names as the dialog opens: two groups with one name
+  // can't be told apart. Never the live list, where a group just created
+  // would match itself while the dialog closes.
+  final taken = {
+    for (final g in context.read<FinanceProvider>().groups)
+      if (g.id != existing?.id) g.label.trim().toLowerCase(),
+  };
+  bool isTaken() => taken.contains(labelCtrl.text.trim().toLowerCase());
 
   await showDialog(
     context: context,
@@ -372,9 +380,12 @@ Future<void> showGroupDialog(
                   autofocus: existing == null,
                   textCapitalization: TextCapitalization.sentences,
                   onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Name',
                     hintText: 'e.g. Leisure',
+                    errorText: isTaken()
+                        ? 'A group with this name already exists'
+                        : null,
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -401,9 +412,10 @@ Future<void> showGroupDialog(
               onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
-            // Disabled while the name is empty instead of a silent no-op.
+            // Disabled while the name is empty or taken instead of a silent
+            // no-op.
             FilledButton(
-              onPressed: labelCtrl.text.trim().isEmpty
+              onPressed: labelCtrl.text.trim().isEmpty || isTaken()
                   ? null
                   : () {
                       final label = labelCtrl.text.trim();
@@ -764,11 +776,15 @@ Future<void> showCategoryDialog(
                                 builder: (ctx) {
                                   // Two categories named "Home" are
                                   // indistinguishable in every dropdown, so the
-                                  // duplicate is rejected up front.
+                                  // duplicate is rejected up front. Not while
+                                  // saving: a new category is in the list
+                                  // before the dialog finishes closing, and
+                                  // would match itself.
                                   final name = labelCtrl.text
                                       .trim()
                                       .toLowerCase();
                                   final duplicate =
+                                      !saving &&
                                       name.isNotEmpty &&
                                       allCategories.any(
                                         (c) =>

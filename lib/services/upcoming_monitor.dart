@@ -14,12 +14,14 @@ import 'upcoming_items.dart';
 
 /// Fires "card bill due" and "recurring payment expected" notifications.
 ///
-/// Same contract as BudgetMonitor: there is no background service — this
-/// runs while the app is open (launch, resume, data changes) and de-dupes
-/// per billing cycle via prefs markers, so each item notifies at most once
-/// per due date's month:
-///   `card_due_fired_<accountId>_<yyyy-MM>`
-///   `recurring_due_fired_<hit key>_<yyyy-MM>`
+/// Same contract as BudgetMonitor: this runs while the app is open (launch,
+/// resume, data changes) and from the background import, and de-dupes via
+/// prefs markers, so each item notifies at most once per due date:
+///   `card_due_fired_<accountId>_<yyyy-MM-dd>`
+///   `recurring_due_fired_<hit key>_<yyyy-MM-dd>`
+///   `reminder_due_fired_<reminderId>_<yyyy-MM-dd>`
+/// A marker ending in a bare `yyyy-MM` (the older form) covers every due
+/// date in that month until the sweep drops it.
 class UpcomingMonitor {
   /// Card bills notify when due within this many days — the same window
   /// that turns the dashboard row red.
@@ -42,20 +44,46 @@ class UpcomingMonitor {
   UpcomingMonitor({NotificationService? notifications})
     : notifications = notifications ?? NotificationService.instance;
 
-  static String _ym(DateTime d) => monthKey(d);
+  /// A marker is swept once its due date is this many days old: well past
+  /// the longest overdue window (7 days for reminders, repeats and card
+  /// bills), so an item still overdue never loses its marker.
+  static const markerKeepDays = 40;
+
+  static String _ymd(DateTime d) =>
+      '${monthKey(d)}-${d.day.toString().padLeft(2, '0')}';
 
   static String cardDueKey(String accountId, DateTime due) =>
-      'card_due_fired_${accountId}_${_ym(due)}';
+      'card_due_fired_${accountId}_${_ymd(due)}';
 
   static String recurringDueKey(String hitKey, DateTime due) =>
-      'recurring_due_fired_${hitKey}_${_ym(due)}';
+      'recurring_due_fired_${hitKey}_${_ymd(due)}';
 
-  /// Marking a reminder paid moves its due date to a new month, hence a new
-  /// key — no marker clearing needed.
+  /// Marking a reminder paid moves its due date on, hence a new key: no
+  /// marker clearing needed.
   static String reminderDueKey(String reminderId, DateTime due) =>
-      'reminder_due_fired_${reminderId}_${_ym(due)}';
+      'reminder_due_fired_${reminderId}_${_ymd(due)}';
 
-  Future<void> check(FinanceProvider finance, SettingsProvider settings) async {
+  /// The older month-keyed form of [key] ("..._2026-10" for
+  /// "..._2026-10-30"), which still counts as fired for its whole month.
+  static String _monthFormOf(String key) => key.substring(0, key.length - 3);
+
+  /// The due date a marker's suffix names: the day itself, or the last day
+  /// of the month for the older month-keyed form. Null when unreadable.
+  static DateTime? _markerDue(String suffix) {
+    if (suffix.length == 10) return DateTime.tryParse(suffix);
+    if (suffix.length == 7) {
+      final first = DateTime.tryParse('$suffix-01');
+      return first == null ? null : DateTime(first.year, first.month + 1, 0);
+    }
+    return null;
+  }
+
+  /// [now] defaults to the clock; tests pass a fixed date.
+  Future<void> check(
+    FinanceProvider finance,
+    SettingsProvider settings, {
+    DateTime? now,
+  }) async {
     if (_busy) {
       _rerunRequested = true;
       return;
@@ -63,23 +91,24 @@ class UpcomingMonitor {
     if (!settings.upcomingReminders) return;
     _busy = true;
     try {
-      final now = DateTime.now();
+      final clock = now ?? DateTime.now();
+      final today = DateTime(clock.year, clock.month, clock.day);
       final prefs = await SharedPreferences.getInstance();
 
       if (!_sweptOldMarkers) {
         _sweptOldMarkers = true;
-        // Markers are keyed by the DUE month, which can be next month for a
-        // bill notified late in this one — sweep only strictly-past months
-        // ('yyyy-MM' compares correctly as a string).
-        final ym = _ym(now);
+        // Only markers whose due date is long gone: one still inside an
+        // overdue window keeps that item from notifying again.
         for (final k in prefs.getKeys().toList()) {
           final isOurs =
               k.startsWith('card_due_fired_') ||
               k.startsWith('recurring_due_fired_') ||
               k.startsWith('reminder_due_fired_');
           if (!isOurs) continue;
-          final suffix = k.substring(k.lastIndexOf('_') + 1);
-          if (suffix.compareTo(ym) < 0) await prefs.remove(k);
+          final due = _markerDue(k.substring(k.lastIndexOf('_') + 1));
+          if (due != null && today.difference(due).inDays > markerKeepDays) {
+            await prefs.remove(k);
+          }
         }
       }
 
@@ -91,7 +120,7 @@ class UpcomingMonitor {
         // month (beyond the window) and next cycle's key is new. Not yet
         // billed: nothing is owed until the statement generates, however
         // close the due date sits.
-        final s = cardBillStatus(a, now);
+        final s = cardBillStatus(a, clock);
         if (s == null || s.phase != CardBillPhase.billed) continue;
         final out = finance.accountOutstanding(a);
         if (out == null || out <= 0) continue;
@@ -100,14 +129,18 @@ class UpcomingMonitor {
           key: cardDueKey(a.id, s.due),
           // 94000 to 94999; every range is listed in NotificationIds.
           id: NotificationIds.cardBill(a.id),
-          title: '${a.name} bill due ${fmtInDays(s.daysUntil)}',
-          body: '${fmtMoney(out)} due on ${fmtDate(s.due)}',
+          title: s.daysUntil < 0
+              ? '${a.name} bill overdue'
+              : '${a.name} bill due ${fmtInDays(s.daysUntil)}',
+          body: s.daysUntil < 0
+              ? '${fmtMoney(out)} was due on ${fmtDate(s.due)}'
+              : '${fmtMoney(out)} due on ${fmtDate(s.due)}',
         ));
       }
 
       final hits = detectRecurring(
         finance.countedTransactions,
-        now: now,
+        now: clock,
         alias: finance.merchantAlias,
         pinned: finance.subscriptionPins,
       );
@@ -116,10 +149,10 @@ class UpcomingMonitor {
         // Marked paid by hand: its alert never came, so nothing to remind.
         if (hitMarkedPaid(finance, h)) continue;
         // Its reminder notifies (or, adding itself, needs no reminding).
-        if (finance.reminders.any((r) => reminderCoversHit(r, h, now))) {
+        if (finance.reminders.any((r) => reminderCoversHit(r, h, clock))) {
           continue;
         }
-        final days = h.daysUntil(now);
+        final days = h.daysUntil(clock);
         if (days > recurringWindowDays) continue;
         checks.add((
           key: recurringDueKey(h.key, h.nextDue),
@@ -135,9 +168,9 @@ class UpcomingMonitor {
 
       for (final r in finance.reminders) {
         // Add it for me records the expense itself: nothing to remind.
-        if (r.autoAdd || reminderFinished(r, now)) continue;
-        final due = reminderNextDue(r, now);
-        final days = reminderDaysUntil(r, now);
+        if (r.autoAdd || reminderFinished(r, clock)) continue;
+        final due = reminderNextDue(r, clock);
+        final days = reminderDaysUntil(r, clock);
         if (days > reminderWindowDays) continue;
         final amount = r.expectedAmount;
         final when = days < 0
@@ -152,7 +185,10 @@ class UpcomingMonitor {
       }
 
       for (final c in checks) {
-        if (prefs.getBool(c.key) ?? false) continue;
+        if ((prefs.getBool(c.key) ?? false) ||
+            (prefs.getBool(_monthFormOf(c.key)) ?? false)) {
+          continue;
+        }
         // No permission → a show() is silently dropped. Bail WITHOUT
         // recording the marker so the reminder still fires once granted.
         if (!await notifications.areEnabled) return;
@@ -168,7 +204,7 @@ class UpcomingMonitor {
       _busy = false;
       if (_rerunRequested) {
         _rerunRequested = false;
-        await check(finance, settings);
+        await check(finance, settings, now: now);
       }
     }
   }

@@ -13,6 +13,10 @@ import '../utils/format.dart';
 /// of the due date.
 const int kCardUrgentWindowDays = 5;
 
+/// An unpaid cycle stays the current one (overdue) up to this many days
+/// past its due date, the same grace window as reminders.
+const int kCardOverdueDays = 7;
+
 /// Where the shown cycle stands. Only [billed] deserves attention: the
 /// statement exists and the money is owed by the due date.
 enum CardBillPhase {
@@ -31,9 +35,14 @@ enum CardBillPhase {
 }
 
 class CardBillStatus {
-  /// Effective due date: the natural one, or the NEXT cycle's when the
-  /// natural one was marked paid.
+  /// Effective due date: the current cycle's, or the NEXT unpaid cycle's
+  /// when the current one was marked paid.
   final DateTime due;
+
+  /// The current cycle's own due date, paid or not: the next one on or after
+  /// today, or an unpaid one up to [kCardOverdueDays] past. Mark paid, Mark
+  /// unpaid and Record a payment act on this cycle.
+  final DateTime cycleDue;
 
   /// When the bill for [due] is (or was) generated: the last occurrence of
   /// [Account.statementDay] strictly before [due]. Null when the account has
@@ -45,15 +54,17 @@ class CardBillStatus {
 
   final CardBillPhase phase;
 
-  /// The user marked the current cycle's bill paid
-  /// ([Account.billPaidMonth] matches the natural due's [monthKey]).
+  /// The user marked the current cycle's bill paid: [Account.billPaidMonth]
+  /// is [cycleDue]'s [monthKey] or a later one.
   final bool paidThisCycle;
 
-  /// Billed (generated, unpaid) and due within [kCardUrgentWindowDays].
+  /// Billed (generated, unpaid) and due within [kCardUrgentWindowDays], or
+  /// overdue.
   final bool urgent;
 
   const CardBillStatus({
     required this.due,
+    required this.cycleDue,
     required this.statementDate,
     required this.daysUntil,
     required this.phase,
@@ -95,10 +106,16 @@ String cardBillSubtitle(CardBillStatus s, {bool withStatement = true}) {
     case CardBillPhase.notBilled:
       return 'Bill generates ${fmtDateCompact(stmt!)} · due $due';
     case CardBillPhase.billed:
+      final showStmt = stmt != null && withStatement;
+      if (s.daysUntil < 0) {
+        return showStmt
+            ? 'Billed ${fmtDateCompact(stmt)} · overdue · was due $due'
+            : 'Overdue · was due $due';
+      }
       final when = fmtInDays(s.daysUntil);
-      return stmt == null || !withStatement
-          ? 'Due $due · $when'
-          : 'Billed ${fmtDateCompact(stmt)} · due $due · $when';
+      return showStmt
+          ? 'Billed ${fmtDateCompact(stmt)} · due $due · $when'
+          : 'Due $due · $when';
   }
 }
 
@@ -133,14 +150,28 @@ CardBillStatus? cardBillStatus(Account account, DateTime now) {
     return null;
   }
   final today = DateTime(now.year, now.month, now.day);
-  final natural = nextMonthlyOccurrence(account.dueDay!, now);
-  final paid = account.billPaidMonth == monthKey(natural);
-  final due = paid
-      ? nextMonthlyOccurrence(
-          account.dueDay!,
-          natural.add(const Duration(days: 1)),
-        )
-      : natural;
+  final dueDay = account.dueDay!;
+  // A later month counts too: marking a later cycle paid covers this one.
+  final paidMonth = account.billPaidMonth ?? '';
+  bool covered(DateTime d) => paidMonth.compareTo(monthKey(d)) >= 0;
+  // The day after an unpaid due date it is still owed: the cycle moves on
+  // only once the grace window has passed. A paid one moves on at once.
+  var cycle = nextMonthlyOccurrence(
+    dueDay,
+    DateTime(today.year, today.month, today.day - kCardOverdueDays),
+  );
+  if (cycle.isBefore(today) && covered(cycle)) {
+    cycle = nextMonthlyOccurrence(dueDay, today);
+  }
+  final paid = covered(cycle);
+  // The shown due is the first cycle after every month marked paid.
+  var due = cycle;
+  for (var i = 0; i < 24 && monthKey(due).compareTo(paidMonth) <= 0; i++) {
+    due = nextMonthlyOccurrence(
+      dueDay,
+      DateTime(due.year, due.month, due.day + 1),
+    );
+  }
   final stmt = account.statementDay == null
       ? null
       : _statementBefore(account.statementDay!, due);
@@ -154,6 +185,7 @@ CardBillStatus? cardBillStatus(Account account, DateTime now) {
   final days = due.difference(today).inDays;
   return CardBillStatus(
     due: due,
+    cycleDue: cycle,
     statementDate: stmt,
     daysUntil: days,
     phase: phase,

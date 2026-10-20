@@ -42,6 +42,9 @@ class SmsImportService {
   static const _autoRunKey = 'sms_auto_import_last_run_millis';
   static const _backfillDays = 30;
 
+  /// A stored scan marker further ahead of the clock than this is wrong.
+  static const _markerSlack = Duration(minutes: 5);
+
   final SmsSource source;
   final NotificationSource notifications;
 
@@ -253,15 +256,27 @@ class SmsImportService {
     }
 
     final prefs = await SharedPreferences.getInstance();
+    // No message counts toward the marker past this moment: one dated ahead
+    // (a wrong phone clock, a carrier's bad timestamp) would otherwise make
+    // every later scan start after it and skip real alerts until that date.
+    final scanStart = DateTime.now();
+    final scanStartMillis = scanStart.millisecondsSinceEpoch;
+    // A marker already ahead of the clock is taken as now: what arrived
+    // between the real last scan and now cannot be told apart.
+    final stored = prefs.getInt(_lastScanKey);
+    if (stored != null &&
+        stored > scanStart.add(_markerSlack).millisecondsSinceEpoch) {
+      await prefs.setInt(_lastScanKey, scanStartMillis);
+    }
     final int sinceMillis;
     if (range != null) {
       sinceMillis = range.start.millisecondsSinceEpoch;
     } else if (lookback != null) {
-      sinceMillis = DateTime.now().subtract(lookback).millisecondsSinceEpoch;
+      sinceMillis = scanStart.subtract(lookback).millisecondsSinceEpoch;
     } else {
       sinceMillis =
           prefs.getInt(_lastScanKey) ??
-          DateTime.now()
+          scanStart
               .subtract(const Duration(days: _backfillDays))
               .millisecondsSinceEpoch;
     }
@@ -292,7 +307,8 @@ class SmsImportService {
       final millis = msg.date.millisecondsSinceEpoch;
       if (untilMillis != null && millis >= untilMillis) continue;
       scanned++;
-      if (millis > newestMillis) newestMillis = millis;
+      final upTo = millis > scanStartMillis ? scanStartMillis : millis;
+      if (upTo > newestMillis) newestMillis = upTo;
       final txn = SmsTxnParser.parse(
         msg.sender,
         msg.body,
@@ -368,7 +384,8 @@ class SmsImportService {
     //    _persist swallows its errors into persistFailed; advancing past
     //    rows that exist only in memory would skip those alerts on every
     //    future incremental scan even though they are still in the inbox.
-    // Never move the marker backwards either way.
+    // Never move the marker backwards either way; only a marker ahead of the
+    // clock is pulled back, at the start of the run.
     final existing = prefs.getInt(_lastScanKey);
     final contiguous = existing == null || sinceMillis <= existing;
     if (queryResult.complete &&

@@ -170,11 +170,49 @@ void main() {
 
     test('after 09:00 on the 1st, the next month takes over', () {
       final later = DateTime(2026, 10, 1, 9, 30);
-      expect(recapBooking(later, [oct, sep]), (
+      expect(recapBooking(later, [oct, sep], keepLate: false), (
         when: DateTime(2026, 11, 1, 9),
         month: oct,
       ));
-      expect(recapBooking(later, [sep]), isNull);
+      expect(recapBooking(later, [sep], keepLate: false), isNull);
+    });
+
+    test('for 6 hours after 09:00 the 1st\'s note is kept', () {
+      for (final at in [
+        DateTime(2026, 10, 1, 9, 30),
+        DateTime(2026, 10, 1, 14, 59),
+      ]) {
+        for (final months in [
+          [sep],
+          [oct, sep],
+        ]) {
+          expect(recapBooking(at, months), (
+            when: DateTime(2026, 10, 1, 9),
+            month: sep,
+          ));
+        }
+      }
+      final after = DateTime(2026, 10, 1, 15);
+      expect(recapBooking(after, [oct, sep]), (
+        when: DateTime(2026, 11, 1, 9),
+        month: oct,
+      ));
+      expect(recapBooking(after, [sep]), isNull);
+    });
+
+    test('a late 1 January keeps the December note', () {
+      expect(recapBooking(DateTime(2027, 1, 1, 11), [DateTime(2026, 12)]), (
+        when: DateTime(2027, 1, 1, 9),
+        month: DateTime(2026, 12),
+      ));
+    });
+
+    test('no data last month: nothing kept after 09:00 either', () {
+      expect(recapBooking(DateTime(2026, 10, 1, 10), [aug]), isNull);
+      expect(recapBooking(DateTime(2026, 10, 1, 10), [oct]), (
+        when: DateTime(2026, 11, 1, 9),
+        month: oct,
+      ));
     });
 
     test('January reaches back to December', () {

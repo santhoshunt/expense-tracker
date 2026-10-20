@@ -742,6 +742,88 @@ class BackupService {
     );
   }
 
+  /// The report's summary boxes for [txs], the rows of the period [year],
+  /// [month] or [range] picks (the whole ledger when none does): income,
+  /// expense, what went to savings, and the net.
+  ///
+  /// The figures follow the same population as the table: whole-ledger
+  /// provider totals, the period's own sums, or (for a range) sums folded
+  /// from the filtered rows with the provider's rules, transfers excluded,
+  /// splits counting only the user's own share. [savings] counts the To
+  /// savings rows whether or not the category is a transfer, like the Saved
+  /// card. The net takes off only the part that is a transfer: rows of an
+  /// un-transferred To savings are already in [expense].
+  @visibleForTesting
+  static ({double income, double expense, double savings, double net})
+  summaryFigures(
+    FinanceProvider finance,
+    List<Tx> txs, {
+    int? year,
+    DateTime? month,
+    DateTimeRange? range,
+    int startMonth = 1,
+  }) {
+    final double income;
+    final double expense;
+    final double savings;
+    final double savingsTransfers;
+    if (range != null) {
+      // countsInTotals: an uncounted wallet row is in no total, as in-app.
+      // A linked refund is not income; it comes off its purchase instead.
+      income = txs
+          .where(
+            (t) =>
+                t.type == TxType.income &&
+                !isTransferCategory(t.categoryId) &&
+                finance.countsInTotals(t) &&
+                !finance.isLinkedRefund(t),
+          )
+          .fold(0.0, (s, t) => s + t.amount);
+      expense = txs
+          .where(
+            (t) =>
+                t.type == TxType.expense &&
+                !isTransferCategory(t.categoryId) &&
+                finance.countsInTotals(t),
+          )
+          .fold(0.0, (s, t) => s + finance.netSpendOf(t));
+      final savingsRows = txs.where(
+        (t) =>
+            t.type == TxType.expense &&
+            t.categoryId == kSavingsTransferCategoryId &&
+            finance.countsInTotals(t),
+      );
+      savings = savingsRows.fold(0.0, (s, t) => s + t.amount);
+      savingsTransfers = isTransferCategory(kSavingsTransferCategoryId)
+          ? savings
+          : 0;
+    } else if (month != null) {
+      income = finance.incomeInMonth(month);
+      expense = finance.expenseInMonth(month);
+      savings = finance.savingsOutflowInMonth(month);
+      savingsTransfers = finance.savingsTransfersInMonth(month);
+    } else if (year != null) {
+      income = finance.incomeInYear(year, startMonth: startMonth);
+      expense = finance.expenseInYear(year, startMonth: startMonth);
+      savings = finance.savingsOutflowInYear(year, startMonth: startMonth);
+      savingsTransfers = finance.savingsTransfersInYear(
+        year,
+        startMonth: startMonth,
+      );
+    } else {
+      income = finance.totalIncome;
+      expense = finance.totalExpense;
+      savings = finance.totalSavingsTransfers;
+      savingsTransfers = finance.totalSavingsTransfers;
+    }
+    return (
+      income: income,
+      expense: expense,
+      savings: savings,
+      net: income - expense - savingsTransfers,
+    );
+  }
+
   /// Builds the report bytes. Exposed separately so tests can render it
   /// without touching the platform save dialog. [range], [month] and [year]
   /// are alternatives, taken in that order when more than one is given.
@@ -779,54 +861,19 @@ class BackupService {
         : year == null
         ? null
         : yearLabel(year, startMonth);
-    // Summary figures follow the same population as the table: whole-ledger
-    // provider totals, the year's own sums, or (for a range) sums folded
-    // from the filtered rows with the provider's rules — transfers excluded,
-    // splits counting only the user's own share.
-    final double sumIncome;
-    final double sumExpense;
-    final double sumSavings;
-    if (range != null) {
-      // countsInTotals: an uncounted wallet row is in no total, as in-app.
-      // A linked refund is not income; it comes off its purchase instead.
-      sumIncome = txs
-          .where(
-            (t) =>
-                t.type == TxType.income &&
-                !isTransferCategory(t.categoryId) &&
-                finance.countsInTotals(t) &&
-                !finance.isLinkedRefund(t),
-          )
-          .fold(0.0, (s, t) => s + t.amount);
-      sumExpense = txs
-          .where(
-            (t) =>
-                t.type == TxType.expense &&
-                !isTransferCategory(t.categoryId) &&
-                finance.countsInTotals(t),
-          )
-          .fold(0.0, (s, t) => s + finance.netSpendOf(t));
-      sumSavings = txs
-          .where(
-            (t) =>
-                t.type == TxType.expense &&
-                t.categoryId == kSavingsTransferCategoryId &&
-                finance.countsInTotals(t),
-          )
-          .fold(0.0, (s, t) => s + t.amount);
-    } else if (month != null) {
-      sumIncome = finance.incomeInMonth(month);
-      sumExpense = finance.expenseInMonth(month);
-      sumSavings = finance.savingsOutflowInMonth(month);
-    } else if (year != null) {
-      sumIncome = finance.incomeInYear(year, startMonth: startMonth);
-      sumExpense = finance.expenseInYear(year, startMonth: startMonth);
-      sumSavings = finance.savingsOutflowInYear(year, startMonth: startMonth);
-    } else {
-      sumIncome = finance.totalIncome;
-      sumExpense = finance.totalExpense;
-      sumSavings = finance.totalSavingsTransfers;
-    }
+    final (
+      income: sumIncome,
+      expense: sumExpense,
+      savings: sumSavings,
+      net: sumNet,
+    ) = summaryFigures(
+      finance,
+      txs,
+      year: year,
+      month: month,
+      range: range,
+      startMonth: startMonth,
+    );
 
     // Group transactions by month, newest first: the month a row counts in,
     // like the app's month figures, except in a range export, which is
@@ -949,7 +996,7 @@ class BackupService {
                   periodName == null
                       ? 'NET FOR PERIOD'
                       : 'NET FOR ${periodName.toUpperCase()}',
-                  sumIncome - sumExpense - sumSavings,
+                  sumNet,
                   _green,
                 ),
             ],

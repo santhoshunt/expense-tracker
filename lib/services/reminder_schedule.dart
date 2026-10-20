@@ -89,6 +89,8 @@ bool _beforeAutoSince(Reminder r, DateTime due) {
 ///
 /// The current period is the latest month the reminder falls in, at or
 /// before now's month (always now's month for monthly):
+/// - the period before it, when its occurrence passed 1..7 days ago and is
+///   unpaid (2 Nov still owes 30 Oct);
 /// - its occurrence, when [now] is on or before it;
 /// - its occurrence when it passed 1..7 days ago (overdue);
 /// - otherwise the next period's occurrence.
@@ -100,6 +102,11 @@ DateTime reminderNextDue(Reminder r, DateTime now) {
   if (once != null) return once;
   final today = DateTime(now.year, now.month, now.day);
   final current = _alignedAtOrBefore(r, _index(today.year, today.month));
+  final previous = _occurrence(r, current - r.cycle.months);
+  if (!_paid(r, previous) &&
+      today.difference(previous).inDays <= kReminderGraceDays) {
+    return previous;
+  }
   final due = _occurrence(r, current);
   final daysPast = today.difference(due).inDays;
   if (!_paid(r, due) && daysPast <= kReminderGraceDays) return due;
@@ -133,17 +140,35 @@ bool reminderOccurrenceDone(Reminder r, DateTime due) {
 }
 
 /// Whether the current period's occurrence (this month's for monthly, the
-/// latest quarter, half-year or year month otherwise) is marked paid.
+/// latest quarter, half-year or year month otherwise) is marked paid. While
+/// the period before it is still within [kReminderGraceDays] of its due
+/// date, that one is in view instead, as in [reminderNextDue]: on 2 Nov a
+/// day-30 reminder asks about 30 Oct, overdue or just marked paid.
 bool reminderPaidThisPeriod(Reminder r, DateTime now) {
   final once = reminderOnceDate(r);
-  final due =
-      once ??
-      _occurrence(r, _alignedAtOrBefore(r, _index(now.year, now.month)));
+  final due = once ?? _occurrenceInView(r, now);
   final paid = r.lastPaidMonth;
   // Not [_beforeCreated]: a quarterly reminder made after its quarter's
   // month was not paid, it just was not due.
   return (paid != null && paid.compareTo(monthKey(due)) >= 0) ||
       _beforeAutoSince(r, due);
+}
+
+/// The occurrence a repeating reminder's paid state is about: the previous
+/// period's while it is at most [kReminderGraceDays] past and was due at all
+/// (not before the reminder was made or Add it for me was switched on),
+/// otherwise the current period's.
+DateTime _occurrenceInView(Reminder r, DateTime now) {
+  final today = DateTime(now.year, now.month, now.day);
+  final current = _alignedAtOrBefore(r, _index(today.year, today.month));
+  final previous = _occurrence(r, current - r.cycle.months);
+  final inGrace = today.difference(previous).inDays <= kReminderGraceDays;
+  if (inGrace &&
+      !_beforeCreated(r, previous) &&
+      !_beforeAutoSince(r, previous)) {
+    return previous;
+  }
+  return _occurrence(r, current);
 }
 
 /// Calendar days from [now] to the next due; negative = overdue.

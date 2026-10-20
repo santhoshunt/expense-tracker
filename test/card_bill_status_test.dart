@@ -42,10 +42,63 @@ void main() {
     expect(outside.urgent, isFalse);
   });
 
-  test('past the due day the cycle rolls to next month', () {
+  test('an unpaid cycle stays current and overdue for a week', () {
     final s = cardBillStatus(card(), DateTime(2026, 9, 11))!;
+    expect(s.due, DateTime(2026, 9, 10));
+    expect(s.cycleDue, DateTime(2026, 9, 10));
+    expect(s.daysUntil, -1);
+    expect(s.phase, CardBillPhase.billed);
+    expect(s.urgent, isTrue);
+    expect(s.paidThisCycle, isFalse);
+
+    final last = cardBillStatus(card(), DateTime(2026, 9, 17))!;
+    expect(last.due, DateTime(2026, 9, 10));
+    expect(last.daysUntil, -7);
+  });
+
+  test('past the overdue week the cycle rolls to next month', () {
+    final s = cardBillStatus(card(), DateTime(2026, 9, 18))!;
+    expect(s.due, DateTime(2026, 10, 10));
+    expect(s.cycleDue, DateTime(2026, 10, 10));
+    expect(s.paidThisCycle, isFalse);
+  });
+
+  test('overdue across month ends, February and the year end', () {
+    final oct = cardBillStatus(card(dueDay: 20), DateTime(2026, 10, 21))!;
+    expect(oct.due, DateTime(2026, 10, 20));
+    expect(oct.daysUntil, -1);
+    final rolled = cardBillStatus(card(dueDay: 20), DateTime(2026, 10, 28))!;
+    expect(rolled.due, DateTime(2026, 11, 20));
+
+    final feb = cardBillStatus(card(dueDay: 30), DateTime(2026, 3, 2))!;
+    expect(feb.due, DateTime(2026, 2, 28));
+    expect(feb.daysUntil, -2);
+
+    final dec = cardBillStatus(card(dueDay: 31), DateTime(2027, 1, 3))!;
+    expect(dec.due, DateTime(2026, 12, 31));
+    expect(dec.daysUntil, -3);
+    expect(dec.urgent, isTrue);
+  });
+
+  test('a past cycle marked paid needs no grace: the next one is current', () {
+    final s = cardBillStatus(card(paid: '2026-09'), DateTime(2026, 9, 12))!;
+    expect(s.cycleDue, DateTime(2026, 10, 10));
     expect(s.due, DateTime(2026, 10, 10));
     expect(s.paidThisCycle, isFalse);
+    expect(s.daysUntil, 28);
+    expect(s.urgent, isFalse);
+  });
+
+  test('a later month marked paid covers the overdue cycle', () {
+    // A late payment once marked the next month: inside the overdue week
+    // that reads as paid, not overdue, and the shown due skips the marked
+    // month.
+    final s = cardBillStatus(card(paid: '2026-10'), DateTime(2026, 9, 12))!;
+    expect(s.paidThisCycle, isTrue);
+    expect(s.phase, CardBillPhase.paid);
+    expect(s.cycleDue, DateTime(2026, 10, 10));
+    expect(s.due, DateTime(2026, 11, 10));
+    expect(s.urgent, isFalse);
   });
 
   test('paid this cycle: due moves to next month, urgency drops', () {
@@ -168,6 +221,21 @@ void main() {
       expect(
         sub(cardBillStatus(card(), DateTime(2026, 9, 10))!),
         'Due 10 Sep · today',
+      );
+      expect(
+        sub(cardBillStatus(card(), DateTime(2026, 9, 12))!),
+        'Overdue · was due 10 Sep',
+      );
+      expect(
+        sub(cardBillStatus(card(stmtDay: 24), DateTime(2026, 9, 12))!),
+        'Billed 24 Aug · overdue · was due 10 Sep',
+      );
+      expect(
+        cardBillSubtitle(
+          cardBillStatus(card(stmtDay: 24), DateTime(2026, 9, 12))!,
+          withStatement: false,
+        ),
+        'Overdue · was due 10 Sep',
       );
     });
 

@@ -195,4 +195,37 @@ void main() {
     );
     expect(transferFold(tester).collapsed, isFalse);
   });
+
+  testWidgets('creating a unique name never flashes the duplicate error', (
+    tester,
+  ) async {
+    await open(tester);
+    await tester.enterText(find.byType(TextField), 'Garden');
+    await tester.pump();
+    await tester.tap(find.text('Create'));
+    // Every frame of the save and the closing animation: the new category
+    // is in the list before the dialog is gone, and must not match itself.
+    for (var i = 0; i < 20; i++) {
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(
+        find.text('A category with this name already exists'),
+        findsNothing,
+      );
+    }
+    await tester.pumpAndSettle();
+    expect(find.text('New category'), findsNothing);
+    expect(customCategories.where((c) => c.label == 'Garden'), hasLength(1));
+  });
+
+  testWidgets('a name taken by another category still shows the error', (
+    tester,
+  ) async {
+    await open(tester);
+    await tester.enterText(find.byType(TextField), 'food & dining');
+    await tester.pump();
+    expect(
+      find.text('A category with this name already exists'),
+      findsOneWidget,
+    );
+  });
 }

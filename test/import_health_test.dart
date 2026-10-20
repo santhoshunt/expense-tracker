@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/default_rules.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/services/import_health.dart';
@@ -104,6 +105,80 @@ void main() {
       );
       expect(
         SmsTxnParser.looksUnreadable('+919876543210', unreadable),
+        isFalse,
+      );
+    });
+
+    test('a finished debit an ignore phrase in its footer drops', () {
+      const emi =
+          'EMI of Rs.6,215.00 debited from A/c XX4410 on 03-10-26. Next EMI '
+          'of Rs.6,215.00 will be debited on 03-11-26.';
+      const otpFooter =
+          'Rs.1,280.00 has been debited from A/c XX7702 on 03-10-26. Never '
+          'share your OTP with anyone.';
+      for (final body in [emi, otpFooter]) {
+        expect(
+          SmsTxnParser.parse('VM-HDFCBK', body, DateTime(2026, 10, 3)),
+          isNull,
+          reason: body,
+        );
+        expect(
+          SmsTxnParser.looksUnreadable('VM-HDFCBK', body),
+          isTrue,
+          reason: body,
+        );
+      }
+    });
+
+    test(
+      'not a promise, a failure, an OTP code or a phrase the user added',
+      () {
+        for (final body in [
+          'Rs.6,215.00 will be debited from A/c XX4410 on 03-11-26 for EMI.',
+          'Rs.900.00 could not be credited to A/c XX4410. Txn failed.',
+          'Your OTP is 482913 for Rs.2,100.00 debited at Bramble Mart.',
+          'Rs.250.00 not debited from A/c XX4410 due to insufficient balance.',
+          'Rs.900.00 has not been credited to A/c XX4410 as the txn failed.',
+          'Txn of Rs.640.00 at Corvel Store declined; if debited, it will be '
+              'returned in 5 days.',
+        ]) {
+          expect(
+            SmsTxnParser.looksUnreadable('VM-HDFCBK', body),
+            isFalse,
+            reason: body,
+          );
+        }
+        expect(
+          SmsTxnParser.looksUnreadable(
+            'VM-HDFCBK',
+            'Rs.300.00 debited from A/c XX4410 for QUILLRUN SIP on 03-10-26.',
+            ignorePhrases: const [...kDefaultIgnorePhrases, 'quillrun sip'],
+          ),
+          isFalse,
+        );
+      },
+    );
+
+    test('a foreign-currency spend, never a foreign promotion', () {
+      const spend =
+          'USD 42.00 spent on Card XX6610 at Tarnwick Books on 03-10-26.';
+      expect(
+        SmsTxnParser.parse('VM-HDFCBK', spend, DateTime(2026, 10, 3)),
+        isNull,
+      );
+      expect(SmsTxnParser.looksUnreadable('VM-HDFCBK', spend), isTrue);
+      expect(
+        SmsTxnParser.looksUnreadable(
+          'VM-HDFCBK',
+          'Spend USD 100 abroad on your card and earn 5% cashback.',
+        ),
+        isFalse,
+      );
+      expect(
+        SmsTxnParser.looksUnreadable(
+          'VM-HDFCBK',
+          'EUR 15.00 will be charged to Card XX6610 on renewal.',
+        ),
         isFalse,
       );
     });

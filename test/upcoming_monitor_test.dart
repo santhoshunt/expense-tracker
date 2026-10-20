@@ -240,6 +240,105 @@ void main() {
     expect(notifications.shown, isEmpty);
   });
 
+  test('an unpaid card bill past its due date notifies as overdue', () async {
+    final (finance, settings, id) = await cardFixture();
+    await finance.setCardCycle(id, dueDay: 20);
+    await monitor.check(finance, settings, now: DateTime(2026, 10, 22, 10));
+    expect(notifications.shown, hasLength(1));
+    expect(notifications.shown.single.$2, 'HDFC Card bill overdue');
+    expect(notifications.shown.single.$3, contains('was due on'));
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      prefs.getBool(UpcomingMonitor.cardDueKey(id, DateTime(2026, 10, 20))),
+      isTrue,
+    );
+  });
+
+  test('markers name the full due date', () {
+    expect(
+      UpcomingMonitor.recurringDueKey(
+        'expense|test gym',
+        DateTime(2026, 10, 1),
+      ),
+      'recurring_due_fired_expense|test gym_2026-10-01',
+    );
+    expect(
+      UpcomingMonitor.cardDueKey('c1', DateTime(2026, 12, 31)),
+      isNot(UpcomingMonitor.cardDueKey('c1', DateTime(2026, 12, 1))),
+    );
+  });
+
+  test('two expected dates in one month each notify', () async {
+    final finance = FinanceProvider();
+    await finance.load();
+    final settings = SettingsProvider();
+    await settings.load();
+    Future<void> pay(DateTime d) => finance.addTransaction(
+      type: TxType.expense,
+      categoryId: 'entertainment',
+      amount: 499,
+      note: 'Test gym',
+      date: d,
+    );
+    // Every 30 days: expected on 1 Oct, then on 31 Oct.
+    for (final d in [
+      DateTime(2026, 7, 3),
+      DateTime(2026, 8, 2),
+      DateTime(2026, 9, 1),
+    ]) {
+      await pay(d);
+    }
+    await monitor.check(finance, settings, now: DateTime(2026, 9, 30, 10));
+    expect(notifications.shown, hasLength(1));
+
+    await pay(DateTime(2026, 10, 1));
+    await UpcomingMonitor(
+      notifications: notifications,
+    ).check(finance, settings, now: DateTime(2026, 10, 30, 10));
+    expect(notifications.shown, hasLength(2));
+    expect(notifications.shown.last.$3, contains('31 Oct'));
+  });
+
+  test('an overdue repeat stays quiet on the 1st and later runs', () async {
+    final finance = FinanceProvider();
+    await finance.load();
+    final settings = SettingsProvider();
+    await settings.load();
+    for (final d in [
+      DateTime(2026, 7, 30),
+      DateTime(2026, 8, 30),
+      DateTime(2026, 9, 30),
+    ]) {
+      await finance.addTransaction(
+        type: TxType.expense,
+        categoryId: 'entertainment',
+        amount: 299,
+        note: 'Test streaming',
+        date: d,
+      );
+    }
+    await monitor.check(finance, settings, now: DateTime(2026, 10, 30, 10));
+    expect(notifications.shown, hasLength(1));
+    for (final day in [
+      DateTime(2026, 11, 1, 6),
+      DateTime(2026, 11, 1, 12),
+      DateTime(2026, 11, 3, 18),
+    ]) {
+      await UpcomingMonitor(
+        notifications: notifications,
+      ).check(finance, settings, now: day);
+    }
+    expect(notifications.shown, hasLength(1));
+
+    // Still due on the 1st: without its marker it would notify again.
+    SharedPreferences.setMockInitialValues({});
+    await UpcomingMonitor(
+      notifications: notifications,
+    ).check(finance, settings, now: DateTime(2026, 11, 1, 6));
+    expect(notifications.shown, hasLength(2));
+    expect(notifications.shown.last.$3, contains('was expected on'));
+  });
+
   test('concurrent checks coalesce', () async {
     final (finance, settings, _) = await cardFixture();
     await Future.wait([

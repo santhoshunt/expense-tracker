@@ -20,7 +20,7 @@ import org.json.JSONObject
  * The buffer lives in SharedPreferences (same process as the activity). The
  * Flutter side reads it during imports ([peek]) and clears what it saved
  * ([ack]). Capture is best-effort: only
- * texts containing a currency token are kept, and a persistent seen-set stops
+ * texts containing an amount are kept, and a persistent seen-set stops
  * MessagingStyle history reposts from re-adding drained messages.
  */
 class TxnNotificationListener : NotificationListenerService() {
@@ -58,7 +58,11 @@ class TxnNotificationListener : NotificationListenerService() {
             "com.oneplus.mms",                     // OnePlus
         )
 
-        private val MONEY = Regex("""(?i)(?:rs\.?|inr|₹)\s*[\d,]+""")
+        // At least every amount the Dart parser reads: "Rs:354.00",
+        // "INR.5000.00", the paise form "Rs..50" and SBI's unprefixed
+        // "debited by 150.0". A message dropped here never reaches the import.
+        private val MONEY =
+            Regex("""(?i)(?:rs[.:]?|inr[.:]?|₹)\s*\.?\d|(?:debited|credited)\s+by\s+\d""")
 
         /** Total-events counter kept in memory and folded into prefs with the
          * next real write: a disk write per device notification runs on the
@@ -87,17 +91,39 @@ class TxnNotificationListener : NotificationListenerService() {
         private fun hashOf(sender: String, body: String) =
             "${sender}|${body}".hashCode().toString()
 
+        /** A MessagingStyle entry's own time is the same in every history
+         * repost, and differs for a second alert with the same text. */
+        private fun hashOf(sender: String, body: String, messageTime: Long) =
+            "${sender}|${body}|${messageTime}".hashCode().toString()
+
+        /** [messageTime] is the MessagingStyle entry's own time, or 0 for a
+         * plain notification, whose post time changes on every repost. */
         @Synchronized
-        fun store(context: Context, sender: String, body: String, timeMillis: Long) {
+        fun store(
+            context: Context,
+            sender: String,
+            body: String,
+            timeMillis: Long,
+            messageTime: Long = 0L,
+        ) {
             flushTotalEvents(context)
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
             // Seen-set survives drains: Google Messages reposts the whole
             // conversation history in each MessagingStyle notification, which
             // would otherwise re-buffer already-imported messages.
-            val hash = hashOf(sender, body)
+            val plainHash = hashOf(sender, body)
+            val hash = if (messageTime > 0) hashOf(sender, body, messageTime) else plainHash
             val seen = LinkedHashSet(prefs.getStringSet(KEY_SEEN, emptySet())!!)
             if (hash in seen) return
+            if (hash != plainHash && plainHash in seen) {
+                // Seen under the key without a time: a repost of a message
+                // already captured. Keyed by time from here on.
+                seen.remove(plainHash)
+                seen.add(hash)
+                prefs.edit().putStringSet(KEY_SEEN, seen).apply()
+                return
+            }
             seen.add(hash)
             while (seen.size > MAX_SEEN) seen.remove(seen.first())
 
@@ -109,13 +135,16 @@ class TxnNotificationListener : NotificationListenerService() {
                     .put("body", body)
                     .put("date", timeMillis)
                     .put("seq", seq)
+                    .put("key", hash)
             )
             while (arr.length() > MAX_BUFFER) {
                 // The evicted (oldest, never-drained) message must also leave
                 // the seen-set, or a repost of it can never be recaptured.
                 val evicted = arr.getJSONObject(0)
                 seen.remove(
-                    hashOf(evicted.getString("address"), evicted.getString("body"))
+                    evicted.optString("key", "").ifEmpty {
+                        hashOf(evicted.getString("address"), evicted.getString("body"))
+                    }
                 )
                 arr.remove(0)
             }
@@ -264,7 +293,13 @@ class TxnNotificationListener : NotificationListenerService() {
                 val sender = (b.getCharSequence("sender")?.toString() ?: "").ifBlank { title }
                 if (sender.isBlank()) continue
                 val time = b.getLong("time", 0L)
-                store(applicationContext, sender, text, if (time > 0) time else sbn.postTime)
+                store(
+                    applicationContext,
+                    sender,
+                    text,
+                    if (time > 0) time else sbn.postTime,
+                    time,
+                )
             }
             // Sample the newest message so a "0 captured" report reveals what
             // the listener actually receives — e.g. an Android 15+ "sensitive

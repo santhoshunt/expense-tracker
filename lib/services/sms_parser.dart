@@ -807,9 +807,13 @@ class SmsTxnParser {
   /// True when [body] from [sender] passes the sender and transactional
   /// checks [parse] applies first, but yields no positive amount or no
   /// direction: a bank alert this parser cannot read, often because the
-  /// bank changed its format. OTPs, promotions and ignore phrases fail the
-  /// earlier checks, and promotions ([looksLikeSpam]) are left out too, so
-  /// they never count. Mirrors [parse]'s order.
+  /// bank changed its format. Promotions ([looksLikeSpam]) never count.
+  /// Mirrors [parse]'s order.
+  ///
+  /// A body the transactional check rejects counts only when it still states
+  /// a finished debit or credit beside an amount ([_droppedButDone]): a
+  /// built-in ignore phrase in a real alert's footer, or a foreign-currency
+  /// spend.
   static bool looksUnreadable(
     String sender,
     String body, {
@@ -835,7 +839,7 @@ class SmsTxnParser {
       return false;
     }
     if (!bodyLooksTransactional(body, ignorePhrases: ignorePhrases)) {
-      return false;
+      return _droppedButDone(body, ignorePhrases);
     }
     final amountMatch = _pickAmountMatch(body);
     if (amountMatch == null) return true;
@@ -844,6 +848,71 @@ class SmsTxnParser {
     );
     if (amount == null || amount <= 0) return true;
     return _direction(body, amountMatch.start) == null;
+  }
+
+  /// A debit or credit that has happened. After "be", "not" or "if" it is a
+  /// promise, a failure or a condition ("will be debited", "has not been
+  /// credited", "if debited"); "has been debited" still counts.
+  static final RegExp _doneVerbRe = RegExp(
+    r'(?<![a-z])(?<!\b(?:be|not|not\s+been|if)\s+)'
+    r'(?:debited|credited|spent|withdrawn|deducted|charged)(?![a-z])',
+    caseSensitive: false,
+  );
+
+  /// An amount in a currency the import does not read.
+  static final RegExp _foreignAmountRe = RegExp(
+    r'\b(?:usd|eur|gbp|aed)\s*[.:]?\s*\d[\d,]*(?:\.\d{1,2})?',
+    caseSensitive: false,
+  );
+
+  /// An OTP delivery: "123456 is your OTP", "OTP is 123456", "OTP: 123456".
+  /// A footer such as "Never share your OTP" carries no code.
+  static final RegExp _otpCodeRe = RegExp(
+    r'\b\d{4,8}\s+is\s+(?:your|the)\b[^.]{0,30}?'
+    r'\b(?:otp|one[\s-]time\s+password)\b'
+    r'|\b(?:otp|one[\s-]time\s+password)(?:\s+(?:is|code))?\s*[:=-]?\s*'
+    r'\d{4,8}\b',
+    caseSensitive: false,
+  );
+
+  /// The verb and the amount at most this many characters apart.
+  static const int _doneVerbReach = 20;
+
+  static final RegExp _sentenceEndRe = RegExp(r'[.!?;](?:\s|$)');
+
+  /// Whether [body], which [bodyLooksTransactional] rejected, still states a
+  /// finished debit or credit beside an amount, in the same sentence. Only
+  /// when every ignore phrase it hit is a built-in, and it is no OTP
+  /// delivery: a phrase the user added drops a message on purpose.
+  static bool _droppedButDone(String body, List<String> ignorePhrases) {
+    for (final p in ignorePhrases) {
+      if (!patternMatchesText(p, body)) continue;
+      final builtIn = kDefaultIgnorePhrases.contains(p.toLowerCase().trim());
+      if (!builtIn) return false;
+    }
+    if (_otpCodeRe.hasMatch(body)) return false;
+    final balances = _balanceSpans(body);
+    final amounts = [
+      for (final m in _amountRe.allMatches(body))
+        if (!balances.any((s) => m.start >= s.$1 && m.end <= s.$2)) m,
+      ..._foreignAmountRe.allMatches(body),
+    ];
+    for (final v in _doneVerbRe.allMatches(body)) {
+      for (final a in amounts) {
+        final String gap;
+        if (v.start >= a.end) {
+          gap = body.substring(a.end, v.start);
+        } else if (v.end <= a.start) {
+          gap = body.substring(v.end, a.start);
+        } else {
+          continue;
+        }
+        if (gap.length <= _doneVerbReach && !_sentenceEndRe.hasMatch(gap)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /// Step-by-step diagnosis of how [parse] treats one message — backs the

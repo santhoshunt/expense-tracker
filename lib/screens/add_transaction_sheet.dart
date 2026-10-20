@@ -682,6 +682,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         ? normalizePersonName(_fromCtrl.text)
         : '';
     final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
+    final outer = _outerMessenger();
     SettingsProvider? settings;
     try {
       settings = context.read<SettingsProvider>();
@@ -690,6 +692,14 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     }
     // Read before the save: the key follows the note as typed.
     final subChange = _subscriptionChange();
+    // What the change overwrites, for the confirming save's Undo.
+    final subBefore = subChange == null
+        ? null
+        : (
+            key: subChange.key,
+            pins: finance.subscriptionPinsBefore([subChange.key]),
+            hidden: settings?.hiddenUpcoming.contains(subChange.key),
+          );
     // Text typed in the tag field but not yet added is saved too.
     final tags = pendingTagsOf(_tags, _tagCtrl);
     setState(() => _busy = true);
@@ -769,20 +779,28 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       if (mounted) setState(() => _busy = false);
       rethrow;
     }
-    if (confirms && mounted) {
+    // Offered whether or not the sheet is still mounted: the offer goes to
+    // the host or the caller's messenger, read before the awaits.
+    if (confirms) {
       // Without the "new" marker opening the sheet cleared, as on delete.
       final before = widget.existing!.copyWith(unseen: false);
       _offerUndo(
         'Saved and confirmed',
-        () => finance.restoreEditedTransactions([before]),
+        () {
+          finance.restoreEditedTransactions([before]);
+          if (subBefore != null) {
+            _undoSubscription(finance, settings, subBefore);
+          }
+        },
         icon: Icons.done_all,
         tone: AppToastTone.success,
         closes: true,
+        outer: outer,
       );
     }
     // Every add says what it saved, with Undo. A Subscription mark made
     // while adding belongs to the merchant and stays.
-    if (newId != null && widget.announceAdd && mounted) {
+    if (newId != null && widget.announceAdd) {
       final id = newId;
       _offerUndo(
         'Added ${categoryById(_categoryId, fallbackType: _type).label} · '
@@ -791,9 +809,50 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         icon: Icons.add,
         tone: AppToastTone.success,
         closes: true,
+        outer: outer,
       );
     }
-    navigator.pop(newId);
+    _close(navigator, route, newId);
+  }
+
+  /// Puts back what a Subscription change overwrote: the merchant's mark,
+  /// and whether the upcoming list hid it ([hidden] null leaves that).
+  static Future<void> _undoSubscription(
+    FinanceProvider finance,
+    SettingsProvider? settings,
+    ({String key, Map<String, SubscriptionCycle?> pins, bool? hidden}) before,
+  ) async {
+    await finance.setSubscriptionPins(before.pins);
+    final hidden = before.hidden;
+    if (settings == null || hidden == null) return;
+    if (hidden) {
+      await settings.hideUpcoming(before.key);
+    } else {
+      await settings.unhideUpcoming(before.key);
+    }
+  }
+
+  /// The caller's messenger, for an offer made as the sheet closes. Read
+  /// while the sheet is mounted: an action that awaits may land after it.
+  ScaffoldMessengerState? _outerMessenger() =>
+      widget.outerMessenger ?? ScaffoldMessenger.maybeOf(context);
+
+  /// Closes the sheet's [route] once an awaited action lands. Back is
+  /// swallowed while [_busy], but the route can still go another way (a
+  /// direct pop, the page beneath closing): then a pop would close the
+  /// wrong route, so a route no longer active is left alone, and one
+  /// under another route is removed in place.
+  static void _close(
+    NavigatorState navigator,
+    ModalRoute<dynamic>? route, [
+    String? result,
+  ]) {
+    if (route == null || !route.isActive) return;
+    if (route.isCurrent) {
+      navigator.pop(result);
+    } else {
+      navigator.removeRoute(route, result);
+    }
   }
 
   Future<void> _delete() async {
@@ -801,56 +860,68 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     setState(() => _busy = true);
     final finance = context.read<FinanceProvider>();
     final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
+    final outer = _outerMessenger();
     // Without the "new" marker opening the sheet cleared, so Undo does not
     // bring it back.
     final tx = widget.existing!.copyWith(unseen: false);
     // Deleting one leg of a pair unlinks the other; the snapshot lets Undo
     // put both the row and the partner's link back.
     final partner = await finance.deleteTransaction(tx.id);
-    if (!mounted) return;
     // Immediate delete + Undo instead of a confirmation dialog. The offer
     // goes to the app-level messenger or the host sheet, so it outlives
-    // this sheet.
+    // this sheet, and is made even when the sheet is already gone.
     _offerUndo(
       'Deleted ${tx.category.label} · ${fmtMoney(tx.amount)}',
       () =>
           finance.restoreEditedTransactions([tx, ?partner], reAddMissing: true),
       icon: Icons.delete_outline,
       closes: true,
+      outer: outer,
     );
-    navigator.pop();
+    _close(navigator, route);
   }
 
   /// Offers Undo for a delete, Unpair, Unlink, a link, an add or a
   /// confirming save. [closes] marks an offer made as the sheet pops: it
   /// goes to [_AddTransactionForm.onUndoable] when the host takes it, else
-  /// to the caller's messenger, which outlives the sheet. The others leave
-  /// the sheet open and show on its own messenger, above it, host or not.
+  /// to [outer] (the caller's messenger, which outlives the sheet). The
+  /// others leave the sheet open and show on its own messenger, above it,
+  /// host or not.
   void _offerUndo(
     String message,
     VoidCallback undo, {
     required IconData icon,
     AppToastTone tone = AppToastTone.removal,
     bool closes = false,
+    ScaffoldMessengerState? outer,
   }) {
     final host = widget.onUndoable;
-    if (host == null || !closes) {
-      if (closes) {
-        showUndoSnackBarOn(
-          widget.outerMessenger ?? ScaffoldMessenger.of(context),
-          message,
-          undo,
-          icon: icon,
-          tone: tone,
-        );
-      } else {
+    if (!closes) {
+      if (mounted) {
         showUndoSnackBar(context, message, undo, icon: icon, tone: tone);
+      }
+      return;
+    }
+    if (host == null) {
+      final messenger = outer ?? (mounted ? _outerMessenger() : null);
+      if (messenger != null && messenger.mounted) {
+        showUndoSnackBarOn(messenger, message, undo, icon: icon, tone: tone);
       }
       return;
     }
     // The icon names what is undone: a bin for a delete, a link for Unpair.
     // The host shows the toast, so the removal thud is its to give.
     host(message, undo, icon: icon, tone: tone);
+  }
+
+  /// [_pairedBanner] for the row as the ledger holds it: once Unpair or
+  /// Delete clears the link the banner goes, rather than report the other
+  /// leg missing while the sheet closes.
+  List<Widget> _pairedBanners(BuildContext context) {
+    final tx = _live(context.watch<FinanceProvider>());
+    if (tx == null || tx.pairId == null) return const [];
+    return [_pairedBanner(context, tx)];
   }
 
   /// "Paired transfer" line for a row linked to its other leg, with Unpair.
@@ -892,22 +963,29 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           ),
           TextButton(
             style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
-            onPressed: () async {
-              final pairId = tx.pairId!;
-              final a = tx.id;
-              final b = partner?.id;
-              final navigator = Navigator.of(context);
-              await finance.unpair(pairId);
-              if (!context.mounted) return;
-              // Categories stay as they are (transfer); Undo re-links.
-              _offerUndo(
-                'Unpaired',
-                b == null ? () {} : () => finance.pairTransactions(a, b),
-                icon: Icons.link_off,
-                closes: true,
-              );
-              navigator.pop();
-            },
+            onPressed: _busy
+                ? null
+                : () async {
+                    // The same latch as Save and Delete: a second tap
+                    // would pop the page beneath.
+                    if (_busy) return;
+                    setState(() => _busy = true);
+                    // Both legs as they are: Undo puts back this exact pair.
+                    final before = [tx, ?finance.pairPartnerOf(tx)];
+                    final navigator = Navigator.of(context);
+                    final route = ModalRoute.of(context);
+                    final outer = _outerMessenger();
+                    await finance.unpair(tx.pairId!);
+                    // Categories stay as they are (transfer).
+                    _offerUndo(
+                      'Unpaired',
+                      () => finance.restoreEditedTransactions(before),
+                      icon: Icons.link_off,
+                      closes: true,
+                      outer: outer,
+                    );
+                    _close(navigator, route);
+                  },
             child: const Text('Unpair'),
           ),
         ],
@@ -1542,8 +1620,11 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       canPop: false,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
+        // A save, delete or Unpair in flight closes the sheet itself when
+        // it lands; closing it here too would close the page beneath.
+        if (_busy) return;
         final navigator = Navigator.of(context);
-        if (_busy || _fingerprint() == _initialFingerprint) {
+        if (_fingerprint() == _initialFingerprint) {
           navigator.pop();
           return;
         }
@@ -1602,8 +1683,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  if (widget.existing!.pairId != null)
-                    _pairedBanner(context, widget.existing!),
+                  ..._pairedBanners(context),
                   ..._refundBanners(context),
                 ],
                 // No per-segment icons and no selected checkmark: three

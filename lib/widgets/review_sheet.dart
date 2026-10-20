@@ -469,11 +469,14 @@ class _TransferSuggestionRow extends StatelessWidget {
       },
       acceptLabel: 'Pair',
       onAccept: () async {
+        // Pairing confirms both legs and rewrites their categories; Undo
+        // puts the rows back as they were, a pending leg back in review.
+        final before = [s.out, s.incoming];
         final pairId = await finance.pairTransactions(s.out.id, s.incoming.id);
         if (pairId == null) return;
         offerUndo(
           'Paired as $kindLabel',
-          () => finance.unpair(pairId),
+          () => finance.restoreEditedTransactions(before),
           icon: Icons.link,
         );
       },

@@ -710,6 +710,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       // to clear it with, and would keep the list empty.
       final liveTags = {for (final u in finance.allTags) tagKey(u.tag)};
       _tagFilter.removeWhere((k) => !liveTags.contains(k));
+      // A deleted or merged account has no chip, and its filter would keep
+      // emptying the list.
+      if (_accountId != null && finance.accountById(_accountId!) == null) {
+        _accountId = null;
+      }
     }
     return _pageCache[f] ??= _buildPageData(f, finance, allConfirmed);
   }
@@ -1023,8 +1028,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         : finance.accountById(_accountId!);
 
     // Built once: the Filters badge counts exactly the chips the strip shows.
-    // _pageDataFor above has already dropped the ids of deleted categories,
-    // groups, budgets and tags, so every filter still on has its chip.
+    // _pageDataFor above has already dropped the ids of deleted accounts,
+    // categories, groups, budgets and tags, so every filter still on has its
+    // chip.
     final filterChips = _activeFilterChips(finance, activeAccount);
     final hasFilterChips = filterChips.isNotEmpty;
     // The last chip in strip order that was not there last build: a
@@ -1444,6 +1450,22 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (_selected.contains(t.id)) t,
   ];
 
+  /// [_selectedSnapshot] plus the other leg of every selected transfer:
+  /// an edit that breaks a pair unlinks both legs, so Undo needs both.
+  List<Tx> _selectedSnapshotWithPartners(FinanceProvider finance) {
+    final rows = _selectedSnapshot(finance);
+    final pairIds = {
+      for (final t in rows)
+        if (t.pairId != null) t.pairId,
+    };
+    if (pairIds.isEmpty) return rows;
+    return [
+      ...rows,
+      for (final t in finance.transactions)
+        if (!_selected.contains(t.id) && pairIds.contains(t.pairId)) t,
+    ];
+  }
+
   /// Bulk category. A category belongs to one side (income/expense), so the
   /// sheet offers only categories whose type appears in the selection, and
   /// the provider applies each one to matching-type rows only.
@@ -1480,7 +1502,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     )) {
       return;
     }
-    final snapshot = _selectedSnapshot(finance);
+    final snapshot = _selectedSnapshotWithPartners(finance);
     final changed = await finance.setCategoryForMany(
       Set.of(_selected),
       picked.id,
@@ -1863,6 +1885,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final finance = context.read<FinanceProvider>();
     final ids = _selected.toList();
     if (ids.length != 2) return;
+    // Pairing rewrites both legs (category, review state, split), so Undo
+    // puts the rows back as they were rather than only unlinking them.
+    final before = _selectedSnapshot(finance);
     final pairId = await finance.pairTransactions(ids[0], ids[1]);
     if (!mounted) return;
     if (pairId == null) {
@@ -1885,7 +1910,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     showUndoSnackBar(
       context,
       'Paired as transfer',
-      () => finance.unpair(pairId),
+      () => finance.restoreEditedTransactions(before),
       icon: Icons.link,
     );
   }
@@ -1954,6 +1979,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       showAppToast(context, refusal);
       return;
     }
+    // Linking takes a refund the one-time pass offered off its list; Undo
+    // puts it back, as on the review sheet.
+    final wasInReview = finance.refundReviewIds.contains(refund.id);
     // A transfer pair's leg leaves its pair first: a row is in one pair at
     // a time. Its category stays as it is.
     for (final id in pairIds) {
@@ -1979,7 +2007,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       refund.amount >= purchase.amount - 0.005
           ? 'Linked as refund: the purchase no longer counts'
           : 'Linked as refund: ${fmtMoney(refund.amount)} comes off',
-      () => finance.restoreEditedTransactions(snapshot),
+      () {
+        finance.restoreEditedTransactions(snapshot);
+        if (wasInReview) finance.restoreRefundReviewId(refund.id);
+      },
       icon: Icons.undo,
     );
   }

@@ -19,6 +19,9 @@ class FakeSmsSource implements SmsSource {
   List<SmsMessage> inbox = [];
   bool complete = true;
 
+  /// The window start of the last query.
+  DateTime? lastSince;
+
   @override
   bool get isSupported => true;
 
@@ -36,6 +39,7 @@ class FakeSmsSource implements SmsSource {
     required DateTime since,
     DateTime? until,
   }) async {
+    lastSince = since;
     final msgs = inbox
         .where(
           (m) =>
@@ -187,6 +191,49 @@ void main() {
         expect(prefs.getInt(_markerKey), marker);
       },
     );
+
+    test('a future-dated message moves the marker to the scan only', () async {
+      final before = DateTime.now();
+      SharedPreferences.setMockInitialValues({
+        _markerKey: before
+            .subtract(const Duration(days: 3))
+            .millisecondsSinceEpoch,
+      });
+      source.inbox = [msg(before.add(const Duration(days: 30)))];
+
+      await service.run(await finance());
+
+      final prefs = await SharedPreferences.getInstance();
+      final marker = prefs.getInt(_markerKey)!;
+      expect(marker, greaterThanOrEqualTo(before.millisecondsSinceEpoch));
+      expect(marker, lessThanOrEqualTo(DateTime.now().millisecondsSinceEpoch));
+
+      // An alert arriving after the scan is still inside the next window.
+      final alert = msg(DateTime.now().add(const Duration(milliseconds: 200)));
+      source.inbox = [...source.inbox, alert];
+      await service.run(await finance());
+      expect(alert.date.isAfter(source.lastSince!), isTrue);
+    });
+
+    test('a stored marker ahead of the clock is taken as now', () async {
+      final before = DateTime.now();
+      SharedPreferences.setMockInitialValues({
+        _markerKey: before.add(const Duration(days: 30)).millisecondsSinceEpoch,
+      });
+
+      await service.run(await finance());
+
+      final prefs = await SharedPreferences.getInstance();
+      final marker = prefs.getInt(_markerKey)!;
+      expect(marker, greaterThanOrEqualTo(before.millisecondsSinceEpoch));
+      expect(marker, lessThanOrEqualTo(DateTime.now().millisecondsSinceEpoch));
+      expect(source.lastSince!.millisecondsSinceEpoch, marker);
+
+      final alert = msg(DateTime.now().add(const Duration(milliseconds: 200)));
+      source.inbox = [alert];
+      await service.run(await finance());
+      expect(alert.date.isAfter(source.lastSince!), isTrue);
+    });
 
     test('first run (no marker) records one', () async {
       SharedPreferences.setMockInitialValues({});

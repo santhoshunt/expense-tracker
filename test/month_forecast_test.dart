@@ -386,6 +386,34 @@ void main() {
   );
 
   test(
+    'a pinned quarterly bill paid on 31 October is not November\'s',
+    () async {
+      final p = await load();
+      for (final m in [8, 9, 10]) {
+        await spend(p, DateTime(2026, m, 1, 10), 400);
+        await spend(p, DateTime(2026, m, 25, 10), 1100);
+      }
+      // Paid 31 Oct, next due 31 Jan: 92 days, one calendar quarter. Its
+      // 91-day approximation would put the paid cycle on 1 Nov.
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'shopping',
+        amount: 999,
+        note: 'ShopMart',
+        date: DateTime(2026, 10, 31, 12),
+      );
+      await p.setSubscriptionPins({
+        'expense|shopmart': SubscriptionCycle.quarterly,
+      });
+      final f = forecast(p, at: DateTime(2026, 11, 20, 14));
+      // Not paid for November, so October's row is everyday: per day after
+      // the 20th August ₹100, September ₹110, October ₹190.82; the middle
+      // is ₹110, over November's 10 days left.
+      expect(f.everyday, closeTo(1100, 0.01));
+    },
+  );
+
+  test(
     'a typed row of a bill amount in another category is everyday',
     () async {
       final p = await load();

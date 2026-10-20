@@ -83,9 +83,7 @@ String? merchantIdentityOf(Tx t) {
   if (t.suspectedSpam || isTransferCategory(t.categoryId)) return null;
   // Never key on t.sender — it is the bank's DLT channel, so every debit
   // from the same bank would collapse into one "pattern".
-  var identity = t.source == TxSource.sms
-      ? SmsTxnParser.merchantOf(t.smsText).toLowerCase()
-      : '';
+  var identity = alertMerchantOf(t).toLowerCase();
   if (identity.isEmpty) {
     identity = _identityText(t.payee);
     // A payee of one or two characters is too short to key on; the note
@@ -98,6 +96,16 @@ String? merchantIdentityOf(Tx t) {
   // "merchant" is noise.
   if (!identity.contains(RegExp('[a-z]'))) return null;
   return identity;
+}
+
+/// The merchant an imported alert names, as the parser reads it; empty for
+/// a manual row or an alert that names none. A row whose alert text is gone
+/// (restored from a backup) uses the merchant the backup carried
+/// ([Tx.smsMerchant]).
+String alertMerchantOf(Tx t) {
+  if (t.source != TxSource.sms) return '';
+  if (t.smsBody.isEmpty && t.smsMerchant.isNotEmpty) return t.smsMerchant;
+  return SmsTxnParser.merchantOf(t.smsText);
 }
 
 /// Typed text as an identity: lowercased, every run of other characters one
@@ -328,8 +336,7 @@ String? _aliasLabel(Tx t, MerchantAliasLookup? alias) {
 /// The merchant an imported alert names, title-cased; null for a manual
 /// row or an alert that names none.
 String? _alertMerchantLabel(Tx t) {
-  if (t.source != TxSource.sms) return null;
-  final m = SmsTxnParser.merchantOf(t.smsText);
+  final m = alertMerchantOf(t);
   return m.isEmpty ? null : _titleCase(m);
 }
 

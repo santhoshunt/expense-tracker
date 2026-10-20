@@ -382,6 +382,19 @@ class NotificationService {
     await _plugin.cancel(id: reviewNotificationId);
   }
 
+  /// Whether the note with [id] is booked and not delivered yet. Static so
+  /// the test stand-ins, which implement this class, need not provide it.
+  static Future<bool> isBooked(int id) => instance._isBooked(id);
+
+  Future<bool> _isBooked(int id) async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) {
+      return false;
+    }
+    await init();
+    final pending = await _plugin.pendingNotificationRequests();
+    return pending.any((r) => r.id == id);
+  }
+
   /// Drops the booked recap note, if any. One already showing stays: the
   /// plugin's cancel removes both, so it runs only while still booked.
   Future<void> cancelRecap() async {

@@ -506,6 +506,12 @@ class Tx {
   /// existed, whose note stands in for it (see merchantIdentityOf).
   final String payee;
 
+  /// The merchant an imported alert names, as the parser read it, kept for
+  /// a row whose [smsBody] is gone: backups leave the alert text out and
+  /// carry this instead. Empty on manual rows and on rows that still hold
+  /// their alert (the merchant is read from [smsBody] there).
+  final String smsMerchant;
+
   const Tx({
     required this.id,
     required this.type,
@@ -532,6 +538,7 @@ class Tx {
     this.unseen = false,
     this.refundOf,
     this.payee = '',
+    this.smsMerchant = '',
   });
 
   /// The date period figures use: [countIn] when set, else [date].
@@ -596,6 +603,7 @@ class Tx {
       unseen: unseen,
       refundOf: refundOf,
       payee: payee,
+      smsMerchant: smsMerchant,
     );
   }
 
@@ -665,6 +673,8 @@ class Tx {
     unseen: unseen ?? this.unseen,
     refundOf: clearRefundOf ? null : (refundOf ?? this.refundOf),
     payee: payee ?? this.payee,
+    // Carried verbatim like smsBody.
+    smsMerchant: smsMerchant,
   );
 
   Map<String, dynamic> toJson() => {
@@ -693,6 +703,7 @@ class Tx {
     if (unseen) 'unseen': true,
     if (refundOf != null) 'refundOf': refundOf,
     if (payee.isNotEmpty) 'payee': payee,
+    if (smsMerchant.isNotEmpty) 'smsMerchant': smsMerchant,
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) {
@@ -735,6 +746,9 @@ class Tx {
       unseen: json['unseen'] == true,
       refundOf: json['refundOf'] is String ? json['refundOf'] as String : null,
       payee: json['payee'] is String ? json['payee'] as String : '',
+      smsMerchant: json['smsMerchant'] is String
+          ? json['smsMerchant'] as String
+          : '',
     );
   }
 }

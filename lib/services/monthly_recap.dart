@@ -140,21 +140,31 @@ List<DateTime> recapMonths(Iterable<DateTime> monthsWithData, DateTime now) {
 /// day of the month after [now].
 DateTime nextRecapTime(DateTime now) => DateTime(now.year, now.month + 1, 1, 9);
 
+/// How long after its 09:00 time a booked note is left alone. The recap and
+/// digest notes are inexact, so Android may deliver them late: an app open
+/// in that time must not cancel or replace one not shown yet.
+const Duration kLateNoteWindow = Duration(hours: 6);
+
 /// The recap note to have booked as of [now]: when it fires and the month
 /// it covers, or null for none. [monthsWithData] are the months holding
 /// confirmed transactions (first days, as FinanceProvider reports them).
 ///
 /// Before 09:00 on the 1st, last month's note is still ahead: opening the
-/// app at 08:30 must not move it to next month or drop it.
+/// app at 08:30 must not move it to next month or drop it. With [keepLate]
+/// that holds until [kLateNoteWindow] after 09:00, and the booking's time
+/// may then be past: the caller keeps the note still booked rather than
+/// book this one again. Without it, the next note after the 09:00 one.
 ({DateTime when, DateTime month})? recapBooking(
   DateTime now,
-  Iterable<DateTime> monthsWithData,
-) {
+  Iterable<DateTime> monthsWithData, {
+  bool keepLate = true,
+}) {
   final thisMonth = DateTime(now.year, now.month);
   final dueToday = DateTime(now.year, now.month, 1, 9);
   final lastMonth = DateTime(now.year, now.month - 1);
   final months = monthsWithData.toSet();
-  if (now.isBefore(dueToday) && months.contains(lastMonth)) {
+  final until = keepLate ? dueToday.add(kLateNoteWindow) : dueToday;
+  if (now.isBefore(until) && months.contains(lastMonth)) {
     return (when: dueToday, month: lastMonth);
   }
   if (months.contains(thisMonth)) {

@@ -43,7 +43,8 @@ Future<void> showReminderEditor(
   final nameCtrl = TextEditingController(text: existing?.name ?? name ?? '');
   final startAmount = existing == null ? amount : existing.expectedAmount;
   final amountCtrl = TextEditingController(
-    text: startAmount == null ? '' : startAmount.toStringAsFixed(0),
+    // Paise kept: a rounded figure would be saved back rounded.
+    text: startAmount == null ? '' : fmtFieldNumber(startAmount),
   );
   var day = (existing?.dayOfMonth ?? dayOfMonth ?? 1).clamp(1, 31);
   var selectedCategory = existing?.categoryId ?? categoryId ?? 'other_expense';

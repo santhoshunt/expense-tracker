@@ -33,7 +33,8 @@ Future<void> showBudgetDialog(
     text: existing?.name ?? presetName ?? '',
   );
   final limitCtrl = TextEditingController(
-    text: existing == null ? '' : existing.limit.toStringAsFixed(0),
+    // Paise kept: a rounded figure would be saved back rounded.
+    text: existing == null ? '' : fmtFieldNumber(existing.limit),
   );
   var mode = existing?.mode ?? presetMode ?? BudgetMode.exclude;
   final selected = {

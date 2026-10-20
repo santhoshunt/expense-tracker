@@ -1459,6 +1459,9 @@ class _TransactionsTabState extends State<_TransactionsTab> {
     // authoritative, which keeps transfer categories (either direction)
     // consistent with the app-wide `tx.type == category.type` invariant.
     final c = categoryById(categoryId);
+    // A transfer leg moved out of the transfer categories unlinks its
+    // partner too, so Undo puts both back.
+    final partner = finance.pairPartnerOf(before);
     await finance.updateTransaction(
       before.copyWith(categoryId: c.id, type: c.type),
     );
@@ -1466,7 +1469,7 @@ class _TransactionsTabState extends State<_TransactionsTab> {
     setState(() => _ruleOfferId = before.id);
     showUndoSnackBar(context, 'Moved to ${c.label}', () {
       // The snapshot also restores the row's earlier "set by hand" flag.
-      finance.restoreEditedTransactions([before]);
+      finance.restoreEditedTransactions([before, ?partner]);
       if (mounted && _ruleOfferId == before.id) {
         setState(() => _ruleOfferId = null);
       }

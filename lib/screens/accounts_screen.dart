@@ -1610,7 +1610,9 @@ class _CardFigures extends StatelessWidget {
                   ),
                 );
               }
-              final s = cardBillStatus(account, DateTime.now())!;
+              // A closed card has no bill cycle: no line.
+              final s = cardBillStatus(account, DateTime.now());
+              if (s == null) return const SizedBox.shrink();
               final line = Text(
                 cardBillSubtitle(s),
                 style: TextStyle(
@@ -2828,6 +2830,7 @@ Future<void> showAddAccountDialog(
                         final name = nameCtrl.text.trim();
                         final finance = ctx.read<FinanceProvider>();
                         final navigator = Navigator.of(ctx);
+                        final route = ModalRoute.of(ctx);
                         final messenger = ScaffoldMessenger.of(context);
                         final kind = kindCtrl.text.trim();
                         // A throw used to leave the dialog open forever with no
@@ -2867,7 +2870,9 @@ Future<void> showAddAccountDialog(
                               );
                             }
                           }
-                          navigator.pop();
+                          // A barrier tap during the save already closed
+                          // the dialog; a pop now would close the page.
+                          if (route?.isCurrent == true) navigator.pop();
                         } catch (_) {
                           if (!ctx.mounted) return;
                           setState(() {

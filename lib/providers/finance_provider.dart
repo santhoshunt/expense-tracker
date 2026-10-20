@@ -14,6 +14,7 @@ import '../models/spend_budget.dart';
 import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../services/budget.dart';
+import '../services/card_bill.dart';
 import '../services/import_health.dart' show kImportHealthKey;
 import '../services/recurring_detector.dart';
 import '../services/refund_matching.dart';
@@ -54,7 +55,8 @@ typedef DeletedBudget = ({
 /// hand it to [FinanceProvider.restoreCategory]: the category and its place
 /// in the custom list, pre-delete copies of the rows it moved and of the
 /// reminders it remapped, the rules it removed with their old positions
-/// (ascending), its group, and the budgets that listed it.
+/// (ascending), its group, the budgets that listed it, and pre-delete
+/// copies of the other legs of moved rows' transfer pairs.
 typedef DeletedCategory = ({
   TxCategory category,
   int index,
@@ -63,6 +65,7 @@ typedef DeletedCategory = ({
   String? groupId,
   List<String> budgetIds,
   List<Reminder> remindersBefore,
+  List<Tx> pairPartners,
 });
 
 /// What [FinanceProvider.deleteGroup] removed, so a snackbar Undo can hand
@@ -73,6 +76,10 @@ typedef DeletedGroup = ({
   int index,
   List<String> memberIds,
 });
+
+/// One alert in the import's fuzzy duplicate lookup: when it was dated, its
+/// account key, and the balance it stated when it came from the inbox.
+typedef _FuzzyEntry = ({DateTime date, String? acct, double? bal});
 
 /// Income / expense / savings totals for one month, plus the per-category
 /// expense breakdown and the transfer flows — all produced in a single pass.
@@ -367,6 +374,14 @@ class FinanceProvider extends ChangeNotifier {
   /// not due.
   final Map<String, String> _patternPaid = {};
   final List<Reminder> _reminders = [];
+
+  /// Row id to the paid mark the row set on a reminder
+  /// ([_markRemindersPaidBy]): the reminder, its [Reminder.lastPaidMonth]
+  /// before and the month set. Lets deleting the row, or sending it back to
+  /// review, put the reminder back, and Undo bring the mark back. In memory
+  /// only: after a restart a delete leaves the mark.
+  final Map<String, ({String reminderId, String? prior, String marked})>
+  _reminderMarks = {};
   bool _loaded = false;
 
   bool get loaded => _loaded;
@@ -858,6 +873,13 @@ class FinanceProvider extends ChangeNotifier {
     startMonth,
   ).fold(0.0, (s, m) => s + savingsOutflowInMonth(m));
 
+  /// [savingsTransfersInMonth] summed over the year: savings outflow only
+  /// while the category is a transfer, the part not already in expense.
+  double savingsTransfersInYear(int year, {int startMonth = 1}) => _monthsOf(
+    year,
+    startMonth,
+  ).fold(0.0, (s, m) => s + savingsTransfersInMonth(m));
+
   /// Expense totals per category across [year], largest first.
   List<MapEntry<TxCategory, double>> expenseByCategoryInYear(
     int year, {
@@ -1019,6 +1041,7 @@ class FinanceProvider extends ChangeNotifier {
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     _loadWarnings.clear();
+    _reminderMarks.clear();
     final txRaw = prefs.getString(_txKey);
     if (txRaw != null) {
       await _guardedLoad(
@@ -1620,6 +1643,13 @@ class FinanceProvider extends ChangeNotifier {
       );
       if (_patternPaid.length != before) await _persist(marks: true);
     }
+    // Card bills paid by a transfer the app saw: their cycle is paid, not
+    // overdue. Not when the ledger or the accounts failed to load.
+    if (!_loadWarnings.contains('transactions') &&
+        !_loadWarnings.contains('accounts') &&
+        _markCardCyclesPaid()) {
+      await _persist(accounts: true);
+    }
     _loaded = true;
     notifyListeners();
   }
@@ -1946,8 +1976,9 @@ class FinanceProvider extends ChangeNotifier {
     );
     // A cash payment typed in for a reminder pays it too.
     final paid = _markRemindersPaidBy([_transactions.last]);
+    final cards = _markCardCyclesPaid();
     notifyListeners();
-    await _persist(tx: true, reminders: paid);
+    await _persist(tx: true, reminders: paid, accounts: cards);
     return id;
   }
 
@@ -1976,8 +2007,17 @@ class FinanceProvider extends ChangeNotifier {
     );
     // A pair whose leg left the transfer categories is no longer a transfer.
     if (updated.pairId != null) _clearOrphanPairs();
+    // Confirming an import (Save and confirm) lets it pay a reminder; a row
+    // put back in review takes its payment back.
+    var reminders = false;
+    if (old.pending && !updated.pending) {
+      reminders = _markRemindersPaidBy([_transactions[i]]);
+    } else if (!old.pending && updated.pending) {
+      reminders = _unmarkRemindersPaidBy([updated.id]);
+    }
+    final cards = _markCardCyclesPaid();
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: reminders, accounts: cards);
   }
 
   /// Removes one row. When it was one leg of a transfer pair, the other leg
@@ -1999,8 +2039,10 @@ class FinanceProvider extends ChangeNotifier {
       }
     }
     _transactions.removeAt(i);
+    // An Add sheet Undo, or a discarded import: its reminder payment goes.
+    final reminders = _unmarkRemindersPaidBy([id]);
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: reminders);
     return partner;
   }
 
@@ -2018,8 +2060,9 @@ class FinanceProvider extends ChangeNotifier {
     if (removed.isEmpty) return removed;
     _transactions.removeWhere((t) => wanted.contains(t.id));
     _clearOrphanPairs();
+    final reminders = _unmarkRemindersPaidBy(removed.map((t) => t.id));
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: reminders);
     return removed;
   }
 
@@ -2073,6 +2116,7 @@ class FinanceProvider extends ChangeNotifier {
       return leg.categoryId;
     }
 
+    final wasPending = [if (out.pending) out.id, if (inn.pending) inn.id];
     final pairId = 'pair_${_newId()}';
     // The sanitizer drops the split's people with the share, and a
     // repayment's payer once the row leaves Repaid to me.
@@ -2095,8 +2139,14 @@ class FinanceProvider extends ChangeNotifier {
       inn,
       guarded(cats.incoming, 'transfer_in', inn),
     );
+    // Linking confirms a leg still in review, so it may pay a reminder.
+    final reminders = _markRemindersPaidBy([
+      for (final t in _transactions)
+        if (wasPending.contains(t.id)) t,
+    ]);
+    final cards = _markCardCyclesPaid();
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: reminders, accounts: cards);
     return pairId;
   }
 
@@ -2145,23 +2195,27 @@ class FinanceProvider extends ChangeNotifier {
     if (_transactions.any((t) => t.id == tx.id)) return;
     // Categories may have changed since the snapshot was taken.
     _transactions.add(_sanitizeSplit(tx));
+    final reminders = _remarkRemindersPaidBy([tx]);
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: reminders);
   }
 
   /// Batch [restoreTransaction]: the undo half of [deleteTransactions] and
   /// [discardAllPending]. Rows whose id meanwhile reappeared are skipped.
+  /// A pair leg whose partner stays deleted comes back unlinked.
   Future<void> restoreTransactions(List<Tx> rows) async {
     final existing = {for (final t in _transactions) t.id};
-    var added = 0;
+    final back = <Tx>[];
     for (final tx in rows) {
       if (existing.contains(tx.id)) continue;
       _transactions.add(_sanitizeSplit(tx));
-      added++;
+      back.add(tx);
     }
-    if (added == 0) return;
+    if (back.isEmpty) return;
+    _clearOrphanPairs();
+    final reminders = _remarkRemindersPaidBy(back);
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: reminders);
   }
 
   /// The undo half of edits that only rewrite row fields (bulk category,
@@ -2177,13 +2231,18 @@ class FinanceProvider extends ChangeNotifier {
     bool reAddMissing = false,
   }) async {
     var changed = 0;
+    // Rows coming back or changing review state: a row back in review takes
+    // its reminder payment back, a deleted or confirmed row puts it back.
+    final reviewMoves = <Tx>[];
     for (final snap in snapshot) {
       final old = _sanitizeSplit(snap);
       final i = _transactions.indexWhere((t) => t.id == old.id);
       if (i == -1) {
         if (!reAddMissing) continue;
         _transactions.add(old);
+        reviewMoves.add(old);
       } else {
+        if (_transactions[i].pending != old.pending) reviewMoves.add(old);
         _transactions[i] = old;
       }
       changed++;
@@ -2192,8 +2251,9 @@ class FinanceProvider extends ChangeNotifier {
       // A pair leg whose partner was deleted after the edit comes back with
       // its old pairId; unlink it rather than point at a missing row.
       _clearOrphanPairs();
+      final reminders = _remarkRemindersPaidBy(reviewMoves);
       notifyListeners();
-      await _persist(tx: true);
+      await _persist(tx: true, reminders: reminders);
     }
   }
 
@@ -2587,9 +2647,19 @@ class FinanceProvider extends ChangeNotifier {
     // Re-applying can recategorise or drop SMS history, so transactions are
     // dirty too.
     final applied = _reapplyRulesToHistory();
+    final reminders = _afterRulesReapplied(applied.dropped);
     notifyListeners();
-    await _persist(rules: true, tx: true);
+    await _persist(rules: true, tx: true, reminders: reminders);
     return applied;
+  }
+
+  /// Cleanup after [_reapplyRulesToHistory]: a pair leg a rule moved out of
+  /// the transfer categories is unlinked, and rows a spam rule [dropped]
+  /// take back the reminder payments they made. Returns whether any
+  /// reminder changed; the caller persists.
+  bool _afterRulesReapplied(List<Tx> dropped) {
+    _clearOrphanPairs();
+    return _unmarkRemindersPaidBy(dropped.map((t) => t.id));
   }
 
   Future<({int reclassified, int droppedPending, List<Tx> dropped})> updateRule(
@@ -2601,8 +2671,9 @@ class FinanceProvider extends ChangeNotifier {
     }
     _rules[i] = updated;
     final applied = _reapplyRulesToHistory();
+    final reminders = _afterRulesReapplied(applied.dropped);
     notifyListeners();
-    await _persist(rules: true, tx: true);
+    await _persist(rules: true, tx: true, reminders: reminders);
     return applied;
   }
 
@@ -2664,8 +2735,9 @@ class FinanceProvider extends ChangeNotifier {
     _rules[i] = survivor.copyWith(pattern: conditions.join(' | '));
     _rules.removeWhere((r) => r.id != survivor.id && ids.contains(r.id));
     final applied = _reapplyRulesToHistory();
+    final reminders = _afterRulesReapplied(applied.dropped);
     notifyListeners();
-    await _persist(rules: true, tx: true);
+    await _persist(rules: true, tx: true, reminders: reminders);
     return applied;
   }
 
@@ -2688,9 +2760,10 @@ class FinanceProvider extends ChangeNotifier {
       await _persist(rules: true);
       return;
     }
-    _reapplyRulesToHistory();
+    final applied = _reapplyRulesToHistory();
+    final reminders = _afterRulesReapplied(applied.dropped);
     notifyListeners();
-    await _persist(rules: true, tx: true);
+    await _persist(rules: true, tx: true, reminders: reminders);
   }
 
   /// Puts every built-in rule back as it first was: removes the built-ins,
@@ -2775,7 +2848,8 @@ class FinanceProvider extends ChangeNotifier {
           !(t.pending || t.unseen)) {
         continue;
       }
-      final text = t.smsText;
+      // As in [_reapplyRulesToHistory]: the alert text only, never a note.
+      final text = t.smsBody;
       if (text.isEmpty) continue;
       final rule = _matchRuleIn(rules, text, t.type);
       if (rule != null && rule.isSpamRule) drops++;
@@ -2865,6 +2939,10 @@ class FinanceProvider extends ChangeNotifier {
     // The snapshot is taken before anything changes.
     final index = customCategories.indexWhere((c) => c.id == id);
     final category = index == -1 ? categoryById(id) : customCategories[index];
+    final movedPairIds = {
+      for (final t in _transactions)
+        if (t.categoryId == id && t.pairId != null) t.pairId,
+    };
     final snapshot = (
       category: category,
       index: index,
@@ -2884,6 +2962,10 @@ class FinanceProvider extends ChangeNotifier {
       remindersBefore: [
         for (final r in _reminders)
           if (r.categoryId == id) r,
+      ],
+      pairPartners: [
+        for (final t in _transactions)
+          if (t.categoryId != id && movedPairIds.contains(t.pairId)) t,
       ],
     );
     final target = moveTo == null || moveTo == id
@@ -2920,6 +3002,8 @@ class FinanceProvider extends ChangeNotifier {
       );
       remindersChanged = true;
     }
+    // Rows moved out of the transfer categories are no longer a transfer.
+    _clearOrphanPairs();
     notifyListeners();
     await _persist(
       categories: true,
@@ -2963,6 +3047,14 @@ class FinanceProvider extends ChangeNotifier {
     for (final before in d.remindersBefore) {
       final i = _reminders.indexWhere((r) => r.id == before.id);
       if (i != -1) _reminders[i] = before;
+    }
+    // Partners the delete unlinked take their link back; the check below
+    // drops it again when the pair no longer holds.
+    for (final snap in d.pairPartners) {
+      final i = _transactions.indexWhere((t) => t.id == snap.id);
+      if (i != -1 && _transactions[i].pairId == null) {
+        _transactions[i] = _transactions[i].copyWith(pairId: snap.pairId);
+      }
     }
     _clearOrphanPairs();
     notifyListeners();
@@ -3166,14 +3258,21 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   Future<void> updateBudget(SpendBudget updated) async {
-    if (!_budgets.any((b) => b.id == updated.id)) return;
+    final current = _budgets.where((b) => b.id == updated.id).firstOrNull;
+    if (current == null) return;
+    // A new limit, mode or set of categories changes what the alerts
+    // measure, so they may fire again; a new name or icon does not.
     // Clear the fired-alert marker BEFORE notifying: the budget monitor is
     // a provider listener, so notify-first let it fire against the new
     // limit + old marker, record a level, and then have a later clear
     // erase that record — the identical alert fired again on the next
     // change.
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(customBudgetAlertKey(updated.id, DateTime.now()));
+    if (current.limit != updated.limit ||
+        current.mode != updated.mode ||
+        !setEquals(current.categoryIds, updated.categoryIds)) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(customBudgetAlertKey(updated.id, DateTime.now()));
+    }
     // Re-lookup AFTER the awaits: an index captured before them could point
     // at a different (or removed) budget if a delete/clear/import landed in
     // the gap — writing through the stale index silently overwrote a
@@ -3618,12 +3717,14 @@ class FinanceProvider extends ChangeNotifier {
   /// [replay] is the load-time rescan of rows already seen: it only looks
   /// for early payments older builds missed, and skips rows an Add it for
   /// me reminder recorded and rows that reach an occurrence already marked.
+  /// A pending row pays nothing until it is confirmed. Each mark is
+  /// recorded in [_reminderMarks].
   /// Returns whether any reminder changed; the caller persists.
   bool _markRemindersPaidBy(Iterable<Tx> rows, {bool replay = false}) {
     var changed = false;
     final ordered = rows.toList()..sort((a, b) => a.date.compareTo(b.date));
     for (final t in ordered) {
-      if (t.type != TxType.expense || t.suspectedSpam) continue;
+      if (t.type != TxType.expense || t.suspectedSpam || t.pending) continue;
       // A row an Add it for me reminder recorded is that reminder's own.
       if (replay &&
           _reminders.any(
@@ -3695,12 +3796,60 @@ class FinanceProvider extends ChangeNotifier {
       // Replayed, a row that reaches a marked occurrence most likely paid
       // it already: it must not go on to pay a second reminder.
       if (best == -1 || (replay && paidAlready)) continue;
-      _reminders[best] = _reminders[best].copyWith(
-        lastPaidMonth: monthKey(bestDue!),
+      final marked = monthKey(bestDue!);
+      _reminderMarks[t.id] = (
+        reminderId: _reminders[best].id,
+        prior: _reminders[best].lastPaidMonth,
+        marked: marked,
       );
+      _reminders[best] = _reminders[best].copyWith(lastPaidMonth: marked);
       changed = true;
     }
     return changed;
+  }
+
+  /// Takes back the paid mark each row in [ids] set ([_reminderMarks]):
+  /// the row is gone or back in review. Only while the reminder still
+  /// holds that mark; a later payment or a hand mark that moved it on is
+  /// kept. The record stays, so [_remarkRemindersPaidBy] can put the mark
+  /// back on Undo. Returns whether any reminder changed; the caller
+  /// persists.
+  bool _unmarkRemindersPaidBy(Iterable<String> ids) {
+    var changed = false;
+    for (final id in ids) {
+      final m = _reminderMarks[id];
+      if (m == null) continue;
+      final i = _reminders.indexWhere((r) => r.id == m.reminderId);
+      if (i == -1 || _reminders[i].lastPaidMonth != m.marked) continue;
+      final prior = m.prior;
+      _reminders[i] = prior == null
+          ? _reminders[i].copyWith(clearLastPaidMonth: true)
+          : _reminders[i].copyWith(lastPaidMonth: prior);
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// Puts back the paid mark each confirmed row in [rows] had set before
+  /// [_unmarkRemindersPaidBy] took it back, while the reminder still holds
+  /// the value from before the mark. Pending rows are taken back instead.
+  /// Returns whether any reminder changed; the caller persists.
+  bool _remarkRemindersPaidBy(Iterable<Tx> rows) {
+    var changed = false;
+    final back = <String>[];
+    for (final t in rows) {
+      if (t.pending) {
+        back.add(t.id);
+        continue;
+      }
+      final m = _reminderMarks[t.id];
+      if (m == null) continue;
+      final i = _reminders.indexWhere((r) => r.id == m.reminderId);
+      if (i == -1 || _reminders[i].lastPaidMonth != m.prior) continue;
+      _reminders[i] = _reminders[i].copyWith(lastPaidMonth: m.marked);
+      changed = true;
+    }
+    return _unmarkRemindersPaidBy(back) || changed;
   }
 
   /// Removes [id] from the group-assignment map and every budget's category
@@ -4210,19 +4359,25 @@ class FinanceProvider extends ChangeNotifier {
   /// `Avl Lmt`) plus the ledger movement recorded after it. The anchoring
   /// transaction itself is excluded — the figure its SMS stated already
   /// includes its own effect.
-  /// Cache key carries the calendar month: the figures embed "spent this
-  /// month", and an app left open across midnight on the 1st would otherwise
-  /// keep serving the old month's number until some mutation notified.
+  /// Cache key carries the calendar date: the figures embed "spent this
+  /// month" and leave out rows dated after today, and an app left open
+  /// across midnight would otherwise keep serving yesterday's figures until
+  /// some mutation notified.
   /// The key carries the debit cards linked to the account too, whose rows
   /// a bank's figures include. Every link change notifies, which drops the
   /// whole cache anyway; the links in the key keep a stale entry from ever
   /// being served if one didn't.
   _AccountFigures _figures(Account account) {
-    final now = DateTime.now();
+    final now = figuresClock();
     final cards = _cardLinks[account.id]?.join(',') ?? '';
-    final key = '${account.id}|${now.year * 12 + now.month}|$cards';
+    final key = '${account.id}|${now.year}-${now.month}-${now.day}|$cards';
     return _d.accountFigures[key] ??= _computeFigures(account);
   }
+
+  /// The clock account figures read today from. Tests move it across
+  /// midnight.
+  @visibleForTesting
+  static DateTime Function() figuresClock = DateTime.now;
 
   _AccountFigures _computeFigures(Account account) {
     // Resolve to the canonical instance: figures are cached per id, so reading
@@ -4233,7 +4388,7 @@ class FinanceProvider extends ChangeNotifier {
     // spends left this bank, and the Avl Bal in a card alert is this bank's
     // balance, so it anchors here like any other.
     final all = _balanceRows(acc);
-    final now = DateTime.now();
+    final now = figuresClock();
     final monthStart = DateTime(now.year, now.month);
     final monthEnd = DateTime(now.year, now.month + 1);
 
@@ -4895,6 +5050,56 @@ class FinanceProvider extends ChangeNotifier {
       setCardBillPaidMonth(id, monthKey(due));
 
   Future<void> clearCardBillPaid(String id) => setCardBillPaidMonth(id, null);
+
+  /// Marks a credit card's bill paid for each cycle a confirmed payment
+  /// paid: money in on the card in [kCardPaymentCategoryId], or the card leg
+  /// of a linked transfer, dated in the cycle's payment window. The window
+  /// runs from the statement date (30 days before the due date when the
+  /// card has no statement day) through [kCardOverdueDays] after the due
+  /// date. A payment pays the cycle current on its own date
+  /// ([cardBillStatus]), whatever its amount. Only forward:
+  /// [Account.billPaidMonth] never moves back. Rows from the last 70 days
+  /// only, which covers any window still shown. Returns whether any account
+  /// changed; the caller persists.
+  bool _markCardCyclesPaid() {
+    final now = DateTime.now();
+    final since = DateTime(now.year, now.month, now.day - 70);
+    final endOfToday = DateTime(now.year, now.month, now.day + 1);
+    // Read from the lists, not the derived cache: this runs mid-mutation.
+    final cardIndex = {
+      for (final (i, a) in _accounts.indexed)
+        if (a.isCard) a.id: i,
+    };
+    if (cardIndex.isEmpty) return false;
+    final payments = <int, List<Tx>>{};
+    for (final t in _transactions) {
+      if (t.pending || t.type != TxType.income) continue;
+      if (t.categoryId != kCardPaymentCategoryId && t.pairId == null) continue;
+      if (t.date.isBefore(since) || !t.date.isBefore(endOfToday)) continue;
+      final i = cardIndex[_keyIndex[t.acctKey]];
+      if (i != null) (payments[i] ??= []).add(t);
+    }
+    var changed = false;
+    payments.forEach((i, rows) {
+      rows.sort((a, b) => a.date.compareTo(b.date));
+      for (final t in rows) {
+        final s = cardBillStatus(_accounts[i], t.date);
+        if (s == null || s.paidThisCycle) continue;
+        final cycle = s.cycleDue;
+        // Unpaid, so the shown due is this cycle and so is its statement.
+        final opens =
+            s.statementDate ??
+            DateTime(cycle.year, cycle.month, cycle.day - 30);
+        if (t.date.isBefore(opens)) continue;
+        final key = monthKey(cycle);
+        final was = _accounts[i].billPaidMonth;
+        if (was != null && was.compareTo(key) >= 0) continue;
+        _accounts[i] = _accounts[i].copyWith(billPaidMonth: key);
+        changed = true;
+      }
+    });
+    return changed;
+  }
 
   /// Records a card bill payment the app never saw (paid from an account
   /// without SMS import, or the card's confirmation never arrived): a manual
@@ -5702,8 +5907,9 @@ class FinanceProvider extends ChangeNotifier {
       // Backups strip SMS bodies, so restored rows have no text to match
       // against. Skip them rather than fall back to the sender — classifier
       // patterns running against DLT sender codes ("hdfc" vs "VM-HDFCBK")
-      // would mass-reclassify restored history.
-      final text = t.smsText;
+      // would mass-reclassify restored history. Nor the note: on such a row
+      // it is the user's own text, not the alert.
+      final text = t.smsBody;
       if (text.isEmpty) continue;
       final rule = _matchRule(text, t.type);
       if (rule == null) continue;
@@ -5743,8 +5949,9 @@ class FinanceProvider extends ChangeNotifier {
   ///
   /// Duplicate rules: same bank reference id + same direction always wins;
   /// without a ref, same type + amount with a date within 3 minutes is
-  /// treated as the same bank alert sent twice. Fuzzy matching is only used to *skip* an import —
-  /// never to touch existing user data.
+  /// treated as the same bank alert sent twice, unless both are inbox alerts
+  /// stating different balances after them. Fuzzy matching is only used to
+  /// *skip* an import, never to touch existing user data.
   Future<(int, int)> addImported(List<ParsedTxn> parsed) async {
     _lastImportCounted = 0;
     if (parsed.isEmpty) return (0, 0);
@@ -5783,9 +5990,14 @@ class FinanceProvider extends ChangeNotifier {
     // inbox alert with no ref (a card swipe, an ATM withdrawal) is a real
     // payment and must not swallow the next one. Each such match pairs one
     // to one, so a second payment with another ref still imports.
+    //
+    // Two inbox alerts that both state the balance after them, and state
+    // different ones, are two payments: a second withdrawal of the same
+    // amount minutes later. Only inbox alerts: a notification's cut-off
+    // text can leave a partial balance figure.
     final refKeys = <String>{};
-    final fuzzyDates = <String, List<({DateTime date, String? acct})>>{};
-    final fuzzyDatesNoRef = <String, List<({DateTime date, String? acct})>>{};
+    final fuzzyDates = <String, List<_FuzzyEntry>>{};
+    final fuzzyDatesNoRef = <String, List<_FuzzyEntry>>{};
     final bankOf = <String, String>{};
     String fuzzyKeyOf(TxType type, double amount, String sender) =>
         '${type.name}|$amount|'
@@ -5819,15 +6031,20 @@ class FinanceProvider extends ChangeNotifier {
               (cardLinkedBank[b] ?? linkedCardBank[b]);
     }
 
+    // The balance an inbox alert states; null for a notification copy.
+    double? inboxBalance(String sender, double? balance) =>
+        balance != null && SmsTxnParser.isDltSender(sender) ? balance : null;
     int nearIndex(
-      List<({DateTime date, String? acct})>? rows,
+      List<_FuzzyEntry>? rows,
       DateTime at,
       String? acct,
+      double? bal,
     ) =>
         rows?.indexWhere(
           (r) =>
               r.date.difference(at).abs() <= const Duration(minutes: 3) &&
-              (acct == null || r.acct == null || sameAccount(r.acct!, acct)),
+              (acct == null || r.acct == null || sameAccount(r.acct!, acct)) &&
+              (bal == null || r.bal == null || r.bal == bal),
         ) ??
         -1;
     void remember(
@@ -5837,11 +6054,17 @@ class FinanceProvider extends ChangeNotifier {
       String? ref,
       DateTime date,
       String? acct,
+      double? balance,
     ) {
       final key = fuzzyKeyOf(type, amount, sender);
-      (fuzzyDates[key] ??= []).add((date: date, acct: acct));
+      final entry = (
+        date: date,
+        acct: acct,
+        bal: inboxBalance(sender, balance),
+      );
+      (fuzzyDates[key] ??= []).add(entry);
       if (ref == null && !SmsTxnParser.isDltSender(sender)) {
-        (fuzzyDatesNoRef[key] ??= []).add((date: date, acct: acct));
+        (fuzzyDatesNoRef[key] ??= []).add(entry);
       }
     }
 
@@ -5858,7 +6081,15 @@ class FinanceProvider extends ChangeNotifier {
     };
     for (final t in _transactions) {
       if (t.externalRef != null) refKeys.add('${t.type.name}|${t.externalRef}');
-      remember(t.type, t.amount, t.sender, t.externalRef, t.date, t.acctKey);
+      remember(
+        t.type,
+        t.amount,
+        t.sender,
+        t.externalRef,
+        t.date,
+        t.acctKey,
+        t.balanceAfter,
+      );
     }
     for (final p in parsed) {
       final ruleText = p.rawBody.isNotEmpty ? p.rawBody : p.merchant;
@@ -5888,13 +6119,14 @@ class FinanceProvider extends ChangeNotifier {
         }
       }
       final key = fuzzyKeyOf(p.type, p.amount, p.sender);
+      final bal = inboxBalance(p.sender, p.balanceAfter);
       final bool isDuplicate;
       if (p.ref != null) {
         if (refKeys.contains('${p.type.name}|${p.ref}')) {
           isDuplicate = true;
         } else {
           final twins = fuzzyDatesNoRef[key];
-          final i = nearIndex(twins, p.date, p.acctKey);
+          final i = nearIndex(twins, p.date, p.acctKey, bal);
           // Paired: that ref-less copy is spent, and the ref now known.
           if (i != -1) {
             twins!.removeAt(i);
@@ -5925,7 +6157,7 @@ class FinanceProvider extends ChangeNotifier {
           }
         }
       } else {
-        isDuplicate = nearIndex(fuzzyDates[key], p.date, p.acctKey) != -1;
+        isDuplicate = nearIndex(fuzzyDates[key], p.date, p.acctKey, bal) != -1;
       }
       if (isDuplicate) continue;
 
@@ -5983,7 +6215,15 @@ class FinanceProvider extends ChangeNotifier {
       // The new row must block later duplicates in this same batch, exactly
       // as it would have when the old code rescanned _transactions each time.
       if (p.ref != null) refKeys.add('${p.type.name}|${p.ref}');
-      remember(p.type, p.amount, p.sender, p.ref, p.date, p.acctKey);
+      remember(
+        p.type,
+        p.amount,
+        p.sender,
+        p.ref,
+        p.date,
+        p.acctKey,
+        p.balanceAfter,
+      );
       added++;
     }
     if (added > 0) {
@@ -6048,24 +6288,28 @@ class FinanceProvider extends ChangeNotifier {
           if (other.pending ||
               !other.unseen ||
               other.userCategorized ||
-              other.pairId != null ||
-              other.type == t.type ||
-              other.acctKey == t.acctKey ||
+              !_couldPair(t, other) ||
               other.date.difference(t.date).abs() > kPairDateWindow) {
             continue;
           }
           backToReview.add(other.id);
         }
       }
+      var paid = false;
       if (backToReview.isNotEmpty) {
         for (var i = 0; i < firstNew; i++) {
           final t = _transactions[i];
           if (!backToReview.contains(t.id)) continue;
           _transactions[i] = t.copyWith(pending: true, unseen: false);
         }
+        // Back in review, they pay no reminder until confirmed again.
+        paid = _unmarkRemindersPaidBy(backToReview);
       }
-      // A bank alert for a reminder's amount near its due day pays it.
-      final paid = _markRemindersPaidBy(_transactions.sublist(firstNew));
+      // A bank alert for a reminder's amount near its due day pays it, once
+      // it counts: the sure rows here, the rest when confirmed.
+      paid = _markRemindersPaidBy(_transactions.sublist(firstNew)) || paid;
+      // A card payment that counted at once pays its card's bill.
+      _markCardCyclesPaid();
       notifyListeners();
       await _persist(tx: true, accounts: true, reminders: paid);
     }
@@ -6080,10 +6324,10 @@ class FinanceProvider extends ChangeNotifier {
   ///  * the category is neither a transfer nor Other;
   ///  * a non-spam rule chose the category ([fromRule]), or confirmed rows
   ///    of the same merchant ([recurringKeyOf]) carry that category;
-  ///  * no possible transfer partner: no opposite-direction row of the same
-  ///    amount, to the paisa, on another account key within
-  ///    [kPairDateWindow]. Such a row stays pending, so the pair suggestion
-  ///    in the review queue still shows;
+  ///  * no possible transfer partner: no row of the same amount, to the
+  ///    paisa, within [kPairDateWindow] that could be its other leg
+  ///    ([_couldPair]). Such a row stays pending, so the pair suggestion in
+  ///    the review queue still shows;
   ///  * not a possible duplicate: no other row of the same direction and
   ///    amount, to the paisa, on the same account key (or one with none)
   ///    within a day. Both copies in one batch stay pending.
@@ -6124,10 +6368,34 @@ class FinanceProvider extends ChangeNotifier {
         }
         continue;
       }
-      if (other.acctKey == key) continue;
+      if (!_couldPair(row, other)) continue;
       if (gap <= kPairDateWindow) return false;
     }
     return true;
+  }
+
+  /// Whether [a] and [b] could be the two legs of one own-account move, by
+  /// the rules [suggestTransferPairs] applies (dates aside): opposite
+  /// directions on different account keys, neither linked already, spam, a
+  /// split, a friend's repayment or a refund, and accounts [pairKindFor]
+  /// accepts (no wallet, no card sending).
+  bool _couldPair(Tx a, Tx b) {
+    if (a.type == b.type || a.acctKey == b.acctKey) return false;
+    bool pairable(Tx t) =>
+        t.pairId == null &&
+        !t.suspectedSpam &&
+        !t.isSplit &&
+        t.categoryId != kRepaidToMeCategoryId &&
+        !(t.type == TxType.income &&
+            (t.refundOf != null || isRefundWorded(t.smsText)));
+    if (!pairable(a) || !pairable(b)) return false;
+    final out = a.type == TxType.expense ? a : b;
+    final inn = a.type == TxType.expense ? b : a;
+    return pairKindFor(
+          send: accountForKey(out.acctKey),
+          recv: accountForKey(inn.acctKey),
+        ) !=
+        null;
   }
 
   static int _inPaise(double amount) => (amount * 100).round();
@@ -6208,9 +6476,14 @@ class FinanceProvider extends ChangeNotifier {
   Future<void> confirmTransaction(String id) async {
     final i = _transactions.indexWhere((t) => t.id == id);
     if (i == -1) return;
+    final wasPending = _transactions[i].pending;
     _transactions[i] = _transactions[i].copyWith(pending: false);
+    // A confirmed bank alert for a reminder's amount near its due day
+    // pays it.
+    final reminders = wasPending && _markRemindersPaidBy([_transactions[i]]);
+    final cards = wasPending && _markCardCyclesPaid();
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: reminders, accounts: cards);
   }
 
   /// Imports transactions (e.g. from a CSV). With [replace] all existing
@@ -6417,6 +6690,7 @@ class FinanceProvider extends ChangeNotifier {
     // Past refunds waiting for review name rows that are gone.
     _refundReviewIds.clear();
     await prefs.remove(_refundSuggestIdsKey);
+    _reminderMarks.clear();
     if (includeConfig) {
       _rules.clear();
       _importRules.clear();
@@ -6458,7 +6732,9 @@ class FinanceProvider extends ChangeNotifier {
   /// (they leave the device via Drive backups), and everything a restore
   /// needs — sender, ref, amounts, account links, card-ness — is exported as
   /// its own field. No export carries them: the CSV and PDF omit them too, so
-  /// alert text never leaves the app.
+  /// alert text never leaves the app. The merchant each alert names goes as
+  /// `smsMerchant`, so a restored row keeps its title, alias and
+  /// subscription mark.
   Map<String, dynamic> exportData() => {
     'app': 'expense_tracker',
     // v10: transactions may carry `myShare` (group splits).
@@ -6488,10 +6764,10 @@ class FinanceProvider extends ChangeNotifier {
     // v27: transactions may carry `refundOf` (the purchase a refund pays
     // back).
     // v28: transactions may carry `payee` (Paid to on a manual entry).
-    'version': 28,
-    'transactions': _transactions
-        .map((t) => t.toJson()..remove('smsBody'))
-        .toList(),
+    // v29: SMS transactions may carry `smsMerchant` (the merchant the alert
+    // names, in place of the alert text).
+    'version': 29,
+    'transactions': [for (final t in _transactions) _backupJsonOf(t)],
     'accounts': _accounts.map((a) => a.toJson()).toList(),
     // v9 addition: card/bank (v26: or debit) kind per SMS-derived account
     // key. Bodies are
@@ -6522,6 +6798,14 @@ class FinanceProvider extends ChangeNotifier {
     },
     'patternPaid': Map<String, String>.from(_patternPaid),
   };
+
+  /// [t] as a backup holds it: no alert text, the merchant it names instead.
+  static Map<String, dynamic> _backupJsonOf(Tx t) {
+    final json = t.toJson()..remove('smsBody');
+    final merchant = alertMerchantOf(t);
+    if (merchant.isNotEmpty) json['smsMerchant'] = merchant;
+    return json;
+  }
 
   /// Card/bank kind for every SMS-derived account key in the ledger.
   /// Prefers the owning account's actual type; falls back to deriving from
@@ -6806,6 +7090,28 @@ class FinanceProvider extends ChangeNotifier {
       // (CSV imports get this via importTransactions; this path didn't).
       sanitizeTail(_transactions.length);
       _clearOrphanPairs();
+      // Rows and reminders come from the file; a record from the replaced
+      // ones could undo a mark on a restored row with the same id.
+      _reminderMarks.clear();
+      // A collection the file supplies is whole again: it may be saved,
+      // and its load warning goes.
+      _loadWarnings.removeWhere(
+        (name) => switch (name) {
+          'transactions' || 'accounts' => true,
+          'categories' => categories != null,
+          'category styles' => importedOverrides != null,
+          'groups' => importedGroups != null || importedAssignments != null,
+          'budgets' => importedBudgets != null,
+          'merchantAliases' => importedAliases != null,
+          'reminders' => importedReminders != null,
+          'rules' => importedRules != null,
+          'import rules' => importedImportRules != null,
+          'tag colours' => importedTagColors != null,
+          'subscription marks' => importedPins != null,
+          'payment marks' => importedPatternPaid != null,
+          _ => false,
+        },
+      );
       final remindersSanitized = _sanitizeReminders();
       _sanitizeAccountLinks();
       _rebuildKeyIndex();
@@ -6824,7 +7130,10 @@ class FinanceProvider extends ChangeNotifier {
         reminders: importedReminders != null || remindersSanitized,
         rules: importedRules != null,
         importRules: importedImportRules != null,
-        marks: importedTagColors != null || importedPins != null,
+        marks:
+            importedTagColors != null ||
+            importedPins != null ||
+            importedPatternPaid != null,
       );
       return txs.length;
     }
@@ -7078,15 +7387,19 @@ class FinanceProvider extends ChangeNotifier {
   /// through [restoreEditedTransactions], which puts them back in review.
   Future<List<Tx>> confirmAllPending() async {
     final before = <Tx>[];
+    final confirmed = <Tx>[];
     for (var i = 0; i < _transactions.length; i++) {
       if (_transactions[i].pending && !_transactions[i].suspectedSpam) {
         before.add(_transactions[i]);
         _transactions[i] = _transactions[i].copyWith(pending: false);
+        confirmed.add(_transactions[i]);
       }
     }
     if (before.isEmpty) return before;
+    final reminders = _markRemindersPaidBy(confirmed);
+    final cards = _markCardCyclesPaid();
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: reminders, accounts: cards);
     return before;
   }
 
@@ -7102,8 +7415,9 @@ class FinanceProvider extends ChangeNotifier {
     if (removed.isEmpty) return removed;
     _transactions.removeWhere((t) => t.pending && !t.suspectedSpam);
     _clearOrphanPairs();
+    final reminders = _unmarkRemindersPaidBy(removed.map((t) => t.id));
     notifyListeners();
-    await _persist(tx: true);
+    await _persist(tx: true, reminders: reminders);
     return removed;
   }
 }

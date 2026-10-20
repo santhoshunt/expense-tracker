@@ -2,6 +2,7 @@ import 'package:intl/intl.dart';
 
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import 'monthly_recap.dart' show kLateNoteWindow;
 import 'spend_comparison.dart' show median;
 
 /// Monday 00:00 of [d]'s week. Weeks run Monday to Sunday.
@@ -234,15 +235,17 @@ String weekRangeLabel(DateTime week, {bool withWeekday = false}) {
 /// The digest note to have booked as of [now]: when it fires and the
 /// Monday of the week it covers, or null for none (an empty ledger).
 /// Before 09:00 on a Monday, today's note for last week is still ahead;
-/// otherwise next Monday's, for the current week.
+/// otherwise next Monday's, for the current week. [keepLate] stretches
+/// "before 09:00" by [kLateNoteWindow], as in [recapBooking].
 ({DateTime when, DateTime week})? weeklyDigestBooking(
   DateTime now, {
   required bool hasData,
+  bool keepLate = true,
 }) {
   if (!hasData) return null;
   final thisWeek = weekStartOf(now);
   final dueToday = DateTime(thisWeek.year, thisWeek.month, thisWeek.day, 9);
-  if (now.isBefore(dueToday)) {
+  if (now.isBefore(keepLate ? dueToday.add(kLateNoteWindow) : dueToday)) {
     return (
       when: dueToday,
       week: DateTime(thisWeek.year, thisWeek.month, thisWeek.day - 7),

@@ -11,6 +11,7 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/utils/app_theme.dart';
+import 'package:expense_tracker/utils/dates.dart';
 import 'package:expense_tracker/utils/format.dart';
 
 void main() {
@@ -106,6 +107,33 @@ void main() {
     await pumpThrough(tester);
     expect(finance.accountById(id)!.billPaidMonth, isNull);
     expect(find.textContaining('Due '), findsOneWidget);
+  });
+
+  testWidgets('an overdue bill reads overdue, and mark paid flags its cycle', (
+    tester,
+  ) async {
+    // Due two days ago and unpaid: still the current cycle, in red.
+    final now = DateTime.now();
+    final due = DateTime(now.year, now.month, now.day - 2);
+    final (finance, id) = await seeded(dueInDays: -2);
+    await pumpApp(tester, finance);
+    await pumpThrough(tester);
+
+    expect(
+      find.text('Overdue · was due ${fmtDateCompact(due)}'),
+      findsOneWidget,
+    );
+    final icon = tester.widget<Icon>(find.byIcon(Icons.credit_card));
+    final scheme = Theme.of(
+      tester.element(find.byIcon(Icons.credit_card)),
+    ).colorScheme;
+    expect(icon.color, scheme.error);
+
+    await tester.tap(find.text('HDFC Card bill'));
+    await pumpThrough(tester);
+    await tester.tap(find.text('Mark paid for this cycle'));
+    await pumpThrough(tester);
+    expect(finance.accountById(id)!.billPaidMonth, monthKey(due));
   });
 
   testWidgets('record a payment drops the amount and flags the cycle', (

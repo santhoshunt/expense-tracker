@@ -3364,16 +3364,17 @@ class _UpcomingCard extends StatelessWidget {
     );
   }
 
-  /// Mark paid / record payment for a card bill row. The natural due (this
-  /// cycle's, ignoring the paid flag) is recomputed here: a paid row already
-  /// DISPLAYS next cycle's date, but un-marking and the paid flag itself are
-  /// about the current cycle.
+  /// Mark paid / record payment for a card bill row. Both act on the current
+  /// cycle ([CardBillStatus.cycleDue], an overdue one included): a paid row
+  /// already DISPLAYS next cycle's date, but un-marking and the paid flag
+  /// itself are about the current cycle.
   void _showCardBillActions(BuildContext context, Account a) {
     final finance = context.read<FinanceProvider>();
-    final now = DateTime.now();
-    final natural = nextMonthlyOccurrence(a.dueDay!, now);
-    final paid = a.billPaidMonth == monthKey(natural);
-    final status = cardBillStatus(a, now)!;
+    // Closed, or its due day cleared since the row was built: no cycle.
+    final status = cardBillStatus(a, DateTime.now());
+    if (status == null) return;
+    final cycle = status.cycleDue;
+    final paid = status.paidThisCycle;
     showModalBottomSheet<void>(
       context: context,
       useSafeArea: true,
@@ -3412,7 +3413,7 @@ class _UpcomingCard extends StatelessWidget {
                   onTap: () {
                     Navigator.pop(ctx);
                     final prev = a.billPaidMonth;
-                    finance.markCardBillPaid(a.id, natural);
+                    finance.markCardBillPaid(a.id, cycle);
                     showUndoSnackBar(
                       context,
                       '${a.name} bill marked paid',
@@ -3431,7 +3432,7 @@ class _UpcomingCard extends StatelessWidget {
                 ),
                 onTap: () {
                   Navigator.pop(ctx);
-                  _showRecordPaymentDialog(context, a, natural);
+                  _showRecordPaymentDialog(context, a, cycle);
                 },
               ),
               // The phase logic is only as good as the cycle dates — surface
