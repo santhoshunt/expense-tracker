@@ -695,7 +695,7 @@ void main() {
     // Stored by an older parser as income with another ref…
     await p.addImported([copy(TxType.income, 'OLD123')]);
     // …then read again, now as an expense.
-    final (added, _) = await p.addImported([copy(TxType.expense, 'NEW456')]);
+    final (added, _, _) = await p.addImported([copy(TxType.expense, 'NEW456')]);
     expect(added, 0);
     expect(p.pendingTransactions, hasLength(1));
   });

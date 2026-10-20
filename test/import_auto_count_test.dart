@@ -89,7 +89,7 @@ void main() {
       'a built-in rule match on a known account counts, marked new',
       () async {
         final p = await withHistory();
-        final (added, _) = await p.addImported([
+        final (added, _, _) = await p.addImported([
           alert(date: DateTime(2026, 7, 5, 13), ref: 'A'),
         ]);
         expect(added, 1);

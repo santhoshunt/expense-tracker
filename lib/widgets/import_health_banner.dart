@@ -130,17 +130,27 @@ class _ImportHealthBannerState extends State<ImportHealthBanner> {
     final text = Theme.of(context).textTheme;
     final first = warnings.first;
     final bank = bankLabel(first.bank);
+    final one = first.count == 1;
     final title = first.kind == ImportWarningKind.unreadable
-        ? '${first.count} $bank alerts in $kUnreadWindowDays days could not '
-              'be read'
+        ? '${first.count} $bank ${one ? 'alert' : 'alerts'} in '
+              '$kUnreadWindowDays days could not be read'
         : 'No $bank alerts since ${fmtDate(first.since)}';
-    final detail = first.kind == ImportWarningKind.unreadable
-        ? 'Their format may have changed. They are not imported until the '
-              'app can read them.'
-        : 'It usually sends one every ${first.usualGapDays} '
+    final detail = first.kind != ImportWarningKind.unreadable
+        ? 'It usually sends one every ${first.usualGapDays} '
               '${first.usualGapDays == 1 ? 'day' : 'days'}. Check SMS '
               'permission and notification access, or dismiss this if the '
-              'account is closed.';
+              'account is closed.'
+        : first.droppedButDone
+        ? (one
+              ? 'It states a completed payment, but the app skipped it. Add '
+                    'it by hand until the app can read it.'
+              : 'They state completed payments, but the app skipped them. '
+                    'Add them by hand until the app can read them.')
+        : (one
+              ? 'Its format may have changed. It is not imported until the '
+                    'app can read it.'
+              : 'Their format may have changed. They are not imported until '
+                    'the app can read them.');
     final more = warnings.length - 1;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
@@ -227,8 +237,12 @@ Future<void> showImportHealthSheet(
                 const SizedBox(height: 2),
                 Text(
                   w.kind == ImportWarningKind.unreadable
-                      ? '${w.count} alerts since ${fmtDate(w.since)} looked '
-                            'like transactions but could not be read.'
+                      ? (w.count == 1
+                            ? 'An alert on ${fmtDate(w.since)} looked like a '
+                                  'transaction but could not be read.'
+                            : '${w.count} alerts since ${fmtDate(w.since)} '
+                                  'looked like transactions but could not be '
+                                  'read.')
                       : 'Last alert read on ${fmtDate(w.since)}; it usually '
                             'sends one every ${w.usualGapDays} '
                             '${w.usualGapDays == 1 ? 'day' : 'days'}.',

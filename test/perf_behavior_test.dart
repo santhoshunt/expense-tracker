@@ -42,14 +42,14 @@ void main() {
     test('ref matches block same ref+direction only', () async {
       final p = FinanceProvider();
       await p.load();
-      final (seeded, _) = await p.addImported([
+      final (seeded, _, _) = await p.addImported([
         parsed(type: TxType.income, amount: 100, date: t0, ref: 'R1'),
       ]);
       expect(seeded, 1);
 
       // Same ref + same direction → duplicate; same ref + other direction is
       // the other leg of a bill payment and must import.
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         parsed(type: TxType.income, amount: 100, date: t0, ref: 'R1'),
         parsed(type: TxType.expense, amount: 100, date: t0, ref: 'R1'),
       ]);
@@ -64,7 +64,7 @@ void main() {
         parsed(type: TxType.expense, amount: 500, date: t0, sender: 'INDBNK'),
       ]);
 
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         // 2 min away, same everything → duplicate.
         parsed(
           type: TxType.expense,
@@ -103,7 +103,7 @@ void main() {
       await p.addImported([
         parsed(type: TxType.income, amount: 100, date: t0, ref: 'R9'),
       ]);
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         parsed(
           type: TxType.income,
           amount: 100,
@@ -126,7 +126,7 @@ void main() {
           sender: 'VM-HDFCBK',
         ),
       ]);
-      var (added, _) = await p.addImported([
+      var (added, _, _) = await p.addImported([
         parsed(
           type: TxType.expense,
           amount: 640,
@@ -137,7 +137,7 @@ void main() {
       expect(added, 0, reason: 'across two imports');
 
       // Both copies in one import, as a single run hands them over.
-      (added, _) = await p.addImported([
+      (added, _, _) = await p.addImported([
         parsed(
           type: TxType.expense,
           amount: 910,
@@ -154,7 +154,7 @@ void main() {
       expect(added, 1, reason: 'within one batch');
 
       // Another bank at the same moment is a different payment.
-      (added, _) = await p.addImported([
+      (added, _, _) = await p.addImported([
         parsed(
           type: TxType.expense,
           amount: 640,
@@ -178,7 +178,7 @@ void main() {
             sender: 'HDFC Bank',
           ),
         ]);
-        final (added, _) = await p.addImported([
+        final (added, _, _) = await p.addImported([
           parsed(
             type: TxType.expense,
             amount: 250,
@@ -189,7 +189,7 @@ void main() {
         ]);
         expect(added, 0);
         // Two different payments that both carry refs never block each other.
-        final (more, _) = await p.addImported([
+        final (more, _, _) = await p.addImported([
           parsed(type: TxType.expense, amount: 99, date: t0, ref: 'A1'),
           parsed(type: TxType.expense, amount: 99, date: t0, ref: 'A2'),
         ]);
@@ -205,7 +205,7 @@ void main() {
       await p.addImported([
         parsed(type: TxType.expense, amount: 99, date: t0, sender: 'VM-HDFCBK'),
       ]);
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         parsed(
           type: TxType.expense,
           amount: 99,
@@ -223,7 +223,7 @@ void main() {
       await p.addImported([
         parsed(type: TxType.expense, amount: 77, date: t0, sender: 'HDFC Bank'),
       ]);
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         parsed(
           type: TxType.expense,
           amount: 77,
@@ -248,7 +248,7 @@ void main() {
       await p.addImported([
         parsed(type: TxType.expense, amount: 55, date: t0, sender: 'VM-SBIINB'),
       ]);
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         parsed(
           type: TxType.expense,
           amount: 55,
@@ -263,7 +263,7 @@ void main() {
     test('rows added earlier in the same batch block later ones', () async {
       final p = FinanceProvider();
       await p.load();
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         parsed(type: TxType.expense, amount: 777, date: t0),
         parsed(type: TxType.expense, amount: 777, date: t0),
         parsed(type: TxType.income, amount: 5, date: t0, ref: 'B1'),

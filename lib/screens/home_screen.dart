@@ -761,9 +761,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // auto-import cadence. drainNotifications() is a no-op when access
       // hasn't been granted.
       final notifImported = await _smsImport.drainNotifications(finance);
-      // Read before the SMS run replaces it; a drain with nothing to add
-      // never calls addImported, so its figure would be stale.
-      final notifCounted = notifImported > 0 ? finance.lastImportCounted : 0;
+      // The drain's own figure, read before the SMS run starts.
+      final notifCounted = _smsImport.lastDrainCounted;
 
       final result = await _smsImport.maybeAutoRun(
         finance,

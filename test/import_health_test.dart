@@ -200,16 +200,27 @@ void main() {
     test('counts one alert once, and caps what it keeps', () async {
       final t0 = DateTime(2026, 9, 20, 10);
       await ImportHealth.recordUnreadable([
-        (sender: 'VM-HDFCBK', body: unreadable, date: t0),
+        (
+          sender: 'VM-HDFCBK',
+          body: unreadable,
+          date: t0,
+          droppedButDone: false,
+        ),
       ], now: t0);
       // A re-scan of the same window, and the alert's notification copy a
       // minute later from the messaging app.
       await ImportHealth.recordUnreadable([
-        (sender: 'VM-HDFCBK', body: unreadable, date: t0),
+        (
+          sender: 'VM-HDFCBK',
+          body: unreadable,
+          date: t0,
+          droppedButDone: false,
+        ),
         (
           sender: 'HDFC Bank',
           body: unreadable,
           date: t0.add(const Duration(minutes: 1)),
+          droppedButDone: false,
         ),
       ], now: t0);
       var state = await ImportHealth.load(now: t0);
@@ -220,6 +231,7 @@ void main() {
             sender: 'AD-HDFCBK',
             body: '$unreadable $i',
             date: t0.add(Duration(minutes: 10 * i)),
+            droppedButDone: false,
           ),
       ], now: t0);
       state = await ImportHealth.load(now: t0);
@@ -233,7 +245,12 @@ void main() {
     test('long texts are cut to the sample length', () async {
       final t0 = DateTime(2026, 9, 20);
       await ImportHealth.recordUnreadable([
-        (sender: 'VM-HDFCBK', body: 'x' * 1000, date: t0),
+        (
+          sender: 'VM-HDFCBK',
+          body: 'x' * 1000,
+          date: t0,
+          droppedButDone: false,
+        ),
       ], now: t0);
       final h = (await ImportHealth.load(now: t0)).banks['HDFC']!;
       expect(h.samples.single.body.length, kMaxSampleChars);
@@ -242,7 +259,12 @@ void main() {
     test('alerts older than the cutoff are not kept', () async {
       final now = DateTime(2026, 9, 28);
       await ImportHealth.recordUnreadable([
-        (sender: 'VM-HDFCBK', body: unreadable, date: DateTime(2026, 6, 1)),
+        (
+          sender: 'VM-HDFCBK',
+          body: unreadable,
+          date: DateTime(2026, 6, 1),
+          droppedButDone: false,
+        ),
       ], now: now);
       expect((await ImportHealth.load()).banks, isEmpty);
     });
@@ -250,7 +272,12 @@ void main() {
     test('Delete all data removes the stored texts', () async {
       final t0 = DateTime.now();
       await ImportHealth.recordUnreadable([
-        (sender: 'VM-HDFCBK', body: unreadable, date: t0),
+        (
+          sender: 'VM-HDFCBK',
+          body: unreadable,
+          date: t0,
+          droppedButDone: false,
+        ),
       ]);
       final finance = FinanceProvider();
       await finance.load();
@@ -266,10 +293,14 @@ void main() {
       List<DateTime> unread, {
       DateTime? dismissed,
       DateTime? seen,
+      bool droppedButDone = false,
     }) => ImportHealthState({
       'HDFC': BankHealth(
         bank: 'HDFC',
-        unread: [for (final d in unread) (at: d, seen: seen ?? d)],
+        unread: [
+          for (final d in unread)
+            (at: d, seen: seen ?? d, droppedButDone: droppedButDone),
+        ],
         dismissedAt: dismissed,
       ),
     });
@@ -504,7 +535,7 @@ void main() {
   test('loading drops entries past the cutoff', () async {
     final t0 = DateTime(2026, 9, 20);
     await ImportHealth.recordUnreadable([
-      (sender: 'VM-HDFCBK', body: unreadable, date: t0),
+      (sender: 'VM-HDFCBK', body: unreadable, date: t0, droppedButDone: false),
     ], now: t0);
     final later = t0.add(const Duration(days: kSilenceGiveUpDays + 1));
     final h = (await ImportHealth.load(now: later)).banks['HDFC']!;

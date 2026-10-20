@@ -18,7 +18,7 @@ class SmsImportResult {
   final int spamDropped;
 
   /// Of [imported], the rows that counted at once; the rest wait in
-  /// review (see FinanceProvider.lastImportCounted).
+  /// review (the third figure FinanceProvider.addImported returns).
   final int counted;
 
   const SmsImportResult({
@@ -125,7 +125,17 @@ class SmsImportService {
       ignorePhrases: ignorePhrases,
       spamSignals: spamSignals,
     )) {
-      misses.add((sender: sender, body: body, date: date));
+      misses.add((
+        sender: sender,
+        body: body,
+        date: date,
+        // looksUnreadable passes such a body only when it states a
+        // completed debit or credit beside an amount.
+        droppedButDone: !SmsTxnParser.bodyLooksTransactional(
+          body,
+          ignorePhrases: ignorePhrases,
+        ),
+      ));
     }
   }
 
@@ -182,9 +192,8 @@ class SmsImportService {
         );
       }
     }
-    final (imported, _) = await finance.addImported(parsed);
-    // Read at once, before any other await lets another import reset it.
-    lastDrainCounted = finance.lastImportCounted;
+    final (imported, _, counted) = await finance.addImported(parsed);
+    lastDrainCounted = counted;
     await _recordMisses(misses);
     if (!finance.persistFailed) await notifications.ack(batch);
     return imported;
@@ -241,9 +250,9 @@ class SmsImportService {
           );
         }
       }
-      final (imported, spamDropped) = await finance.addImported(parsed);
-      // Read at once, before any other await lets another import reset it.
-      final counted = finance.lastImportCounted;
+      final (imported, spamDropped, counted) = await finance.addImported(
+        parsed,
+      );
       await _recordMisses(misses);
       if (!finance.persistFailed) await notifications.ack(batch);
       return SmsImportResult(
@@ -366,9 +375,7 @@ class SmsImportService {
       }
     }
 
-    final (imported, spamDropped) = await finance.addImported(parsed);
-    // Read at once, before any other await lets another import reset it.
-    final counted = finance.lastImportCounted;
+    final (imported, spamDropped, counted) = await finance.addImported(parsed);
     await _recordMisses(misses);
     if (!finance.persistFailed) await notifications.ack(batch);
     // Advance the marker only when this scan is authoritative up to

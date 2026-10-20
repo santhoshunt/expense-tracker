@@ -40,7 +40,7 @@ The repo still has `web/` and `ios/` folders from the Flutter template, and the 
 
 - All data lives in the app's own storage on the phone (`shared_preferences`).
 - `android:allowBackup` is off, so Android's cloud backup and device-to-device transfer never copy it.
-- Exports and Drive backups leave out the raw SMS text. JSON and Drive backups keep the merchant name read from each alert, so a restore keeps row titles, merchant renames and subscription marks.
+- Exports and Drive backups leave out the raw SMS text. JSON and Drive backups keep the merchant name read from each alert, so a restore keeps row titles, merchant renames and subscription marks. They also keep a hash of each deleted or discarded alert, never its text, so a rescan on the restored phone does not import it again.
 - Drive access uses the `drive.file` scope, which lets the app see only the files it created.
 - The app makes network calls only to Google Drive, when you turn it on, and to the GitHub releases API for the update check.
 

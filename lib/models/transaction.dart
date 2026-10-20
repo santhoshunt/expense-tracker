@@ -512,6 +512,13 @@ class Tx {
   /// their alert (the merchant is read from [smsBody] there).
   final String smsMerchant;
 
+  /// When an imported alert arrived, kept only while the row's [date]
+  /// differs from it (the user re-dated the row). Import dedup keys on it
+  /// ([smsArrivedAt]), so a rescan still recognises the alert. Null on
+  /// manual rows, on rows never re-dated, and on rows re-dated before this
+  /// field existed.
+  final DateTime? smsAt;
+
   const Tx({
     required this.id,
     required this.type,
@@ -539,10 +546,22 @@ class Tx {
     this.refundOf,
     this.payee = '',
     this.smsMerchant = '',
+    this.smsAt,
   });
 
   /// The date period figures use: [countIn] when set, else [date].
   DateTime get effectiveDate => countIn ?? date;
+
+  /// When the alert behind this row arrived: [smsAt], else [date].
+  DateTime get smsArrivedAt => smsAt ?? date;
+
+  /// [smsAt] for this row moved to [newDate]: the arrival time while the
+  /// date differs from it, null once they agree or on a manual row.
+  DateTime? _smsAtFor(DateTime newDate) {
+    if (source != TxSource.sms) return null;
+    final arrived = smsArrivedAt;
+    return arrived.isAtSameMomentAs(newDate) ? null : arrived;
+  }
 
   /// Null when [countIn] is absent or equals [date], so a row that counts on
   /// its own date never carries the key.
@@ -604,6 +623,7 @@ class Tx {
       refundOf: refundOf,
       payee: payee,
       smsMerchant: smsMerchant,
+      smsAt: smsAt,
     );
   }
 
@@ -675,6 +695,8 @@ class Tx {
     payee: payee ?? this.payee,
     // Carried verbatim like smsBody.
     smsMerchant: smsMerchant,
+    // A re-dated import remembers when its alert arrived.
+    smsAt: _smsAtFor(date ?? this.date),
   );
 
   Map<String, dynamic> toJson() => {
@@ -704,6 +726,7 @@ class Tx {
     if (refundOf != null) 'refundOf': refundOf,
     if (payee.isNotEmpty) 'payee': payee,
     if (smsMerchant.isNotEmpty) 'smsMerchant': smsMerchant,
+    if (smsAt != null) 'smsAt': smsAt!.toIso8601String(),
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) {
@@ -749,6 +772,13 @@ class Tx {
       smsMerchant: json['smsMerchant'] is String
           ? json['smsMerchant'] as String
           : '',
+      smsAt: switch (json['smsAt']) {
+        final String s => switch (DateTime.tryParse(s)) {
+          final at? when !at.isAtSameMomentAs(date) => at,
+          _ => null,
+        },
+        _ => null,
+      },
     );
   }
 }

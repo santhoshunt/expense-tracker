@@ -75,7 +75,7 @@ void main() {
       await source.setSubscriptionPins({key: SubscriptionCycle.monthly});
 
       final data = jsonDecode(jsonEncode(source.exportData())) as Map;
-      expect(data['version'], 29);
+      expect(data['version'], 30);
       final exported = (data['transactions'] as List).single as Map;
       expect(exported.containsKey('smsBody'), isFalse);
       expect(exported['smsMerchant'], SmsTxnParser.merchantOf(body));
@@ -196,7 +196,7 @@ void main() {
     test('two alerts stating different balances are two payments', () async {
       final p = await fresh();
       final at = daysAgo(1);
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         withdrawal(at, 9000),
         withdrawal(at.add(const Duration(minutes: 1)), 7000),
       ]);
@@ -206,7 +206,7 @@ void main() {
     test('the same balance twice is one alert sent twice', () async {
       final p = await fresh();
       final at = daysAgo(1);
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         withdrawal(at, 9000),
         withdrawal(at.add(const Duration(minutes: 1)), 9000),
       ]);

@@ -195,7 +195,7 @@ void main() {
       final p = FinanceProvider();
       await p.load();
 
-      final (first, _) = await p.addImported([
+      final (first, _, _) = await p.addImported([
         ParsedTxn(
           type: TxType.expense,
           amount: 4872.15,
@@ -211,7 +211,7 @@ void main() {
       ]);
       expect(first, 1);
 
-      final (second, _) = await p.addImported([
+      final (second, _, _) = await p.addImported([
         ParsedTxn(
           type: TxType.income,
           amount: 4872.15,
@@ -229,7 +229,7 @@ void main() {
       expect(p.pendingTransactions.length, 2);
 
       // A true re-scan of the same message is still a duplicate.
-      final (third, _) = await p.addImported([
+      final (third, _, _) = await p.addImported([
         ParsedTxn(
           type: TxType.income,
           amount: 4872.15,
@@ -266,14 +266,14 @@ void main() {
         rawBody: 'Rs.120.00 debited from a/c XX1234 at CHAI POINT.',
       );
 
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         refless(DateTime(2026, 7, 4, 9, 15)),
         refless(DateTime(2026, 7, 4, 18, 40)),
       ]);
       expect(added, 2);
 
       // A genuine re-scan of the same alert still dedups.
-      final (again, _) = await p.addImported([
+      final (again, _, _) = await p.addImported([
         refless(DateTime(2026, 7, 4, 9, 16)),
       ]);
       expect(again, 0);

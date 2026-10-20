@@ -38,7 +38,7 @@ void main() {
     final p = FinanceProvider();
     await p.load();
 
-    final (added, _) = await p.addImported([txn(amount: 250, ref: 'REF1')]);
+    final (added, _, _) = await p.addImported([txn(amount: 250, ref: 'REF1')]);
     expect(added, 1);
     // No account in the alert, so it is not sure enough to count at once
     // (import_auto_count_test covers the rows that do).
@@ -58,7 +58,7 @@ void main() {
     await p.load();
 
     await p.addImported([txn(ref: 'REF1')]);
-    final (added, _) = await p.addImported([
+    final (added, _, _) = await p.addImported([
       txn(ref: 'REF1'),
       // Another payment's alert quotes its own ref, so its text differs:
       // the same text, sender and time is the stored message again.
@@ -75,12 +75,12 @@ void main() {
     final d = DateTime(2026, 7, 1, 13, 0);
     await p.addImported([txn(amount: 99, date: d)]);
     // Same alert delivered twice a minute later → duplicate.
-    var (added, _) = await p.addImported([
+    var (added, _, _) = await p.addImported([
       txn(amount: 99, date: d.add(const Duration(minutes: 1))),
     ]);
     expect(added, 0);
     // Same amount hours apart → genuinely separate purchase.
-    (added, _) = await p.addImported([
+    (added, _, _) = await p.addImported([
       txn(amount: 99, date: d.add(const Duration(hours: 5))),
     ]);
     expect(added, 1);
@@ -144,7 +144,7 @@ void main() {
     await p.load();
     await p.addRule('this is a spam message', 'spam');
 
-    final (added, spamDropped) = await p.addImported([
+    final (added, spamDropped, _) = await p.addImported([
       txn(ref: 'A', rawBody: 'Rs.100 debited. THIS IS A SPAM MESSAGE offer!'),
       txn(ref: 'B', rawBody: 'Rs.200 debited at SWIGGY'),
     ]);

@@ -20,7 +20,7 @@ void main() {
     expect(p.rules.where((r) => r.isBuiltIn), isNotEmpty);
 
     // The parser no longer categorises — the seeded rule does, on import.
-    final (added, _) = await p.addImported([
+    final (added, _, _) = await p.addImported([
       ParsedTxn(
         type: TxType.expense,
         amount: 250,

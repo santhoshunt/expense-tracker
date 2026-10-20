@@ -1821,7 +1821,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       return;
     }
     try {
-      final path = await BackupService.exportCsvRows(rows);
+      final path = await BackupService.exportCsvRows(
+        rows,
+        kinds: BackupService.acctKindsFor(finance, rows),
+      );
       // Null = the save dialog was cancelled — not worth a snackbar.
       if (path != null && path.isNotEmpty) {
         showAppToastOn(

@@ -27,7 +27,10 @@ const int kMaxUnreadTimes = 30;
 const int kMaxUnreadSamples = 3;
 const int kMaxSampleChars = 300;
 
-/// Unreadable alerts warn from this many within [kUnreadWindowDays].
+/// Unreadable alerts warn from this many within [kUnreadWindowDays]. One
+/// is enough when it stated a completed payment the import skipped
+/// ([UnreadHit.droppedButDone]): a monthly EMI alert never sends a second
+/// within the window.
 const int kUnreadThreshold = 2;
 const int kUnreadWindowDays = 14;
 
@@ -48,10 +51,18 @@ typedef UnreadSample = ({DateTime at, String sender, String body});
 
 /// An unreadable alert: when it was sent, and when this app first saw it
 /// (a Weekly import or a range scan can see it days later).
-typedef UnreadHit = ({DateTime at, DateTime seen});
+/// [droppedButDone]: it stated a completed debit or credit, but a built-in
+/// ignore phrase (often in its footer) or a foreign currency made the
+/// parser skip it, rather than a format the parser does not know.
+typedef UnreadHit = ({DateTime at, DateTime seen, bool droppedButDone});
 
 /// An alert the parser could not read, as the import hands it over.
-typedef ImportMiss = ({String sender, String body, DateTime date});
+typedef ImportMiss = ({
+  String sender,
+  String body,
+  DateTime date,
+  bool droppedButDone,
+});
 
 class BankHealth {
   final String bank;
@@ -84,7 +95,11 @@ class BankHealth {
   Map<String, dynamic> toJson() => {
     'unread': [
       for (final u in unread)
-        [u.at.millisecondsSinceEpoch, u.seen.millisecondsSinceEpoch],
+        [
+          u.at.millisecondsSinceEpoch,
+          u.seen.millisecondsSinceEpoch,
+          if (u.droppedButDone) 1,
+        ],
     ],
     'samples': [
       for (final s in samples)
@@ -98,11 +113,16 @@ class BankHealth {
         v is num ? DateTime.fromMillisecondsSinceEpoch(v.toInt()) : null;
     final unread = <UnreadHit>[];
     for (final v in json['unread'] as List? ?? const []) {
-      // [sent, seen], or a bare send time (seen then).
+      // [sent, seen, 1 when droppedButDone], or a bare send time (seen
+      // then).
       final sent = at(v is List && v.isNotEmpty ? v[0] : v);
       if (sent == null) continue;
       final seen = v is List && v.length > 1 ? at(v[1]) : null;
-      unread.add((at: sent, seen: seen ?? sent));
+      unread.add((
+        at: sent,
+        seen: seen ?? sent,
+        droppedButDone: v is List && v.length > 2 && v[2] == 1,
+      ));
     }
     unread.sort((a, b) => a.at.compareTo(b.at));
     return BankHealth(
@@ -234,8 +254,10 @@ class ImportHealth {
       )) {
         continue;
       }
-      final unread = [...was.unread, (at: at, seen: seenAt)]
-        ..sort((a, b) => a.at.compareTo(b.at));
+      final unread = [
+        ...was.unread,
+        (at: at, seen: seenAt, droppedButDone: m.droppedButDone),
+      ]..sort((a, b) => a.at.compareTo(b.at));
       final body = m.body.length > kMaxSampleChars
           ? m.body.substring(0, kMaxSampleChars)
           : m.body;
@@ -355,6 +377,11 @@ class ImportWarning {
   final int usualGapDays;
   final BankHealth? health;
 
+  /// Every unreadable alert in the window stated a completed payment the
+  /// import skipped ([UnreadHit.droppedButDone]), so no format change is
+  /// to blame.
+  final bool droppedButDone;
+
   const ImportWarning({
     required this.bank,
     required this.kind,
@@ -362,13 +389,14 @@ class ImportWarning {
     required this.since,
     this.usualGapDays = 0,
     this.health,
+    this.droppedButDone = false,
   });
 }
 
 /// What the Overview banner should say, most urgent first: unreadable
-/// alerts (2 or more sent in 14 days and seen after a dismissal), then silent
-/// banks (unless dismissed since their last alert). A bank with both shows
-/// once, as unreadable.
+/// alerts (2 or more sent in 14 days, or 1 that stated a completed payment,
+/// and seen after a dismissal), then silent banks (unless dismissed since
+/// their last alert). A bank with both shows once, as unreadable.
 List<ImportWarning> buildImportWarnings(
   ImportHealthState health,
   List<BankSilence> silent,
@@ -385,16 +413,19 @@ List<ImportWarning> buildImportWarnings(
       for (final u in h.unread)
         if (!u.at.isBefore(windowStart) &&
             (dismissed == null || u.seen.isAfter(dismissed)))
-          u.at,
+          u,
     ];
-    if (hits.length < kUnreadThreshold) continue;
+    if (hits.isEmpty) continue;
+    final skippedDone = hits.any((u) => u.droppedButDone);
+    if (hits.length < kUnreadThreshold && !skippedDone) continue;
     out.add(
       ImportWarning(
         bank: h.bank,
         kind: ImportWarningKind.unreadable,
         count: hits.length,
-        since: hits.first,
+        since: hits.first.at,
         health: h,
+        droppedButDone: hits.every((u) => u.droppedButDone),
       ),
     );
     seen.add(h.bank);

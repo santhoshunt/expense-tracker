@@ -220,7 +220,7 @@ void main() {
         }
         await p.confirmAllPending();
         // The account alert a minute later, after the card's anchor.
-        final (added, _) = await p.addImported([
+        final (added, _, _) = await p.addImported([
           alert(
             date: sep6.add(const Duration(minutes: 1)),
             amount: 640,
@@ -258,7 +258,7 @@ void main() {
         ),
       ]);
       await p.confirmAllPending();
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         alert(
           date: sep6.add(const Duration(minutes: 1)),
           amount: 640,
@@ -271,7 +271,7 @@ void main() {
       expect(p.accountBalance(acct(p, bankKey)), 50000 - 640);
 
       // A second real 640 payment with its own ref, minutes later, imports.
-      final (again, _) = await p.addImported([
+      final (again, _, _) = await p.addImported([
         alert(
           date: sep6.add(const Duration(minutes: 9)),
           amount: 640,
@@ -285,7 +285,7 @@ void main() {
     test('a card the batch itself creates and links meets its bank twin in '
         'that batch', () async {
       final p = await loaded();
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         alert(date: sep5, amount: 500, acctKey: bankKey, avlBal: 50000),
         alert(
           date: sep6,
@@ -335,7 +335,7 @@ void main() {
       final bankId = acct(p, bankKey).id;
       expect(acct(p, cardKey).linkedAccountId, bankId);
       expect(acct(p, otherCard).linkedAccountId, bankId);
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         alert(
           date: sep6.add(const Duration(minutes: 1)),
           amount: 640,
@@ -599,7 +599,7 @@ void main() {
       );
       await p.linkDebitCard(card, bank);
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 29);
+      expect(data['version'], 30);
 
       SharedPreferences.setMockInitialValues({});
       final q = await loaded();

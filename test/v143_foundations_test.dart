@@ -120,7 +120,7 @@ void main() {
 
     test('CSV round trip keeps the payee', () {
       final csv = BackupService.buildCsvOf([manual(payee: 'Kappa Cafe')]);
-      expect(csv.split('\r\n').first, endsWith(',payee'));
+      expect(csv.split('\r\n').first, endsWith(',payee,acctKind,smsAt'));
       expect(BackupService.txsFromCsv(csv).single.payee, 'Kappa Cafe');
     });
 
@@ -139,7 +139,7 @@ void main() {
         final t = p.transactions.firstWhere((t) => t.id == id);
         expect(t.payee, 'Kappa Cafe');
         expect(p.rowTitleFor(t), 'Kappa Cafe');
-        expect(p.exportData()['version'], 29);
+        expect(p.exportData()['version'], 30);
         // The stored ledger keeps it across a restart.
         final again = await loaded();
         expect(

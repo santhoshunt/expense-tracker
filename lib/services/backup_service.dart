@@ -193,6 +193,11 @@ class BackupService {
     'refundOf',
     // Who a manual entry paid (Tx.payee); older files lack it.
     'payee',
+    // card, debit or bank for the row's account, so a restore on another
+    // device rebuilds the right kind; empty when unknown.
+    'acctKind',
+    // When a re-dated import's alert arrived (Tx.smsAt); usually empty.
+    'smsAt',
   ];
 
   /// A split's people as one CSV cell:
@@ -316,20 +321,38 @@ class BackupService {
     return '${f.format(r.start)}-${f.format(r.end)}';
   }
 
+  /// Account kind per account key among [rows], for the acctKind column.
+  static Map<String, String> acctKindsFor(
+    FinanceProvider finance,
+    List<Tx> rows,
+  ) => {
+    for (final key in rows.map((t) => t.acctKey).toSet())
+      if (key != null && finance.acctKindOfKey(key).isNotEmpty)
+        key: finance.acctKindOfKey(key),
+  };
+
   /// Transactions (confirmed + pending) as CSV text.
-  static String buildCsv(FinanceProvider finance) =>
-      buildCsvOf(_allRows(finance));
+  static String buildCsv(FinanceProvider finance) {
+    final rows = _allRows(finance);
+    return buildCsvOf(rows, kinds: acctKindsFor(finance, rows));
+  }
 
   /// [rows] as CSV text, in the caller's order — the filtered-list export
-  /// hands over exactly what the Transactions screen is showing.
-  static String buildCsvOf(List<Tx> rows) =>
-      _csvOfTxs((rows, _labelsFor(rows)));
+  /// hands over exactly what the Transactions screen is showing. [kinds]
+  /// fills the acctKind column ([acctKindsFor]).
+  static String buildCsvOf(
+    List<Tx> rows, {
+    Map<String, String> kinds = const {},
+  }) => _csvOfTxs((rows, _labelsFor(rows), kinds));
 
   /// The string-building half of [buildCsv]: pure over its input, so
   /// [exportCsv] can run it under [compute]. `Tx` holds only sendable fields;
-  /// category labels come pre-resolved in the record's map.
-  static String _csvOfTxs((List<Tx>, Map<String, String>) args) {
-    final (all, labels) = args;
+  /// category labels and account kinds come pre-resolved in the record's
+  /// maps.
+  static String _csvOfTxs(
+    (List<Tx>, Map<String, String>, Map<String, String>) args,
+  ) {
+    final (all, labels, kinds) = args;
     final rows = <String>[_csvHeader.join(',')];
     for (final t in all) {
       rows.add(
@@ -359,42 +382,62 @@ class BackupService {
           t.unseen.toString(),
           _csvEscape(t.refundOf ?? ''),
           _csvEscape(t.payee),
+          _csvEscape(kinds[t.acctKey] ?? ''),
+          _csvEscape(t.smsAt?.toIso8601String() ?? ''),
         ].join(','),
       );
     }
     return rows.join('\r\n');
   }
 
-  static Uint8List _csvBytesOfTxs((List<Tx>, Map<String, String>) args) =>
-      Uint8List.fromList(utf8.encode(_csvOfTxs(args)));
+  static Uint8List _csvBytesOfTxs(
+    (List<Tx>, Map<String, String>, Map<String, String>) args,
+  ) => Uint8List.fromList(utf8.encode(_csvOfTxs(args)));
 
   /// The bytes [exportCsv] writes. Split out so tests can exercise the real
   /// [compute] hop: the record payload has to be isolate-sendable, and the
   /// labels have to be resolved on this side of it.
   @visibleForTesting
-  static Future<Uint8List> csvBytes(FinanceProvider finance) =>
-      csvBytesOf(_allRows(finance));
+  static Future<Uint8List> csvBytes(FinanceProvider finance) {
+    final rows = _allRows(finance);
+    return csvBytesOf(rows, kinds: acctKindsFor(finance, rows));
+  }
 
   /// Bytes for an explicit row list, in the caller's order.
   @visibleForTesting
-  static Future<Uint8List> csvBytesOf(List<Tx> rows) =>
-      compute(_csvBytesOfTxs, (rows, _labelsFor(rows)), debugLabel: 'buildCsv');
+  static Future<Uint8List> csvBytesOf(
+    List<Tx> rows, {
+    Map<String, String> kinds = const {},
+  }) => compute(_csvBytesOfTxs, (
+    rows,
+    _labelsFor(rows),
+    kinds,
+  ), debugLabel: 'buildCsv');
 
   /// Saves a CSV of all transactions, optionally only those dated inside
   /// [range]. Returns the path, or null if cancelled.
   static Future<String?> exportCsv(
     FinanceProvider finance, {
     DateTimeRange? range,
-  }) => exportCsvRows(rowsInRange(_allRows(finance), range), range: range);
+  }) {
+    final rows = rowsInRange(_allRows(finance), range);
+    return exportCsvRows(
+      rows,
+      range: range,
+      kinds: acctKindsFor(finance, rows),
+    );
+  }
 
   /// Saves a CSV of exactly [rows] (e.g. the Transactions tab's filtered
-  /// list), in the given order. [range] only decorates the filename.
+  /// list), in the given order. [range] only decorates the filename;
+  /// [kinds] fills the acctKind column ([acctKindsFor]).
   /// Returns the path, or null if cancelled.
   static Future<String?> exportCsvRows(
     List<Tx> rows, {
     DateTimeRange? range,
+    Map<String, String> kinds = const {},
   }) async {
-    final bytes = await csvBytesOf(rows);
+    final bytes = await csvBytesOf(rows, kinds: kinds);
     return _save(
       range == null
           ? 'expense_tracker_transactions_${_stamp()}'
@@ -457,7 +500,12 @@ class BackupService {
   /// Converts parsed CSV rows into transactions.
   /// Throws [FormatException] when mandatory columns are missing.
   @visibleForTesting
-  static List<Tx> txsFromCsv(String text) {
+  static List<Tx> txsFromCsv(String text) => csvImportOf(text).$1;
+
+  /// [txsFromCsv] plus the acctKind column: account key → `card`, `debit`
+  /// or `bank`, for keys a row names a kind for. One parse for both.
+  @visibleForTesting
+  static (List<Tx>, Map<String, String>) csvImportOf(String text) {
     final rows = parseCsv(text);
     if (rows.isEmpty) throw const FormatException('Empty CSV file');
     final header = rows.first.map((h) => h.trim().toLowerCase()).toList();
@@ -504,6 +552,11 @@ class BackupService {
     final refundOfCol = col('refundof');
     // Older files lack the column; their rows name no payee.
     final payeeCol = col('payee');
+    // Older files lack these; their accounts' kind is derived as before,
+    // and their rows carry no arrival time.
+    final acctKindCol = col('acctkind');
+    final smsAtCol = col('smsat');
+    final kinds = <String, String>{};
 
     String cell(List<String> r, int? c) {
       final v = c == null || c >= r.length ? '' : r[c].trim();
@@ -603,7 +656,20 @@ class BackupService {
           final p => p,
         },
         payee: normalizePayee(cell(r, payeeCol)),
+        // Only on an import whose date differs from it, as Tx keeps it.
+        smsAt: switch (DateTime.tryParse(cell(r, smsAtCol))) {
+          final at?
+              when cell(r, sourceCol) == TxSource.sms.name &&
+                  !at.isAtSameMomentAs(date) =>
+            at,
+          _ => null,
+        },
       );
+      final kind = cell(r, acctKindCol).toLowerCase();
+      if (acctKey.isNotEmpty &&
+          (kind == 'card' || kind == 'debit' || kind == 'bank')) {
+        kinds[acctKey] ??= kind;
+      }
       // CSVs written before the smsBody column existed kept the raw SMS in
       // the note, so that note has to be moved. Files with either the
       // smsBody column (the old exporter) or categoryName (the current one,
@@ -613,7 +679,7 @@ class BackupService {
       final legacyNoteFormat = smsBodyCol == null && categoryNameCol == null;
       txs.add(legacyNoteFormat ? tx.migrateSmsBodyFromNote() : tx);
     }
-    return txs;
+    return (txs, kinds);
   }
 
   /// Picks a CSV file and imports the transactions in it. With [replace] all
@@ -628,12 +694,12 @@ class BackupService {
     if (bytes == null) return null;
     // Parse off the main isolate: txsFromCsv is pure string → Tx work (the
     // category registry is not consulted — ids are carried verbatim).
-    final txs = await compute(
-      txsFromCsv,
+    final (txs, kinds) = await compute(
+      csvImportOf,
       utf8.decode(bytes),
       debugLabel: 'parseCsv',
     );
-    return finance.importTransactions(txs, replace: replace);
+    return finance.importTransactions(txs, replace: replace, acctKinds: kinds);
   }
 
   // --- PDF -------------------------------------------------------------------

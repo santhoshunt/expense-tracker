@@ -465,7 +465,7 @@ void main() {
       await p.confirmAllPending();
       final buy = p.transactions.single;
 
-      final (added, _) = await p.addImported([
+      final (added, _, _) = await p.addImported([
         alert(TxType.income, oct4, backBody),
       ]);
       expect(added, 1);
@@ -662,7 +662,7 @@ void main() {
       final back = await refund(p);
       await p.linkRefund(back, buy);
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 29);
+      expect(data['version'], 30);
       final rows = (data['transactions'] as List).cast<Map>();
       expect(rows.firstWhere((m) => m['id'] == back)['refundOf'], buy);
       expect(

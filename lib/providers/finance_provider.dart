@@ -21,6 +21,7 @@ import '../services/refund_matching.dart';
 import '../services/reminder_schedule.dart';
 import '../services/review_queue.dart';
 import '../services/sms_parser.dart';
+import '../services/stable_hash.dart';
 import '../services/transfer_pairing.dart';
 import '../utils/dates.dart';
 import '../utils/figma_palette.dart';
@@ -346,6 +347,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _debitCardsDetectedKey = 'debit_cards_detected_v1';
   static const _refundsLinkedKey = 'refunds_linked_v1';
   static const _refundSuggestIdsKey = 'refund_suggest_ids_v1';
+  static const _discardedImportsKey = 'discarded_imports_v1';
 
   final List<Tx> _transactions = [];
   final List<ClassifierRule> _rules = [];
@@ -444,10 +446,128 @@ class FinanceProvider extends ChangeNotifier {
       _d.unseenCount ??= _transactions.where((t) => t.unseen).length;
 
   /// How many rows the most recent [addImported] counted at once rather
-  /// than sending to review. Its callers read it right after the call, so
-  /// the import result keeps its two-number shape.
+  /// than sending to review. App code reads the figure from the call's own
+  /// result instead: another import can start while one awaits its save
+  /// and reset this.
+  @visibleForTesting
   int get lastImportCounted => _lastImportCounted;
   int _lastImportCounted = 0;
+
+  /// Hashed identities ([_discardKeysOf]) of imported alerts the user
+  /// deleted or discarded, oldest first, so a rescan does not bring them
+  /// back. Hashes only: backups carry this, and they never carry SMS text.
+  final Set<String> _discardedImports = <String>{};
+
+  /// How many discarded alerts [_discardedImports] remembers.
+  static const int kMaxDiscardedImports = 5000;
+
+  /// The keys an alert is known by in [_discardedImports]: its text when
+  /// known, else its bank reference, else its amount, each with the sender
+  /// and the moment it arrived. A discarded row records the first that
+  /// applies ([_discardKeysOf]); an incoming alert is checked against all
+  /// three, so a row restored without its text still matches its alert.
+  static List<String> _alertKeys({
+    required String sender,
+    required DateTime arrived,
+    required TxType type,
+    required double amount,
+    required String body,
+    required String? ref,
+    bool all = false,
+  }) {
+    final at = '$sender|${arrived.millisecondsSinceEpoch}';
+    final keys = <String>[
+      if (body.isNotEmpty) stableHash('m|$at|$body'),
+      if (ref != null && (all || body.isEmpty))
+        stableHash('r|$at|${type.name}|$ref'),
+      if (all || (body.isEmpty && ref == null))
+        stableHash('a|$at|${type.name}|${(amount * 100).round()}'),
+    ];
+    return keys;
+  }
+
+  /// A notification copy's bank, direction, amount and arrival minute. Its
+  /// inbox twin has another sender, time and often a ref, so no
+  /// [_alertKeys] key matches it; the duplicate check would have dropped
+  /// the twin within 3 minutes, and [_nearDiscardedCopy] does the same.
+  static String _copyKey(String bank, TxType type, double amount, int minute) =>
+      stableHash('n|$bank|${type.name}|${(amount * 100).round()}|$minute');
+
+  static int _minuteOf(DateTime d) =>
+      d.millisecondsSinceEpoch ~/ Duration.millisecondsPerMinute;
+
+  static List<String> _discardKeysOf(Tx t) => [
+    ..._alertKeys(
+      sender: t.sender,
+      arrived: t.smsArrivedAt,
+      type: t.type,
+      amount: t.amount,
+      body: t.smsBody,
+      ref: t.externalRef,
+    ),
+    if (t.sender.isNotEmpty && !SmsTxnParser.isDltSender(t.sender))
+      _copyKey(
+        SmsTxnParser.dedupBankOf(t.sender),
+        t.type,
+        t.amount,
+        _minuteOf(t.smsArrivedAt),
+      ),
+  ];
+
+  /// Whether a discarded notification copy of the same bank, direction and
+  /// amount arrived within about 3 minutes of [p].
+  bool _nearDiscardedCopy(ParsedTxn p) {
+    final bank = SmsTxnParser.dedupBankOf(p.sender);
+    if (bank.isEmpty) return false;
+    final minute = _minuteOf(p.date);
+    for (var m = minute - 3; m <= minute + 3; m++) {
+      if (_discardedImports.contains(_copyKey(bank, p.type, p.amount, m))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Records the SMS rows among [rows] as discarded. True when the set
+  /// changed (the caller persists with `discards: true`).
+  bool _rememberDiscarded(Iterable<Tx> rows) {
+    var changed = false;
+    for (final t in rows) {
+      if (t.source != TxSource.sms) continue;
+      for (final k in _discardKeysOf(t)) {
+        // Re-added at the end: a second discard makes it the newest.
+        _discardedImports.remove(k);
+        _discardedImports.add(k);
+        changed = true;
+      }
+    }
+    _capDiscarded();
+    return changed;
+  }
+
+  /// Forgets [rows]' discard records: an Undo brought them back.
+  bool _forgetDiscarded(Iterable<Tx> rows) {
+    if (_discardedImports.isEmpty) return false;
+    var changed = false;
+    for (final t in rows) {
+      if (t.source != TxSource.sms) continue;
+      for (final k in _discardKeysOf(t)) {
+        changed = _discardedImports.remove(k) || changed;
+      }
+    }
+    return changed;
+  }
+
+  void _capDiscarded() {
+    final over = _discardedImports.length - kMaxDiscardedImports;
+    if (over <= 0) return;
+    final oldest = _discardedImports.take(over).toList();
+    _discardedImports.removeAll(oldest);
+  }
+
+  /// How many discarded alerts are remembered; for tests.
+  @visibleForTesting
+  int get discardedImportCount => _discardedImports.length;
 
   /// Clears the "new" marker on [id], as opening the row does.
   Future<void> markSeen(String id) async {
@@ -1589,6 +1709,9 @@ class FinanceProvider extends ChangeNotifier {
     _refundReviewIds
       ..clear()
       ..addAll(prefs.getStringList(_refundSuggestIdsKey) ?? const []);
+    _discardedImports
+      ..clear()
+      ..addAll(prefs.getStringList(_discardedImportsKey) ?? const []);
     // Once, on the first launch of 1.42.0: refunds from the last 90 days
     // are linked to their purchase when sure, or offered for review
     // ([_linkPastRefunds]). Not when the ledger, the accounts or the
@@ -1713,6 +1836,7 @@ class FinanceProvider extends ChangeNotifier {
     aliases: true,
     reminders: true,
     marks: true,
+    discards: true,
   );
 
   /// Writes only the collections the caller says it changed.
@@ -1740,6 +1864,7 @@ class FinanceProvider extends ChangeNotifier {
     bool aliases = false,
     bool reminders = false,
     bool marks = false,
+    bool discards = false,
   }) async {
     try {
       await _persistOrThrow(
@@ -1754,6 +1879,7 @@ class FinanceProvider extends ChangeNotifier {
         aliases: aliases,
         reminders: reminders,
         marks: marks,
+        discards: discards,
       );
       if (_persistFailed) {
         _persistFailed = false;
@@ -1779,6 +1905,7 @@ class FinanceProvider extends ChangeNotifier {
     bool aliases = false,
     bool reminders = false,
     bool marks = false,
+    bool discards = false,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     if (tx) {
@@ -1871,6 +1998,12 @@ class FinanceProvider extends ChangeNotifier {
     }
     if (marks && !_loadWarnings.contains('payment marks')) {
       await prefs.setString(_patternPaidKey, jsonEncode(_patternPaid));
+    }
+    if (discards) {
+      await prefs.setStringList(
+        _discardedImportsKey,
+        _discardedImports.toList(),
+      );
     }
   }
 
@@ -2041,8 +2174,10 @@ class FinanceProvider extends ChangeNotifier {
     _transactions.removeAt(i);
     // An Add sheet Undo, or a discarded import: its reminder payment goes.
     final reminders = _unmarkRemindersPaidBy([id]);
+    // A deleted import stays gone on a rescan.
+    final discards = _rememberDiscarded([victim]);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders);
+    await _persist(tx: true, reminders: reminders, discards: discards);
     return partner;
   }
 
@@ -2061,8 +2196,9 @@ class FinanceProvider extends ChangeNotifier {
     _transactions.removeWhere((t) => wanted.contains(t.id));
     _clearOrphanPairs();
     final reminders = _unmarkRemindersPaidBy(removed.map((t) => t.id));
+    final discards = _rememberDiscarded(removed);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders);
+    await _persist(tx: true, reminders: reminders, discards: discards);
     return removed;
   }
 
@@ -2196,8 +2332,9 @@ class FinanceProvider extends ChangeNotifier {
     // Categories may have changed since the snapshot was taken.
     _transactions.add(_sanitizeSplit(tx));
     final reminders = _remarkRemindersPaidBy([tx]);
+    final discards = _forgetDiscarded([tx]);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders);
+    await _persist(tx: true, reminders: reminders, discards: discards);
   }
 
   /// Batch [restoreTransaction]: the undo half of [deleteTransactions] and
@@ -2214,8 +2351,9 @@ class FinanceProvider extends ChangeNotifier {
     if (back.isEmpty) return;
     _clearOrphanPairs();
     final reminders = _remarkRemindersPaidBy(back);
+    final discards = _forgetDiscarded(back);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders);
+    await _persist(tx: true, reminders: reminders, discards: discards);
   }
 
   /// The undo half of edits that only rewrite row fields (bulk category,
@@ -2234,6 +2372,7 @@ class FinanceProvider extends ChangeNotifier {
     // Rows coming back or changing review state: a row back in review takes
     // its reminder payment back, a deleted or confirmed row puts it back.
     final reviewMoves = <Tx>[];
+    final readded = <Tx>[];
     for (final snap in snapshot) {
       final old = _sanitizeSplit(snap);
       final i = _transactions.indexWhere((t) => t.id == old.id);
@@ -2241,6 +2380,7 @@ class FinanceProvider extends ChangeNotifier {
         if (!reAddMissing) continue;
         _transactions.add(old);
         reviewMoves.add(old);
+        readded.add(old);
       } else {
         if (_transactions[i].pending != old.pending) reviewMoves.add(old);
         _transactions[i] = old;
@@ -2252,8 +2392,9 @@ class FinanceProvider extends ChangeNotifier {
       // its old pairId; unlink it rather than point at a missing row.
       _clearOrphanPairs();
       final reminders = _remarkRemindersPaidBy(reviewMoves);
+      final discards = _forgetDiscarded(readded);
       notifyListeners();
-      await _persist(tx: true, reminders: reminders);
+      await _persist(tx: true, reminders: reminders, discards: discards);
     }
   }
 
@@ -5936,11 +6077,12 @@ class FinanceProvider extends ChangeNotifier {
 
   // --- SMS import -----------------------------------------------------------
 
-  /// Adds parsed SMS transactions, skipping duplicates and rule-confirmed
-  /// spam. Returns (added, confirmedSpamDropped). A sure row
+  /// Adds parsed SMS transactions, skipping duplicates, rule-confirmed spam
+  /// and alerts the user deleted or discarded before ([_discardedImports]).
+  /// Returns (added, confirmedSpamDropped, counted). A sure row
   /// ([_isSureImport]) counts at once with the "new" marker ([Tx.unseen]);
-  /// every other row waits pending for review. [lastImportCounted] says how
-  /// many counted.
+  /// every other row waits pending for review. `counted` says how many of
+  /// the added rows counted at once.
   ///
   /// Rule handling: a matching spam rule drops the message entirely; a
   /// matching category rule overrides the parser's category guess and clears
@@ -5952,9 +6094,12 @@ class FinanceProvider extends ChangeNotifier {
   /// treated as the same bank alert sent twice, unless both are inbox alerts
   /// stating different balances after them. Fuzzy matching is only used to
   /// *skip* an import, never to touch existing user data.
-  Future<(int, int)> addImported(List<ParsedTxn> parsed) async {
+  Future<(int, int, int)> addImported(List<ParsedTxn> parsed) async {
     _lastImportCounted = 0;
-    if (parsed.isEmpty) return (0, 0);
+    if (parsed.isEmpty) return (0, 0, 0);
+    // This call's own figure: _lastImportCounted can be reset by another
+    // import while this one awaits its save.
+    var counted = 0;
     // Rows are only appended below, so everything from here on is new.
     final firstNew = _transactions.length;
     var added = 0;
@@ -6071,13 +6216,15 @@ class FinanceProvider extends ChangeNotifier {
     // The very same message again (a rescan): same sender, text and time.
     // It must drop even when a newer parser reads another ref or direction
     // from it than the stored row has. Rows already on record only, so two
-    // identical ref-less swipes in one batch both import.
+    // identical ref-less swipes in one batch both import. The time is when
+    // the alert arrived ([Tx.smsArrivedAt]), so a re-dated row still
+    // matches; the fuzzy bucket below uses it for the same reason.
     String sameMessage(String sender, DateTime date, String body) =>
         '$sender|${date.millisecondsSinceEpoch}|$body';
     final seenMessages = <String>{
       for (final t in _transactions)
         if (t.source == TxSource.sms && t.smsText.isNotEmpty)
-          sameMessage(t.sender, t.date, t.smsText),
+          sameMessage(t.sender, t.smsArrivedAt, t.smsText),
     };
     for (final t in _transactions) {
       if (t.externalRef != null) refKeys.add('${t.type.name}|${t.externalRef}');
@@ -6086,10 +6233,43 @@ class FinanceProvider extends ChangeNotifier {
         t.amount,
         t.sender,
         t.externalRef,
-        t.date,
+        t.source == TxSource.sms ? t.smsArrivedAt : t.date,
         t.acctKey,
         t.balanceAfter,
       );
+    }
+    // Alerts the user deleted or discarded. Each still stands in the
+    // duplicate maps as if its row were there, so the bank's second copy
+    // of it (a notification, or the same alert sent twice) drops too
+    // instead of importing in its place. Before the main pass, so a copy
+    // earlier in the batch is caught as well.
+    final discarded = <ParsedTxn>{};
+    if (_discardedImports.isNotEmpty) {
+      for (final p in parsed) {
+        final keys = _alertKeys(
+          sender: p.sender,
+          arrived: p.date,
+          type: p.type,
+          amount: p.amount,
+          body: p.rawBody,
+          ref: p.ref,
+          all: true,
+        );
+        if (!keys.any(_discardedImports.contains) && !_nearDiscardedCopy(p)) {
+          continue;
+        }
+        discarded.add(p);
+        if (p.ref != null) refKeys.add('${p.type.name}|${p.ref}');
+        remember(
+          p.type,
+          p.amount,
+          p.sender,
+          p.ref,
+          p.date,
+          p.acctKey,
+          p.balanceAfter,
+        );
+      }
     }
     for (final p in parsed) {
       final ruleText = p.rawBody.isNotEmpty ? p.rawBody : p.merchant;
@@ -6098,6 +6278,7 @@ class FinanceProvider extends ChangeNotifier {
         spamDropped++;
         continue;
       }
+      if (discarded.contains(p)) continue;
       if (p.rawBody.isNotEmpty &&
           seenMessages.contains(sameMessage(p.sender, p.date, p.rawBody))) {
         continue;
@@ -6263,7 +6444,7 @@ class FinanceProvider extends ChangeNotifier {
           if (purchase != null) {
             _transactions[i] = _linkedRefund(t, purchase.id, unseen: true);
             taken[purchase.id] = (taken[purchase.id] ?? 0) + t.amount;
-            _lastImportCounted++;
+            counted++;
             continue;
           }
         }
@@ -6277,7 +6458,7 @@ class FinanceProvider extends ChangeNotifier {
         );
         if (sure) {
           _transactions[i] = t.copyWith(pending: false, unseen: true);
-          _lastImportCounted++;
+          counted++;
           continue;
         }
         // The review queue never suggests a pair with a spam suspect.
@@ -6310,10 +6491,11 @@ class FinanceProvider extends ChangeNotifier {
       paid = _markRemindersPaidBy(_transactions.sublist(firstNew)) || paid;
       // A card payment that counted at once pays its card's bill.
       _markCardCyclesPaid();
+      _lastImportCounted = counted;
       notifyListeners();
       await _persist(tx: true, accounts: true, reminders: paid);
     }
-    return (added, spamDropped);
+    return (added, spamDropped, counted);
   }
 
   /// Whether the SMS import [row], carrying its final category, is sure
@@ -6634,18 +6816,30 @@ class FinanceProvider extends ChangeNotifier {
     return changed;
   }
 
-  Future<int> importTransactions(List<Tx> txs, {required bool replace}) async {
+  /// Imports rows from a CSV. With [replace] the rows replace the ledger;
+  /// the accounts stay, as categories and rules do: the CSV holds no
+  /// account names, balances, limits or links, and a hand-assigned row's
+  /// `manual:` key resolves only through the device's account. A key no
+  /// account owns gets one, of the kind [acctKinds] gives (the CSV's
+  /// acctKind column), else derived from the alert text.
+  Future<int> importTransactions(
+    List<Tx> txs, {
+    required bool replace,
+    Map<String, String> acctKinds = const {},
+  }) async {
     final sanitized = txs.map(_sanitizeImportedTx).toList();
+    void ensureAccounts() {
+      _acctKindHints = acctKinds;
+      _ensureAccountsForTransactions();
+      _acctKindHints = const {};
+    }
+
     if (replace) {
       _transactions
         ..clear()
         ..addAll(sanitized);
       _clearOrphanPairs();
-      // Parity with importData's replace mode: stale accounts must not
-      // survive a "replace everything" import.
-      _accounts.clear();
-      _rebuildKeyIndex();
-      _ensureAccountsForTransactions();
+      ensureAccounts();
       notifyListeners();
       await _persist(tx: true, accounts: true);
       return sanitized.length;
@@ -6655,11 +6849,23 @@ class FinanceProvider extends ChangeNotifier {
     _transactions.addAll(fresh);
     if (fresh.isNotEmpty) {
       _clearOrphanPairs();
-      _ensureAccountsForTransactions();
+      ensureAccounts();
       notifyListeners();
       await _persist(tx: true, accounts: true);
     }
     return fresh.length;
+  }
+
+  /// Card, debit card or bank for [key]'s account, for the CSV's acctKind
+  /// column ([_acctKinds]' words); '' for a key no card or bank owns.
+  String acctKindOfKey(String? key) {
+    if (key == null || key.startsWith('manual:')) return '';
+    return switch (accountForKey(key)?.type) {
+      AccountType.creditCard => 'card',
+      AccountType.debitCard => 'debit',
+      AccountType.bank => 'bank',
+      _ => '',
+    };
   }
 
   /// Deletes every transaction and account, plus the fired budget-alert
@@ -6691,6 +6897,9 @@ class FinanceProvider extends ChangeNotifier {
     _refundReviewIds.clear();
     await prefs.remove(_refundSuggestIdsKey);
     _reminderMarks.clear();
+    // With the rows gone, a rescan may bring back any alert.
+    _discardedImports.clear();
+    await prefs.remove(_discardedImportsKey);
     if (includeConfig) {
       _rules.clear();
       _importRules.clear();
@@ -6766,8 +6975,12 @@ class FinanceProvider extends ChangeNotifier {
     // v28: transactions may carry `payee` (Paid to on a manual entry).
     // v29: SMS transactions may carry `smsMerchant` (the merchant the alert
     // names, in place of the alert text).
-    'version': 29,
+    // v30: SMS transactions may carry `smsAt` (when a re-dated row's alert
+    // arrived); `discardedImports` (hashes of deleted or discarded alerts,
+    // never their text).
+    'version': 30,
     'transactions': [for (final t in _transactions) _backupJsonOf(t)],
+    'discardedImports': _discardedImports.toList(),
     'accounts': _accounts.map((a) => a.toJson()).toList(),
     // v9 addition: card/bank (v26: or debit) kind per SMS-derived account
     // key. Bodies are
@@ -6939,6 +7152,14 @@ class FinanceProvider extends ChangeNotifier {
     final importedPatternPaid = rawPatternPaid is Map
         ? _decodePatternPaid(rawPatternPaid)
         : null;
+    // v30 addition, same absent-means-keep rule. Only hash-shaped entries.
+    final rawDiscarded = data['discardedImports'];
+    final importedDiscarded = rawDiscarded is List
+        ? [
+            for (final e in rawDiscarded)
+              if (e is String && RegExp(r'^[0-9a-f]{16}$').hasMatch(e)) e,
+          ]
+        : null;
     // v13 addition, same absent-means-keep rule.
     final rawReminders = data['reminders'];
     final importedReminders = rawReminders is List
@@ -7086,6 +7307,12 @@ class FinanceProvider extends ChangeNotifier {
           ..clear()
           ..addAll(importedImportRules);
       }
+      if (importedDiscarded != null) {
+        _discardedImports
+          ..clear()
+          ..addAll(importedDiscarded);
+        _capDiscarded();
+      }
       // Registry is final now — safe to enforce the type/category invariant
       // (CSV imports get this via importTransactions; this path didn't).
       sanitizeTail(_transactions.length);
@@ -7134,6 +7361,7 @@ class FinanceProvider extends ChangeNotifier {
             importedTagColors != null ||
             importedPins != null ||
             importedPatternPaid != null,
+        discards: importedDiscarded != null,
       );
       return txs.length;
     }
@@ -7378,6 +7606,16 @@ class FinanceProvider extends ChangeNotifier {
             newPatternPaid.isNotEmpty,
       );
     }
+    // Alerts discarded on either side stay discarded.
+    final newDiscards = [
+      for (final k in importedDiscarded ?? const <String>[])
+        if (!_discardedImports.contains(k)) k,
+    ];
+    if (newDiscards.isNotEmpty) {
+      _discardedImports.addAll(newDiscards);
+      _capDiscarded();
+      await _persist(discards: true);
+    }
     return newTxs.length;
   }
 
@@ -7416,8 +7654,9 @@ class FinanceProvider extends ChangeNotifier {
     _transactions.removeWhere((t) => t.pending && !t.suspectedSpam);
     _clearOrphanPairs();
     final reminders = _unmarkRemindersPaidBy(removed.map((t) => t.id));
+    final discards = _rememberDiscarded(removed);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders);
+    await _persist(tx: true, reminders: reminders, discards: discards);
     return removed;
   }
 }
