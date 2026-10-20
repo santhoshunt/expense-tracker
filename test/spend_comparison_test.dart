@@ -484,6 +484,60 @@ void main() {
       expect(usualWindow(p, DateTime(2026, 10)), [DateTime(2026, 9)]);
     });
 
+    test('one big month keeps the normal month beside it', () async {
+      final p = await loaded();
+      await spend(p, DateTime(2026, 8, 1), 400);
+      await spend(p, DateTime(2026, 8, 25), 1100);
+      await spend(p, DateTime(2026, 9, 1), 400);
+      await spend(p, DateTime(2026, 9, 25), 31000);
+      // By whole totals the middle of two is ₹16,450 and August's ₹1,500
+      // sits under its quarter. The typical row is ₹750, so the test caps
+      // each row at ₹3,000: August ₹1,500 against September ₹3,400, a bar
+      // of ₹612, and August stays.
+      expect(usualWindow(p, DateTime(2026, 10)), [
+        DateTime(2026, 8),
+        DateTime(2026, 9),
+      ]);
+      final c = buildMonthComparison(
+        p,
+        DateTime(2026, 10),
+        now: DateTime(2026, 10, 31),
+      );
+      expect(c.usualMonths, 2);
+      expect(c.vsUsual.state, isNot(CompareState.notEnoughHistory));
+      expect(c.vsUsual.referenceFull, (1500 + 31400) / 2);
+    });
+
+    test('a month of a few small rows is still a gap', () async {
+      final p = await loaded();
+      await spend(p, DateTime(2026, 8, 1), 100);
+      await spend(p, DateTime(2026, 8, 20), 100);
+      for (final d in [2, 9, 16, 23]) {
+        await spend(p, DateTime(2026, 9, d), 5000);
+      }
+      // Typical row ₹5,000, so nothing is capped: August's ₹200 against a
+      // bar of ₹2,525.
+      expect(usualWindow(p, DateTime(2026, 10)), [DateTime(2026, 9)]);
+    });
+
+    test('a month holding only its rent beside full months is a gap', () async {
+      final p = await loaded();
+      await spend(p, DateTime(2026, 7, 1), 15000, category: 'bills');
+      for (final m in [8, 9]) {
+        await spend(p, DateTime(2026, m, 1), 15000, category: 'bills');
+        for (var d = 2; d <= 21; d++) {
+          await spend(p, DateTime(2026, m, d), 500);
+        }
+      }
+      // The typical row is ₹500, so rent counts as ₹2,000. July holds that
+      // alone against ₹12,000 for August and September, under the ₹3,000
+      // bar: everyday rows were not recorded, and the run stops there.
+      expect(usualWindow(p, DateTime(2026, 10)), [
+        DateTime(2026, 8),
+        DateTime(2026, 9),
+      ]);
+    });
+
     test('a run that spent nothing drops no month', () async {
       final p = await loaded();
       for (final m in [7, 8, 9]) {

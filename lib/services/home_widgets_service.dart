@@ -151,13 +151,16 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       if (!u.muted && u.days >= -7) u,
   ].take(kUpcomingWidgetRows);
   final hideIncome = settings.hideIncome;
+  // Everything the review sheet lists, whatever its date: the app's badge,
+  // and where each widget's count leads.
+  final toReview = finance.reviewCount(settings.dismissedPairSuggestions);
   return {
     'computedDay': epochDay(now),
     // year * 12 + month: compared as a number, so no locale can change it.
     'monthKey': month.year * 12 + month.month,
     'monthLabel': DateFormat('MMMM').format(month),
-    // Imports waiting in review: Today and Recent name them.
-    'pendingCount': finance.pendingCount,
+    // Today and Recent name it; the This week block carries it too.
+    'toReview': toReview,
     'pace': {
       'spent': spent,
       'spentLabel': fmtMoneyTidy(spent),
@@ -193,7 +196,7 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       },
     // Left out with no big bills: the widget shows its empty line.
     if (!bigBills.isEmpty) 'bigBills': _bigBills(bigBills, month),
-    'week': _week(finance, settings, now),
+    'week': _week(finance, now, toReview),
   };
 }
 
@@ -218,14 +221,9 @@ Map<String, dynamic> _bigBills(BigBillsPlan plan, DateTime month) => {
 /// The This week widgets' block: the current week's spend day by day, and
 /// the usual week cut to each weekday, so the widget compares against the
 /// day it draws. Its `weekStart` tells a widget drawn after Sunday that
-/// the figures are last week's. `toReview` is everything the review sheet
-/// lists, whatever its date: the app's badge, and where the count's tap
-/// lands.
-Map<String, dynamic> _week(
-  FinanceProvider finance,
-  SettingsProvider settings,
-  DateTime now,
-) {
+/// the figures are last week's. [toReview] is the snapshot's review count,
+/// which does not depend on the week.
+Map<String, dynamic> _week(FinanceProvider finance, DateTime now, int toReview) {
   final start = weekStartOf(now);
   final d = buildWeekDigest(finance, start, now: now);
   return {
@@ -234,7 +232,7 @@ Map<String, dynamic> _week(
     'spentLabel': fmtMoneyTidy(d.spent),
     'byDay': d.byDay,
     'usualByDay': usualWeekByDay(finance, start),
-    'toReview': finance.reviewCount(settings.dismissedPairSuggestions),
+    'toReview': toReview,
   };
 }
 

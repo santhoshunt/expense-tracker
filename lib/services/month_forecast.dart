@@ -84,11 +84,6 @@ class MonthForecast {
 /// amount; other rows there are everyday shopping.
 const double kPinnedBillTolerance = 0.10;
 
-/// In the missing-records test of a usual month, one everyday row counts for
-/// at most this many typical (median) everyday rows, so one big purchase
-/// cannot set the bar a normal month is held to.
-const double kTypicalRowCap = 4;
-
 /// Whether [t] is a bill payment: a row of a pattern whose bill this
 /// month's forecast already holds ([billKeys], [recurringKeyOf]
 /// identities, mapped to the usual amount for a pinned merchant, whose row
@@ -204,12 +199,10 @@ MonthForecast? computeMonthForecast(
         ],
       ),
   ];
-  final rowCap =
-      kTypicalRowCap *
-      median([
-        for (final (_, rows) in rowsByMonth)
-          for (final t in rows) finance.netSpendOf(t),
-      ]);
+  final rowCap = typicalRowCap([
+    for (final (_, rows) in rowsByMonth)
+      for (final t in rows) finance.netSpendOf(t),
+  ]);
   // Each month's everyday spend per day after today's day-of-month: in
   // full for the estimate, and with every row capped at [rowCap] for the
   // missing-records test. A month too short to have such days (February

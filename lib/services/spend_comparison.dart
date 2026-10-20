@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/dates.dart';
@@ -30,8 +32,20 @@ const int kTopMoversShown = 5;
 
 /// A month under this share of the usual run's middle spend is missing
 /// records, not a quiet month, and ends the run. The month-end forecast
-/// applies the same share to everyday spend instead.
+/// applies the same share to everyday spend instead. Both measure each
+/// month with its rows capped by [typicalRowCap].
 const double kThinMonthShare = 0.25;
+
+/// In the missing-records test of a usual month, one row counts for at
+/// most this many typical (median) rows, so one big purchase cannot set
+/// the bar a normal month is held to.
+const double kTypicalRowCap = 4;
+
+/// The most one row of [amounts] counts for in the missing-records test:
+/// [kTypicalRowCap] times their median. With a capped month total the test
+/// asks whether rows were recorded, not how much was spent.
+double typicalRowCap(Iterable<double> amounts) =>
+    kTypicalRowCap * median(amounts.toList());
 
 /// A rise above this fraction (100%) reads as "N times", not a percentage.
 const double kTimesAbove = 1.0;
@@ -203,18 +217,35 @@ List<DateTime> recordedMonthsBefore(FinanceProvider finance, DateTime month) {
 /// The complete months behind [month] whose figures the ledger can support,
 /// oldest first: [recordedMonthsBefore], where a month with under a quarter
 /// of the run's middle spend is a gap in the records, not a quiet month, and
-/// stops the run too.
+/// stops the run too. The test measures each month with every row capped
+/// at [typicalRowCap], so with two months on record one big purchase
+/// cannot raise the middle past the normal month beside it.
 List<DateTime> usualWindow(FinanceProvider finance, DateTime month) {
   final out = recordedMonthsBefore(finance, month);
+  // The rows [FinanceProvider.expenseInMonth] adds up, month by month.
+  final spendByMonth = [
+    for (final m in out)
+      [
+        for (final t in finance.confirmedInMonth(m))
+          if (t.type == TxType.expense &&
+              !isTransferCategory(t.categoryId) &&
+              finance.countsInTotals(t) &&
+              finance.netSpendOf(t) > 0)
+            finance.netSpendOf(t),
+      ],
+  ];
+  final cap = typicalRowCap([for (final rows in spendByMonth) ...rows]);
+  final capped = [
+    for (final rows in spendByMonth)
+      rows.fold(0.0, (s, a) => s + math.min(a, cap)),
+  ];
   // `out` runs newest first. A thin month stops the run where it sits, the
   // way an empty one does; with a middle of 0 nothing counts as thin.
-  final floor =
-      kThinMonthShare *
-      median([for (final m in out) finance.expenseInMonth(m)]);
+  final floor = kThinMonthShare * median(capped);
   final kept = <DateTime>[];
-  for (final m in out) {
-    if (floor > 0 && finance.expenseInMonth(m) < floor) break;
-    kept.add(m);
+  for (var i = 0; i < out.length; i++) {
+    if (floor > 0 && capped[i] < floor) break;
+    kept.add(out[i]);
   }
   return kept.reversed.toList();
 }

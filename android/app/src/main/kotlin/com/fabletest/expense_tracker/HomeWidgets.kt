@@ -408,7 +408,7 @@ object HomeWidgets {
         // Written on an earlier day: nothing is recorded for today.
         val fresh = t != null && t.optLong("day", -1) == today()
         val count = if (fresh) t?.optInt("count", 0) ?: 0 else 0
-        val pending = data?.optInt("pendingCount", 0) ?: 0
+        val pending = toReview(data)
 
         // Line one: "Today · 2 payments · 3 to review". Where that is wider
         // than the text has (the width less the 16dp and 8dp padding, the
@@ -752,7 +752,7 @@ object HomeWidgets {
         RecentRow(R.id.hw_row4, R.id.hw_dot4, R.id.hw_icon4, R.id.hw_name4, R.id.hw_when4, R.id.hw_amt4),
     )
 
-    /** The newest four confirmed rows, and how many imports wait. */
+    /** The newest four confirmed rows, and how many rows wait for review. */
     private fun recent(
         context: Context,
         heightDp: Int,
@@ -765,7 +765,7 @@ object HomeWidgets {
         )
         views.setTextColor(R.id.hw_title, theme.textSecondary)
         views.setTextColor(R.id.hw_empty, theme.textSecondary)
-        val pending = data?.optInt("pendingCount", 0) ?: 0
+        val pending = toReview(data)
         views.setViewVisibility(R.id.hw_side, if (pending > 0) View.VISIBLE else View.GONE)
         views.setTextViewText(R.id.hw_side, "$pending to review")
         views.setTextColor(R.id.hw_side, theme.accentText)
@@ -1054,10 +1054,16 @@ object HomeWidgets {
         return views
     }
 
+    /** Everything the review sheet lists: the app's badge. A snapshot from
+     * before 1.43.6 carries only its pending imports. */
+    private fun toReview(data: JSONObject?): Int =
+        data?.optInt("toReview", data.optInt("pendingCount", 0)) ?: 0
+
     /** The week block as of today. Once its week is over (a new Monday the
      * app has not seen), nothing is spent and the bars are empty. [usual]
      * is the usual week cut to today, null under 2 weeks of history or once
-     * the block's week is over: last week's usual is not this week's. */
+     * the block's week is over: last week's usual is not this week's.
+     * [toReview] stays whatever the week: the review sheet is not dated. */
     private class WeekView(
         val spent: Double,
         val spentLabel: String,
@@ -1083,7 +1089,7 @@ object HomeWidgets {
             },
             usual = if (!fresh || usual == null || day >= usual.length() || usual.isNull(day)) null
             else usual.optDouble(day),
-            toReview = if (fresh) week.optInt("toReview", 0) else 0,
+            toReview = week.optInt("toReview", 0),
             today = day,
         )
     }

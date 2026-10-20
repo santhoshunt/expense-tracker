@@ -38,7 +38,8 @@ const _usualTip =
     'would. While the month is running, both sides count only up to '
     "today's date. It needs at least 2 complete months. A month with under "
     'a quarter of the middle spend counts as missing records, and '
-    'only the months after it are used.';
+    'only the months after it are used. In this check one big purchase '
+    'counts as no more than 4 typical ones.';
 
 const _categoryTitle = 'Categories vs usual';
 const _categoryTip =

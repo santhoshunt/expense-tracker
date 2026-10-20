@@ -258,7 +258,7 @@ void main() {
       final snap =
           jsonDecode(jsonEncode(buildHomeWidgetSnapshot(p, s, now, const [])))
               as Map<String, dynamic>;
-      expect(snap['pendingCount'], 1);
+      expect(snap['toReview'], 1);
       final recent = snap['recent'] as List;
       // Four rows, newest first; the pending one is not among them.
       expect(
@@ -282,6 +282,62 @@ void main() {
       // A midnight row has no time to show.
       expect(recent.last['timeLabel'], isNull);
       expect(recent[2]['merchant'], isNull);
+    });
+
+    test('every widget counts what the badge counts, past refunds '
+        'included', () async {
+      SharedPreferences.setMockInitialValues({
+        'imports_auto_counted_v1': true,
+        'refunds_linked_v1': true,
+        'refund_suggest_ids_v1': ['test-back'],
+      });
+      final p = FinanceProvider();
+      await p.load();
+      await p.restoreTransactions([
+        Tx(
+          id: 'test-buy',
+          type: TxType.expense,
+          categoryId: 'shopping',
+          amount: 900,
+          note: 'Gadget Hub',
+          date: DateTime(2026, 7, 10, 18, 30),
+          acctKey: 'DEMO:4321',
+        ),
+        Tx(
+          id: 'test-back',
+          type: TxType.income,
+          categoryId: 'other_income',
+          amount: 900,
+          note: '',
+          smsBody: 'Refund of Rs 900.0 credited to a/c XX4321. -Demo Bank',
+          source: TxSource.sms,
+          sender: 'VM-DEMOBK',
+          date: DateTime(2026, 7, 12, 10),
+          // Worded as a refund on the purchase's account: the sheet offers
+          // the purchase.
+          acctKey: 'DEMO:4321',
+        ),
+        Tx(
+          id: 'test-waiting',
+          type: TxType.expense,
+          categoryId: 'food',
+          amount: 120,
+          note: '',
+          date: DateTime(2026, 7, 17, 9),
+          pending: true,
+        ),
+      ]);
+      final s = SettingsProvider();
+      await s.load();
+      // One import waits, and the sheet also asks about the past refund.
+      expect(p.pendingCount, 1);
+      expect(p.reviewCount(s.dismissedPairSuggestions), 2);
+      final snap =
+          jsonDecode(jsonEncode(buildHomeWidgetSnapshot(p, s, now, const [])))
+              as Map<String, dynamic>;
+      expect(snap['toReview'], 2);
+      expect((snap['week'] as Map)['toReview'], 2);
+      expect(snap.containsKey('pendingCount'), isFalse);
     });
 
     test('masks income when Hide income is on', () async {
