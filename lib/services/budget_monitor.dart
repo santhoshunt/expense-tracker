@@ -64,7 +64,9 @@ class BudgetMonitor {
       }
 
       // Each entry: spend, cap, dedup key, notification id, an optional
-      // budget name for the alert text, and the card a tap opens.
+      // budget name for the alert text, and the card a tap opens. Spend on
+      // a guessed category ([Tx.categoryGuessed]) waits until the user
+      // confirms it: a wrong guess must not fire an alert.
       final checks =
           <
             ({
@@ -78,7 +80,9 @@ class BudgetMonitor {
           >[
             if (hasCap)
               (
-                spent: finance.budgetSpentInMonth(month),
+                spent:
+                    finance.budgetSpentInMonth(month) -
+                    finance.guessedSpendInMonth(month),
                 cap: settings.monthlyBudget,
                 key: budgetAlertMonthKey(now),
                 id: NotificationIds.cap(now.month), // stable per month
@@ -87,7 +91,9 @@ class BudgetMonitor {
               ),
             for (final b in customBudgets)
               (
-                spent: finance.budgetSpentFor(b, month),
+                spent:
+                    finance.budgetSpentFor(b, month) -
+                    finance.guessedSpendFor(b, month),
                 cap: b.limit,
                 key: customBudgetAlertKey(b.id, now),
                 // Stable per budget, in its own 300000 range: the old

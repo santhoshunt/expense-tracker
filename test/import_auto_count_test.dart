@@ -124,7 +124,7 @@ void main() {
       expect(p.lastImportCounted, 1);
     });
 
-    test('an unknown category waits', () async {
+    test('an alert nothing places counts at once in To sort', () async {
       final p = await withHistory();
       await p.addImported([
         alert(
@@ -135,9 +135,11 @@ void main() {
         ),
       ]);
       final t = byRef(p, 'A');
-      expect(t.pending, isTrue);
-      expect(t.unseen, isFalse);
-      expect(p.lastImportCounted, 0);
+      expect(t.pending, isFalse);
+      expect(t.unseen, isTrue);
+      expect(t.categoryId, kToSortExpenseId);
+      expect(t.categoryGuessed, isFalse);
+      expect(p.lastImportCounted, 1);
     });
 
     test(
@@ -211,7 +213,7 @@ void main() {
       expect(t.unseen, isTrue);
     });
 
-    test('a merchant seen before under another category waits', () async {
+    test('a category needs no merchant history to count', () async {
       final p = await withHistory();
       await p.addImported([
         alert(
@@ -222,7 +224,28 @@ void main() {
           rawBody: 'Rs.120 debited at KETTLE NOOK',
         ),
       ]);
-      expect(byRef(p, 'A').pending, isTrue);
+      final t = byRef(p, 'A');
+      expect(t.pending, isFalse);
+      expect(t.categoryId, 'shopping');
+      expect(t.categoryGuessed, isFalse);
+    });
+
+    test('an Other alert from a known merchant takes its category, '
+        'marked guessed', () async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          amount: 120,
+          date: DateTime(2026, 7, 5, 13),
+          ref: 'A',
+          categoryId: 'other_expense',
+          rawBody: 'Rs.120 debited at KETTLE NOOK',
+        ),
+      ]);
+      final t = byRef(p, 'A');
+      expect(t.pending, isFalse);
+      expect(t.categoryId, 'food');
+      expect(t.categoryGuessed, isTrue);
     });
   });
 
@@ -420,8 +443,8 @@ void main() {
     });
   });
 
-  group('merchant evidence', () {
-    test('a row still marked new does not vouch for the next one', () async {
+  group('guess evidence', () {
+    test('a row still marked new does not teach a guess', () async {
       final p = await withHistory();
       final rule = await p.addRule('Pebble Mart', 'food');
       expect(rule.reclassified, 0);
@@ -436,16 +459,18 @@ void main() {
       expect(byRef(p, 'A').unseen, isTrue);
       await p.deleteRule(p.rules.firstWhere((r) => !r.isBuiltIn).id);
 
-      // Filed that way only by a row the user has not looked at: waits.
+      // Filed that way only by a row the user has not looked at: To sort.
       await p.addImported([
         alert(
           amount: 90,
           date: DateTime(2026, 7, 8, 13),
           ref: 'B',
+          categoryId: 'other_expense',
           rawBody: 'Rs.90 debited at PEBBLE MART',
         ),
       ]);
-      expect(byRef(p, 'B').pending, isTrue);
+      expect(byRef(p, 'B').pending, isFalse);
+      expect(byRef(p, 'B').categoryId, kToSortExpenseId);
 
       // Once seen, it does.
       await p.markSeen(byRef(p, 'A').id);
@@ -454,10 +479,13 @@ void main() {
           amount: 95,
           date: DateTime(2026, 7, 11, 13),
           ref: 'C',
+          categoryId: 'other_expense',
           rawBody: 'Rs.95 debited at PEBBLE MART',
         ),
       ]);
       expect(byRef(p, 'C').pending, isFalse);
+      expect(byRef(p, 'C').categoryId, 'food');
+      expect(byRef(p, 'C').categoryGuessed, isTrue);
     });
   });
 
@@ -502,6 +530,19 @@ void main() {
           acctKey: bank,
           pending: true,
         ),
+        Tx(
+          id: 'waits',
+          type: TxType.expense,
+          categoryId: 'other_expense',
+          amount: 60,
+          note: '',
+          smsBody: 'Rs.60 debited at PEBBLE MART',
+          date: DateTime(2026, 7, 7, 13),
+          source: TxSource.sms,
+          sender: 'VM-ICICIB',
+          acctKey: 'ICICI:9999',
+          pending: true,
+        ),
       ];
       final account = Account(
         id: 'acc1',
@@ -518,18 +559,26 @@ void main() {
         'accounts_migrated_v4': true,
         'accounts_migrated_v5': true,
         'sms_body_migrated_v1': true,
-        'imports_auto_counted_v1': done,
+        'imports_count_first_v1': done,
       };
     }
 
-    test('converts qualifying pending rows, once', () async {
+    test('places and converts qualifying pending rows, once', () async {
       SharedPreferences.setMockInitialValues(stored(done: false));
       final p = await loaded();
       final sure = p.transactions.firstWhere((t) => t.id == 'sure');
       expect(sure.unseen, isTrue);
-      expect(p.pendingTransactions.single.id, 'unsure');
+      expect(sure.categoryId, 'food');
+      // Other becomes To sort, and on a known account it counts.
+      final unsure = p.transactions.firstWhere((t) => t.id == 'unsure');
+      expect(unsure.unseen, isTrue);
+      expect(unsure.categoryId, kToSortExpenseId);
+      // An account with no confirmed row still waits, placed all the same.
+      final waits = p.pendingTransactions.single;
+      expect(waits.id, 'waits');
+      expect(waits.categoryId, kToSortExpenseId);
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getBool('imports_auto_counted_v1'), isTrue);
+      expect(prefs.getBool('imports_count_first_v1'), isTrue);
 
       // The conversion was written, and a later launch leaves it alone.
       await p.markSeen('sure');
@@ -538,14 +587,18 @@ void main() {
         again.transactions.firstWhere((t) => t.id == 'sure').unseen,
         isFalse,
       );
-      expect(again.pendingTransactions.single.id, 'unsure');
+      expect(again.pendingTransactions.single.id, 'waits');
     });
 
     test('does nothing once the flag is set', () async {
       SharedPreferences.setMockInitialValues(stored(done: true));
       final p = await loaded();
-      expect(p.pendingCount, 2);
+      expect(p.pendingCount, 3);
       expect(p.unseenCount, 0);
+      expect(
+        p.pendingTransactions.firstWhere((t) => t.id == 'unsure').categoryId,
+        'other_expense',
+      );
     });
   });
 

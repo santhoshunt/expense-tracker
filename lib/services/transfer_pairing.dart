@@ -83,6 +83,8 @@ List<PairSuggestion> suggestTransferPairs(
     // A split bill and a friend's repayment are not own-account moves, and
     // pairing would wipe their people and payer.
     if (t.isSplit || t.categoryId == kRepaidToMeCategoryId) continue;
+    // A category split's part is one share of a payment, never a whole leg.
+    if (t.splitId != null) continue;
     // A refund pays back a purchase; the same amount reaching another
     // account is not the other leg of a move.
     if (t.type == TxType.income &&

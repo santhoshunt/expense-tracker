@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Accounts (4x2). Drawn from the shared snapshot, so it redraws when the
+     app pushes figures (updatePeriodMillis=0). Each instance shows the
+     accounts picked in AccountsWidgetConfigActivity, which opens when the
+     widget is added and again from the long-press menu (reconfigurable,
+     from Android 12). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:configure="com.fabletest.expense_tracker.AccountsWidgetConfigActivity"
+    android:description="@string/home_widget_accounts_description"
+    android:initialLayout="@layout/home_widget_accounts"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:previewLayout="@layout/home_widget_accounts_preview"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen"
+    android:widgetFeatures="reconfigurable" />

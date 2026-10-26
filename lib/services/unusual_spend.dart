@@ -1,5 +1,6 @@
 import 'package:intl/intl.dart';
 
+import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/format.dart';
 import 'spend_history.dart';
@@ -52,6 +53,10 @@ class UnusualCategory {
 /// The categories whose spend in `now`'s month passes [isUnusualSpend],
 /// biggest overspend first. Ids in [skip] (already alerted) are left out
 /// before any history is built: this runs on every ledger change.
+///
+/// This month's spend on a guessed category waits until the user confirms
+/// it, so a wrong guess cannot fire the alert, and To sort, which no one
+/// chose, never alerts.
 List<UnusualCategory> unusualCategories(
   FinanceProvider finance, {
   required DateTime now,
@@ -61,20 +66,23 @@ List<UnusualCategory> unusualCategories(
   final out = <UnusualCategory>[];
   for (final e in finance.expenseByCategory(month)) {
     final id = e.key.id;
+    if (isToSortCategory(id)) continue;
+    final guessed = finance.guessedSpendIn(month, id);
     // Under the floor nothing can be far enough over, whatever the usual.
-    if (e.value < kUnusualMinOver || skip.contains(id)) continue;
+    if (e.value - guessed < kUnusualMinOver || skip.contains(id)) continue;
     final h = buildSpendHistory(
       finance,
       subject: HistorySubject.category(id, e.key.label),
       months: [month],
       now: now,
     );
-    if (!isUnusualSpend(h.anchorAmount, h.usual)) continue;
+    final spent = h.anchorAmount - guessed;
+    if (!isUnusualSpend(spent, h.usual)) continue;
     out.add(
       UnusualCategory(
         id: id,
         label: e.key.label,
-        spent: h.anchorAmount,
+        spent: spent,
         usual: h.usual!,
       ),
     );

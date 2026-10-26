@@ -445,6 +445,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => AppNav.instance.showBigBills(),
         );
+      case LaunchAction.openAccounts:
+        setState(() => _showTab(kHomeTabAccounts));
       // The This week widget: the digest of the week the tap lands in.
       case LaunchAction.openThisWeek:
         setState(() => _showTab(kHomeTabDashboard));

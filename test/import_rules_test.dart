@@ -410,7 +410,7 @@ void main() {
       Tx byRef(String ref) =>
           p.transactions.firstWhere((t) => t.externalRef == ref);
       expect(byRef('REFAAA111').categoryId, 'food');
-      expect(byRef('REFBBB222').categoryId, 'other_expense');
+      expect(byRef('REFBBB222').categoryId, kToSortExpenseId);
 
       // Repoint the rule at a different pattern + category: the newly
       // matching message re-classifies.

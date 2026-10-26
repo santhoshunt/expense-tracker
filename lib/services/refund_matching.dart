@@ -117,14 +117,18 @@ List<RefundCandidate> refundCandidatesFor(
 
 /// The purchase [refund] surely pays back, or null: the refund is an SMS
 /// import worded as a refund, and exactly one of [c] has the same merchant
-/// and the exact amount. Anything less is only a suggestion.
+/// and the exact amount. Anything less is only a suggestion. A part of a
+/// category split is never sure: which part a refund pays back is the
+/// user's call.
 Tx? sureRefundPurchase(Tx refund, List<RefundCandidate> c) {
   if (refund.source != TxSource.sms || !isRefundWorded(refund.smsText)) {
     return null;
   }
   Tx? match;
   for (final x in c) {
-    if (!x.sameMerchant || !x.exactAmount) continue;
+    if (!x.sameMerchant || !x.exactAmount || x.purchase.splitId != null) {
+      continue;
+    }
     if (match != null) return null;
     match = x.purchase;
   }

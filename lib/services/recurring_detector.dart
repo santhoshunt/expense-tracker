@@ -163,7 +163,7 @@ List<RecurringHit> detectRecurringPatterns(
   // Nothing marked: the older rows can only ever be skipped, so skip them
   // before the (regex-heavy) key.
   final oldest = pinned.isEmpty ? horizon : pinnedHorizon;
-  for (final t in confirmed) {
+  for (final t in foldCategorySplits(confirmed)) {
     if (t.date.isAfter(now) || t.date.isBefore(oldest)) continue;
     final key = recurringKeyOf(t);
     if (key == null) continue;
@@ -266,6 +266,41 @@ List<RecurringHit> detectRecurringPatterns(
     return byDate != 0 ? byDate : a.key.compareTo(b.key);
   });
   return hits;
+}
+
+/// [rows] with each category split ([Tx.splitId]) folded into one row at
+/// the payment's total: the bank charged once, so a pattern must see one
+/// payment, not one per part. The folded row is the anchor
+/// ([compareSplitParts]), so the result does not depend on the order of
+/// [rows].
+Iterable<Tx> foldCategorySplits(Iterable<Tx> rows) {
+  final kept = <String, Tx>{};
+  final totals = <String, double>{};
+  for (final t in rows) {
+    final sid = t.splitId;
+    if (sid == null) continue;
+    totals[sid] = (totals[sid] ?? 0) + t.amount;
+    final k = kept[sid];
+    if (k == null || compareSplitParts(t, k) < 0) kept[sid] = t;
+  }
+  if (totals.isEmpty) return rows;
+  return [
+    for (final t in rows)
+      if (t.splitId == null)
+        t
+      else if (identical(kept[t.splitId], t))
+        t.copyWith(amount: (totals[t.splitId]! * 100).round() / 100),
+  ];
+}
+
+/// The order of one category split's rows, whatever order they are stored
+/// in (a CSV export may write parts before the anchor): the row holding the
+/// alert (an SMS row) first, then by id, which for rows the app made is the
+/// order they were added. The first row is the anchor.
+int compareSplitParts(Tx a, Tx b) {
+  final aSms = a.source == TxSource.sms;
+  if (aSms != (b.source == TxSource.sms)) return aSms ? -1 : 1;
+  return a.id.compareTo(b.id);
 }
 
 double _median(List<double> values) {

@@ -114,7 +114,8 @@ void main() {
       ),
     ]);
     await p.confirmTransaction(p.pendingTransactions.single.id);
-    expect(p.transactions.single.categoryId, 'other_expense');
+    // No rule placed it: it waits in To sort.
+    expect(p.transactions.single.categoryId, kToSortExpenseId);
 
     await p.addRule('chai corner', 'food');
     expect(p.transactions.single.categoryId, 'food');

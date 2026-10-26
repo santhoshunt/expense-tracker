@@ -58,7 +58,10 @@ void main() {
       ]);
       expect(
         csv.split('\r\n').first,
-        endsWith(',walletCounted,unseen,refundOf,payee,acctKind,smsAt'),
+        endsWith(
+          ',walletCounted,unseen,refundOf,payee,acctKind,smsAt,splitId,'
+          'guessed,noCashback',
+        ),
       );
       final back = {for (final t in BackupService.txsFromCsv(csv)) t.id: t};
       expect(back['a']!.unseen, isTrue);
@@ -70,17 +73,18 @@ void main() {
     test('an older file without the column reads false', () {
       final csv = BackupService.buildCsvOf([row('a', unseen: true)]);
       // The same file as an older build wrote it: no trailing unseen,
-      // refundOf, payee, acctKind or smsAt cell.
-      String dropLast5(String line) {
+      // refundOf, payee, acctKind, smsAt, splitId, guessed or noCashback
+      // cell.
+      String dropLast8(String line) {
         var end = line.length;
-        for (var i = 0; i < 5; i++) {
+        for (var i = 0; i < 8; i++) {
           end = line.lastIndexOf(',', end - 1);
         }
         return line.substring(0, end);
       }
 
       final old = [
-        for (final line in csv.split('\r\n')) dropLast5(line),
+        for (final line in csv.split('\r\n')) dropLast8(line),
       ].join('\r\n');
       expect(old.split('\r\n').first, endsWith(',walletCounted'));
       expect(BackupService.txsFromCsv(old).single.unseen, isFalse);

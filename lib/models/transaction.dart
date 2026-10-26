@@ -102,6 +102,7 @@ const Map<String, IconData> kCategoryIconChoices = {
   'cardOk': Icons.credit_score,
   'money': Icons.attach_money,
   'group': Icons.group,
+  'inbox': Icons.inbox_outlined,
 };
 
 /// "No colour": the muted grey, which every category badge (a 15% wash of
@@ -255,6 +256,16 @@ const List<TxCategory> kCategories = [
     color: FigmaPalette.textMuted,
     type: TxType.expense,
   ),
+  // An imported alert no rule or past payment could place. It counts in
+  // totals at once and waits for the user to pick a category; pickers
+  // never offer it ([isToSortCategory]).
+  TxCategory(
+    id: kToSortExpenseId,
+    label: 'To sort',
+    icon: Icons.inbox_outlined,
+    color: FigmaPalette.textMuted,
+    type: TxType.expense,
+  ),
   // Income categories
   TxCategory(
     id: 'salary',
@@ -311,6 +322,13 @@ const List<TxCategory> kCategories = [
     color: FigmaPalette.purple,
     type: TxType.income,
     isTransfer: true,
+  ),
+  TxCategory(
+    id: kToSortIncomeId,
+    label: 'To sort',
+    icon: Icons.inbox_outlined,
+    color: FigmaPalette.textMuted,
+    type: TxType.income,
   ),
   // Must stay last: categoryById falls back to kCategories.last.
   TxCategory(
@@ -519,6 +537,22 @@ class Tx {
   /// field existed.
   final DateTime? smsAt;
 
+  /// Category split: one payment divided into rows of several money-out
+  /// categories shares this id. The row that holds the alert (its text,
+  /// reference and balance) is the anchor; the others are plain parts on
+  /// the same account and date. Null for the ordinary single-row case.
+  final String? splitId;
+
+  /// The import guessed [categoryId] from the user's past payments. The
+  /// row counts at once, but budget and unusual spending alerts leave it
+  /// out and it teaches no later guess until the user confirms or changes
+  /// the category. Mark all seen does not clear it.
+  final bool categoryGuessed;
+
+  /// On a credit card row: the user turned "Earns cashback" off, so the
+  /// card's reward estimate leaves it out. Inert on every other account.
+  final bool cashbackOff;
+
   const Tx({
     required this.id,
     required this.type,
@@ -547,6 +581,9 @@ class Tx {
     this.payee = '',
     this.smsMerchant = '',
     this.smsAt,
+    this.splitId,
+    this.categoryGuessed = false,
+    this.cashbackOff = false,
   });
 
   /// The date period figures use: [countIn] when set, else [date].
@@ -624,6 +661,9 @@ class Tx {
       payee: payee,
       smsMerchant: smsMerchant,
       smsAt: smsAt,
+      splitId: splitId,
+      categoryGuessed: categoryGuessed,
+      cashbackOff: cashbackOff,
     );
   }
 
@@ -661,6 +701,10 @@ class Tx {
     String? refundOf,
     bool clearRefundOf = false,
     String? payee,
+    String? splitId,
+    bool clearSplitId = false,
+    bool? categoryGuessed,
+    bool? cashbackOff,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -697,6 +741,9 @@ class Tx {
     smsMerchant: smsMerchant,
     // A re-dated import remembers when its alert arrived.
     smsAt: _smsAtFor(date ?? this.date),
+    splitId: clearSplitId ? null : (splitId ?? this.splitId),
+    categoryGuessed: categoryGuessed ?? this.categoryGuessed,
+    cashbackOff: cashbackOff ?? this.cashbackOff,
   );
 
   Map<String, dynamic> toJson() => {
@@ -727,6 +774,9 @@ class Tx {
     if (payee.isNotEmpty) 'payee': payee,
     if (smsMerchant.isNotEmpty) 'smsMerchant': smsMerchant,
     if (smsAt != null) 'smsAt': smsAt!.toIso8601String(),
+    if (splitId != null) 'splitId': splitId,
+    if (categoryGuessed) 'guessed': true,
+    if (cashbackOff) 'noCashback': true,
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) {
@@ -779,6 +829,9 @@ class Tx {
         },
         _ => null,
       },
+      splitId: json['splitId'] is String ? json['splitId'] as String : null,
+      categoryGuessed: json['guessed'] == true,
+      cashbackOff: json['noCashback'] == true,
     );
   }
 }
@@ -971,6 +1024,18 @@ Set<String> _transferCategoryIds = {...kTransferCategoryIds};
 
 bool isTransferCategory(String categoryId) =>
     _transferCategoryIds.contains(categoryId);
+
+/// The placeholders an imported alert lands in when nothing could place it.
+const String kToSortExpenseId = 'to_sort_expense';
+const String kToSortIncomeId = 'to_sort_income';
+
+bool isToSortCategory(String id) =>
+    id == kToSortExpenseId || id == kToSortIncomeId;
+
+/// A category one part of a split payment may take: any money-out one,
+/// spending and transfer-out alike, except To sort.
+bool isMoneyOutCategory(TxCategory c) =>
+    c.type == TxType.expense && !isToSortCategory(c.id);
 
 /// User-defined categorisation rule: when an SMS body contains [pattern]
 /// (case-insensitive), the imported transaction gets [categoryId] — or is

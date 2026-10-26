@@ -22,7 +22,7 @@ import kotlin.math.abs
 /**
  * The Month pace, Upcoming, Today and Add, Spending split, Budgets
  * list, Recent, Quick actions, Big bills and This week widgets (the last
- * two in a 4x2 and a compact 4x1 size). Pure display, like
+ * two in a 4x2 and a compact 4x1 size), and Accounts. Pure display, like
  * [BudgetWidgetProvider]: the Dart side writes the snapshots
  * (`flutter.home_widget_data_v1`, home_widgets_service.dart, and the budget
  * one for Budgets list) and this draws them. The snapshot carries dates
@@ -30,7 +30,9 @@ import kotlin.math.abs
  * see the *_info.xml files) shows the new day without the app running.
  */
 object HomeWidgets {
-    private const val DATA_KEY = "flutter.home_widget_data_v1"
+    /** The shared snapshot; the Accounts widget's setup screen lists its
+     * accounts too. */
+    const val DATA_KEY = "flutter.home_widget_data_v1"
 
     /** The card padding every 4x2 layout uses, in dp: 16 at the sides and
      * 10 above and below. The fit sums below count on these. */
@@ -69,6 +71,7 @@ object HomeWidgets {
         BigBillsCompactWidgetProvider::class.java,
         ThisWeekWidgetProvider::class.java,
         ThisWeekCompactWidgetProvider::class.java,
+        AccountsWidgetProvider::class.java,
     )
 
     private fun today(): Long = LocalDate.now().toEpochDay()
@@ -107,7 +110,7 @@ object HomeWidgets {
                 BudgetsListWidgetProvider::class.java.name ->
                     ({ _, h, b -> budgets(context, h, b, id, theme) })
                 RecentWidgetProvider::class.java.name ->
-                    ({ _, h, _ -> recent(context, h, id, data, theme) })
+                    ({ w, h, _ -> recent(context, w, h, id, data, theme) })
                 QuickActionsWidgetProvider::class.java.name ->
                     ({ w, _, _ -> actions(context, w, id, theme) })
                 BigBillsWidgetProvider::class.java.name ->
@@ -118,6 +121,8 @@ object HomeWidgets {
                     ({ w, h, b -> thisWeek(context, w, h, b, id, data, theme) })
                 ThisWeekCompactWidgetProvider::class.java.name ->
                     ({ w, h, b -> thisWeekCompact(context, w, h, b, id, data, theme) })
+                AccountsWidgetProvider::class.java.name ->
+                    ({ w, h, _ -> accounts(context, w, h, id, data, theme) })
                 else -> return
             }
             // The fallbacks are the smallest a launcher gives: 4 columns of
@@ -409,17 +414,27 @@ object HomeWidgets {
         val fresh = t != null && t.optLong("day", -1) == today()
         val count = if (fresh) t?.optInt("count", 0) ?: 0 else 0
         val pending = toReview(data)
+        val pendingAmount = reviewAmount(data)
 
-        // Line one: "Today · 2 payments · 3 to review". Where that is wider
-        // than the text has (the width less the 16dp and 8dp padding, the
-        // 8dp gap and the Add button), the payment count goes first, so the
-        // review count never ends in an ellipsis.
+        // Line one: "Today · 2 payments · 3 to review · ₹45,000". Where that
+        // is wider than the text has (the width less the 16dp and 8dp
+        // padding, the 8dp gap and the Add button), the payment count goes
+        // first, then the amount, so the review count never ends in an
+        // ellipsis.
         val payments = if (count == 0) "no payments yet"
         else "$count payment${if (count == 1) "" else "s"}"
-        val titles = if (pending > 0) listOf(
-            "Today · $payments · $pending to review",
-            "Today · $pending to review",
-        ) else listOf("Today · $payments")
+        val titles = when {
+            pending > 0 && pendingAmount.isNotEmpty() -> listOf(
+                "Today · $payments · $pending to review · $pendingAmount",
+                "Today · $pending to review · $pendingAmount",
+                "Today · $pending to review",
+            )
+            pending > 0 -> listOf(
+                "Today · $payments · $pending to review",
+                "Today · $pending to review",
+            )
+            else -> listOf("Today · $payments")
+        }
         val addDp = 32 + WidgetKit.textWidthDp(
             context, context.getString(R.string.home_widget_add), 14f, bold = true
         )
@@ -449,7 +464,11 @@ object HomeWidgets {
             // ahead of safe to spend, so an ellipsis cuts that first.
             if (!showTitle && pending > 0) {
                 line.add(" · ", theme.textSecondary)
-                line.add("$pending to review", theme.accentText, bold = true)
+                line.add(
+                    reviewLabel(pending, pendingAmount),
+                    theme.accentText,
+                    bold = true
+                )
             }
             val safe = data?.optJSONObject("safe")
             val safeLabel = safeLabel(safe)
@@ -755,6 +774,7 @@ object HomeWidgets {
     /** The newest four confirmed rows, and how many rows wait for review. */
     private fun recent(
         context: Context,
+        widthDp: Int,
         heightDp: Int,
         id: Int,
         data: JSONObject?,
@@ -767,7 +787,16 @@ object HomeWidgets {
         views.setTextColor(R.id.hw_empty, theme.textSecondary)
         val pending = toReview(data)
         views.setViewVisibility(R.id.hw_side, if (pending > 0) View.VISIBLE else View.GONE)
-        views.setTextViewText(R.id.hw_side, "$pending to review")
+        // The amount joins the count where the header row has room for it
+        // beside the title (the width less the side padding and the 8dp gap).
+        val full = reviewLabel(pending, reviewAmount(data))
+        val headDp = WidgetKit.textWidthDp(
+            context, context.getString(R.string.home_widget_recent_title), 12f
+        ) + 8 + WidgetKit.textWidthDp(context, full, 12f, bold = true)
+        views.setTextViewText(
+            R.id.hw_side,
+            if (headDp <= widthDp - 2 * PAD_H) full else "$pending to review"
+        )
         views.setTextColor(R.id.hw_side, theme.accentText)
         val items = data?.optJSONArray("recent")
         // As many rows as the height holds under the header: a row is its
@@ -1059,17 +1088,30 @@ object HomeWidgets {
     private fun toReview(data: JSONObject?): Int =
         data?.optInt("toReview", data.optInt("pendingCount", 0)) ?: 0
 
+    /** What the waiting imports add up to ("₹45,000"), or "" when nothing
+     * waits, only suggestions do, or an older snapshot carries none. */
+    private fun reviewAmount(data: JSONObject?): String =
+        data?.optString("reviewAmountLabel", "") ?: ""
+
+    /** "3 to review · ₹45,000", or "3 to review" with no [amount]. */
+    private fun reviewLabel(count: Int, amount: String): String =
+        if (amount.isEmpty()) "$count to review" else "$count to review · $amount"
+
     /** The week block as of today. Once its week is over (a new Monday the
      * app has not seen), nothing is spent and the bars are empty. [usual]
      * is the usual week cut to today, null under 2 weeks of history or once
      * the block's week is over: last week's usual is not this week's.
-     * [toReview] stays whatever the week: the review sheet is not dated. */
+     * [toReview] and [reviewAmount] stay whatever the week: the review
+     * sheet is not dated. [toSort] is the week's spend still in To sort,
+     * "" once the week is over or when there is none. */
     private class WeekView(
         val spent: Double,
         val spentLabel: String,
         val byDay: List<Double>,
         val usual: Double?,
         val toReview: Int,
+        val reviewAmount: String,
+        val toSort: String,
         val today: Int,
     )
 
@@ -1090,6 +1132,8 @@ object HomeWidgets {
             usual = if (!fresh || usual == null || day >= usual.length() || usual.isNull(day)) null
             else usual.optDouble(day),
             toReview = week.optInt("toReview", 0),
+            reviewAmount = week.optString("reviewAmountLabel", ""),
+            toSort = if (fresh) week.optString("toSortLabel", "") else "",
             today = day,
         )
     }
@@ -1138,10 +1182,19 @@ object HomeWidgets {
             WidgetKit.lineDp(context, 13f)
         }
         val showSub = core + subDp <= room
-        val showTitle =
-            core + WidgetKit.lineDp(context, 12f) + (if (showSub) subDp else 0f) <= room
+        val titleDp = WidgetKit.lineDp(context, 12f)
+        val showTitle = core + titleDp + (if (showSub) subDp else 0f) <= room
+        // The To sort part of the spend, under the figure, only with room
+        // left once the title and the gap line have theirs.
+        val toSortDp = WidgetKit.lineDp(context, 12f)
+        val showToSort = w.toSort.isNotEmpty() &&
+            core + (if (showTitle) titleDp else 0f) + (if (showSub) subDp else 0f) +
+            toSortDp <= room
         views.setViewVisibility(R.id.hw_head, if (showTitle) View.VISIBLE else View.GONE)
         views.setViewVisibility(R.id.hw_sub_row, if (showSub) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.hw_to_sort, if (showToSort) View.VISIBLE else View.GONE)
+        views.setTextViewText(R.id.hw_to_sort, "incl. ${w.toSort} to sort")
+        views.setTextColor(R.id.hw_to_sort, theme.textSecondary)
         // Money out in the expense red; nothing spent is a plain ₹0.
         val amount = WidgetKit.Line()
         if (w.spent >= 0.5) {
@@ -1167,7 +1220,15 @@ object HomeWidgets {
         // The review count has its own tap: it opens the review sheet, the
         // rest of the widget the digest.
         views.setViewVisibility(R.id.hw_review, if (w.toReview > 0) View.VISIBLE else View.GONE)
-        views.setTextViewText(R.id.hw_review, "${w.toReview} to review")
+        // The amount joins the count while the pair takes no more than half
+        // the row (the width less the side padding), so the gap line keeps
+        // its room.
+        val review = reviewLabel(w.toReview, w.reviewAmount)
+        val reviewDp = 8 + WidgetKit.textWidthDp(context, review, 13f, bold = true)
+        views.setTextViewText(
+            R.id.hw_review,
+            if (reviewDp <= (widthDp - 2 * PAD_H) / 2f) review else "${w.toReview} to review"
+        )
         views.setTextColor(R.id.hw_review, theme.accentText)
         views.setOnClickPendingIntent(
             R.id.hw_review,
@@ -1228,6 +1289,111 @@ object HomeWidgets {
                 paceBar(context, widthDp, fill, null, if (over) theme.over else theme.accent, theme)
             }?.let { views.setImageViewBitmap(R.id.hw_bar, it) }
         }
+        return views
+    }
+
+    // --- Accounts -----------------------------------------------------------
+
+    private class AccountRow(
+        val row: Int,
+        val icon: Int,
+        val name: Int,
+        val spent: Int,
+        val left: Int,
+    )
+
+    private val accountRows = listOf(
+        AccountRow(R.id.hw_row1, R.id.hw_icon1, R.id.hw_name1, R.id.hw_spent1, R.id.hw_left1),
+        AccountRow(R.id.hw_row2, R.id.hw_icon2, R.id.hw_name2, R.id.hw_spent2, R.id.hw_left2),
+        AccountRow(R.id.hw_row3, R.id.hw_icon3, R.id.hw_name3, R.id.hw_spent3, R.id.hw_left3),
+        AccountRow(R.id.hw_row4, R.id.hw_icon4, R.id.hw_name4, R.id.hw_spent4, R.id.hw_left4),
+        AccountRow(R.id.hw_row5, R.id.hw_icon5, R.id.hw_name5, R.id.hw_spent5, R.id.hw_left5),
+        AccountRow(R.id.hw_row6, R.id.hw_icon6, R.id.hw_name6, R.id.hw_spent6, R.id.hw_left6),
+    )
+
+    /** The glyph for an account kind in the snapshot. */
+    private fun accountIcon(kind: String): Int = when (kind) {
+        "card", "debit" -> R.drawable.widget_ic_card
+        "wallet" -> R.drawable.widget_ic_wallet
+        "savings" -> R.drawable.widget_ic_income
+        else -> R.drawable.widget_ic_bank
+    }
+
+    /** The accounts picked for this widget, in the app's order: each row
+     * the name, then spent and left ("₹12,400 · ₹84,210 left"), or spent
+     * alone ("₹4,120 spent") for an account with no left of its own. An id
+     * missing from the snapshot (closed or deleted since) is skipped. Past
+     * what the height holds, one row fewer and a count of the rest. */
+    private fun accounts(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_accounts, theme, id, QuickActions.OPEN_ACCOUNTS
+        )
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val picked = AccountsWidgetProvider.selectionOf(context, id).toSet()
+        val all = data?.optJSONArray("accounts")
+        val entries = mutableListOf<JSONObject>()
+        if (all != null) {
+            for (i in 0 until all.length()) {
+                val o = all.optJSONObject(i) ?: continue
+                if (o.optString("id") in picked) entries += o
+            }
+        }
+        // As Budgets list: as many rows as the height holds under the title
+        // (a row is its gap and the 16dp icon or the 13sp line, whichever
+        // is taller); with more accounts than that, one row fewer and a
+        // "+N more" line; with room for one row only, that row alone.
+        val room = heightDp - 2 * PAD_V - WidgetKit.lineDp(context, 12f)
+        val rowDp = ROW_GAP + maxOf(16f, WidgetKit.lineDp(context, 13f))
+        val fit = WidgetKit.rowsThatFit(room, rowDp, 1, accountRows.size)
+        val shown = when {
+            entries.size <= fit -> entries.size
+            fit >= 2 -> fit - 1
+            else -> 1
+        }
+        accountRows.forEachIndexed { i, ids ->
+            val o = if (i < shown) entries.getOrNull(i) else null
+            views.setViewVisibility(ids.row, if (o == null) View.GONE else View.VISIBLE)
+            if (o == null) return@forEachIndexed
+            views.setImageViewResource(ids.icon, accountIcon(o.optString("kind")))
+            views.setInt(ids.icon, "setColorFilter", theme.textSecondary)
+            views.setTextViewText(ids.name, o.optString("name"))
+            views.setTextColor(ids.name, theme.text)
+            val left = o.optString("leftLabel")
+            val spent = o.optString("spentLabel")
+            // Where spent and left would squeeze the name under 64dp (the
+            // width less the side padding, the 16dp icon and its 8dp gap),
+            // the row keeps what is left alone.
+            val bothDp = 8 + WidgetKit.textWidthDp(context, spent, 13f) +
+                4 + WidgetKit.textWidthDp(context, "· $left left", 13f, bold = true)
+            val leftOnly = left.isNotEmpty() && widthDp - 2 * PAD_H - 24 - bothDp < 64
+            views.setViewVisibility(ids.spent, if (leftOnly) View.GONE else View.VISIBLE)
+            views.setTextViewText(ids.spent, if (left.isEmpty()) "$spent spent" else spent)
+            views.setTextColor(ids.spent, theme.textSecondary)
+            views.setViewVisibility(ids.left, if (left.isEmpty()) View.GONE else View.VISIBLE)
+            views.setTextViewText(ids.left, if (leftOnly) "$left left" else "· $left left")
+            views.setTextColor(ids.left, theme.text)
+        }
+        val more = entries.size - shown
+        views.setViewVisibility(
+            R.id.hw_more,
+            if (more > 0 && fit >= 2) View.VISIBLE else View.GONE
+        )
+        views.setTextViewText(R.id.hw_more, "+$more more")
+        views.setTextColor(R.id.hw_more, theme.textSecondary)
+        views.setViewVisibility(R.id.hw_empty, if (entries.isEmpty()) View.VISIBLE else View.GONE)
+        views.setTextViewText(
+            R.id.hw_empty,
+            if (data == null) context.getString(R.string.home_widget_empty)
+            else context.getString(R.string.home_widget_accounts_empty)
+        )
         return views
     }
 
@@ -1317,6 +1483,37 @@ class ThisWeekWidgetProvider : HomeWidgetProviderBase()
 
 /** This week (compact, 4x1): spent so far against usual, as one bar. */
 class ThisWeekCompactWidgetProvider : HomeWidgetProviderBase()
+
+/** Accounts (4x2): spent and left on the accounts picked for this widget
+ * in its setup screen ([AccountsWidgetConfigActivity]). */
+class AccountsWidgetProvider : HomeWidgetProviderBase() {
+    companion object {
+        /** Native-only state: which accounts each widget instance shows. */
+        private const val PREFS = "accounts_widget_prefs"
+        private const val KEY_PREFIX = "accounts_"
+
+        /** Stores [accountIds] for [appWidgetId], comma-joined. */
+        fun saveSelection(context: Context, appWidgetId: Int, accountIds: List<String>) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putString("$KEY_PREFIX$appWidgetId", accountIds.joinToString(","))
+                .apply()
+        }
+
+        /** The ids picked for [appWidgetId]; empty when none are. */
+        fun selectionOf(context: Context, appWidgetId: Int): List<String> =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString("$KEY_PREFIX$appWidgetId", null)
+                ?.split(",")
+                ?.filter { it.isNotEmpty() }
+                ?: emptyList()
+    }
+
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        for (id in appWidgetIds) prefs.remove("$KEY_PREFIX$id")
+        prefs.apply()
+    }
+}
 
 /** One picker entry per subclass; [HomeWidgets.render] picks the layout. */
 abstract class HomeWidgetProviderBase : AppWidgetProvider() {

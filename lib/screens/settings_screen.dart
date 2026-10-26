@@ -32,6 +32,7 @@ import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/notification_switches.dart';
 import 'app_nav.dart';
+import 'card_rewards_page.dart';
 import 'classifiers_screen.dart';
 
 part 'settings_pages.dart';
@@ -137,6 +138,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final notifications = notificationsOn == 0
         ? 'All off'
         : '$notificationsOn of 4 on';
+    final (cards, cardsSetUp) = context.select<FinanceProvider, (int, int)>((
+      f,
+    ) {
+      final open = f.openAccounts.where((a) => a.isCard);
+      return (open.length, open.where((a) => a.rewards != null).length);
+    });
+    final cardRewards = cards == 0
+        ? 'No credit cards'
+        : '$cardsSetUp of $cards ${cards == 1 ? 'card' : 'cards'} set up';
     // Backup shows the last backup once it has loaded. About has no stored
     // value to show: the version loads on its own page.
     final groups = <(IconData, String, String, WidgetBuilder)>[
@@ -159,6 +169,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
         'Notifications',
         notifications,
         (_) => const NotificationsPage(),
+      ),
+      (
+        Icons.redeem_outlined,
+        'Card rewards',
+        cardRewards,
+        (_) => const _CardRewardsListPage(),
       ),
       (
         Icons.cloud_outlined,

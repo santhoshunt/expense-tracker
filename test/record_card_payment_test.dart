@@ -157,7 +157,9 @@ void main() {
     final bankLeg = p.pendingTransactions.singleWhere(
       (t) => t.id == 'bankDebit',
     );
-    expect(bankLeg.categoryId, 'other_expense');
+    // The category it had before pairing: To sort, where the one-time
+    // pass on load put the pending Other row.
+    expect(bankLeg.categoryId, kToSortExpenseId);
     expect(bankLeg.pairId, isNull);
     expect(p.transactions.any((t) => t.id == result.txId), isFalse);
   });

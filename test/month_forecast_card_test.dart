@@ -118,12 +118,16 @@ void main() {
     await tester.tap(find.text('Due this month (1)'));
     await tester.pumpAndSettle();
     expect(find.text('Due this month'), findsOneWidget);
-    expect(find.text('Broadband'), findsOneWidget);
-    expect(find.textContaining('· reminder'), findsOneWidget);
+    // In the sheet: in the month's last week the Overview's Next 7 days
+    // card lists the same bill behind it.
+    Finder inSheet(Finder f) =>
+        find.descendant(of: find.byType(BottomSheet), matching: f);
+    expect(inSheet(find.text('Broadband')), findsOneWidget);
+    expect(inSheet(find.textContaining('· reminder')), findsOneWidget);
 
     // Paid marks it, greys the row and takes it out of the total; Undo
     // puts it back.
-    await tester.tap(find.widgetWithText(TextButton, 'Paid'));
+    await tester.tap(inSheet(find.widgetWithText(TextButton, 'Paid')));
     await tester.pumpAndSettle();
     expect(find.text('Marked paid'), findsOneWidget);
     expect(p.reminders.single.lastPaidMonth, isNotNull);

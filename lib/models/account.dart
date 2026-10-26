@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'card_rewards.dart';
+
 /// A bank account, credit card or savings instrument (RD/FD/PPF) the app
 /// tracks money against.
 ///
@@ -131,6 +133,10 @@ class Account {
   /// is inert ([FinanceProvider.linkedAccountOf]).
   final String? linkedAccountId;
 
+  /// Credit cards only: the cashback or points the card pays per category,
+  /// which the cycle's reward estimate reads. Null = not set up.
+  final CardRewards? rewards;
+
   Account({
     required this.id,
     required this.name,
@@ -151,6 +157,7 @@ class Account {
     this.holdsPoints = false,
     this.pointValue,
     this.linkedAccountId,
+    this.rewards,
   });
 
   /// Credit cards only: debit cards have no limit, outstanding or bill.
@@ -219,6 +226,8 @@ class Account {
     bool clearPointValue = false,
     String? linkedAccountId,
     bool clearLinkedAccountId = false,
+    CardRewards? rewards,
+    bool clearRewards = false,
   }) => Account(
     id: id,
     name: name ?? this.name,
@@ -249,6 +258,7 @@ class Account {
     linkedAccountId: clearLinkedAccountId
         ? null
         : (linkedAccountId ?? this.linkedAccountId),
+    rewards: clearRewards ? null : (rewards ?? this.rewards),
   );
 
   Map<String, dynamic> toJson() => {
@@ -272,6 +282,7 @@ class Account {
     if (holdsPoints) 'holdsPoints': true,
     if (pointValue != null) 'pointValue': pointValue,
     if (linkedAccountId != null) 'linkedAccountId': linkedAccountId,
+    if (rewards != null) 'rewards': rewards!.toJson(),
   };
 
   factory Account.fromJson(Map<String, dynamic> json) {
@@ -318,6 +329,7 @@ class Account {
       linkedAccountId: json['linkedAccountId'] is String
           ? json['linkedAccountId'] as String
           : null,
+      rewards: CardRewards.tryFromJson(json['rewards']),
     );
   }
 

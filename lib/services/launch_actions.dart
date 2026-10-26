@@ -38,6 +38,9 @@ enum LaunchAction {
 
   /// The This week widgets: the weekly digest sheet on the current week.
   openThisWeek,
+
+  /// The Accounts widget: the Accounts tab.
+  openAccounts,
 }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
@@ -94,6 +97,7 @@ class LaunchActions {
     'open_transactions' => LaunchAction.openTransactions,
     'open_big_bills' => LaunchAction.openBigBills,
     'open_review' => LaunchAction.openReview,
+    'open_accounts' => LaunchAction.openAccounts,
     // The widget names no week: it always opens the current one.
     'open_weekly_digest' => LaunchAction.openThisWeek,
     _ => null,

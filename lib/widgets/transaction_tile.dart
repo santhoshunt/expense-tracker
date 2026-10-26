@@ -138,6 +138,62 @@ class TransactionTile extends StatelessWidget {
     },
   );
 
+  /// Line two of a row whose category the import guessed, or left To sort:
+  /// [label] in an outlined pill with a [border] of that kind, then any
+  /// [note], then " · new" on an unseen row. The note ellipsizes first, the
+  /// pill next; "new" gives way only where it would take half the line.
+  Widget _pillLine(
+    String label,
+    Color border,
+    String? note,
+    TextStyle? lineStyle,
+  ) => LayoutBuilder(
+    builder: (context, constraints) {
+      final width = constraints.maxWidth;
+      final newWidth = _textWidth(context, ' · new', lineStyle);
+      final showNew = tx.unseen && newWidth <= width / 2;
+      final pill = Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+        decoration: BoxDecoration(
+          border: Border.all(color: border),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: lineStyle,
+        ),
+      );
+      return Row(
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: showNew ? width - newWidth : width,
+            ),
+            child: pill,
+          ),
+          if (note != null)
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Text(
+                  note,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: lineStyle,
+                ),
+              ),
+            ),
+          if (showNew)
+            ExcludeSemantics(
+              child: Text(' · new', maxLines: 1, style: lineStyle),
+            ),
+        ],
+      );
+    },
+  );
+
   @override
   Widget build(BuildContext context) {
     final cat = tx.category;
@@ -219,11 +275,35 @@ class TransactionTile extends StatelessWidget {
     final extraNote = noteText.isNotEmpty && noteText != rowTitle
         ? noteText
         : null;
-    final String? second = refundFor != null
+    // A category the import guessed, or To sort, goes in an outlined pill.
+    // Where the title is the category already, the pill does not repeat it:
+    // a guess says only "Guessed", and To sort needs nothing more.
+    final toSort = isToSortCategory(tx.categoryId);
+    final String? pillLabel = refundFor != null
+        ? null
+        : toSort
+        ? (rowTitle == null ? null : cat.label)
+        : tx.categoryGuessed
+        ? (rowTitle == null ? 'Guessed' : '${cat.label} · guessed')
+        : null;
+    final pillBorder = toSort
+        ? AppColors.of(context).orange
+        : accentTextColor(context);
+    // One part of a payment split by category: "1 of 3".
+    final splitAt = tx.splitId == null
+        ? null
+        : context.select<FinanceProvider, (int, int)>((f) {
+            final parts = f.splitPartsOf(tx);
+            return (parts.indexWhere((p) => p.id == tx.id) + 1, parts.length);
+          });
+    final splitLabel = splitAt == null
+        ? null
+        : '${splitAt.$1} of ${splitAt.$2}';
+    final String? second = refundFor != null || pillLabel != null
         ? extraNote
         : rowTitle == null
-        ? null
-        : [cat.label, ?extraNote].join(' · ');
+        ? (splitLabel == null ? null : 'Part $splitLabel')
+        : [cat.label, ?splitLabel, ?extraNote].join(' · ');
     // The refund line under line two: "₹500 refunded · 4 Oct" on the
     // purchase, "For 25 Sep purchase" on the refund. Days only: the time
     // would crowd the line.
@@ -250,7 +330,9 @@ class TransactionTile extends StatelessWidget {
     // An import that counted at once without review: a dot leads the line
     // and "new" ends it, until the row is opened or marked seen.
     final isNew = tx.unseen;
-    final Widget? line = isNew
+    final Widget? line = pillLabel != null
+        ? _pillLine(pillLabel, pillBorder, second, lineStyle)
+        : isNew
         ? _secondLine(second, lineStyle)
         : second == null
         ? null

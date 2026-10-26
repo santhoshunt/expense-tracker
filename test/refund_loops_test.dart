@@ -283,7 +283,9 @@ void main() {
       ]);
       expect(
         csv.split('\r\n').first,
-        endsWith(',unseen,refundOf,payee,acctKind,smsAt'),
+        endsWith(
+          ',unseen,refundOf,payee,acctKind,smsAt,splitId,guessed,noCashback',
+        ),
       );
       final back = {for (final t in BackupService.txsFromCsv(csv)) t.id: t};
       expect(back['back']!.refundOf, 'buy');
@@ -292,18 +294,18 @@ void main() {
 
     test('an older file without the column still imports', () {
       final csv = BackupService.buildCsvOf([refund()]);
-      // Drops the last four columns: refundOf and the later payee, acctKind
-      // and smsAt.
-      String dropLast4(String line) {
+      // Drops the last seven columns: refundOf and the later payee,
+      // acctKind, smsAt, splitId, guessed and noCashback.
+      String dropLast7(String line) {
         var end = line.length;
-        for (var i = 0; i < 4; i++) {
+        for (var i = 0; i < 7; i++) {
           end = line.lastIndexOf(',', end - 1);
         }
         return line.substring(0, end);
       }
 
       final old = [
-        for (final line in csv.split('\r\n')) dropLast4(line),
+        for (final line in csv.split('\r\n')) dropLast7(line),
       ].join('\r\n');
       expect(old.split('\r\n').first, endsWith(',unseen'));
       final t = BackupService.txsFromCsv(old).single;

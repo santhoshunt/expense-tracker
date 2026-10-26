@@ -199,7 +199,7 @@ void main() {
         expect(json, isNot(contains('QUILLFERN')));
         expect(json, isNot(contains('XX3141')));
         final data = jsonDecode(json) as Map<String, dynamic>;
-        expect(data['version'], 30);
+        expect(data['version'], 31);
         expect(data['discardedImports'], hasLength(1));
 
         SharedPreferences.setMockInitialValues({});
@@ -303,7 +303,10 @@ void main() {
     test('on a new device, the acctKind column rebuilds a card', () async {
       final p = await withCardAndHandAssigned();
       final csv = BackupService.buildCsv(p);
-      expect(csv.split('\r\n').first, endsWith(',acctKind,smsAt'));
+      expect(
+        csv.split('\r\n').first,
+        endsWith(',acctKind,smsAt,splitId,guessed,noCashback'),
+      );
       final (txs, kinds) = BackupService.csvImportOf(csv);
       expect(kinds, {'HDFC:4412': 'card'});
 

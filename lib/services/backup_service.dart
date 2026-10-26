@@ -198,6 +198,12 @@ class BackupService {
     'acctKind',
     // When a re-dated import's alert arrived (Tx.smsAt); usually empty.
     'smsAt',
+    // The split payment a row is part of (Tx.splitId); usually empty.
+    'splitId',
+    // The import guessed the category (Tx.categoryGuessed).
+    'guessed',
+    // A card row left out of the reward estimate (Tx.cashbackOff).
+    'noCashback',
   ];
 
   /// A split's people as one CSV cell:
@@ -384,6 +390,9 @@ class BackupService {
           _csvEscape(t.payee),
           _csvEscape(kinds[t.acctKey] ?? ''),
           _csvEscape(t.smsAt?.toIso8601String() ?? ''),
+          _csvEscape(t.splitId ?? ''),
+          t.categoryGuessed.toString(),
+          t.cashbackOff.toString(),
         ].join(','),
       );
     }
@@ -556,6 +565,11 @@ class BackupService {
     // and their rows carry no arrival time.
     final acctKindCol = col('acctkind');
     final smsAtCol = col('smsat');
+    // Older files lack these; their rows are unsplit, placed by hand and
+    // earn rewards.
+    final splitIdCol = col('splitid');
+    final guessedCol = col('guessed');
+    final noCashbackCol = col('nocashback');
     final kinds = <String, String>{};
 
     String cell(List<String> r, int? c) {
@@ -664,6 +678,12 @@ class BackupService {
             at,
           _ => null,
         },
+        splitId: switch (cell(r, splitIdCol)) {
+          '' => null,
+          final s => s,
+        },
+        categoryGuessed: cell(r, guessedCol).toLowerCase() == 'true',
+        cashbackOff: cell(r, noCashbackCol).toLowerCase() == 'true',
       );
       final kind = cell(r, acctKindCol).toLowerCase();
       if (acctKey.isNotEmpty &&

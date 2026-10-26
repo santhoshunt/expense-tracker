@@ -90,8 +90,9 @@ class _CategoriesTabState extends State<CategoriesTab> {
     final builtIn = [
       for (final c in kCategories)
         // Match against the override-applied definition: a renamed
-        // built-in must be findable by its current name.
-        if (_matches(categoryById(c.id), q)) c,
+        // built-in must be findable by its current name. To sort is a
+        // placeholder the import manages, so it is not edited here.
+        if (!isToSortCategory(c.id) && _matches(categoryById(c.id), q)) c,
     ];
     final scheme = Theme.of(context).colorScheme;
     final large = isLargeTextScale(context);
@@ -467,14 +468,19 @@ Future<void> _deleteGroupWithUndo(BuildContext context, CategoryGroup g) async {
 Future<void> _confirmDeleteCategory(BuildContext context, TxCategory c) async {
   final finance = context.read<FinanceProvider>();
   // Same-direction destinations only, so rows keep their type. "Other"
-  // (the historical hard-coded target) leads as the default.
+  // (the historical hard-coded target) leads as the default. Not To sort:
+  // the category's reminders move along, and To sort is no reminder's.
   final fallbackId = c.type == TxType.expense
       ? 'other_expense'
       : 'other_income';
   final targets = [
     categoryById(fallbackId),
     for (final t in allCategories)
-      if (t.type == c.type && t.id != c.id && t.id != fallbackId) t,
+      if (t.type == c.type &&
+          t.id != c.id &&
+          t.id != fallbackId &&
+          !isToSortCategory(t.id))
+        t,
   ];
   var moveTo = fallbackId;
   final ok = await showDialog<bool>(

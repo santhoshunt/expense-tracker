@@ -35,6 +35,9 @@ object QuickActions {
     /** The This week widget's review count: the review sheet. */
     const val OPEN_REVIEW = "open_review"
 
+    /** The Accounts widget: the Accounts tab. */
+    const val OPEN_ACCOUNTS = "open_accounts"
+
     /** Opens the enabled launcher entry with [action].
      *
      * The component comes from getLaunchIntentForPackage, never from
@@ -65,7 +68,7 @@ object QuickActions {
             ADD_EXPENSE, ADD_INCOME, IMPORT_SMS, OPEN_BUDGET, OPEN_BUDGETS,
             OPEN_PACE, OPEN_UPCOMING, OPEN_TODAY, OPEN_BREAKDOWN,
             OPEN_TRANSACTIONS, OPEN_BIG_BILLS, OPEN_WEEKLY_DIGEST,
-            OPEN_REVIEW -> action
+            OPEN_REVIEW, OPEN_ACCOUNTS -> action
             else -> null
         }
     }

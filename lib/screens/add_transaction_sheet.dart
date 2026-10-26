@@ -2,14 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/account.dart';
+import '../models/card_rewards.dart';
 import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
+import '../services/card_rewards.dart';
 import '../services/recurring_detector.dart';
 import '../services/refund_matching.dart';
 import '../services/subscriptions.dart';
 import '../utils/format.dart';
+import '../widgets/category_split_sheet.dart';
 import '../widgets/date_time_picker.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
@@ -95,6 +98,9 @@ Future<String?> showAddTransactionSheet(
   );
 }
 
+/// Helper on the fields a split part shares with its payment.
+const String _kSplitLocked = 'Change in Edit split';
+
 /// What the type toggle offers. Transfer is not a [TxType]: transfer
 /// categories carry their own direction via their type, so the saved
 /// transaction's type always comes from the selected category.
@@ -162,6 +168,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   /// "Count as spending" for a row on a wallet ([Tx.walletCounted]).
   bool _walletCounted = false;
 
+  /// "Earns cashback" on a card with rewards: the opposite of
+  /// [Tx.cashbackOff].
+  bool _earns = true;
+
   /// The amount field's text as the sheet opened: an edit on a points
   /// wallet keeps the stored ₹ unless the points were retyped, so a
   /// rounded point count can't shift the amount.
@@ -219,6 +229,11 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
 
   bool get isEditing => widget.existing != null;
 
+  /// One part of a payment split by category: its amount, date, count-in
+  /// and account belong to the whole payment, so the sheet locks them.
+  /// Amounts change in the split editor.
+  bool get _inSplit => widget.existing?.splitId != null;
+
   /// Paid to shows on every Expense and Income entry, imported rows too:
   /// many alerts name no merchant, and a typed payee then titles the row.
   bool get _showsPayee => _kind != _EntryKind.transfer;
@@ -263,6 +278,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     _date.toIso8601String(),
     _countIn?.toIso8601String() ?? '',
     _walletCounted.toString(),
+    _earns.toString(),
   ].join('|');
 
   /// The picked account when it is a wallet.
@@ -352,6 +368,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     }
     _initialAccountId = _accountId;
     _walletCounted = e?.walletCounted ?? false;
+    _earns = !(e?.cashbackOff ?? false);
     // On a points wallet the field shows points.
     final perPoint = _perPoint(finance);
     if (perPoint != null && startAmount != null) {
@@ -511,20 +528,19 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     ];
   }
 
-  List<TxCategory> _categoriesFor(_EntryKind kind) => _ordered(switch (kind) {
-    _EntryKind.expense => [
-      for (final c in allCategories)
-        if (c.type == TxType.expense && !c.isTransfer) c,
-    ],
-    _EntryKind.income => [
-      for (final c in allCategories)
-        if (c.type == TxType.income && !c.isTransfer) c,
-    ],
-    _EntryKind.transfer => [
-      for (final c in allCategories)
-        if (c.isTransfer) c,
-    ],
-  });
+  /// To sort is never offered: it is where an import waits for a pick. A
+  /// split part's transfers are money out only, so the part stays money out.
+  List<TxCategory> _categoriesFor(_EntryKind kind) => _ordered([
+    for (final c in allCategories)
+      if (!isToSortCategory(c.id) &&
+          switch (kind) {
+            _EntryKind.expense => c.type == TxType.expense && !c.isTransfer,
+            _EntryKind.income => c.type == TxType.income && !c.isTransfer,
+            _EntryKind.transfer =>
+              c.isTransfer && (!_inSplit || c.type == TxType.expense),
+          })
+        c,
+  ]);
 
   /// Orders the picker per the Settings preference. "Most used" ranks by
   /// gross over the last three months (ties fall back to A to Z), which
@@ -716,12 +732,19 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     final payee = _kind == _EntryKind.transfer
         ? ''
         : normalizePayee(_payeeCtrl.text);
+    // The tick is saved only where it shows; elsewhere the row keeps it.
+    final earnsShown = _rewards(finance) != null;
 
     try {
       if (isEditing) {
         await finance.updateTransaction(
           widget.existing!.copyWith(
             pending: confirms ? false : null,
+            // Saving a guessed row is looking at its category: the guess
+            // stands as the user's, as Keep makes it.
+            categoryGuessed: false,
+            userCategorized: widget.existing!.categoryGuessed ? true : null,
+            cashbackOff: earnsShown ? !_earns : null,
             // A refund turned into an expense refunds nothing.
             refundOf: _type == TxType.expense ? null : refundOf,
             clearRefundOf: _type == TxType.expense || refundOf == null,
@@ -768,6 +791,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           repaidBy: from.isEmpty ? null : from,
           countIn: _countIn,
           walletCounted: onWallet && _walletCounted,
+          cashbackOff: earnsShown && !_earns,
         );
         if (_accountId != null) await finance.assignAccount(id, _accountId!);
         newId = id;
@@ -865,6 +889,23 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     // Without the "new" marker opening the sheet cleared, so Undo does not
     // bring it back.
     final tx = widget.existing!.copyWith(unseen: false);
+    // A split part is one payment with its siblings: all of them go, and
+    // Undo brings all of them back.
+    final live = _live(finance);
+    if (live != null && live.splitId != null) {
+      final removed = await finance.deleteTransactions([
+        for (final p in finance.splitPartsOf(live)) p.id,
+      ]);
+      _offerUndo(
+        'Deleted payment (${removed.length} parts)',
+        () => finance.restoreTransactions(removed),
+        icon: Icons.delete_outline,
+        closes: true,
+        outer: outer,
+      );
+      _close(navigator, route);
+      return;
+    }
     // Deleting one leg of a pair unlinks the other; the snapshot lets Undo
     // put both the row and the partner's link back.
     final partner = await finance.deleteTransaction(tx.id);
@@ -999,6 +1040,158 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     final id = widget.existing!.id;
     return finance.transactions.where((t) => t.id == id).firstOrNull ??
         finance.pendingTransactions.where((t) => t.id == id).firstOrNull;
+  }
+
+  /// "Category guessed from past payments" with Keep, on a row whose
+  /// category the import guessed. Goes once the guess is kept.
+  List<Widget> _guessBanners(BuildContext context) {
+    final finance = context.watch<FinanceProvider>();
+    final tx = _live(finance);
+    if (tx == null || !tx.categoryGuessed) return const [];
+    return [
+      _refundBox(
+        context,
+        icon: Icons.auto_awesome_outlined,
+        lines: const ['Category guessed from past payments'],
+        action: TextButton(
+          style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          onPressed: _busy ? null : () => finance.confirmGuess(tx.id),
+          child: const Text('Keep'),
+        ),
+      ),
+    ];
+  }
+
+  /// Under the category: "Split by category" on a row that can split, and
+  /// "Edit split · 1 of 3" on a part of one. Editing only: a split needs
+  /// the row saved. A split that cannot change ([FinanceProvider.canSplit])
+  /// keeps its button, and a tap says what stands in the way.
+  List<Widget> _splitButton(BuildContext context) {
+    if (!isEditing) return const [];
+    final finance = context.watch<FinanceProvider>();
+    final tx = _live(finance);
+    if (tx == null) return const [];
+    final String label;
+    String? blocked;
+    if (tx.splitId != null) {
+      final parts = finance.splitPartsOf(tx);
+      final at = parts.indexWhere((p) => p.id == tx.id) + 1;
+      label = 'Edit split · $at of ${parts.length}';
+      if (!finance.canSplit(tx)) {
+        blocked = parts.any((p) => p.myShare != null)
+            ? 'Remove the group split on its parts first'
+            : 'Unlink the refund on its parts first';
+      }
+    } else if (finance.canSplit(tx)) {
+      label = 'Split by category';
+    } else {
+      return const [];
+    }
+    return [
+      Align(
+        alignment: AlignmentDirectional.centerStart,
+        child: TextButton.icon(
+          onPressed: _busy
+              ? null
+              : blocked != null
+              ? () => showAppToast(context, blocked!)
+              : () => _openSplit(tx),
+          icon: const Icon(Icons.call_split, size: 18),
+          label: Text(label),
+        ),
+      ),
+    ];
+  }
+
+  /// Opens the split editor for [tx]. A change there leaves this sheet's
+  /// fields describing a row that no longer exists as shown, so the sheet
+  /// closes, and the Undo goes where a delete's would.
+  Future<void> _openSplit(Tx tx) async {
+    if (_fingerprint() != _initialFingerprint) {
+      showAppToast(context, 'Save your changes first');
+      return;
+    }
+    final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
+    final outer = _outerMessenger();
+    final changed = await showCategorySplitSheet(
+      context,
+      tx,
+      offerUndo: (message, undo) => _offerUndo(
+        message,
+        undo,
+        icon: Icons.call_split,
+        tone: AppToastTone.change,
+        closes: true,
+        outer: outer,
+      ),
+    );
+    if (changed) _close(navigator, route);
+  }
+
+  /// The picked card's reward rules and the category whose rate applies,
+  /// when this entry earns on them: money out in a category that earns
+  /// ([earnsCardRewards]). A split payment earns once, through its anchor,
+  /// at the rate of its first part that earns
+  /// ([FinanceProvider.rewardCategoryOf]), the anchor read as edited here.
+  ({CardRewards rules, String categoryId})? _rewards(FinanceProvider finance) {
+    final id = _accountId;
+    final account = id == null ? null : finance.accountById(id);
+    final rules = account?.rewards;
+    if (account == null || !account.isCard || rules == null) return null;
+    if (_type != TxType.expense) return null;
+    final e = widget.existing;
+    final parts = e == null ? const <Tx>[] : finance.splitPartsOf(e);
+    if (e != null && finance.isSplitPart(e)) return null;
+    for (final p in e?.splitId == null ? const <Tx>[] : parts) {
+      final category = p.id == e!.id ? _categoryId : p.categoryId;
+      if (earnsCardRewards(category)) {
+        return (rules: rules, categoryId: category);
+      }
+    }
+    if (e?.splitId != null || !earnsCardRewards(_categoryId)) return null;
+    return (rules: rules, categoryId: _categoryId);
+  }
+
+  /// "Earns cashback" (or points) with what this entry earns: "≈ ₹324 at
+  /// 10%", "≈ 40 points". A split payment earns on its whole amount.
+  List<Widget> _rewardsField(BuildContext context, FinanceProvider finance) {
+    final rewards = _rewards(finance);
+    if (rewards == null) return const [];
+    final rules = rewards.rules;
+    final rateCategory = rewards.categoryId;
+    final points = rules.unit == RewardUnit.points;
+    final e = widget.existing;
+    final amount = e != null && e.splitId != null
+        ? finance.splitTotalOf(e)
+        : parseAmount(_amountCtrl.text);
+    final earned = amount == null
+        ? null
+        : rules.earnOn(rateCategory, amount).floorToDouble();
+    final estimate = earned == null
+        ? null
+        : points
+        ? '≈ ${fmtPoints(earned)}'
+        : '≈ ${fmtMoneyWhole(earned)} at '
+              '${fmtFieldNumber(rules.rateFor(rateCategory))}%';
+    final scheme = Theme.of(context).colorScheme;
+    return [
+      CheckboxListTile(
+        value: _earns,
+        onChanged: (v) => setState(() => _earns = v ?? true),
+        controlAffinity: ListTileControlAffinity.leading,
+        contentPadding: EdgeInsets.zero,
+        title: Text(points ? 'Earns points' : 'Earns cashback'),
+        secondary: estimate == null
+            ? null
+            : Text(
+                estimate,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+              ),
+      ),
+    ];
   }
 
   /// An outlined box like [_pairedBanner]'s: [lines] under an [icon], the
@@ -1249,7 +1442,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
               showRuleDialog(
                 this.context,
                 patternSuggestion: selected.trim(),
-                categorySuggestion: _categoryId,
+                // A rule never files into To sort.
+                categorySuggestion: isToSortCategory(_categoryId)
+                    ? null
+                    : _categoryId,
               );
             },
           ),
@@ -1498,9 +1694,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
     padding: const EdgeInsets.only(top: 8),
     child: Align(
       alignment: AlignmentDirectional.centerStart,
+      // A split part's Count in is the whole payment's, so it stays put.
       child: _countIn == null
           ? TextButton(
-              onPressed: _pickCountIn,
+              onPressed: _inSplit ? null : _pickCountIn,
               child: const Text(
                 'Count in another date ›',
                 semanticsLabel: 'Count in another date',
@@ -1509,8 +1706,11 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           : InputChip(
               avatar: const Icon(Icons.event_repeat_outlined, size: 18),
               label: Text('Counts in ${fmtCountIn(_countIn!)}'),
+              isEnabled: !_inSplit,
               onPressed: _pickCountIn,
-              onDeleted: () => setState(() => _countIn = null),
+              onDeleted: _inSplit
+                  ? null
+                  : () => setState(() => _countIn = null),
               deleteButtonTooltipMessage: 'Count on its own date',
             ),
     ),
@@ -1683,6 +1883,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     ),
                   ),
                   const SizedBox(height: 16),
+                  ..._guessBanners(context),
                   ..._pairedBanners(context),
                   ..._refundBanners(context),
                 ],
@@ -1693,22 +1894,24 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                 // scales.
                 SegmentedButton<_EntryKind>(
                   showSelectedIcon: false,
-                  segments: const [
-                    ButtonSegment(
+                  segments: [
+                    const ButtonSegment(
                       value: _EntryKind.expense,
                       label: FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Text('Expense', maxLines: 1),
                       ),
                     ),
+                    // A split part stays money out.
                     ButtonSegment(
                       value: _EntryKind.income,
-                      label: FittedBox(
+                      enabled: !_inSplit,
+                      label: const FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Text('Income', maxLines: 1),
                       ),
                     ),
-                    ButtonSegment(
+                    const ButtonSegment(
                       value: _EntryKind.transfer,
                       label: FittedBox(
                         fit: BoxFit.scaleDown,
@@ -1733,6 +1936,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                 AppDropdownField<String>(
                   label: 'Category',
                   value: _categoryId,
+                  // To sort is not on the list, so the field shows empty.
+                  helper: isToSortCategory(_categoryId)
+                      ? 'To sort: pick a category'
+                      : null,
                   items: [
                     for (final c in categories)
                       PickerItem(
@@ -1750,10 +1957,12 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                     if (v != null) setState(() => _categoryId = v);
                   },
                 ),
+                ..._splitButton(context),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _amountCtrl,
                   autofocus: !isEditing,
+                  enabled: !_inSplit,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
@@ -1761,9 +1970,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                   decoration: switch (_perPoint(
                     context.watch<FinanceProvider>(),
                   )) {
-                    null => const InputDecoration(
+                    null => InputDecoration(
                       labelText: 'Amount',
                       prefixText: '₹ ',
+                      helperText: _inSplit ? _kSplitLocked : null,
                     ),
                     final perPoint => InputDecoration(
                       labelText: 'Points',
@@ -1942,24 +2152,44 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          AppDropdownField<String>(
-                            label: 'Account (optional)',
-                            value: _accountId,
-                            items: [
-                              const PickerItem(
-                                value: null,
-                                label: 'Unassigned',
+                          if (_inSplit)
+                            InputDecorator(
+                              decoration: const InputDecoration(
+                                labelText: 'Account (optional)',
+                                helperText: _kSplitLocked,
+                                enabled: false,
                               ),
-                              for (final a in accounts)
-                                PickerItem(
-                                  value: a.id,
-                                  label: a.displayName,
-                                  leading: Icon(a.icon, size: 18),
+                              child: Text(
+                                _accountId == null
+                                    ? 'Unassigned'
+                                    : finance
+                                              .accountById(_accountId!)
+                                              ?.displayName ??
+                                          'Unassigned',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            )
+                          else
+                            AppDropdownField<String>(
+                              label: 'Account (optional)',
+                              value: _accountId,
+                              items: [
+                                const PickerItem(
+                                  value: null,
+                                  label: 'Unassigned',
                                 ),
-                            ],
-                            onChanged: (v) =>
-                                setState(() => _pickAccount(finance, v)),
-                          ),
+                                for (final a in accounts)
+                                  PickerItem(
+                                    value: a.id,
+                                    label: a.displayName,
+                                    leading: Icon(a.icon, size: 18),
+                                  ),
+                              ],
+                              onChanged: (v) =>
+                                  setState(() => _pickAccount(finance, v)),
+                            ),
+                          ..._rewardsField(context, finance),
                           // Wallet rows stay out of spending and income
                           // unless turned on here. Not on a transfer, which
                           // is never spending or income. A ListTile with its
@@ -2026,33 +2256,35 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                       child: OutlinedButton.icon(
                         icon: const Icon(Icons.calendar_today, size: 18),
                         label: Text(fmtDate(_date)),
-                        onPressed: () async {
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: _date,
-                            firstDate: DateTime(2000),
-                            lastDate: DateTime.now().add(
-                              const Duration(days: 1),
-                            ),
-                          );
-                          if (picked == null) return;
-                          setState(() {
-                            final moved =
-                                picked.year != _date.year ||
-                                picked.month != _date.month ||
-                                picked.day != _date.day;
-                            _date = DateTime(
-                              picked.year,
-                              picked.month,
-                              picked.day,
-                              _date.hour,
-                              _date.minute,
-                            );
-                            // A Count in chosen for the old day says nothing
-                            // about the new one, as with bulk Date & time.
-                            if (moved) _countIn = null;
-                          });
-                        },
+                        onPressed: _inSplit
+                            ? null
+                            : () async {
+                                final picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: _date,
+                                  firstDate: DateTime(2000),
+                                  lastDate: DateTime.now().add(
+                                    const Duration(days: 1),
+                                  ),
+                                );
+                                if (picked == null) return;
+                                setState(() {
+                                  final moved =
+                                      picked.year != _date.year ||
+                                      picked.month != _date.month ||
+                                      picked.day != _date.day;
+                                  _date = DateTime(
+                                    picked.year,
+                                    picked.month,
+                                    picked.day,
+                                    _date.hour,
+                                    _date.minute,
+                                  );
+                                  // A Count in chosen for the old day says nothing
+                                  // about the new one, as with bulk Date & time.
+                                  if (moved) _countIn = null;
+                                });
+                              },
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -2060,26 +2292,39 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                       child: OutlinedButton.icon(
                         icon: const Icon(Icons.schedule, size: 18),
                         label: Text(fmtTime(_date)),
-                        onPressed: () async {
-                          final picked = await showTimePicker(
-                            context: context,
-                            initialTime: TimeOfDay.fromDateTime(_date),
-                          );
-                          if (picked == null) return;
-                          setState(
-                            () => _date = DateTime(
-                              _date.year,
-                              _date.month,
-                              _date.day,
-                              picked.hour,
-                              picked.minute,
-                            ),
-                          );
-                        },
+                        onPressed: _inSplit
+                            ? null
+                            : () async {
+                                final picked = await showTimePicker(
+                                  context: context,
+                                  initialTime: TimeOfDay.fromDateTime(_date),
+                                );
+                                if (picked == null) return;
+                                setState(
+                                  () => _date = DateTime(
+                                    _date.year,
+                                    _date.month,
+                                    _date.day,
+                                    picked.hour,
+                                    picked.minute,
+                                  ),
+                                );
+                              },
                       ),
                     ),
                   ],
                 ),
+                // Date, time and Count in belong to the whole payment.
+                if (_inSplit)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      _kSplitLocked,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
                 // A new entry's Add sits in the footer below the form.
                 if (!isEditing) ...[
                   const SizedBox(height: 8),

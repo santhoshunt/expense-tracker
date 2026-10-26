@@ -197,10 +197,14 @@ void main() {
       'Appearance',
       'SMS import',
       'Notifications',
+      'Card rewards',
       'Backup and data',
       'Privacy',
       'About',
     ]) {
+      // The last rows sit below a short test screen.
+      await tester.ensureVisible(find.text(group));
+      await pumpThrough(tester);
       await tester.tap(find.text(group));
       await pumpThrough(tester);
       expect(find.text('Monthly cap', skipOffstage: false), findsNothing);
@@ -212,6 +216,8 @@ void main() {
     // Category order moved beside the categories.
     expect(find.text('Category order'), findsNothing);
     // The Cockpit card on top opens the hub.
+    await tester.ensureVisible(find.text('Cockpit'));
+    await pumpThrough(tester);
     await tester.tap(find.text('Cockpit'));
     await pumpThrough(tester);
     expect(find.widgetWithText(AppBar, 'Cockpit'), findsOneWidget);

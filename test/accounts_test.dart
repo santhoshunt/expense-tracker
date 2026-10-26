@@ -650,7 +650,8 @@ void main() {
           ref: 'R3',
         ),
       ]);
-      await p.confirmTransaction(p.pendingTransactions.single.id);
+      // A known account: the alert counts at once.
+      expect(p.pendingCount, 0);
       expect(p.accountBalance(p.accountById(acc.id)!), 45000);
 
       // A NEWER alert takes over again — the documented handoff. +100ms,
@@ -668,7 +669,7 @@ void main() {
           ref: 'R4',
         ),
       ]);
-      await p.confirmTransaction(p.pendingTransactions.single.id);
+      expect(p.pendingCount, 0);
       expect(p.accountBalance(p.accountById(acc.id)!), 47000);
       expect(
         p.accountBalanceProvenance(p.accountById(acc.id)!).$1,
@@ -786,7 +787,8 @@ void main() {
           ref: 'I3',
         ),
       ]);
-      await p.confirmTransaction(p.pendingTransactions.single.id);
+      // A known account: the alert counts at once.
+      expect(p.pendingCount, 0);
       expect(p.transactionCountForAccount(icici.id), 2);
       expect(p.transactionCountForAccount(hdfc.id), 2);
 
@@ -836,7 +838,8 @@ void main() {
         acctKey: 'INDBNK:7316',
       ),
     ]);
-    await p.confirmTransaction(p.pendingTransactions.single.id);
+    // A known account: the alert counts at once.
+    expect(p.pendingCount, 0);
     expect(p.accountBalance(p.accountById(acc.id)!), 31372.46);
   });
 

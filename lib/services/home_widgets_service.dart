@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/account.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
@@ -31,7 +32,7 @@ int epochDay(DateTime d) =>
     Duration.millisecondsPerDay;
 
 /// Feeds the Month pace, Upcoming, Today and Add, Spending split, Recent,
-/// Big bills and This week widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart
+/// Big bills, This week and Accounts widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart
 /// computes and native draws; the snapshot carries dates and a usual-by-day
 /// curve so the widgets stay right across midnight without the app running.
 class HomeWidgetsService {
@@ -154,6 +155,10 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
   // Everything the review sheet lists, whatever its date: the app's badge,
   // and where each widget's count leads.
   final toReview = finance.reviewCount(settings.dismissedPairSuggestions);
+  final reviewAmount = _reviewAmount(finance, hideIncome);
+  final reviewAmountLabel = reviewAmount < 0.5
+      ? ''
+      : fmtMoneyWhole(reviewAmount);
   return {
     'computedDay': epochDay(now),
     // year * 12 + month: compared as a number, so no locale can change it.
@@ -161,6 +166,10 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
     'monthLabel': DateFormat('MMMM').format(month),
     // Today and Recent name it; the This week block carries it too.
     'toReview': toReview,
+    // What the waiting imports add up to, beside the count. Empty when
+    // nothing waits or only suggestions do.
+    'reviewAmount': reviewAmount,
+    'reviewAmountLabel': reviewAmountLabel,
     'pace': {
       'spent': spent,
       'spentLabel': fmtMoneyTidy(spent),
@@ -196,7 +205,69 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       },
     // Left out with no big bills: the widget shows its empty line.
     if (!bigBills.isEmpty) 'bigBills': _bigBills(bigBills, month),
-    'week': _week(finance, now, toReview),
+    'week': _week(finance, now, toReview, reviewAmountLabel),
+    'accounts': _accounts(finance),
+  };
+}
+
+/// The sum of the imports waiting for review, spam suspects left out. With
+/// Hide income on, waiting income is left out too: the widget sits on the
+/// home screen.
+double _reviewAmount(FinanceProvider finance, bool hideIncome) {
+  var sum = 0.0;
+  for (final t in finance.pendingTransactions) {
+    if (t.suspectedSpam) continue;
+    if (hideIncome && t.type == TxType.income) continue;
+    sum += t.amount;
+  }
+  return sum;
+}
+
+/// The Accounts widget's rows: every open account in the Accounts screen's
+/// order (banks, credit cards, debit cards, savings, wallets). Each widget
+/// shows the ones picked for it. A credit card's spend is its statement
+/// cycle's and its left is the available limit; a debit card drawing from a
+/// bank has no left of its own (its money is the bank's); any other account
+/// shows this month's spend and its balance.
+List<Map<String, dynamic>> _accounts(FinanceProvider finance) {
+  const order = [
+    AccountType.bank,
+    AccountType.creditCard,
+    AccountType.debitCard,
+    AccountType.savings,
+    AccountType.wallet,
+  ];
+  final open = finance.openAccounts;
+  return [
+    for (final type in order)
+      for (final a in open)
+        if (a.type == type) _accountRow(finance, a),
+  ];
+}
+
+Map<String, dynamic> _accountRow(FinanceProvider finance, Account a) {
+  final linked = finance.linkedAccountOf(a) != null;
+  final double spent;
+  final double? left;
+  if (a.isCard) {
+    spent = finance.cardCycleSpend(a);
+    left = finance.accountAvailable(a);
+  } else {
+    spent = finance.accountSpentThisMonth(a);
+    left = linked ? null : finance.accountBalance(a);
+  }
+  return {
+    'id': a.id,
+    'name': a.displayName,
+    'kind': switch (a.type) {
+      AccountType.bank => 'bank',
+      AccountType.creditCard => 'card',
+      AccountType.debitCard => 'debit',
+      AccountType.savings => 'savings',
+      AccountType.wallet => 'wallet',
+    },
+    'spentLabel': fmtMoneyWhole(spent),
+    'leftLabel': left == null ? '' : fmtMoneyWhole(left),
   };
 }
 
@@ -221,11 +292,19 @@ Map<String, dynamic> _bigBills(BigBillsPlan plan, DateTime month) => {
 /// The This week widgets' block: the current week's spend day by day, and
 /// the usual week cut to each weekday, so the widget compares against the
 /// day it draws. Its `weekStart` tells a widget drawn after Sunday that
-/// the figures are last week's. [toReview] is the snapshot's review count,
-/// which does not depend on the week.
-Map<String, dynamic> _week(FinanceProvider finance, DateTime now, int toReview) {
+/// the figures are last week's. [toReview] and [reviewAmountLabel] are the
+/// snapshot's review count and amount, which do not depend on the week.
+/// `toSortLabel` is the part of the week's spend still in To sort, empty
+/// when none is.
+Map<String, dynamic> _week(
+  FinanceProvider finance,
+  DateTime now,
+  int toReview,
+  String reviewAmountLabel,
+) {
   final start = weekStartOf(now);
   final d = buildWeekDigest(finance, start, now: now);
+  final toSort = _toSortInWeek(finance, start, now);
   return {
     'weekStart': epochDay(start),
     'spent': d.spent,
@@ -233,7 +312,24 @@ Map<String, dynamic> _week(FinanceProvider finance, DateTime now, int toReview) 
     'byDay': d.byDay,
     'usualByDay': usualWeekByDay(finance, start),
     'toReview': toReview,
+    'reviewAmountLabel': reviewAmountLabel,
+    'toSortLabel': toSort < 0.5 ? '' : fmtMoneyWhole(toSort),
   };
+}
+
+/// To sort spend in the week from [start] up to [now]'s day, on the terms
+/// [buildWeekDigest] counts the week's spend.
+double _toSortInWeek(FinanceProvider finance, DateTime start, DateTime now) {
+  final daysShown = now.weekday;
+  var sum = 0.0;
+  for (final t in finance.countedTransactions) {
+    if (t.type != TxType.expense || t.categoryId != kToSortExpenseId) continue;
+    final d = t.effectiveDate;
+    if (d.weekday > daysShown || weekStartOf(d) != start) continue;
+    final net = finance.netSpendOf(t);
+    if (net > 0) sum += net;
+  }
+  return sum;
 }
 
 /// Rows the Recent widget shows: the newest confirmed transactions.

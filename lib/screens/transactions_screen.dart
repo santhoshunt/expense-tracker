@@ -1478,9 +1478,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         if (_selected.contains(t.id)) t,
     ];
     final types = {for (final t in selectedTxs) t.type};
+    // To sort is where imports wait for a category, never one to pick.
     final options = [
       for (final c in allCategories)
-        if (types.contains(c.type)) c,
+        if (types.contains(c.type) && !isToSortCategory(c.id)) c,
     ];
     // The keyboard inset keeps the search field in view.
     final picked = await showModalBottomSheet<TxCategory>(
@@ -1587,7 +1588,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     )) {
       return;
     }
-    final snapshot = _selectedSnapshot(finance);
+    // A split part's siblings move with it, so Undo restores them too.
+    final snapshot = finance.withSplitSiblings(_selected);
     final changed = await finance.setDateTimeForMany(Set.of(_selected), stamp);
     _afterBulk(
       changed,
@@ -1674,7 +1676,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 'in ${fmtMonth(stamp)}.',
           );
     if (!ok) return;
-    final snapshot = _selectedSnapshot(finance);
+    // A split part's siblings move with it, so Undo restores them too.
+    final snapshot = finance.withSplitSiblings(_selected);
     final changed = await finance.setCountInForMany(Set.of(_selected), stamp);
     _afterBulk(
       changed,

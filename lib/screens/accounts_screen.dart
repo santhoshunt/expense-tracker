@@ -7,6 +7,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/card_bill.dart';
+import '../services/card_rewards.dart';
 import '../services/savings_goal.dart';
 import '../services/sms_parser.dart';
 import '../utils/app_theme.dart';
@@ -28,6 +29,7 @@ import '../widgets/section_header.dart';
 import '../widgets/status_dot.dart';
 import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
+import 'card_rewards_page.dart';
 
 class AccountsScreen extends StatefulWidget {
   /// Tapping an account jumps to its filtered transaction list.
@@ -1594,6 +1596,44 @@ class _CardFigures extends StatelessWidget {
             ),
           ),
         ),
+        if (finance.cardRewardsFor(account) case final earned?) ...[
+          const SizedBox(height: 6),
+          InfoLabel(
+            // Plain text colour, the cycle line under it muted.
+            label: Text(
+              rewardEstimateLine(account, earned),
+              style: TextStyle(color: scheme.onSurface, fontSize: 12),
+            ),
+            tip: InfoTip(
+              title: 'Rewards estimate',
+              message:
+                  'What this card earns in the current statement cycle, '
+                  'from the rates set for it, rounded down. A card with no '
+                  'statement day counts the calendar month. Each spend '
+                  'earns on the amount charged, less refunds. A split '
+                  "payment earns once, at its first category's rate. "
+                  'Transfers earn nothing except Paid for Others, and rows '
+                  'with the earn tick cleared earn nothing. The bank '
+                  'decides the real figure.',
+              link: InfoLink(
+                prompt: 'Change the rates?',
+                label: 'Rewards…',
+                onTap: (c) => openCardRewards(c, account.id),
+              ),
+            ),
+          ),
+          if (finance.cardRewardsFor(account, back: 1) case final last?) ...[
+            const SizedBox(height: 2),
+            Text(
+              rewardCycleLine(
+                account,
+                cardCycleOf(account, DateTime.now()),
+                last,
+              ),
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+            ),
+          ],
+        ],
         if (account.dueDay != null) ...[
           const SizedBox(height: 6),
           Builder(
@@ -1817,6 +1857,8 @@ class _AccountMenu extends StatelessWidget {
             _setLimit(context);
           case 'cycle':
             showCardCycleDialog(context, account);
+          case 'rewards':
+            openCardRewards(context, account.id);
           case 'balance':
             showSetBalanceDialog(context, account);
           case 'merge':
@@ -1867,6 +1909,8 @@ class _AccountMenu extends StatelessWidget {
                   value: 'cycle',
                   child: Text('Statement & due dates…'),
                 ),
+              if (account.isCard)
+                const PopupMenuItem(value: 'rewards', child: Text('Rewards…')),
               if (account.isDebitCard)
                 const PopupMenuItem(value: 'draws', child: Text('Draws from…')),
               // A linked debit card has no balance of its own to set.

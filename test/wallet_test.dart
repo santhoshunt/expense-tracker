@@ -375,7 +375,7 @@ void main() {
       final p = await loaded();
       await walletWithSpend(p, counted: true, points: true);
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 30);
+      expect(data['version'], 31);
       final q = await loaded();
       await q.importData(data as Map<String, dynamic>, replace: true);
       final a = q.accounts.single;
@@ -445,7 +445,10 @@ void main() {
       final csv = BackupService.buildCsvOf([t]);
       expect(
         csv.split('\r\n').first,
-        endsWith(',countIn,walletCounted,unseen,refundOf,payee,acctKind,smsAt'),
+        endsWith(
+          ',countIn,walletCounted,unseen,refundOf,payee,acctKind,smsAt,'
+          'splitId,guessed,noCashback',
+        ),
       );
       expect(BackupService.txsFromCsv(csv).single.walletCounted, isTrue);
     });

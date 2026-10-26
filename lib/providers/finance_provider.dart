@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/account.dart';
+import '../models/card_rewards.dart';
 import '../models/category_group.dart';
 import '../models/default_rules.dart';
 import '../models/import_rule.dart';
@@ -15,6 +16,8 @@ import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import '../services/budget.dart';
 import '../services/card_bill.dart';
+import '../services/card_rewards.dart';
+import '../services/category_guess.dart';
 import '../services/import_health.dart' show kImportHealthKey;
 import '../services/recurring_detector.dart';
 import '../services/refund_matching.dart';
@@ -40,6 +43,12 @@ typedef CardPaymentResult = ({
   Tx? bankLegBefore,
   String? prevPaidMonth,
 });
+
+/// What [FinanceProvider.splitTransaction] or [FinanceProvider.mergeSplit]
+/// changed, so a snackbar Undo can hand it to
+/// [FinanceProvider.undoSplitChange]: copies of the rows as they were, and
+/// the ids of the payment's rows after the change.
+typedef SplitChange = ({List<Tx> before, List<String> afterIds});
 
 /// What [FinanceProvider.deleteBudget] removed, so a snackbar Undo can hand
 /// it to [FinanceProvider.restoreBudget]: the budget, its list position, and
@@ -258,6 +267,10 @@ class _Derived {
   /// period figure reads these, so they are worked out once per change.
   _RefundLinks? refunds;
 
+  /// [Tx.splitId] to its rows in ledger order, the anchor first
+  /// ([FinanceProvider.splitPartsOf]).
+  Map<String, List<Tx>>? splitGroups;
+
   /// [FinanceProvider.refundReviewIds], filtered to rows still waiting.
   Set<String>? refundReview;
 
@@ -343,7 +356,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _patternPaidKey = 'pattern_paid_v1';
   static const _remindersKey = 'reminders_v1';
   static const _remindersEarlyRescanKey = 'reminders_early_rescan_v1';
-  static const _importsAutoCountedKey = 'imports_auto_counted_v1';
+  static const _importsCountFirstKey = 'imports_count_first_v1';
   static const _debitCardsDetectedKey = 'debit_cards_detected_v1';
   static const _refundsLinkedKey = 'refunds_linked_v1';
   static const _refundSuggestIdsKey = 'refund_suggest_ids_v1';
@@ -439,6 +452,12 @@ class FinanceProvider extends ChangeNotifier {
   /// the app bar badge reads this on every change.
   int get pendingCount =>
       _d.pendingCount ??= _transactions.where((t) => t.pending).length;
+
+  /// What the imports waiting in review add up to, suspected spam left
+  /// out. The home screen widgets show it beside the review count.
+  double get pendingAmount => _paise(
+    pendingTransactions.fold(0.0, (s, t) => t.suspectedSpam ? s : s + t.amount),
+  );
 
   /// Imports that counted at once and still carry the "new" marker
   /// ([Tx.unseen]).
@@ -1101,6 +1120,40 @@ class FinanceProvider extends ChangeNotifier {
     return sum;
   }
 
+  /// The part of [budgetSpentFor] that rests on guessed categories
+  /// ([Tx.categoryGuessed]). Budget alerts leave it out until the user
+  /// confirms or changes those rows.
+  double guessedSpendFor(SpendBudget b, DateTime month) =>
+      _guessedSpend(month, (t) => countsTowardBudget(t, b));
+
+  /// The guessed part of [categoryId]'s spend in [month], as
+  /// [expenseByCategory] counts it.
+  double guessedSpendIn(DateTime month, String categoryId) => _guessedSpend(
+    month,
+    (t) =>
+        t.type == TxType.expense &&
+        t.categoryId == categoryId &&
+        !isTransferCategory(t.categoryId) &&
+        countsInTotals(t),
+  );
+
+  /// The guessed part of [budgetSpentInMonth], for the overall cap.
+  double guessedSpendInMonth(DateTime month) => _guessedSpend(
+    month,
+    (t) =>
+        t.type == TxType.expense &&
+        !isTransferCategory(t.categoryId) &&
+        countsInTotals(t),
+  );
+
+  double _guessedSpend(DateTime month, bool Function(Tx) counts) {
+    var sum = 0.0;
+    for (final t in confirmedInMonth(month)) {
+      if (t.categoryGuessed && counts(t)) sum += netSpendOf(t);
+    }
+    return _paise(sum);
+  }
+
   /// Per-category composition of [budgetSpentFor] — the budget detail
   /// sheet's pie. Built from the same buckets, so its sum always equals
   /// the bar's figure by construction. Uses the row-direction transfer
@@ -1680,19 +1733,27 @@ class FinanceProvider extends ChangeNotifier {
         !_loadWarnings.contains('categories') &&
         !_loadWarnings.contains('category styles');
     if (registryIntact && _sanitizeAllSplits()) await _persist(tx: true);
-    // Once, on the first launch of 1.38.1: imports waiting in review that
-    // would now count at once ([_isSureImport]) count, marked new. Not when
-    // the ledger, rules, accounts or category registry failed to load: the
-    // test would read the wrong data and the flag would make that final.
-    if (!(prefs.getBool(_importsAutoCountedKey) ?? false) &&
+    // Once: imports waiting in review get a rule's category, a guess or To
+    // sort, and those that would now count at once ([_isSureImport]) count,
+    // marked new ([_countSurePendingImports]). Not when the ledger, rules,
+    // accounts or category registry failed to load: the test would read
+    // the wrong data and the flag would make that final.
+    if (!(prefs.getBool(_importsCountFirstKey) ?? false) &&
         registryIntact &&
         !_loadWarnings.contains('transactions') &&
         !_loadWarnings.contains('rules') &&
         !_loadWarnings.contains('accounts')) {
-      if (_countSurePendingImports() > 0) await _persist(tx: true);
+      final counted = _countSurePendingImports();
+      if (counted.rows > 0) {
+        await _persist(
+          tx: true,
+          reminders: counted.reminders,
+          accounts: counted.accounts,
+        );
+      }
       // A save that failed leaves the rows counted in memory only: try
       // again on the next launch.
-      if (!_persistFailed) await prefs.setBool(_importsAutoCountedKey, true);
+      if (!_persistFailed) await prefs.setBool(_importsCountFirstKey, true);
     }
     // Once, on the first launch of 1.41.0: Bank accounts that only ever had
     // debit card alerts become debit cards ([_detectDebitCards]). Not when
@@ -2085,6 +2146,7 @@ class FinanceProvider extends ChangeNotifier {
     DateTime? countIn,
     bool walletCounted = false,
     String payee = '',
+    bool cashbackOff = false,
   }) async {
     final id = _newId();
     _transactions.add(
@@ -2104,6 +2166,7 @@ class FinanceProvider extends ChangeNotifier {
           countIn: Tx.normalizeCountIn(countIn, date),
           walletCounted: walletCounted,
           payee: normalizePayee(payee),
+          cashbackOff: cashbackOff,
         ),
       ),
     );
@@ -2135,6 +2198,7 @@ class FinanceProvider extends ChangeNotifier {
     _transactions[i] = _sanitizeSplit(
       updated.copyWith(
         userCategorized: categoryChanged ? true : null,
+        categoryGuessed: categoryChanged ? false : null,
         clearBalanceAfter: dayChanged && updated.balanceAfter != null,
       ),
     );
@@ -2157,10 +2221,19 @@ class FinanceProvider extends ChangeNotifier {
   /// is unlinked and its PRE-unlink copy returned, so an Undo can put both
   /// the row and the link back via [restoreEditedTransactions]. Null for
   /// unpaired rows (and unknown ids).
+  ///
+  /// A split part takes its whole payment with it ([deleteTransactions])
+  /// and returns null: the caller deletes and restores the parts itself
+  /// ([splitPartsOf], [restoreTransactions]).
   Future<Tx?> deleteTransaction(String id) async {
     final i = _transactions.indexWhere((t) => t.id == id);
     if (i == -1) return null;
     final victim = _transactions[i];
+    final sid = victim.splitId;
+    if (sid != null && _rowsOfSplit(sid).length > 1) {
+      await deleteTransactions([id]);
+      return null;
+    }
     Tx? partner;
     if (victim.pairId != null) {
       final pi = _transactions.indexWhere(
@@ -2185,21 +2258,290 @@ class FinanceProvider extends ChangeNotifier {
   /// [ids] and returns the removed rows so the caller can offer Undo (via
   /// [restoreTransactions]). One notify + persist for the whole batch.
   /// Surviving halves of pairs are unlinked (bulk Undo restores the rows,
-  /// not the link — one persisted field, accepted).
+  /// not the link — one persisted field, accepted). A split part takes
+  /// every part of its payment with it.
   Future<List<Tx>> deleteTransactions(Iterable<String> ids) async {
     final wanted = ids.toSet();
+    final splits = {
+      for (final t in _transactions)
+        if (t.splitId != null && wanted.contains(t.id)) t.splitId!,
+    };
     final removed = [
       for (final t in _transactions)
-        if (wanted.contains(t.id)) t,
+        if (wanted.contains(t.id) || splits.contains(t.splitId)) t,
     ];
     if (removed.isEmpty) return removed;
-    _transactions.removeWhere((t) => wanted.contains(t.id));
+    final gone = {for (final t in removed) t.id};
+    _transactions.removeWhere((t) => gone.contains(t.id));
     _clearOrphanPairs();
-    final reminders = _unmarkRemindersPaidBy(removed.map((t) => t.id));
-    final discards = _rememberDiscarded(removed);
+    final reminders = _unmarkRemindersPaidBy(gone);
+    final discards = _rememberDiscarded(_atSplitTotals(removed, removed));
     notifyListeners();
     await _persist(tx: true, reminders: reminders, discards: discards);
     return removed;
+  }
+
+  // --- Category splits ------------------------------------------------------
+
+  Map<String, List<Tx>> get _splitGroups => _d.splitGroups ??= () {
+    final groups = <String, List<Tx>>{};
+    for (final t in _transactions) {
+      final sid = t.splitId;
+      if (sid != null) (groups[sid] ??= []).add(t);
+    }
+    for (final rows in groups.values) {
+      rows.sort(compareSplitParts);
+    }
+    return groups;
+  }();
+
+  /// Every row of [t]'s split payment in [compareSplitParts] order, the
+  /// anchor (the row that holds the alert) first; just [t] when it is not
+  /// split.
+  List<Tx> splitPartsOf(Tx t) {
+    final sid = t.splitId;
+    if (sid == null) return [t];
+    return _splitGroups[sid] ?? [t];
+  }
+
+  /// The row of [t]'s split payment that holds the alert, or [t] itself.
+  Tx splitAnchorOf(Tx t) => splitPartsOf(t).first;
+
+  /// Whether [t] is a split part other than the anchor.
+  bool isSplitPart(Tx t) => t.splitId != null && splitAnchorOf(t).id != t.id;
+
+  /// The whole payment [t] belongs to: its parts summed, or its own amount.
+  double splitTotalOf(Tx t) {
+    if (t.splitId == null) return t.amount;
+    return _paise(splitPartsOf(t).fold(0.0, (s, p) => s + p.amount));
+  }
+
+  /// [sid]'s rows read from the ledger itself, in [splitPartsOf] order.
+  /// Code that changes rows reads this: [splitPartsOf] is cached until the
+  /// next notify.
+  List<Tx> _rowsOfSplit(String sid) => [
+    for (final t in _transactions)
+      if (t.splitId == sid) t,
+  ]..sort(compareSplitParts);
+
+  /// Every split payment's anchor and total, read from the ledger itself
+  /// like [_rowsOfSplit].
+  Map<String, ({Tx anchor, double total})> _splitAnchorsAndTotals() {
+    final out = <String, ({Tx anchor, double total})>{};
+    for (final t in _transactions) {
+      final sid = t.splitId;
+      if (sid == null) continue;
+      final s = out[sid];
+      out[sid] = s == null
+          ? (anchor: t, total: t.amount)
+          : (
+              anchor: compareSplitParts(t, s.anchor) < 0 ? t : s.anchor,
+              total: _paise(s.total + t.amount),
+            );
+    }
+    return out;
+  }
+
+  /// [rows] as their alerts reported them: an imported row of a split
+  /// payment at the payment's total, summed over [pool]. The alert named
+  /// the whole payment, and its discard keys ([_discardKeysOf]) may hold
+  /// the amount.
+  static List<Tx> _atSplitTotals(Iterable<Tx> rows, Iterable<Tx> pool) {
+    final totals = <String, double>{};
+    for (final t in pool) {
+      final sid = t.splitId;
+      if (sid != null) totals[sid] = (totals[sid] ?? 0) + t.amount;
+    }
+    if (totals.isEmpty) return rows.toList();
+    return [
+      for (final t in rows)
+        if (t.splitId != null && t.source == TxSource.sms)
+          t.copyWith(amount: _paise(totals[t.splitId] ?? t.amount))
+        else
+          t,
+    ];
+  }
+
+  /// Whether [t] can be split by category ([splitTransaction]): confirmed
+  /// money out, not a transfer leg, not a refund or refunded, with no group
+  /// split share. A row already split is judged by its whole payment: a
+  /// re-split may drop a part, and a part's group split would go with it.
+  bool canSplit(Tx t) {
+    if (t.type != TxType.expense) return false;
+    if (t.splitId != null) {
+      return splitPartsOf(t).every(
+        (p) =>
+            !p.pending &&
+            p.pairId == null &&
+            p.myShare == null &&
+            refundedFor(p) == 0,
+      );
+    }
+    return !t.pending &&
+        t.pairId == null &&
+        t.myShare == null &&
+        t.refundOf == null &&
+        refundedFor(t) == 0;
+  }
+
+  /// Divides payment [id] into rows of several money-out categories that
+  /// share one [Tx.splitId]. The first of [parts] goes to the row holding
+  /// the alert (the anchor), which keeps its id, text, reference and
+  /// balance; the rest become plain rows on its account, date and counted
+  /// month. On a payment already split, [parts] replace its parts: the
+  /// existing rows are reused in order, then added or removed.
+  ///
+  /// Throws [ArgumentError] unless the row can split ([canSplit]), there
+  /// are at least 2 parts, each above 0 in a money-out category
+  /// ([isMoneyOutCategory]), and they add up to the payment to the paisa.
+  Future<SplitChange> splitTransaction(
+    String id,
+    List<({String categoryId, double amount})> parts,
+  ) async {
+    final i = _transactions.indexWhere((t) => t.id == id);
+    if (i == -1) throw ArgumentError.value(id, 'id', 'No such row');
+    final row = _transactions[i];
+    if (!canSplit(row)) throw ArgumentError.value(id, 'id', 'Cannot split');
+    if (parts.length < 2) {
+      throw ArgumentError.value(parts.length, 'parts', 'Needs 2 parts');
+    }
+    final sid = row.splitId;
+    final group = sid == null ? [row] : _rowsOfSplit(sid);
+    var sum = 0;
+    for (final p in parts) {
+      if (!p.amount.isFinite || p.amount <= 0) {
+        throw ArgumentError.value(p.amount, 'parts', 'Must be above 0');
+      }
+      final cat = categoryById(p.categoryId);
+      if (cat.id != p.categoryId || !isMoneyOutCategory(cat)) {
+        throw ArgumentError.value(p.categoryId, 'parts', 'Not money out');
+      }
+      sum += _inPaise(p.amount);
+    }
+    final total = group.fold(0, (s, t) => s + _inPaise(t.amount));
+    if (sum != total) {
+      throw ArgumentError.value(
+        sum / 100,
+        'parts',
+        'Must add up to the payment',
+      );
+    }
+    final anchor = group.first;
+    final splitId = sid ?? 'split_${_newId()}';
+    final payee = normalizePayee(merchantLabelOrNull(anchor) ?? '');
+    Tx asPart(Tx t, ({String categoryId, double amount}) p) => _sanitizeSplit(
+      t.copyWith(
+        categoryId: p.categoryId,
+        amount: p.amount,
+        splitId: splitId,
+        userCategorized: true,
+        categoryGuessed: false,
+      ),
+    );
+    final afterIds = <String>[];
+    for (var k = 0; k < parts.length; k++) {
+      if (k < group.length) {
+        final j = _transactions.indexWhere((t) => t.id == group[k].id);
+        _transactions[j] = asPart(group[k], parts[k]);
+        afterIds.add(group[k].id);
+        continue;
+      }
+      final part = Tx(
+        // Led by the anchor's id, so [compareSplitParts] puts the anchor
+        // first and the parts in the order they were added, whatever the
+        // anchor's own id looks like.
+        id: '${anchor.id}.${_newId()}',
+        type: anchor.type,
+        categoryId: parts[k].categoryId,
+        amount: parts[k].amount,
+        note: '',
+        date: anchor.date,
+        payee: payee,
+        acctKey: anchor.acctKey,
+        countIn: anchor.countIn,
+        walletCounted: anchor.walletCounted,
+        tags: anchor.tags,
+      );
+      _transactions.add(asPart(part, parts[k]));
+      afterIds.add(part.id);
+    }
+    final dropped = {for (final t in group.skip(parts.length)) t.id};
+    _transactions.removeWhere((t) => dropped.contains(t.id));
+    final refunds = _repointRefunds(dropped, anchor.id);
+    final reminders = _unmarkRemindersPaidBy(dropped);
+    notifyListeners();
+    await _persist(tx: true, reminders: reminders);
+    return (before: [...group, ...refunds], afterIds: afterIds);
+  }
+
+  /// Puts split payment [splitId] back into one row: the anchor takes the
+  /// total and keeps its category, and the other parts go. A refund linked
+  /// to a part moves to the anchor. Throws [ArgumentError] when a part
+  /// other than the anchor has a group split, which would go with it.
+  Future<SplitChange> mergeSplit(String splitId) async {
+    final group = _rowsOfSplit(splitId);
+    if (group.isEmpty) {
+      return (before: const <Tx>[], afterIds: const <String>[]);
+    }
+    if (group.skip(1).any((t) => t.myShare != null)) {
+      throw ArgumentError.value(splitId, 'splitId', 'A part is shared');
+    }
+    final anchor = group.first;
+    final total = group.fold(0, (s, t) => s + _inPaise(t.amount)) / 100;
+    final i = _transactions.indexWhere((t) => t.id == anchor.id);
+    _transactions[i] = _sanitizeSplit(
+      anchor.copyWith(amount: total, clearSplitId: true),
+    );
+    final dropped = {for (final t in group.skip(1)) t.id};
+    _transactions.removeWhere((t) => dropped.contains(t.id));
+    final refunds = _repointRefunds(dropped, anchor.id);
+    final reminders = _unmarkRemindersPaidBy(dropped);
+    notifyListeners();
+    await _persist(tx: true, reminders: reminders);
+    return (before: [...group, ...refunds], afterIds: [anchor.id]);
+  }
+
+  /// Points refunds linked to the [dropped] parts at the payment's anchor
+  /// [anchorId], so none names a row that is gone. Returns their copies
+  /// from before, for the change's Undo.
+  List<Tx> _repointRefunds(Set<String> dropped, String anchorId) {
+    final before = <Tx>[];
+    for (var i = 0; i < _transactions.length; i++) {
+      final t = _transactions[i];
+      if (t.refundOf == null || !dropped.contains(t.refundOf)) continue;
+      before.add(t);
+      _transactions[i] = t.copyWith(refundOf: anchorId);
+    }
+    return before;
+  }
+
+  /// The undo half of [splitTransaction] and [mergeSplit]: removes the rows
+  /// the change added and puts every row back as it was, refunds it moved
+  /// included. A row still there is replaced where it stands.
+  Future<void> undoSplitChange(SplitChange change) async {
+    final beforeIds = {for (final t in change.before) t.id};
+    final added = {
+      for (final id in change.afterIds)
+        if (!beforeIds.contains(id)) id,
+    };
+    _transactions.removeWhere((t) => added.contains(t.id));
+    final readded = <Tx>[];
+    for (final snap in change.before) {
+      final old = _sanitizeSplit(snap);
+      final i = _transactions.indexWhere((t) => t.id == old.id);
+      if (i == -1) {
+        _transactions.add(old);
+        readded.add(old);
+      } else {
+        _transactions[i] = old;
+      }
+    }
+    _clearOrphanPairs();
+    var reminders = _unmarkRemindersPaidBy(added);
+    reminders = _remarkRemindersPaidBy(readded) || reminders;
+    final discards = _forgetDiscarded(_atSplitTotals(readded, _transactions));
+    notifyListeners();
+    await _persist(tx: true, reminders: reminders, discards: discards);
   }
 
   // --- Transfer pairing -----------------------------------------------------
@@ -2227,6 +2569,8 @@ class FinanceProvider extends ChangeNotifier {
     final a = _transactions[ia];
     final b = _transactions[ib];
     if (a.type == b.type || a.pairId != null || b.pairId != null) return null;
+    // A split part is one share of a payment, never a whole transfer leg.
+    if (a.splitId != null || b.splitId != null) return null;
     // A wallet top-up stays two rows: the bank debit keeps counting as
     // spend, the wallet credit doesn't, so nothing counts twice.
     if (accountForKey(a.acctKey)?.isWallet == true ||
@@ -2261,6 +2605,7 @@ class FinanceProvider extends ChangeNotifier {
         pairId: pairId,
         categoryId: cat,
         userCategorized: true,
+        categoryGuessed: false,
         pending: false,
         // Linking the legs is looking at them.
         unseen: false,
@@ -2302,14 +2647,28 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Drops links that no longer describe a transfer: a pair id not held by
   /// exactly two rows, two legs of the same direction, or a leg outside the
-  /// transfer categories. Caller persists when this returns true.
+  /// transfer categories. Also drops a [Tx.splitId] held by fewer than two
+  /// rows (left by a delete, a restore or a bad backup). Caller persists
+  /// when this returns true.
   bool _clearOrphanPairs() {
     final legs = <String, List<int>>{};
+    final splits = <String, List<int>>{};
     for (var i = 0; i < _transactions.length; i++) {
       final pid = _transactions[i].pairId;
       if (pid != null) (legs[pid] ??= []).add(i);
+      final sid = _transactions[i].splitId;
+      if (sid != null) (splits[sid] ??= []).add(i);
     }
     var changed = false;
+    for (final idx in splits.values) {
+      if (idx.length > 1) continue;
+      _transactions[idx.single] = _transactions[idx.single].copyWith(
+        clearSplitId: true,
+      );
+      changed = true;
+    }
+    // Split groups are read again from the ledger as it now stands.
+    _d.splitGroups = null;
     legs.forEach((pid, idx) {
       final valid =
           idx.length == 2 &&
@@ -2332,7 +2691,7 @@ class FinanceProvider extends ChangeNotifier {
     // Categories may have changed since the snapshot was taken.
     _transactions.add(_sanitizeSplit(tx));
     final reminders = _remarkRemindersPaidBy([tx]);
-    final discards = _forgetDiscarded([tx]);
+    final discards = _forgetDiscarded(_atSplitTotals([tx], _transactions));
     notifyListeners();
     await _persist(tx: true, reminders: reminders, discards: discards);
   }
@@ -2351,7 +2710,7 @@ class FinanceProvider extends ChangeNotifier {
     if (back.isEmpty) return;
     _clearOrphanPairs();
     final reminders = _remarkRemindersPaidBy(back);
-    final discards = _forgetDiscarded(back);
+    final discards = _forgetDiscarded(_atSplitTotals(back, _transactions));
     notifyListeners();
     await _persist(tx: true, reminders: reminders, discards: discards);
   }
@@ -2392,7 +2751,7 @@ class FinanceProvider extends ChangeNotifier {
       // its old pairId; unlink it rather than point at a missing row.
       _clearOrphanPairs();
       final reminders = _remarkRemindersPaidBy(reviewMoves);
-      final discards = _forgetDiscarded(readded);
+      final discards = _forgetDiscarded(_atSplitTotals(readded, _transactions));
       notifyListeners();
       await _persist(tx: true, reminders: reminders, discards: discards);
     }
@@ -3223,10 +3582,13 @@ class FinanceProvider extends ChangeNotifier {
       id == 'other_expense' || id == 'other_income';
 
   /// Built-ins whose direction and transfer flag can't be edited: the two
-  /// fallbacks, and Repaid to me, which must stay a money-in transfer so a
-  /// repayment never counts as income.
+  /// fallbacks, the two To sort placeholders imports land in, and Repaid
+  /// to me, which must stay a money-in transfer so a repayment never
+  /// counts as income.
   static bool hasLockedStructure(String id) =>
-      isFallbackCategory(id) || id == kRepaidToMeCategoryId;
+      isFallbackCategory(id) ||
+      isToSortCategory(id) ||
+      id == kRepaidToMeCategoryId;
 
   /// Edits a built-in category — fully: name, icon, colour, AND direction /
   /// transfer-ness (except the two fallback "Other" ids, whose structure is
@@ -3864,8 +4226,23 @@ class FinanceProvider extends ChangeNotifier {
   bool _markRemindersPaidBy(Iterable<Tx> rows, {bool replay = false}) {
     var changed = false;
     final ordered = rows.toList()..sort((a, b) => a.date.compareTo(b.date));
-    for (final t in ordered) {
-      if (t.type != TxType.expense || t.suspectedSpam || t.pending) continue;
+    // A split payment pays as one, at its total, through the row holding
+    // the alert (its anchor); its other parts pay nothing.
+    Map<String, ({Tx anchor, double total})>? splits;
+    for (final row in ordered) {
+      if (row.type != TxType.expense || row.suspectedSpam || row.pending) {
+        continue;
+      }
+      var t = row;
+      final sid = row.splitId;
+      if (sid != null) {
+        splits ??= _splitAnchorsAndTotals();
+        final s = splits[sid];
+        if (s != null) {
+          if (s.anchor.id != row.id) continue;
+          t = row.copyWith(amount: s.total);
+        }
+      }
       // A row an Add it for me reminder recorded is that reminder's own.
       if (replay &&
           _reminders.any(
@@ -4600,9 +4977,18 @@ class FinanceProvider extends ChangeNotifier {
       }
     }
 
+    // A split payment's alert stated the balance after the whole payment:
+    // its parts listed after the anchor are in that figure already.
+    final splitsInAnchor = {
+      for (var i = 0; i <= anchorIndex; i++)
+        if (txs[i].splitId != null) txs[i].splitId,
+    };
     var deltaAfterAnchor = 0.0;
+    var rowsAfterAnchor = 0;
     for (var i = anchorIndex + 1; i < txs.length; i++) {
+      if (splitsInAnchor.contains(txs[i].splitId)) continue;
       deltaAfterAnchor += signed(txs[i]);
+      rowsAfterAnchor++;
     }
 
     // A manual figure with no timestamp (possible in a hand-edited or older
@@ -4644,7 +5030,7 @@ class FinanceProvider extends ChangeNotifier {
       balance = anchor.balanceAfter! + deltaAfterAnchor;
       balanceSource = BalanceSource.alert;
       balanceAsOf = anchor.date;
-      rowsSinceSource = txs.length - 1 - anchorIndex;
+      rowsSinceSource = rowsAfterAnchor;
     } else {
       balance = ledgerTotal;
       balanceSource = BalanceSource.ledger;
@@ -4843,6 +5229,66 @@ class FinanceProvider extends ChangeNotifier {
   /// linked debit cards' spends, as its balance does; a card's is its own.
   double accountSpentThisMonth(Account account) =>
       _figures(account).spentThisMonth;
+
+  /// [account]'s own rows dated inside [cycle], oldest first.
+  Iterable<Tx> _rowsInCycle(Account account, CardCycle cycle) =>
+      (_byAccount[account.id] ?? const <Tx>[]).where(
+        (t) => inCardCycle(cycle, t.date),
+      );
+
+  /// Spend on a credit card in its current statement cycle ([cardCycleOf]),
+  /// on the same terms as [accountSpentThisMonth].
+  double cardCycleSpend(Account account) {
+    var sum = 0.0;
+    for (final t in _rowsInCycle(
+      account,
+      cardCycleOf(account, figuresClock()),
+    )) {
+      if (t.type == TxType.expense && !isTransferCategory(t.categoryId)) {
+        sum += netSpendOf(t);
+      }
+    }
+    return _paise(sum);
+  }
+
+  /// What a credit card's rewards come to in its current statement cycle,
+  /// or [back] cycles before it. Null unless [account] is a card with
+  /// rewards set up.
+  ///
+  /// A row earns on the charge the bank saw (less refunds, never the
+  /// user's group-split share). A split payment earns once, on its total,
+  /// through its anchor, at the rate of [rewardCategoryOf]: the bank pays
+  /// by merchant, not by how the user divides the bill. Paid for Others
+  /// counts; other transfers (a card payment, a move to savings) never
+  /// earn.
+  RewardEstimate? cardRewardsFor(Account account, {int back = 0}) {
+    final rules = account.rewards;
+    if (!account.isCard || rules == null) return null;
+    final cycle = cardCycleOf(account, figuresClock(), back: back);
+    final charges = <RewardCharge>[
+      for (final t in _rowsInCycle(account, cycle))
+        if (t.type == TxType.expense && !t.cashbackOff && !isSplitPart(t))
+          if (rewardCategoryOf(t) case final category?)
+            (
+              categoryId: category,
+              amount: splitPartsOf(
+                t,
+              ).fold(0.0, (s, p) => s + p.amount - refundedFor(p)),
+            ),
+    ];
+    return estimateRewards(rules, charges);
+  }
+
+  /// The category that sets the card reward rate of [t]'s payment: the
+  /// first of its rows, in [splitPartsOf] order, in a category that earns
+  /// ([earnsCardRewards]); [t]'s own for an unsplit row. Null when none
+  /// earns.
+  String? rewardCategoryOf(Tx t) {
+    for (final p in splitPartsOf(t)) {
+      if (earnsCardRewards(p.categoryId)) return p.categoryId;
+    }
+    return null;
+  }
 
   /// Creates an account by hand (no keys yet — link numbers via
   /// [addAccountKey]). Returns the new account's id.
@@ -5171,6 +5617,19 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(accounts: true);
   }
 
+  /// A credit card's reward rules; null clears them. Ignored on any other
+  /// account.
+  Future<void> setCardRewards(String id, CardRewards? rewards) async {
+    final i = _accounts.indexWhere((a) => a.id == id);
+    if (i == -1 || !_accounts[i].isCard) return;
+    _accounts[i] = _accounts[i].copyWith(
+      rewards: rewards,
+      clearRewards: rewards == null,
+    );
+    notifyListeners();
+    await _persist(accounts: true);
+  }
+
   /// Raw bill-paid marker (`yyyy-MM` of the natural due date, or null to
   /// clear). The primitive exists so an Undo can restore whatever value was
   /// there before — [markCardBillPaid]/[clearCardBillPaid] are the intents.
@@ -5422,13 +5881,48 @@ class FinanceProvider extends ChangeNotifier {
   /// The SMS-stated balance is dropped on a move: it described the account
   /// the alert was about, and as an anchor it would overwrite the target
   /// account's balance with another bank's figure.
+  ///
+  /// A split part moves with every part of its payment.
   Future<void> assignAccount(String txId, String accountId) async {
-    final ti = _transactions.indexWhere((t) => t.id == txId);
     final ai = _accounts.indexWhere((a) => a.id == accountId);
-    if (ti == -1 || ai == -1) return;
-    if (!_assignInPlace(ti, ai)) return;
+    if (ai == -1) return;
+    final ids = _withSplitSiblings({txId});
+    var changed = false;
+    for (var i = 0; i < _transactions.length; i++) {
+      if (ids.contains(_transactions[i].id) && _assignInPlace(i, ai)) {
+        changed = true;
+      }
+    }
+    if (!changed) return;
     notifyListeners();
     await _persist(tx: true, accounts: true);
+  }
+
+  /// [ids] plus every other part of the split payments they name, read
+  /// from the ledger itself: a bulk date, Count in or account change must
+  /// never pull one part away from its payment.
+  Set<String> _withSplitSiblings(Set<String> ids) {
+    final splits = {
+      for (final t in _transactions)
+        if (t.splitId != null && ids.contains(t.id)) t.splitId,
+    };
+    if (splits.isEmpty) return ids;
+    return {
+      ...ids,
+      for (final t in _transactions)
+        if (splits.contains(t.splitId)) t.id,
+    };
+  }
+
+  /// The rows [ids] name plus every other part of their split payments, in
+  /// ledger order: the rows a bulk date or Count in change touches, so its
+  /// Undo snapshot holds them all.
+  List<Tx> withSplitSiblings(Iterable<String> ids) {
+    final all = _withSplitSiblings(ids.toSet());
+    return [
+      for (final t in _transactions)
+        if (all.contains(t.id)) t,
+    ];
   }
 
   /// The move itself, shared by [assignAccount] and [assignAccountToMany].
@@ -5491,7 +5985,11 @@ class FinanceProvider extends ChangeNotifier {
       // Without the sanitizer, bulk-moving a split row into "To savings"
       // kept a stale share that resurfaced if the row later moved back.
       _transactions[i] = _sanitizeSplit(
-        t.copyWith(categoryId: categoryId, userCategorized: true),
+        t.copyWith(
+          categoryId: categoryId,
+          userCategorized: true,
+          categoryGuessed: false,
+        ),
       );
       changed++;
     }
@@ -5509,6 +6007,7 @@ class FinanceProvider extends ChangeNotifier {
   Future<int> assignAccountToMany(Set<String> ids, String accountId) async {
     final ai = _accounts.indexWhere((a) => a.id == accountId);
     if (ai == -1) return 0;
+    ids = _withSplitSiblings(ids);
     var changed = 0;
     for (var i = 0; i < _transactions.length; i++) {
       if (!ids.contains(_transactions[i].id)) continue;
@@ -5975,8 +6474,10 @@ class FinanceProvider extends ChangeNotifier {
   /// Stamps the same date and time on every transaction in [ids], and puts
   /// them back on their own dates: a Count in chosen for the old date
   /// (a 30 Sep salary counted in October) says nothing about the new one.
-  /// Returns how many rows changed.
+  /// A split part takes every part of its payment with it. Returns how
+  /// many rows changed.
   Future<int> setDateTimeForMany(Set<String> ids, DateTime dateTime) async {
+    ids = _withSplitSiblings(ids);
     var changed = 0;
     for (var i = 0; i < _transactions.length; i++) {
       final t = _transactions[i];
@@ -6005,8 +6506,10 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Counts every transaction in [ids] in [stamp] ([Tx.countIn]); null puts
   /// them back on their own dates. Their real dates and stated balances stay,
-  /// so account balances don't move. Returns how many rows changed.
+  /// so account balances don't move. A split part takes every part of its
+  /// payment with it. Returns how many rows changed.
   Future<int> setCountInForMany(Set<String> ids, DateTime? stamp) async {
+    ids = _withSplitSiblings(ids);
     var changed = 0;
     for (var i = 0; i < _transactions.length; i++) {
       final t = _transactions[i];
@@ -6029,7 +6532,8 @@ class FinanceProvider extends ChangeNotifier {
   /// keep their current category (they may have been set by hand). Spam
   /// rules drop pending matches, and rows that counted at once and are
   /// still marked new ([Tx.unseen]), only; other confirmed entries were
-  /// already reviewed by the user and are never auto-removed.
+  /// already reviewed by the user and are never auto-removed. A rule's
+  /// category replaces a guess or To sort.
   /// Caller is responsible for notifyListeners + _persist.
   /// Returns what actually happened so callers can tell the user — a
   /// too-broad new spam rule used to wipe the whole review queue with no
@@ -6061,9 +6565,9 @@ class FinanceProvider extends ChangeNotifier {
           _transactions.removeAt(i);
           dropped.add(t);
         }
-      } else if (t.categoryId != rule.categoryId) {
+      } else if (t.categoryId != rule.categoryId || t.categoryGuessed) {
         _transactions[i] = _sanitizeSplit(
-          t.copyWith(categoryId: rule.categoryId),
+          t.copyWith(categoryId: rule.categoryId, categoryGuessed: false),
         );
         reclassified++;
       }
@@ -6107,8 +6611,9 @@ class FinanceProvider extends ChangeNotifier {
     // Taken before any row or account is added, so the sure test below
     // sees the ledger as it was and row order decides nothing.
     final keysWithConfirmed = _keysWithConfirmedRows();
-    // New rows (by index) whose category a non-spam rule chose.
-    final ruleRows = <int>{};
+    // Built on the first alert no rule places, from the ledger as it was:
+    // the merchant lookup is a regex per row.
+    CategoryGuesser? guesser;
     // Duplicate lookups, built once per batch — a linear scan of the ledger
     // per parsed message made a year-long backfill against a 10k-row ledger
     // cost tens of millions of comparisons.
@@ -6226,11 +6731,21 @@ class FinanceProvider extends ChangeNotifier {
         if (t.source == TxSource.sms && t.smsText.isNotEmpty)
           sameMessage(t.sender, t.smsArrivedAt, t.smsText),
     };
+    // A split payment was one alert: it stands here once, at its total, as
+    // the row holding the alert (its anchor); the other parts never were
+    // alerts.
+    final splits = _splitAnchorsAndTotals();
     for (final t in _transactions) {
       if (t.externalRef != null) refKeys.add('${t.type.name}|${t.externalRef}');
+      var amount = t.amount;
+      final split = splits[t.splitId];
+      if (split != null) {
+        if (split.anchor.id != t.id) continue;
+        amount = split.total;
+      }
       remember(
         t.type,
-        t.amount,
+        amount,
         t.sender,
         t.externalRef,
         t.source == TxSource.sms ? t.smsArrivedAt : t.date,
@@ -6362,29 +6877,32 @@ class FinanceProvider extends ChangeNotifier {
             : 'other_income';
       }
 
-      if (rule != null && categoryId == rule.categoryId) {
-        ruleRows.add(_transactions.length);
-      }
-      _transactions.add(
-        Tx(
-          id: _newId(),
-          type: p.type,
-          categoryId: categoryId,
-          amount: p.amount,
-          note: '',
-          // Full SMS text so the original alert is always reviewable;
-          // fall back to the extracted merchant for synthetic inputs.
-          smsBody: p.rawBody.isNotEmpty ? p.rawBody : p.merchant,
-          date: p.date,
-          source: TxSource.sms,
-          sender: p.sender,
-          externalRef: p.ref,
-          pending: true,
-          suspectedSpam: suspectedSpam,
-          acctKey: p.acctKey,
-          balanceAfter: p.balanceAfter,
-        ),
+      var row = Tx(
+        id: _newId(),
+        type: p.type,
+        categoryId: categoryId,
+        amount: p.amount,
+        note: '',
+        // Full SMS text so the original alert is always reviewable;
+        // fall back to the extracted merchant for synthetic inputs.
+        smsBody: p.rawBody.isNotEmpty ? p.rawBody : p.merchant,
+        date: p.date,
+        source: TxSource.sms,
+        sender: p.sender,
+        externalRef: p.ref,
+        pending: true,
+        suspectedSpam: suspectedSpam,
+        acctKey: p.acctKey,
+        balanceAfter: p.balanceAfter,
       );
+      // An alert no rule placed: a guess from past payments, or To sort.
+      if (rule?.categoryId != categoryId && isFallbackCategory(categoryId)) {
+        row = _placed(
+          row,
+          guesser ??= CategoryGuesser.from(_transactions.take(firstNew)),
+        );
+      }
+      _transactions.add(row);
       if (p.acctKey != null) {
         _ensureAccount(
           p.acctKey!,
@@ -6411,7 +6929,6 @@ class FinanceProvider extends ChangeNotifier {
       // Sure rows count at once, marked new; the rest wait in review. Every
       // row was added pending first, so the pair check sees the whole batch,
       // later rows included, and neither leg of a transfer counts.
-      Map<String, Set<String>>? merchants;
       Map<int, List<Tx>>? byPaise;
       Map<int, List<Tx>> pairPool() => byPaise ??= _rowsByPaise(_transactions);
       // Earlier rows that counted at once but are the other leg of a new
@@ -6450,10 +6967,7 @@ class FinanceProvider extends ChangeNotifier {
         }
         final sure = _isSureImport(
           t,
-          fromRule: ruleRows.contains(i),
           keysWithConfirmed: keysWithConfirmed,
-          merchantCategories: () =>
-              merchants ??= _merchantCategoriesOf(_transactions.take(firstNew)),
           pairPool: pairPool,
         );
         if (sure) {
@@ -6503,9 +7017,9 @@ class FinanceProvider extends ChangeNotifier {
   ///  * not suspected spam;
   ///  * its account key is in [keysWithConfirmed]: owned by an account
   ///    that already has a confirmed row;
-  ///  * the category is neither a transfer nor Other;
-  ///  * a non-spam rule chose the category ([fromRule]), or confirmed rows
-  ///    of the same merchant ([recurringKeyOf]) carry that category;
+  ///  * the category is not a transfer;
+  ///  * not a refund that may pay back a purchase ([refundCandidatesFor]):
+  ///    it waits, so the review sheet can offer the link;
   ///  * no possible transfer partner: no row of the same amount, to the
   ///    paisa, within [kPairDateWindow] that could be its other leg
   ///    ([_couldPair]). Such a row stays pending, so the pair suggestion in
@@ -6513,30 +7027,27 @@ class FinanceProvider extends ChangeNotifier {
   ///  * not a possible duplicate: no other row of the same direction and
   ///    amount, to the paisa, on the same account key (or one with none)
   ///    within a day. Both copies in one batch stay pending.
-  /// [merchantCategories] and [pairPool] are built on first use, once per
-  /// pass: the merchant lookup is an uncached regex per row.
+  /// The category itself does not matter otherwise: a guessed or To sort
+  /// row counts like a rule's. [pairPool] is built on first use, once per
+  /// pass.
   bool _isSureImport(
     Tx row, {
-    required bool fromRule,
     required Set<String> keysWithConfirmed,
-    required Map<String, Set<String>> Function() merchantCategories,
     required Map<int, List<Tx>> Function() pairPool,
   }) {
     if (row.suspectedSpam) return false;
     final key = row.acctKey;
     if (key == null || !keysWithConfirmed.contains(key)) return false;
-    final cat = row.categoryId;
-    if (isTransferCategory(cat) ||
-        cat == 'other_expense' ||
-        cat == 'other_income') {
+    if (isTransferCategory(row.categoryId)) return false;
+    if (row.type == TxType.income &&
+        isRefundWorded(row.smsText) &&
+        refundCandidatesFor(
+          row,
+          _transactions,
+          remainingOf: refundableLeftOf,
+          counts: countsInTotals,
+        ).isNotEmpty) {
       return false;
-    }
-    if (!fromRule) {
-      final merchant = recurringKeyOf(row);
-      if (merchant == null) return false;
-      if (!(merchantCategories()[merchant]?.contains(cat) ?? false)) {
-        return false;
-      }
     }
     for (final other in pairPool()[_inPaise(row.amount)] ?? const <Tx>[]) {
       if (other.id == row.id) continue;
@@ -6565,6 +7076,7 @@ class FinanceProvider extends ChangeNotifier {
     if (a.type == b.type || a.acctKey == b.acctKey) return false;
     bool pairable(Tx t) =>
         t.pairId == null &&
+        t.splitId == null &&
         !t.suspectedSpam &&
         !t.isSplit &&
         t.categoryId != kRepaidToMeCategoryId &&
@@ -6582,27 +7094,35 @@ class FinanceProvider extends ChangeNotifier {
 
   static int _inPaise(double amount) => (amount * 100).round();
 
-  /// [rows] bucketed by amount in paise, for the pair check in
-  /// [_isSureImport].
-  static Map<int, List<Tx>> _rowsByPaise(Iterable<Tx> rows) {
+  /// [rows] bucketed by amount in paise, for the pair and duplicate checks
+  /// in [_isSureImport]. A split payment stands once, as its anchor at the
+  /// payment's total: a second alert for the whole payment is a possible
+  /// duplicate, and no single part is a payment.
+  Map<int, List<Tx>> _rowsByPaise(Iterable<Tx> rows) {
+    final splits = _splitAnchorsAndTotals();
     final map = <int, List<Tx>>{};
     for (final t in rows) {
-      (map[_inPaise(t.amount)] ??= []).add(t);
+      var amount = t.amount;
+      final split = splits[t.splitId];
+      if (split != null) {
+        if (split.anchor.id != t.id) continue;
+        amount = split.total;
+      }
+      (map[_inPaise(amount)] ??= []).add(t);
     }
     return map;
   }
 
-  /// Merchant ([recurringKeyOf]) to the categories its confirmed rows
-  /// among [rows] carry. Only rows the user has seen: a row that counted
-  /// at once and is still marked new must not vouch for the next one.
-  static Map<String, Set<String>> _merchantCategoriesOf(Iterable<Tx> rows) {
-    final map = <String, Set<String>>{};
-    for (final t in rows) {
-      if (t.pending || t.unseen) continue;
-      final key = recurringKeyOf(t);
-      if (key != null) (map[key] ??= {}).add(t.categoryId);
+  /// [t], an import no rule placed, in the category [guesser] gives it
+  /// (marked [Tx.categoryGuessed]), else in To sort.
+  static Tx _placed(Tx t, CategoryGuesser guesser) {
+    final guess = guesser.guess(t);
+    if (guess != null) {
+      return t.copyWith(categoryId: guess, categoryGuessed: true);
     }
-    return map;
+    return t.copyWith(
+      categoryId: t.type == TxType.expense ? kToSortExpenseId : kToSortIncomeId,
+    );
   }
 
   /// Account keys whose account has at least one confirmed row. Read from
@@ -6621,45 +7141,81 @@ class FinanceProvider extends ChangeNotifier {
     };
   }
 
-  /// The one-time pass on load: pending imports that meet [_isSureImport]
-  /// count, marked new, as they would have on import. Every row is tested
-  /// before any changes, so two pending legs of one transfer keep each
-  /// other pending. Returns how many counted.
-  int _countSurePendingImports() {
+  /// The one-time pass on load: every pending, non-spam import gets the
+  /// category an import would give it now (a rule's, else a guess or To
+  /// sort in place of Other; a category the user picked stays), then
+  /// those that meet [_isSureImport] count, marked new, as they would have
+  /// on import. Every row is placed before any is tested, and tested
+  /// before any counts, so two pending legs of one transfer keep each
+  /// other pending. A row that counts pays a reminder or a card bill as a
+  /// confirmed import does. Returns how many rows changed, and whether
+  /// reminders or accounts did; the caller persists.
+  ({int rows, bool reminders, bool accounts}) _countSurePendingImports() {
     final keysWithConfirmed = _keysWithConfirmedRows();
-    Map<String, Set<String>>? merchants;
-    Map<int, List<Tx>>? byPaise;
-    final sure = <int>[];
+    CategoryGuesser? guesser;
+    var placed = 0;
+    final waiting = <int>[];
     for (var i = 0; i < _transactions.length; i++) {
-      final t = _transactions[i];
+      var t = _transactions[i];
       if (!t.pending || t.suspectedSpam || t.source != TxSource.sms) continue;
       final text = t.smsText;
       final rule = text.isEmpty ? null : _matchRule(text, t.type);
       if (rule != null && rule.isSpamRule) continue;
-      final ok = _isSureImport(
-        t,
-        fromRule: rule != null && rule.categoryId == t.categoryId,
-        keysWithConfirmed: keysWithConfirmed,
-        merchantCategories: () =>
-            merchants ??= _merchantCategoriesOf(_transactions),
-        pairPool: () => byPaise ??= _rowsByPaise(_transactions),
-      );
-      if (ok) sure.add(i);
+      waiting.add(i);
+      if (t.userCategorized) continue;
+      if (rule != null) t = t.copyWith(categoryId: rule.categoryId);
+      if (rule?.categoryId != t.categoryId &&
+          isFallbackCategory(t.categoryId)) {
+        // Pending rows are no evidence, so placing one changes no guess.
+        t = _placed(t, guesser ??= CategoryGuesser.from(_transactions));
+      }
+      if (t.categoryId == _transactions[i].categoryId) continue;
+      _transactions[i] = t;
+      placed++;
     }
+    Map<int, List<Tx>>? byPaise;
+    final sure = [
+      for (final i in waiting)
+        if (_isSureImport(
+          _transactions[i],
+          keysWithConfirmed: keysWithConfirmed,
+          pairPool: () => byPaise ??= _rowsByPaise(_transactions),
+        ))
+          i,
+    ];
     for (final i in sure) {
       _transactions[i] = _transactions[i].copyWith(
         pending: false,
         unseen: true,
       );
     }
-    return sure.length;
+    if (sure.isEmpty) return (rows: placed, reminders: false, accounts: false);
+    return (
+      rows: placed + sure.length,
+      reminders: _markRemindersPaidBy([for (final i in sure) _transactions[i]]),
+      accounts: _markCardCyclesPaid(),
+    );
+  }
+
+  /// Keeps a guessed category ([Tx.categoryGuessed]) as the user's own
+  /// choice: the row joins budget and unusual spending alerts, rules leave
+  /// it alone, and it teaches later guesses.
+  Future<void> confirmGuess(String id) async {
+    final i = _transactions.indexWhere((t) => t.id == id);
+    if (i == -1 || !_transactions[i].categoryGuessed) return;
+    _transactions[i] = _transactions[i].copyWith(
+      categoryGuessed: false,
+      userCategorized: true,
+    );
+    notifyListeners();
+    await _persist(tx: true);
   }
 
   Future<void> confirmTransaction(String id) async {
     final i = _transactions.indexWhere((t) => t.id == id);
     if (i == -1) return;
     final wasPending = _transactions[i].pending;
-    _transactions[i] = _transactions[i].copyWith(pending: false);
+    _transactions[i] = _confirmed(_transactions[i]);
     // A confirmed bank alert for a reminder's amount near its due day
     // pays it.
     final reminders = wasPending && _markRemindersPaidBy([_transactions[i]]);
@@ -6667,6 +7223,17 @@ class FinanceProvider extends ChangeNotifier {
     notifyListeners();
     await _persist(tx: true, reminders: reminders, accounts: cards);
   }
+
+  /// [t] confirmed from review. Confirming is looking at the row's
+  /// category, so a guess stands as the user's own, as [confirmGuess]
+  /// makes it.
+  static Tx _confirmed(Tx t) => t.categoryGuessed
+      ? t.copyWith(
+          pending: false,
+          categoryGuessed: false,
+          userCategorized: true,
+        )
+      : t.copyWith(pending: false);
 
   /// Imports transactions (e.g. from a CSV). With [replace] all existing
   /// transactions are replaced (goals stay); otherwise entries whose ids
@@ -6978,7 +7545,10 @@ class FinanceProvider extends ChangeNotifier {
     // v30: SMS transactions may carry `smsAt` (when a re-dated row's alert
     // arrived); `discardedImports` (hashes of deleted or discarded alerts,
     // never their text).
-    'version': 30,
+    // v31: transactions may carry `splitId`, `guessed` and `noCashback`;
+    // credit cards may carry `rewards`; rows may sit in the built-in
+    // `to_sort_expense` and `to_sort_income` categories.
+    'version': 31,
     'transactions': [for (final t in _transactions) _backupJsonOf(t)],
     'discardedImports': _discardedImports.toList(),
     'accounts': _accounts.map((a) => a.toJson()).toList(),
@@ -7629,7 +8199,7 @@ class FinanceProvider extends ChangeNotifier {
     for (var i = 0; i < _transactions.length; i++) {
       if (_transactions[i].pending && !_transactions[i].suspectedSpam) {
         before.add(_transactions[i]);
-        _transactions[i] = _transactions[i].copyWith(pending: false);
+        _transactions[i] = _confirmed(_transactions[i]);
         confirmed.add(_transactions[i]);
       }
     }

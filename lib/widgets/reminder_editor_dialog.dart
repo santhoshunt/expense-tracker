@@ -95,7 +95,7 @@ Future<void> showReminderEditor(
   final categoryItems = <PickerItem<String>>[
     const PickerItem.header('Expenses'),
     for (final c in allCategories)
-      if (c.type == TxType.expense && !c.isTransfer)
+      if (c.type == TxType.expense && !c.isTransfer && !isToSortCategory(c.id))
         PickerItem(
           value: c.id,
           label: c.label,

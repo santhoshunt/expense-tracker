@@ -305,9 +305,9 @@ void main() {
     // Imports land in the review queue, not the confirmed list.
     final row = p.pendingTransactions.single;
     // The parsed direction is authoritative — the row keeps type expense
-    // and falls back to the type-correct Other.
+    // and, placed by nothing, lands in the type-correct To sort.
     expect(row.type, TxType.expense);
-    expect(row.categoryId, 'other_expense');
+    expect(row.categoryId, kToSortExpenseId);
   });
 
   test('merge import keeps the device edit on collision', () async {

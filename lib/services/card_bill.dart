@@ -76,7 +76,7 @@ class CardBillStatus {
 /// The last occurrence of day-of-month [day] strictly before [due]; [day]
 /// beyond a month's length clamps to that month's last day (a "31st"
 /// statement lands on 28/29 Feb).
-DateTime _statementBefore(int day, DateTime due) {
+DateTime statementBefore(int day, DateTime due) {
   final sameMonth = DateTime(
     due.year,
     due.month,
@@ -174,7 +174,7 @@ CardBillStatus? cardBillStatus(Account account, DateTime now) {
   }
   final stmt = account.statementDay == null
       ? null
-      : _statementBefore(account.statementDay!, due);
+      : statementBefore(account.statementDay!, due);
   final phase = paid
       ? CardBillPhase.paid
       // No statement day recorded: assume billed, the pre-statement-day

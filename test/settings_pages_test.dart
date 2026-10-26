@@ -53,6 +53,9 @@ void main() {
       'SMS import': 'Automatic SMS import',
       'Backup and data': 'Cloud backup',
       'Notifications': 'Budget alerts',
+      'Card rewards':
+          'No credit cards yet. Add one on Accounts, then set its '
+          'rewards here.',
       'Privacy': 'App lock',
       'About': 'Check for updates',
     };
@@ -62,6 +65,9 @@ void main() {
     }
 
     for (final MapEntry(key: title, value: heading) in pages.entries) {
+      // The last rows sit below a short test screen.
+      await tester.ensureVisible(find.text(title));
+      await pumpThrough(tester);
       await tester.tap(find.text(title));
       await pumpThrough(tester);
       expect(find.widgetWithText(AppBar, title), findsOneWidget);
@@ -89,7 +95,7 @@ void main() {
     expect(find.text('Lock off'), findsOneWidget);
     expect(find.text('3 of 4 on'), findsOneWidget);
     // The Cockpit card, then the rows of one grouped card.
-    expect(find.byType(GroupedSurface), findsNWidgets(7));
+    expect(find.byType(GroupedSurface), findsNWidgets(8));
     expect(find.text('Rules, categories, budgets, dashboard layout'), findsOne);
 
     await settings.setMode(ThemeMode.light);

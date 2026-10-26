@@ -1792,17 +1792,20 @@ class _ClassificationTile extends StatelessWidget {
 // ── Shared dialog helpers ─────────────────────────────────────────────────────
 
 /// Sectioned category rows for anchored pickers: Expenses / Income /
-/// Transfers (+ the Spam pseudo-category when classifying).
+/// Transfers (+ the Spam pseudo-category when classifying). To sort is left
+/// out: a rule always names a real category.
 List<PickerItem<String>> _categoryPickerItems(
   BuildContext context, {
   bool includeSpam = true,
 }) => [
   const PickerItem.header('Expenses'),
   for (final c in allCategories)
-    if (c.type == TxType.expense && !c.isTransfer) _categoryPickerItem(c),
+    if (c.type == TxType.expense && !c.isTransfer && !isToSortCategory(c.id))
+      _categoryPickerItem(c),
   const PickerItem.header('Income'),
   for (final c in allCategories)
-    if (c.type == TxType.income && !c.isTransfer) _categoryPickerItem(c),
+    if (c.type == TxType.income && !c.isTransfer && !isToSortCategory(c.id))
+      _categoryPickerItem(c),
   const PickerItem.header('Transfers'),
   for (final c in allCategories)
     if (c.isTransfer) _categoryPickerItem(c),
@@ -2100,7 +2103,7 @@ List<PickerItem<String?>> _oppositeDirectionItems(TxType type) => [
   const PickerItem<String?>(value: null, label: 'Not for this direction'),
   PickerItem<String?>.header(type == TxType.income ? 'Income' : 'Expenses'),
   for (final c in allCategories)
-    if (c.type == type && !c.isTransfer)
+    if (c.type == type && !c.isTransfer && !isToSortCategory(c.id))
       PickerItem<String?>(
         value: c.id,
         label: c.label,

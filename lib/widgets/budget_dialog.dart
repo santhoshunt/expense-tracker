@@ -47,18 +47,21 @@ Future<void> showBudgetDialog(
   var deleteRequested = false;
 
   // Groupable categories bucketed by parent group ("Other" last), so the
-  // picker mirrors the dashboard's grouping.
+  // picker mirrors the dashboard's grouping. To sort is no budget's: it
+  // holds payments waiting for their category.
+  bool offered(TxCategory c) =>
+      finance.isGroupable(c) && !isToSortCategory(c.id);
   final sections = <(String, List<TxCategory>)>[];
   for (final g in finance.groups) {
     final members = [
       for (final c in allCategories)
-        if (finance.isGroupable(c) && finance.groupIdOf(c.id) == g.id) c,
+        if (offered(c) && finance.groupIdOf(c.id) == g.id) c,
     ];
     if (members.isNotEmpty) sections.add((g.label, members));
   }
   final ungrouped = [
     for (final c in allCategories)
-      if (finance.isGroupable(c) && finance.groupIdOf(c.id) == null) c,
+      if (offered(c) && finance.groupIdOf(c.id) == null) c,
   ];
   if (ungrouped.isNotEmpty) sections.add(('Other', ungrouped));
 

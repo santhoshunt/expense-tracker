@@ -326,6 +326,53 @@ class NotificationsPage extends StatelessWidget {
   }
 }
 
+/// The open credit cards, each opening its [CardRewardsPage].
+class _CardRewardsListPage extends StatelessWidget {
+  const _CardRewardsListPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final cards = context
+        .watch<FinanceProvider>()
+        .openAccounts
+        .where((a) => a.isCard)
+        .toList();
+    final theme = Theme.of(context);
+    return SettingsGroupPage(
+      title: 'Card rewards',
+      children: [
+        Text(
+          'What each credit card pays back. Its card on Accounts shows what '
+          'the current cycle has earned.',
+          style: theme.textTheme.bodySmall,
+        ),
+        const SizedBox(height: 12),
+        if (cards.isEmpty)
+          Text(
+            'No credit cards yet. Add one on Accounts, then set its rewards '
+            'here.',
+            style: theme.textTheme.bodyMedium,
+          ),
+        for (final (i, card) in cards.indexed)
+          GroupedSurface(
+            first: i == 0,
+            last: i == cards.length - 1,
+            child: ListTile(
+              leading: Icon(card.icon),
+              title: Text(card.displayName),
+              subtitle: Text(switch (card.rewards) {
+                null => 'Not set up',
+                final r => cardRewardsSummary(r),
+              }),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => openCardRewards(context, card.id),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 /// Google Drive backup and the file-based export, import and wipe. They
 /// share a page because the Drive description points at Data's import.
 class _BackupDataPage extends StatelessWidget {

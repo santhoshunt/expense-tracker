@@ -3,8 +3,9 @@
      per day (a bitmap drawn in HomeWidgets.kt with the day initials under
      the bars), the gap to usual, and the review count, which opens the
      review sheet on its own. Where the height cannot hold every line at
-     the user's font size, HomeWidgets.thisWeek hides the title row first,
-     then the gap line, rather than clip the figure. -->
+     the user's font size, HomeWidgets.thisWeek hides the To sort line
+     first, then the title row, then the gap line, rather than clip the
+     figure. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/hw_root"
     android:layout_width="match_parent"
@@ -78,6 +79,19 @@
                 android:maxLines="1"
                 android:textColor="#FFFFFF"
                 android:textSize="18sp" />
+
+            <!-- "incl. ₹18,500 to sort": the part of the spend still in To
+                 sort. Shown only with room left over, after the title and
+                 the gap line. -->
+            <TextView
+                android:id="@+id/hw_to_sort"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="#B4C0C8"
+                android:textSize="12sp"
+                android:visibility="gone" />
 
             <ImageView
                 android:id="@+id/hw_strip"

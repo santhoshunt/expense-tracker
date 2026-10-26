@@ -180,7 +180,8 @@ void main() {
     await p.addImported([
       txn(ref: 'A', categoryId: 'other_expense', rawBody: 'debited to ZOHO'),
     ]);
-    expect(p.pendingTransactions.single.categoryId, 'other_expense');
+    // No rule placed it, so it waits in To sort.
+    expect(p.pendingTransactions.single.categoryId, kToSortExpenseId);
   });
 
   test('suspected spam is excluded from confirm-all', () async {
