@@ -6,6 +6,7 @@ import '../providers/settings_provider.dart';
 import 'budget_monitor.dart';
 import 'budget_widget_service.dart';
 import 'home_widgets_service.dart';
+import 'import_checks.dart';
 import 'notification_service.dart';
 import 'sms_import_service.dart';
 import 'unusual_spend_monitor.dart';
@@ -152,6 +153,14 @@ Future<BackgroundImportResult> runBackgroundImport(
     BackgroundTrigger.periodic =>
       mode == AutoImportFrequency.daily || mode == AutoImportFrequency.weekly,
   };
+  // Keep taps from payment-to-check notes land first, so the import's
+  // guesses learn from them.
+  try {
+    await ImportChecks.applyKept(finance);
+  } catch (e) {
+    debugPrint('Applying Keep taps failed: $e');
+  }
+  final checksBefore = ImportChecks.checkIds(finance);
   if (runs) {
     try {
       final drained = await import.drainNotifications(finance);
@@ -189,6 +198,19 @@ Future<BackgroundImportResult> runBackgroundImport(
     // Only new rows that wait in review post it: a swiped-away note stays
     // away until then, and rows that counted at once ask for no review.
     await ReviewNotifier.sync(finance.pendingCount, allowPost: toReview > 0);
+    // Rows that counted at once with a guess or as To sort get their own
+    // note with Keep and Change.
+    if (settings.importChecks) {
+      try {
+        await ImportChecks.post(
+          finance,
+          checksBefore,
+          notifications: notifications,
+        );
+      } catch (e) {
+        debugPrint('Payments to check notes failed: $e');
+      }
+    }
   }
   // Bills come due and imports push budgets over with the app shut: until
   // v1.39.1 these alerts waited for the next open. Each monitor remembers

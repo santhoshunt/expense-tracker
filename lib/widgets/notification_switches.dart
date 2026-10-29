@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../screens/app_nav.dart';
+import '../services/import_checks.dart';
 import '../services/notification_service.dart';
 import '../utils/app_theme.dart';
 import 'glossy.dart';
@@ -116,6 +117,7 @@ class _NotificationSwitchesState extends State<NotificationSwitches>
             if (((hasCap && settings.budgetAlerts) ||
                     settings.unusualAlerts ||
                     settings.weeklyDigest ||
+                    settings.importChecks ||
                     settings.upcomingReminders) &&
                 _notifStatus != null &&
                 _notifStatus != NotificationStatus.enabled)
@@ -236,6 +238,37 @@ class _NotificationSwitchesState extends State<NotificationSwitches>
                   if (on) {
                     await NotificationService.instance.requestPermission();
                   }
+                  await _checkNotifications();
+                },
+              ),
+            ),
+            // Background imports only: one in front reports in its toast.
+            _SwitchWithTip(
+              tip: const InfoTip(
+                title: 'Payments to check',
+                message:
+                    'When a background import counts a payment with a '
+                    'guessed category or as To sort, a note shows it with '
+                    'Keep and Change. Keep confirms the guess the next time '
+                    "the app opens. The lock screen follows your phone's "
+                    'setting for sensitive content.',
+              ),
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Payments to check'),
+                subtitle: Text(
+                  'A note for each new payment counted with a guess or as '
+                  'To sort',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                value: settings.importChecks,
+                onChanged: (on) async {
+                  final finance = context.read<FinanceProvider>();
+                  await context.read<SettingsProvider>().setImportChecks(on);
+                  if (on) {
+                    await NotificationService.instance.requestPermission();
+                  }
+                  await ImportChecks.sync(finance, enabled: on);
                   await _checkNotifications();
                 },
               ),

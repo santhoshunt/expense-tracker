@@ -5,7 +5,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 // Android's ZoneId as it did "UTC"; both are valid there.
 import 'package:timezone/timezone.dart' as tz;
 
+import 'import_checks.dart';
 import 'launch_actions.dart';
+import 'notification_ids.dart';
 
 /// Why a notification would or would not reach the user right now.
 ///
@@ -84,6 +86,13 @@ class NotificationService {
   /// Fixed, so a later import updates the one note instead of adding more.
   static const reviewNotificationId = 93000;
 
+  /// One note per guessed or To sort import, bundled under a summary.
+  static const _importCheckChannelId = 'import_checks';
+  static const _importCheckChannelName = 'Payments to check';
+  static const _importCheckChannelDescription =
+      'New payments counted with a guessed category or as To sort';
+  static const _importCheckGroup = 'import_checks';
+
   bool get _supported =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
@@ -99,9 +108,18 @@ class NotificationService {
     await _plugin.initialize(
       settings: const InitializationSettings(android: android, iOS: ios),
       // Taps while the app is running; a tap that starts the app is read
-      // from launchPayload() instead.
-      onDidReceiveNotificationResponse: (r) =>
-          LaunchActions.instance.onNotificationPayload(r.payload),
+      // from launchPayload() instead. The plugin sends Keep to the
+      // background handler below even then; should a later version send it
+      // here, it must still not open the row.
+      onDidReceiveNotificationResponse: (r) {
+        if (r.actionId == kImportCheckKeepAction) {
+          ImportChecks.keep(r.payload);
+          return;
+        }
+        LaunchActions.instance.onNotificationPayload(r.payload);
+      },
+      // Keep on a payment-to-check note, in the plugin's own engine.
+      onDidReceiveBackgroundNotificationResponse: importCheckAction,
     );
     // Create the channel up front. Lazily-created-on-first-show meant the
     // channel didn't exist in system settings until the first threshold ever
@@ -150,6 +168,17 @@ class NotificationService {
               _reviewChannelId,
               _reviewChannelName,
               description: _reviewChannelDescription,
+            ),
+          );
+      await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.createNotificationChannel(
+            const AndroidNotificationChannel(
+              _importCheckChannelId,
+              _importCheckChannelName,
+              description: _importCheckChannelDescription,
             ),
           );
     }
@@ -380,6 +409,110 @@ class NotificationService {
     if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
     await init();
     await _plugin.cancel(id: reviewNotificationId);
+  }
+
+  /// A payment-to-check note. With [keepLabel] (a guessed row) it carries
+  /// Keep, which runs in the plugin's own engine without opening the app,
+  /// and Change; without one (a To sort row) only Pick a category. Private
+  /// visibility: the lock screen follows the phone's sensitive-content
+  /// setting.
+  Future<void> showImportCheck({
+    required int id,
+    required String title,
+    required String body,
+    required String payload,
+    String? keepLabel,
+  }) async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
+    await init();
+    await _plugin.show(
+      id: id,
+      title: title,
+      body: body,
+      notificationDetails: NotificationDetails(
+        android: AndroidNotificationDetails(
+          _importCheckChannelId,
+          _importCheckChannelName,
+          channelDescription: _importCheckChannelDescription,
+          groupKey: _importCheckGroup,
+          visibility: NotificationVisibility.private,
+          onlyAlertOnce: true,
+          actions: [
+            if (keepLabel != null)
+              AndroidNotificationAction(kImportCheckKeepAction, keepLabel),
+            AndroidNotificationAction(
+              kImportCheckChangeAction,
+              keepLabel != null ? 'Change' : 'Pick a category',
+              showsUserInterface: true,
+            ),
+          ],
+        ),
+      ),
+      payload: payload,
+    );
+  }
+
+  /// The heading that bundles two or more payment-to-check notes.
+  Future<void> showImportCheckSummary(int count) async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
+    await init();
+    await _plugin.show(
+      id: NotificationIds.importCheckSummary,
+      title: 'Payments to check',
+      body: '$count new payments need a look.',
+      notificationDetails: const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _importCheckChannelId,
+          _importCheckChannelName,
+          channelDescription: _importCheckChannelDescription,
+          groupKey: _importCheckGroup,
+          setAsGroupSummary: true,
+          visibility: NotificationVisibility.private,
+          onlyAlertOnce: true,
+        ),
+      ),
+      payload: kImportChecksPayload,
+    );
+  }
+
+  /// Ids of the payment-to-check notes in the shade now, summary left out.
+  /// Swiped and cancelled notes are gone from it. Ids only: the plugin's
+  /// Android side never returns a note's payload. Empty off Android or on a
+  /// plugin failure.
+  Future<List<int>> activeImportChecks() async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) {
+      return const [];
+    }
+    try {
+      await init();
+      final active = await _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.getActiveNotifications();
+      return [
+        for (final n in active ?? const <ActiveNotification>[])
+          if (n.channelId == _importCheckChannelId &&
+              n.id != null &&
+              n.id != NotificationIds.importCheckSummary)
+            n.id!,
+      ];
+    } catch (e) {
+      debugPrint('Active notifications failed: $e');
+      return const [];
+    }
+  }
+
+  /// Never throws: it runs on every ledger change, where a plugin failure
+  /// must cost only the note.
+  Future<void> cancelId(int id) async {
+    if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await init();
+      await _plugin.cancel(id: id);
+    } catch (e) {
+      debugPrint('Notification cancel failed: $e');
+    }
   }
 
   /// Whether the note with [id] is booked and not delivered yet. Static so

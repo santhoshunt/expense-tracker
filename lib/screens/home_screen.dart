@@ -16,6 +16,7 @@ import '../services/budget_monitor.dart';
 import '../services/budget_widget_service.dart';
 import '../services/drive_backup_service.dart';
 import '../services/home_widgets_service.dart';
+import '../services/import_checks.dart';
 import '../services/launch_actions.dart';
 import '../services/monthly_recap.dart';
 import '../services/notification_service.dart';
@@ -218,6 +219,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // yet" against a ledger full of them.
       _syncBudgetWidgets();
       _applyBackgroundImport();
+      _syncImportChecks();
       // A downloaded update never outlives the launch after it.
       unawaited(UpdateDownloader().cleanup());
       _reportUpdateResult();
@@ -270,6 +272,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // A process kept alive past a due day records it on the way back.
     _postDueReminders();
     _checkUnusual();
+    _syncImportChecks();
     final last = _lastAutoImportAt;
     if (last != null &&
         DateTime.now().difference(last) < const Duration(seconds: 5)) {
@@ -447,6 +450,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       case LaunchAction.openAccounts:
         setState(() => _showTab(kHomeTabAccounts));
+      // A payment-to-check note: its row's edit sheet, or the list when the
+      // row has gone since.
+      case LaunchAction.openTransaction:
+        final id = LaunchActions.instance.takeTxId();
+        final tx = context
+            .read<FinanceProvider>()
+            .transactions
+            .where((t) => t.id == id)
+            .firstOrNull;
+        if (tx == null) {
+          _openTransactions(const TxFilterRequest());
+          break;
+        }
+        setState(() => _showTab(kHomeTabTransactions));
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) showAddTransactionSheet(context, existing: tx);
+        });
       // The This week widget: the digest of the week the tap lands in.
       case LaunchAction.openThisWeek:
         setState(() => _showTab(kHomeTabDashboard));
@@ -591,10 +611,26 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       context.read<FinanceProvider>().pendingCount,
       allowPost: false,
     );
+    // A row confirmed, edited or opened here drops its note.
+    ImportChecks.sync(
+      context.read<FinanceProvider>(),
+      enabled: context.read<SettingsProvider>().importChecks,
+    ).catchError((Object e) => debugPrint('Payments to check sync: $e'));
     // A month's first confirmed row books its recap note, and the first
     // row ever the digest note.
     _scheduleRecap();
     _scheduleWeeklyDigest();
+  }
+
+  /// Keep taps made from payment-to-check notes while the app was away land
+  /// in the ledger, then notes whose row is settled go.
+  void _syncImportChecks() {
+    if (!mounted) return;
+    final finance = context.read<FinanceProvider>();
+    final enabled = context.read<SettingsProvider>().importChecks;
+    ImportChecks.applyKept(finance)
+        .then((_) => ImportChecks.sync(finance, enabled: enabled))
+        .catchError((Object e) => debugPrint('Payments to check: $e'));
   }
 
   /// The mode last handed to the native scheduler, so settings changes

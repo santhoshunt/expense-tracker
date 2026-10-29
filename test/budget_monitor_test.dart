@@ -65,6 +65,24 @@ class FakeNotifications implements NotificationService {
 
   @override
   Future<void> cancelReview() async {}
+
+  @override
+  Future<void> showImportCheck({
+    required int id,
+    required String title,
+    required String body,
+    required String payload,
+    String? keepLabel,
+  }) async {}
+
+  @override
+  Future<void> showImportCheckSummary(int count) async {}
+
+  @override
+  Future<List<int>> activeImportChecks() async => const [];
+
+  @override
+  Future<void> cancelId(int id) async {}
 }
 
 void main() {

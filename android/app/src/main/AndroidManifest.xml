@@ -393,7 +393,9 @@
             </intent-filter>
         </service>
         <!-- flutter_local_notifications: shows scheduled notifications (the
-             monthly recap) and re-books them after a reboot or an update. -->
+             monthly recap) and re-books them after a reboot or an update;
+             ActionBroadcastReceiver runs notification buttons (Keep on a
+             payment-to-check note) without opening the app. -->
         <receiver
             android:exported="false"
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
@@ -407,6 +409,9 @@
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
             </intent-filter>
         </receiver>
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

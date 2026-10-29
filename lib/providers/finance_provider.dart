@@ -7211,6 +7211,31 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(tx: true);
   }
 
+  /// Keep taps from payment-to-check notes (services/import_checks.dart),
+  /// applied by the engine that holds the ledger. A row confirms only while
+  /// it still carries the guess the note named: a rule or an edit since
+  /// then wins. The note showed the row, so it is no longer new either.
+  Future<void> confirmGuesses(
+    List<({String txId, String categoryId})> kept,
+  ) async {
+    var changed = false;
+    for (final k in kept) {
+      final i = _transactions.indexWhere((t) => t.id == k.txId);
+      if (i == -1) continue;
+      final t = _transactions[i];
+      if (!t.categoryGuessed || t.categoryId != k.categoryId) continue;
+      _transactions[i] = t.copyWith(
+        categoryGuessed: false,
+        userCategorized: true,
+        unseen: false,
+      );
+      changed = true;
+    }
+    if (!changed) return;
+    notifyListeners();
+    await _persist(tx: true);
+  }
+
   Future<void> confirmTransaction(String id) async {
     final i = _transactions.indexWhere((t) => t.id == id);
     if (i == -1) return;

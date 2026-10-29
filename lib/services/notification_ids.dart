@@ -19,6 +19,10 @@ abstract final class NotificationIds {
   /// The "imports to review" note (NotificationService.showReview).
   static const review = 93000;
 
+  /// The summary that bundles the payment-to-check notes
+  /// (NotificationService.showImportCheckSummary).
+  static const importCheckSummary = 93001;
+
   /// Card bill due alerts (UpcomingMonitor).
   static const cardBillStart = 94000;
   static const cardBillEnd = 94999;
@@ -48,11 +52,21 @@ abstract final class NotificationIds {
   static const customBudgetStart = 300000;
   static const customBudgetEnd = 399999;
 
+  /// Payment-to-check notes, one per guessed or To sort import
+  /// (ImportChecks.post).
+  static const importCheckStart = 400000;
+  static const importCheckEnd = 499999;
+
   /// Every range with its owner, for the overlap test. A fixed id is a
   /// range of one.
   static const ranges = <({int start, int end, String owner})>[
     (start: capStart, end: capEnd, owner: 'Monthly cap'),
     (start: review, end: review, owner: 'Imports to review'),
+    (
+      start: importCheckSummary,
+      end: importCheckSummary,
+      owner: 'Payments to check summary',
+    ),
     (start: cardBillStart, end: cardBillEnd, owner: 'Card bills'),
     (start: recurringStart, end: recurringEnd, owner: 'Upcoming recurring'),
     (start: reminderStart, end: reminderEnd, owner: 'Reminders'),
@@ -60,6 +74,7 @@ abstract final class NotificationIds {
     (start: weeklyDigest, end: weeklyDigest, owner: 'Weekly digest'),
     (start: unusualStart, end: unusualEnd, owner: 'Unusual spending'),
     (start: customBudgetStart, end: customBudgetEnd, owner: 'Custom budgets'),
+    (start: importCheckStart, end: importCheckEnd, owner: 'Payments to check'),
   ];
 
   static int _hashed(int start, int end, String key) =>
@@ -83,4 +98,7 @@ abstract final class NotificationIds {
 
   static int unusual(String categoryId) =>
       _hashed(unusualStart, unusualEnd, categoryId);
+
+  static int importCheck(String txId) =>
+      _hashed(importCheckStart, importCheckEnd, txId);
 }

@@ -79,6 +79,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kUpcomingReminders = 'upcoming_reminders_v1';
   static const _kUnusualAlerts = 'unusual_alerts_enabled_v1';
   static const _kWeeklyDigest = 'weekly_digest_v1';
+  static const _kImportChecks = 'import_checks_v1';
   static const _kUpcomingHidden = 'upcoming_hidden_v1';
   static const _kCollapsedSections = 'collapsed_sections_v1';
   static const _kExpandedAccounts = 'accounts_expanded_v1';
@@ -128,6 +129,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _upcomingReminders = true;
   bool _unusualAlerts = true;
   bool _weeklyDigest = true;
+  bool _importChecks = true;
   Set<String> _upcomingHidden = {};
   Set<String> _collapsedSections = {};
   Set<String> _expandedAccounts = {};
@@ -176,6 +178,10 @@ class SettingsProvider extends ChangeNotifier {
   /// The note at 09:00 every Monday that last week's digest is ready
   /// (services/weekly_digest.dart). The digest itself opens either way.
   bool get weeklyDigest => _weeklyDigest;
+
+  /// A note for each payment a background import counted with a guessed
+  /// category or as To sort (services/import_checks.dart).
+  bool get importChecks => _importChecks;
 
   /// Recurring-detection keys the user hid from the Upcoming card.
   Set<String> get hiddenUpcoming => Set.unmodifiable(_upcomingHidden);
@@ -278,6 +284,7 @@ class SettingsProvider extends ChangeNotifier {
       true,
     );
     _weeklyDigest = tryRead(() => prefs.getBool(_kWeeklyDigest) ?? true, true);
+    _importChecks = tryRead(() => prefs.getBool(_kImportChecks) ?? true, true);
     _upcomingHidden = tryRead(
       () => (prefs.getStringList(_kUpcomingHidden) ?? const []).toSet(),
       <String>{},
@@ -558,6 +565,16 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  Future<void> setImportChecks(bool enabled) async {
+    if (enabled == _importChecks) return;
+    _importChecks = enabled;
+    notifyListeners();
+    await _persistPref(
+      _kImportChecks,
+      (p) => p.setBool(_kImportChecks, enabled),
+    );
+  }
+
   /// Hides one detected recurring payment from the Upcoming card (and the
   /// reminder monitor). Keys come from RecurringHit.key.
   Future<void> hideUpcoming(String key) async {
@@ -801,6 +818,7 @@ class SettingsProvider extends ChangeNotifier {
     'upcomingReminders': _upcomingReminders,
     'unusualAlerts': _unusualAlerts,
     'weeklyDigest': _weeklyDigest,
+    'importChecks': _importChecks,
     'upcomingHidden': _upcomingHidden.toList(),
     'hideIncome': _hideIncome,
     'dismissedPairs': _dismissedPairs.toList(),
@@ -841,6 +859,9 @@ class SettingsProvider extends ChangeNotifier {
     }
     if (map['weeklyDigest'] is bool) {
       _weeklyDigest = map['weeklyDigest'] as bool;
+    }
+    if (map['importChecks'] is bool) {
+      _importChecks = map['importChecks'] as bool;
     }
     if (map['upcomingHidden'] is List) {
       _upcomingHidden = {
@@ -884,6 +905,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setBool(_kUpcomingReminders, _upcomingReminders);
       await p.setBool(_kUnusualAlerts, _unusualAlerts);
       await p.setBool(_kWeeklyDigest, _weeklyDigest);
+      await p.setBool(_kImportChecks, _importChecks);
       await p.setStringList(_kUpcomingHidden, _upcomingHidden.toList());
       await p.setBool(_kHideIncome, _hideIncome);
       await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());

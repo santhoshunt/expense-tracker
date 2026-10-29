@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -41,6 +43,10 @@ enum LaunchAction {
 
   /// The Accounts widget: the Accounts tab.
   openAccounts,
+
+  /// A payment-to-check note or its Change button: that row's edit sheet,
+  /// for the id [LaunchActions.takeTxId] hands over.
+  openTransaction,
 }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
@@ -79,6 +85,17 @@ class LaunchActions {
     final w = _week;
     _week = null;
     return w;
+  }
+
+  /// The row an [LaunchAction.openTransaction] is about. Set before
+  /// [pending], as [_history] is.
+  String? _txId;
+
+  /// The row id for a pending [LaunchAction.openTransaction], once.
+  String? takeTxId() {
+    final id = _txId;
+    _txId = null;
+    return id;
   }
 
   bool _initialised = false;
@@ -158,8 +175,15 @@ class LaunchActions {
       _week = week;
       return LaunchAction.openWeeklyDigest;
     }
+    if (payload != null && payload.startsWith(kImportCheckPayloadPrefix)) {
+      final check = parseImportCheckPayload(payload);
+      if (check == null) return null;
+      _txId = check.txId;
+      return LaunchAction.openTransaction;
+    }
     return switch (payload) {
       kRecapPayload => LaunchAction.openRecap,
+      kImportChecksPayload => LaunchAction.openTransactions,
       kReviewPayload => LaunchAction.openReview,
       kUpcomingPayload => LaunchAction.openUpcoming,
       kBudgetPayload => LaunchAction.openBudget,
@@ -173,6 +197,7 @@ class LaunchActions {
     _initialised = false;
     _history = null;
     _week = null;
+    _txId = null;
     pending.value = null;
   }
 }
@@ -228,6 +253,43 @@ DateTime? parseWeeklyPayload(String payload) {
   }
   return week.weekday == DateTime.monday ? week : null;
 }
+
+/// Payload prefix on a payment-to-check note, followed by JSON naming the
+/// row and the category the note showed: `check:{"tx":"…","cat":"food"}`.
+/// JSON because neither id format promises to be free of separators.
+const String kImportCheckPayloadPrefix = 'check:';
+
+/// [kImportCheckPayloadPrefix]'s payload for row [txId] in [categoryId].
+String importCheckPayload(String txId, String categoryId) =>
+    '$kImportCheckPayloadPrefix${jsonEncode({'tx': txId, 'cat': categoryId})}';
+
+/// The row and category in an [importCheckPayload]; null when malformed.
+({String txId, String categoryId})? parseImportCheckPayload(String payload) {
+  if (!payload.startsWith(kImportCheckPayloadPrefix)) return null;
+  try {
+    final map = jsonDecode(payload.substring(kImportCheckPayloadPrefix.length));
+    if (map is! Map) return null;
+    final tx = map['tx'];
+    final cat = map['cat'];
+    if (tx is! String || tx.isEmpty || cat is! String || cat.isEmpty) {
+      return null;
+    }
+    return (txId: tx, categoryId: cat);
+  } on FormatException {
+    return null;
+  }
+}
+
+/// The Keep button on a guessed row's payment-to-check note. It runs in the
+/// plugin's own engine without opening the app.
+const String kImportCheckKeepAction = 'keep';
+
+/// The Change (or Pick a category) button: opens the row's edit sheet.
+const String kImportCheckChangeAction = 'change';
+
+/// Payload on the payment-to-check summary: the Transactions tab, as the
+/// Recent widget opens it.
+const String kImportChecksPayload = 'open_transactions';
 
 /// Payload on the monthly recap notification.
 const String kRecapPayload = 'recap';
