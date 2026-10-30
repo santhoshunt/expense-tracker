@@ -2033,7 +2033,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             message:
                 "Each slice is a category's share of the month's spending "
                 "(the year's in Year view). Tap a slice for its amount, share "
-                'and history. By category below lists every category.',
+                'and history, or a name under the chart for its history.',
           ),
           body: () => [
             Card(
@@ -2041,9 +2041,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 padding: const EdgeInsets.all(AppSpace.card),
                 child: CategoryDonutChart(
                   data: byCategory,
-                  // By category lists every category: no second list here.
-                  showLegend: false,
-                  chartHeight: 140,
                   emptyText: _yearMode
                       ? 'No spending this year'
                       : 'No spending this month',

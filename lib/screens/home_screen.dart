@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -203,6 +204,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // Background runs that find the app alive import here, in the engine
     // that owns the ledger (background_import.dart).
     BackgroundImportScheduler.runImportHandler = _runBackgroundImport;
+    // Keep on a payment-to-check note, tapped while this engine is alive.
+    _keepPort = ImportChecks.listenForKeeps(_syncImportChecks);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scheduleRecap();
       _scheduleWeeklyDigest();
@@ -579,6 +582,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     LaunchActions.instance.pending.removeListener(_scheduleLaunchAction);
     appLocked.removeListener(_scheduleLaunchAction);
     AppNav.instance.detachHome(this);
+    final keepPort = _keepPort;
+    if (keepPort != null) ImportChecks.stopListening(keepPort);
     WidgetsBinding.instance.removeObserver(this);
     _finance?.removeListener(_checkBudget);
     _settings?.removeListener(_syncBudgetWidgets);
@@ -622,8 +627,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     _scheduleWeeklyDigest();
   }
 
-  /// Keep taps made from payment-to-check notes while the app was away land
-  /// in the ledger, then notes whose row is settled go.
+  /// The port Keep taps reach this engine through ([_syncImportChecks]).
+  ReceivePort? _keepPort;
+
+  /// Keep taps made from payment-to-check notes land in the ledger, then
+  /// notes whose row is settled go. Runs on open, on resume and on each
+  /// Keep tapped while this engine is alive.
   void _syncImportChecks() {
     if (!mounted) return;
     final finance = context.read<FinanceProvider>();

@@ -1,3 +1,6 @@
+import 'dart:isolate';
+import 'dart:ui' show IsolateNameServer;
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,6 +17,11 @@ import 'notification_service.dart';
 /// may hold it), so the engine that does applies them ([applyKept]).
 const String kImportChecksKeptKey = 'import_checks_kept_v1';
 
+/// The name the open app's port for Keep taps goes by. The plugin's engine
+/// runs in the app's process, so it finds the port here and the app applies
+/// the tap at once; with no app open the tap waits in [kImportChecksKeptKey].
+const String kImportChecksPortName = 'import_checks_keep';
+
 /// The most notes one background run posts, newest first. A first-run
 /// backfill can count dozens of rows; the rest show their pill in the app.
 const int kMaxImportCheckNotes = 5;
@@ -27,7 +35,8 @@ bool needsImportCheck(Tx t) =>
 
 /// Payment-to-check notes: one per row a background import counted with a
 /// guessed category or as To sort, bundled under a summary. Keep confirms
-/// the guess later, without opening the app; Change opens the row. The
+/// the guess without opening the app, at once when the app is open and
+/// otherwise when it next opens; Change opens the row. The
 /// shade itself is the record of which notes are up
 /// ([NotificationService.activeImportChecks]), so swipes need no tracking.
 abstract final class ImportChecks {
@@ -109,6 +118,26 @@ abstract final class ImportChecks {
       ...?prefs.getStringList(kImportChecksKeptKey),
       payload,
     ]);
+    // An open app applies it now rather than on its next resume.
+    IsolateNameServer.lookupPortByName(kImportChecksPortName)?.send(null);
+  }
+
+  /// The open app's port for Keep taps: [onKeep] runs for each one. Replaces
+  /// a mapping a previous engine left behind.
+  static ReceivePort listenForKeeps(void Function() onKeep) {
+    IsolateNameServer.removePortNameMapping(kImportChecksPortName);
+    final port = ReceivePort()..listen((_) => onKeep());
+    IsolateNameServer.registerPortWithName(
+      port.sendPort,
+      kImportChecksPortName,
+    );
+    return port;
+  }
+
+  /// Closes a [listenForKeeps] port and drops its name.
+  static void stopListening(ReceivePort port) {
+    IsolateNameServer.removePortNameMapping(kImportChecksPortName);
+    port.close();
   }
 
   /// Confirms the queued Keep taps in the ledger, then drops them from the
