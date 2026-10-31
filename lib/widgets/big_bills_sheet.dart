@@ -15,7 +15,7 @@ import '../utils/format.dart';
 import 'reminder_editor_dialog.dart';
 
 /// Every big bill with its share a month, under the monthly figure and the
-/// 12-month strip. Opened from the Overview's Big bills ahead card. It
+/// 12-month strip. Opened from the Ahead tab's Big bills ahead card. It
 /// watches the ledger and the hide list and rebuilds the plan from
 /// [patterns] (the Dashboard's detected repeats), so an edit shows at once.
 /// A row opens its reminder's editor, or Cockpit's Subscriptions for a
@@ -165,7 +165,7 @@ Future<void> showBigBillsSheet(
 }
 
 /// The monthly figure, plain (a target, not money spent), then "a month to
-/// set aside". Shared by the Overview card and the sheet.
+/// set aside". Shared by the Ahead tab's card and the sheet.
 class BigBillsHeadline extends StatelessWidget {
   final BigBillsPlan plan;
 

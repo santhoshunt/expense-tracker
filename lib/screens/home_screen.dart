@@ -21,6 +21,7 @@ import '../services/import_checks.dart';
 import '../services/launch_actions.dart';
 import '../services/monthly_recap.dart';
 import '../services/notification_service.dart';
+import '../services/price_rise_monitor.dart';
 import '../services/sms_import_service.dart';
 import '../services/sms_source.dart';
 import '../services/unusual_spend_monitor.dart';
@@ -74,6 +75,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _budgetMonitor = BudgetMonitor();
   final _upcomingMonitor = UpcomingMonitor();
   final _unusualMonitor = UnusualSpendMonitor();
+  final _priceRiseMonitor = PriceRiseMonitor();
   final _budgetWidgets = BudgetWidgetService();
   final _homeWidgets = HomeWidgetsService();
   FinanceProvider? _finance;
@@ -152,8 +154,32 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   // Budget rows: the rows counting toward that budget in that month (budget
   // math is expense-only already — no type filter needed).
-  void _viewBudget(String budgetId, DateTime month) =>
-      _openTransactions(TxFilterRequest(budgetId: budgetId, month: month));
+  // A dated budget lists its whole range, by the day each row counts in.
+  // [categoryId] narrows it to one slice of a tag budget's pie.
+  void _viewBudget(String budgetId, DateTime month, {String? categoryId}) {
+    final range = context
+        .read<FinanceProvider>()
+        .budgets
+        .where((b) => b.id == budgetId)
+        .firstOrNull
+        ?.range;
+    _openTransactions(
+      range == null
+          ? TxFilterRequest(
+              budgetId: budgetId,
+              categoryId: categoryId,
+              month: month,
+            )
+          : TxFilterRequest(
+              budgetId: budgetId,
+              categoryId: categoryId,
+              range: range,
+              rangeCounted: true,
+              // "12 to 18 Dec", as the trip shows it.
+              rangeLabel: fmtDayRange(range, DateTime.now()),
+            ),
+    );
+  }
 
   // Top-merchant rows: merchants have no structured field, so the deep-link
   // pre-fills the free-text search with the normalized identity.
@@ -275,6 +301,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     // A process kept alive past a due day records it on the way back.
     _postDueReminders();
     _checkUnusual();
+    _checkPriceRise();
     _syncImportChecks();
     final last = _lastAutoImportAt;
     if (last != null &&
@@ -360,14 +387,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// Budget alerts are on by default, so the Settings toggle (the other
   /// place permission is requested) may never be touched — ask on launch
-  /// when a cap is active, or when unusual spending alerts or the weekly
-  /// digest note (both on by default, no budget needed) are. No-op once
-  /// granted or permanently denied.
+  /// when a cap is active, or when unusual spending alerts, the weekly
+  /// digest note or subscription price rises (all on by default, no budget
+  /// needed) are. No-op once granted or permanently denied.
   Future<void> _ensureNotificationPermission() async {
     if (!mounted) return;
     final settings = context.read<SettingsProvider>();
     final budgetAlerts = settings.budgetAlerts && settings.monthlyBudget > 0;
-    if (!budgetAlerts && !settings.unusualAlerts && !settings.weeklyDigest) {
+    if (!budgetAlerts &&
+        !settings.unusualAlerts &&
+        !settings.weeklyDigest &&
+        !settings.priceRiseAlerts) {
       return;
     }
     await NotificationService.instance.requestPermission();
@@ -453,6 +483,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       case LaunchAction.openAccounts:
         setState(() => _showTab(kHomeTabAccounts));
+      case LaunchAction.openSubscriptions:
+        goCockpitSubscriptions(context);
       // A payment-to-check note: its row's edit sheet, or the list when the
       // row has gone since.
       case LaunchAction.openTransaction:
@@ -470,6 +502,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) showAddTransactionSheet(context, existing: tx);
         });
+      // The Payments to check widget's +N more line: the rows waiting now,
+      // fixed so opening one keeps it listed; the plain list when none wait.
+      case LaunchAction.openChecks:
+        final ids = ImportChecks.checkIds(context.read<FinanceProvider>());
+        _openTransactions(
+          ids.isEmpty ? const TxFilterRequest() : TxFilterRequest(ids: ids),
+        );
       // The This week widget: the digest of the week the tap lands in.
       case LaunchAction.openThisWeek:
         setState(() => _showTab(kHomeTabDashboard));
@@ -607,6 +646,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         )
         .catchError((Object e) => debugPrint('Budget check failed: $e'));
     _checkUnusual();
+    _checkPriceRise();
     // Imports can change what's due (a card payment clears the bill, a new
     // debit completes a recurring pattern) — re-evaluate alongside budgets.
     _checkUpcoming();
@@ -694,17 +734,48 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           0,
           imported,
         );
-        showAppToastOn(
+        _importToast(
           messenger,
+          finance,
           'Auto-import: ${importCountsText(imported, imported - waiting)}.',
           tone: AppToastTone.success,
-          icon: Icons.sms_outlined,
         );
       }
+      // Out of sight no toast can offer Undo: the moves stay made.
+      if (!front) finance.takeAtmMoves();
       return result;
     } finally {
       _autoImporting = false;
     }
+  }
+
+  /// An import's toast. When the import moved ATM withdrawals to Cash
+  /// ([FinanceProvider.takeAtmMoves]) it says how many and offers Undo,
+  /// which moves them back.
+  void _importToast(
+    ScaffoldMessengerState messenger,
+    FinanceProvider finance,
+    String message, {
+    required AppToastTone tone,
+  }) {
+    final moves = finance.takeAtmMoves();
+    if (moves.isEmpty) {
+      showAppToastOn(messenger, message, tone: tone, icon: Icons.sms_outlined);
+      return;
+    }
+    final n = moves.length;
+    final period = message.endsWith('.');
+    final base = period ? message.substring(0, message.length - 1) : message;
+    final text =
+        '$base · $n ATM withdrawal${n == 1 ? '' : 's'} moved to Cash'
+        '${period ? '.' : ''}';
+    showUndoSnackBarOn(
+      messenger,
+      text,
+      () => finance.undoCashMoves(moves),
+      icon: Icons.local_atm,
+      tone: tone,
+    );
   }
 
   /// Records the expenses Add it for me reminders owe up to today, with a
@@ -770,6 +841,18 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         .catchError((Object e) => debugPrint('Unusual check failed: $e'));
   }
 
+  /// The subscription price-rise alert. Also on resume, like
+  /// [_checkUnusual]: a rise can land while the app sits in the background.
+  void _checkPriceRise() {
+    if (!mounted) return;
+    _priceRiseMonitor
+        .check(
+          context.read<FinanceProvider>(),
+          context.read<SettingsProvider>(),
+        )
+        .catchError((Object e) => debugPrint('Price rise check failed: $e'));
+  }
+
   void _checkUpcoming() {
     if (!mounted) return;
     _upcomingMonitor
@@ -821,11 +904,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       final totalImported = (result?.imported ?? 0) + notifImported;
       if (totalImported == 0) return;
       final totalCounted = (result?.counted ?? 0) + notifCounted;
-      showAppToastOn(
+      _importToast(
         messenger,
+        finance,
         'Auto-import: ${importCountsText(totalImported, totalCounted)}.',
         tone: AppToastTone.success,
-        icon: Icons.sms_outlined,
       );
     } catch (e) {
       // Fire-and-forget from a post-frame callback — surface instead of
@@ -957,14 +1040,14 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (result.duplicates > 0) {
           parts.add('${result.duplicates} duplicates skipped');
         }
-        showAppToastOn(
+        _importToast(
           messenger,
+          finance,
           parts.isEmpty
               ? 'No new transactions found in '
                     '${result.scanned} scanned message${result.scanned == 1 ? '' : 's'}.'
               : parts.join(' · '),
           tone: parts.isEmpty ? AppToastTone.info : AppToastTone.success,
-          icon: Icons.sms_outlined,
         );
         // Rows left to review open the sheet at once; rows that only
         // counted land on Transactions as before.
@@ -1161,6 +1244,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   ),
                   onPressed: _importing ? null : () => showReviewSheet(context),
                 ),
+              // Global search; the Transactions tab keeps its own field.
+              if (_index != kHomeTabTransactions) const SearchButton(),
               const SettingsButton(),
               // The shown tab's own entries, then Cockpit and Who owes you.
               HomeMenu(tab: _index),

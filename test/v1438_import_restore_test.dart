@@ -199,7 +199,7 @@ void main() {
         expect(json, isNot(contains('QUILLFERN')));
         expect(json, isNot(contains('XX3141')));
         final data = jsonDecode(json) as Map<String, dynamic>;
-        expect(data['version'], 31);
+        expect(data['version'], 32);
         expect(data['discardedImports'], hasLength(1));
 
         SharedPreferences.setMockInitialValues({});

@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
+import 'package:expense_tracker/services/reminder_schedule.dart';
 import 'package:expense_tracker/utils/dates.dart';
 
 void main() {
@@ -57,7 +58,8 @@ void main() {
     expect(p3.reminders, hasLength(1));
   });
 
-  test('income or unknown categories fall back to Other expense', () async {
+  test('income reminders keep their category; unknown ones fall back to Other '
+      'expense, income transfers to Other income', () async {
     final p = FinanceProvider();
     await p.load();
     await p.addReminder(name: 'a', dayOfMonth: 1, categoryId: 'salary');
@@ -67,13 +69,24 @@ void main() {
       dayOfMonth: 1,
       categoryId: kSavingsTransferCategoryId,
     );
-    expect(p.reminders[0].categoryId, 'other_expense');
+    await p.addReminder(
+      name: 'd',
+      dayOfMonth: 1,
+      categoryId: kTransferInCategoryId,
+    );
+    expect(p.reminders[0].categoryId, 'salary', reason: 'money expected in');
+    expect(reminderIsIncome(p.reminders[0]), isTrue);
     expect(p.reminders[1].categoryId, 'other_expense');
     expect(
       p.reminders[2].categoryId,
       kSavingsTransferCategoryId,
       reason: 'expense-typed transfers are money out',
     );
+    expect(p.reminders[3].categoryId, 'other_income');
+
+    final p2 = FinanceProvider();
+    await p2.load();
+    expect(p2.reminders[0].categoryId, 'salary', reason: 'a reload keeps it');
   });
 
   test('deleting a category remaps its reminders', () async {
@@ -90,6 +103,24 @@ void main() {
     expect(p.reminders.single.categoryId, 'education');
     await p.deleteCategory('education');
     expect(p.reminders.single.categoryId, 'other_expense');
+  });
+
+  test('deleting an income category keeps its reminders money in', () async {
+    final p = FinanceProvider();
+    await p.load();
+    final catId = await p.addCategory(
+      label: 'Side job',
+      type: TxType.income,
+      icon: Icons.work,
+      color: Colors.green,
+    );
+    await p.addReminder(name: 'Pay', dayOfMonth: 1, categoryId: catId);
+    expect(p.reminders.single.categoryId, catId);
+    await p.deleteCategory(catId, moveTo: 'salary');
+    expect(p.reminders.single.categoryId, 'salary');
+    await p.deleteCategory('salary');
+    expect(p.reminders.single.categoryId, 'other_income');
+    expect(reminderIsIncome(p.reminders.single), isTrue);
   });
 
   test(

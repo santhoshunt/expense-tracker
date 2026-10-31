@@ -235,6 +235,7 @@ class _SmsImportPage extends StatelessWidget {
     final filters = context.select<FinanceProvider, int>(
       (f) => f.importRules.length,
     );
+    final atmAuto = context.select<FinanceProvider, bool>((f) => f.atmAutoMove);
 
     return SettingsGroupPage(
       title: 'SMS import',
@@ -295,6 +296,26 @@ class _SmsImportPage extends StatelessWidget {
             ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => goCockpitImport(context),
+          ),
+        ),
+        const SizedBox(height: 12),
+        FrostedPanel(
+          radius: BorderRadius.circular(AppRadius.card),
+          child: _TipSwitchTile(
+            icon: Icons.local_atm,
+            label: 'Move ATM withdrawals to Cash',
+            subtitle: atmAuto
+                ? 'Each ATM alert becomes a move from the bank to Cash'
+                : 'The review sheet asks about each ATM alert',
+            tip:
+                'Taking cash out of an ATM moves money from your bank to '
+                'cash in hand, so it is not spending. On, each ATM alert '
+                'becomes a transfer from the bank to your Default Cash '
+                'account, and the cash payments you record count as '
+                'spending. Off, the review sheet asks about each one. It '
+                'turns on the first time you tap Move there.',
+            value: atmAuto,
+            onChanged: (v) => context.read<FinanceProvider>().setAtmAutoMove(v),
           ),
         ),
         const SizedBox(height: 12),

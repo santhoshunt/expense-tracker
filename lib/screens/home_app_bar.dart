@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
 import 'app_nav.dart';
 import 'classifiers_screen.dart';
+import 'search_screen.dart';
 import 'settings_screen.dart';
 
 /// The Dashboard's app-bar title: the shown month or year between its
 /// arrows, then a Year (or Month) button that switches the view; tapping
-/// the label opens the month picker. Driven by [AppNav.dashboardHeader],
-/// which the Dashboard keeps current.
+/// the label opens the month picker. On a page with no month (Ahead) it is
+/// a fixed title over a muted subtitle, with no arrows and no picker.
+/// Driven by [AppNav.dashboardHeader], which the Dashboard keeps current.
 class DashboardMonthTitle extends StatelessWidget {
   const DashboardMonthTitle({super.key});
 
@@ -17,63 +19,90 @@ class DashboardMonthTitle extends StatelessWidget {
     final header = AppNav.instance.dashboardHeader;
     return ListenableBuilder(
       listenable: header,
-      builder: (context, _) => Row(
-        children: [
-          IconButton(
-            tooltip: header.yearMode ? 'Previous year' : 'Previous month',
-            visualDensity: VisualDensity.compact,
-            // Read on tap, not at build: the header swaps its callbacks
-            // without a rebuild when the Dashboard changes or goes.
-            onPressed: header.onPrev == null
-                ? null
-                : () => header.onPrev?.call(),
-            icon: const Icon(Icons.chevron_left),
-          ),
-          Flexible(
-            // The label is still the picker's button, without the ▾ so it
-            // keeps its width beside the switch.
-            child: Semantics(
-              button: true,
-              hint: header.yearMode ? 'Pick a year' : 'Pick a month',
-              child: InkWell(
-                borderRadius: BorderRadius.circular(AppRadius.control),
-                onTap: header.onPick == null
-                    ? null
-                    : () => header.onPick?.call(),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 8,
-                    horizontal: 4,
-                  ),
-                  // Shrinks rather than cutting the month short on a
-                  // narrow screen with large text.
-                  child: FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      header.label,
-                      maxLines: 1,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+      builder: (context, _) {
+        final sub = header.subtitle;
+        if (sub != null) {
+          final text = Theme.of(context).textTheme;
+          return Padding(
+            padding: const EdgeInsets.only(left: 12),
+            // Shrinks rather than overflowing the toolbar at large text.
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    header.label,
+                    maxLines: 1,
+                    style: text.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
+                  Text(
+                    sub,
+                    maxLines: 1,
+                    style: text.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+        return _monthRow(context, header);
+      },
+    );
+  }
+
+  Widget _monthRow(BuildContext context, DashboardHeader header) => Row(
+    children: [
+      IconButton(
+        tooltip: header.yearMode ? 'Previous year' : 'Previous month',
+        visualDensity: VisualDensity.compact,
+        // Read on tap, not at build: the header swaps its callbacks
+        // without a rebuild when the Dashboard changes or goes.
+        onPressed: header.onPrev == null ? null : () => header.onPrev?.call(),
+        icon: const Icon(Icons.chevron_left),
+      ),
+      Flexible(
+        // The label is still the picker's button, without the ▾ so it
+        // keeps its width beside the switch.
+        child: Semantics(
+          button: true,
+          hint: header.yearMode ? 'Pick a year' : 'Pick a month',
+          child: InkWell(
+            borderRadius: BorderRadius.circular(AppRadius.control),
+            onTap: header.onPick == null ? null : () => header.onPick?.call(),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              // Shrinks rather than cutting the month short on a
+              // narrow screen with large text.
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  header.label,
+                  maxLines: 1,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
             ),
           ),
-          IconButton(
-            tooltip: header.yearMode ? 'Next year' : 'Next month',
-            visualDensity: VisualDensity.compact,
-            onPressed: header.onNext == null
-                ? null
-                : () => header.onNext?.call(),
-            icon: const Icon(Icons.chevron_right),
-          ),
-          // The Month or Year switch lives in ⋮ only (with its tip).
-        ],
+        ),
       ),
-    );
-  }
+      IconButton(
+        tooltip: header.yearMode ? 'Next year' : 'Next month',
+        visualDensity: VisualDensity.compact,
+        onPressed: header.onNext == null ? null : () => header.onNext?.call(),
+        icon: const Icon(Icons.chevron_right),
+      ),
+      // The Month or Year switch lives in ⋮ only (with its tip).
+    ],
+  );
 }
 
 /// The app bar's Settings button, just before the ⋮ menu on every tab.
@@ -88,6 +117,24 @@ class SettingsButton extends StatelessWidget {
       onPressed: () => Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const SettingsScreen()),
+      ),
+    );
+  }
+}
+
+/// The app bar's Search button, before Settings on the Dashboard and
+/// Accounts tabs; the Transactions tab keeps its own field.
+class SearchButton extends StatelessWidget {
+  const SearchButton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Search',
+      icon: const Icon(Icons.search),
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SearchScreen()),
       ),
     );
   }

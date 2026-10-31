@@ -134,10 +134,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       settings.unusualAlerts,
       settings.weeklyDigest,
       settings.upcomingReminders,
+      settings.priceRiseAlerts,
     ].where((on) => on).length;
     final notifications = notificationsOn == 0
         ? 'All off'
-        : '$notificationsOn of 4 on';
+        : '$notificationsOn of 5 on';
     final (cards, cardsSetUp) = context.select<FinanceProvider, (int, int)>((
       f,
     ) {

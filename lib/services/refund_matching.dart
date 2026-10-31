@@ -60,14 +60,17 @@ class RefundCandidate {
 /// ([remainingOf]). Each must name the refund's merchant, or sit on the
 /// refund's account when the refund is worded as one ([isRefundWorded]).
 /// Same merchant first, then the exact amount, then the closest date. None
-/// for a cashback: a reward, never a refund.
+/// for a cashback: a reward, never a refund. None for a row of a category
+/// split: its parts are not refunds.
 List<RefundCandidate> refundCandidatesFor(
   Tx refund,
   Iterable<Tx> confirmed, {
   required double Function(Tx) remainingOf,
   required bool Function(Tx) counts,
 }) {
-  if (refund.type != TxType.income || _cashbackRe.hasMatch(refund.smsText)) {
+  if (refund.splitId != null ||
+      refund.type != TxType.income ||
+      _cashbackRe.hasMatch(refund.smsText)) {
     return const [];
   }
   final refundMerchant = merchantIdentityOf(refund);

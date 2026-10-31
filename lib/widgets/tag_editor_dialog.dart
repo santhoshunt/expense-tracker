@@ -120,20 +120,29 @@ Future<void> showTagEditor(
   if (result == null || !context.mounted) return;
 
   final colours = finance.tagColorSnapshot;
+  final budgetsBefore = finance.budgets;
   final name = result.name;
   if (name == null) {
     final before = await finance.deleteTag(tag);
     onEdited?.call(null);
     if (!context.mounted) return;
+    final budgetsGone = budgetsBefore.length - finance.budgets.length;
+    final budgetText = budgetsGone <= 0
+        ? ''
+        : budgetsGone == 1
+        ? ' and its budget'
+        : ' and its $budgetsGone budgets';
     showUndoSnackBar(
       context,
       before.isEmpty
-          ? 'Deleted tag "$tag"'
+          ? 'Deleted tag "$tag"$budgetText'
           : 'Deleted tag "$tag" from ${before.length} '
-                '${before.length == 1 ? 'transaction' : 'transactions'}',
+                '${before.length == 1 ? 'transaction' : 'transactions'}'
+                '$budgetText',
       () async {
         await finance.restoreEditedTransactions(before);
         await finance.restoreTagColors(colours);
+        await finance.restoreBudgets(budgetsBefore);
         onEdited?.call(tag);
       },
       icon: Icons.delete_outline,
@@ -167,6 +176,7 @@ Future<void> showTagEditor(
     () async {
       await finance.restoreEditedTransactions(before);
       await finance.restoreTagColors(colours);
+      await finance.restoreBudgets(budgetsBefore);
       onEdited?.call(tag);
     },
     icon: Icons.edit_outlined,

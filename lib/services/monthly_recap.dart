@@ -58,7 +58,8 @@ class MonthlyRecap {
   });
 }
 
-/// Every budget with a limit, cap first, with its spending in [month].
+/// Every monthly budget with a limit, cap first, with its spending in
+/// [month]. Dated budgets are no month's.
 List<BudgetStanding> _standings(
   FinanceProvider finance,
   SettingsProvider settings,
@@ -72,7 +73,7 @@ List<BudgetStanding> _standings(
       limit: settings.monthlyBudget,
     ),
   for (final b in finance.budgets)
-    if (b.limit > 0)
+    if (b.limit > 0 && b.range == null)
       (
         budgetId: b.id,
         label: b.name,

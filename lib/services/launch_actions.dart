@@ -47,6 +47,14 @@ enum LaunchAction {
   /// A payment-to-check note or its Change button: that row's edit sheet,
   /// for the id [LaunchActions.takeTxId] hands over.
   openTransaction,
+
+  /// A subscription price-rise alert: Cockpit, Budgets and bills,
+  /// Subscriptions.
+  openSubscriptions,
+
+  /// The Payments to check widget's +N more line: Transactions filtered to
+  /// the rows waiting when the tap arrives.
+  openChecks,
 }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
@@ -115,10 +123,25 @@ class LaunchActions {
     'open_big_bills' => LaunchAction.openBigBills,
     'open_review' => LaunchAction.openReview,
     'open_accounts' => LaunchAction.openAccounts,
+    'open_checks' => LaunchAction.openChecks,
     // The widget names no week: it always opens the current one.
     'open_weekly_digest' => LaunchAction.openThisWeek,
     _ => null,
   };
+
+  /// [fromName], plus the Payments to check widget's row taps:
+  /// [kOpenTxLaunchPrefix] and a row id hold the id for [takeTxId] and open
+  /// that row.
+  LaunchAction? _fromLaunchName(String? name) {
+    if (name != null && name.startsWith(kOpenTxLaunchPrefix)) {
+      final id = name.substring(kOpenTxLaunchPrefix.length);
+      if (id.isNotEmpty) {
+        _txId = id;
+        return LaunchAction.openTransaction;
+      }
+    }
+    return fromName(name);
+  }
 
   /// Listens for warm launches and collects the cold-start action, if any.
   /// [coldNotificationPayload] is the payload of a notification that
@@ -131,13 +154,13 @@ class LaunchActions {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     channel.setMethodCallHandler((call) async {
       if (call.method == 'launchAction') {
-        final action = fromName(call.arguments as String?);
+        final action = _fromLaunchName(call.arguments as String?);
         if (action != null) pending.value = action;
       }
       return null;
     });
     try {
-      final cold = fromName(
+      final cold = _fromLaunchName(
         await channel.invokeMethod<String>('takeLaunchAction'),
       );
       if (cold != null) pending.value = cold;
@@ -188,6 +211,7 @@ class LaunchActions {
       kUpcomingPayload => LaunchAction.openUpcoming,
       kBudgetPayload => LaunchAction.openBudget,
       kBudgetsPayload => LaunchAction.openBudgets,
+      kSubscriptionsPayload => LaunchAction.openSubscriptions,
       _ => null,
     };
   }
@@ -280,6 +304,10 @@ String importCheckPayload(String txId, String categoryId) =>
   }
 }
 
+/// Launch name prefix on a Payments to check widget row, followed by the
+/// row id: `open_tx:<id>` opens that row's edit sheet.
+const String kOpenTxLaunchPrefix = 'open_tx:';
+
 /// The Keep button on a guessed row's payment-to-check note. It runs in the
 /// plugin's own engine without opening the app.
 const String kImportCheckKeepAction = 'keep';
@@ -296,6 +324,9 @@ const String kRecapPayload = 'recap';
 
 /// Payload on the "transactions to review" notification.
 const String kReviewPayload = 'review';
+
+/// Payload on a subscription price-rise alert.
+const String kSubscriptionsPayload = 'subscriptions';
 
 // The alerts below carry the launch name of the home-screen widget for the
 // same card, so a tap lands where that widget's tap does.

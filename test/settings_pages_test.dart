@@ -89,11 +89,11 @@ void main() {
 
     // A new install: dark, the default theme's own accent, no automatic
     // import, no lock. Budget alerts count only with a cap or a custom
-    // budget to watch, so three of the four alerts are on.
+    // budget to watch, so four of the five alerts are on.
     expect(find.text('Dark · Default accent'), findsOneWidget);
     expect(find.text('Automatic import off'), findsOneWidget);
     expect(find.text('Lock off'), findsOneWidget);
-    expect(find.text('3 of 4 on'), findsOneWidget);
+    expect(find.text('4 of 5 on'), findsOneWidget);
     // The Cockpit card, then the rows of one grouped card.
     expect(find.byType(GroupedSurface), findsNWidgets(8));
     expect(find.text('Rules, categories, budgets, dashboard layout'), findsOne);
@@ -108,7 +108,7 @@ void main() {
     expect(find.text('Light · Ocean accent'), findsOneWidget);
     expect(find.text('Daily'), findsOneWidget);
     expect(find.text('Lock on · Income hidden'), findsOneWidget);
-    expect(find.text('4 of 4 on'), findsOneWidget);
+    expect(find.text('5 of 5 on'), findsOneWidget);
 
     // Every mode but Off shows its own label, On open included.
     await settings.setAutoImport(AutoImportFrequency.everyOpen);
@@ -116,6 +116,7 @@ void main() {
     await settings.setUnusualAlerts(false);
     await settings.setWeeklyDigest(false);
     await settings.setUpcomingReminders(false);
+    await settings.setPriceRiseAlerts(false);
     await pumpThrough(tester);
     expect(find.text('On open'), findsOneWidget);
     expect(find.text('All off'), findsOneWidget);

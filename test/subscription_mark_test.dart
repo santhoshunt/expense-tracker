@@ -165,7 +165,9 @@ void main() {
     expect(p.subscriptionPins, isEmpty);
   });
 
-  testWidgets('a transfer offers no switch', (tester) async {
+  testWidgets('a money-out transfer offers the switch, as savings', (
+    tester,
+  ) async {
     final (p, s) = await seeded();
     await tester.pumpWidget(
       app(
@@ -186,7 +188,7 @@ void main() {
     );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(SwitchListTile, 'Subscription'), findsNothing);
+    expect(find.widgetWithText(SwitchListTile, 'Subscription'), findsOneWidget);
   });
 
   testWidgets('the selection bar marks each merchant once, skips the '

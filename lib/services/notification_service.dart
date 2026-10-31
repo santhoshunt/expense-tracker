@@ -55,10 +55,12 @@ class NotificationService {
   static const _channelName = 'Budget alerts';
 
   /// Every alert on this channel, as Android Settings lists it: payment
-  /// reminders and unusual spending post here too. Android updates the
-  /// description of an existing channel when it is created again.
+  /// reminders, unusual spending and subscription price rises post here
+  /// too. Android updates the description of an existing channel when it is
+  /// created again.
   static const _channelDescription =
-      'Budget thresholds, unusual spending and payments coming due';
+      'Budget thresholds, unusual spending, payments coming due and '
+      'subscription price rises';
 
   static const _recapChannelId = 'monthly_recap';
   static const _recapChannelName = 'Monthly recap';

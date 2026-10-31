@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:isolate';
 import 'dart:ui' show IsolateNameServer;
 
@@ -16,6 +17,28 @@ import 'notification_service.dart';
 /// own engine writes it and must never load the ledger (only one isolate
 /// may hold it), so the engine that does applies them ([applyKept]).
 const String kImportChecksKeptKey = 'import_checks_kept_v1';
+
+/// Keep taps from the Payments to check widget, a JSON array of
+/// [importCheckPayload] strings that Kotlin writes as a plain string
+/// (HomeWidgets.queueKeep), drained here.
+const String kImportChecksWidgetKeptKey = 'import_checks_widget_kept_v1';
+
+/// The payloads queued under [kImportChecksWidgetKeptKey], or none when the
+/// key is missing or malformed.
+List<String> _widgetKept(SharedPreferences prefs) {
+  final raw = prefs.getString(kImportChecksWidgetKeptKey);
+  if (raw == null) return [];
+  try {
+    final list = jsonDecode(raw);
+    if (list is! List) return [];
+    return [
+      for (final p in list)
+        if (p is String && p.isNotEmpty) p,
+    ];
+  } on FormatException {
+    return [];
+  }
+}
 
 /// The name the open app's port for Keep taps goes by. The plugin's engine
 /// runs in the app's process, so it finds the port here and the app applies
@@ -140,25 +163,35 @@ abstract final class ImportChecks {
     port.close();
   }
 
-  /// Confirms the queued Keep taps in the ledger, then drops them from the
-  /// queue. A tap landing between the second reload and the write is lost
-  /// and its row stays guessed; the row still counts and its pill still
-  /// offers Keep.
+  /// Confirms the queued Keep taps in the ledger, from the notes
+  /// ([kImportChecksKeptKey]) and from the Payments to check widget
+  /// ([kImportChecksWidgetKeptKey]), then drops them from both queues. A tap
+  /// landing between the second reload and the write is lost and its row
+  /// stays guessed; the row still counts and its pill still offers Keep.
   static Future<void> applyKept(FinanceProvider finance) async {
     if (finance.loadWarnings.isNotEmpty) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
     final read = prefs.getStringList(kImportChecksKeptKey) ?? const [];
-    if (read.isEmpty) return;
+    final fromWidget = _widgetKept(prefs);
+    if (read.isEmpty && fromWidget.isEmpty) return;
     await finance.confirmGuesses([
-      for (final p in read) ?parseImportCheckPayload(p),
+      for (final p in [...read, ...fromWidget]) ?parseImportCheckPayload(p),
     ]);
     await prefs.reload();
-    final now = [...?prefs.getStringList(kImportChecksKeptKey)];
-    for (final p in read) {
-      now.remove(p);
+    if (read.isNotEmpty) {
+      final now = [...?prefs.getStringList(kImportChecksKeptKey)];
+      for (final p in read) {
+        now.remove(p);
+      }
+      await prefs.setStringList(kImportChecksKeptKey, now);
     }
-    await prefs.setStringList(kImportChecksKeptKey, now);
+    if (fromWidget.isNotEmpty) {
+      await prefs.setString(
+        kImportChecksWidgetKeptKey,
+        jsonEncode(_widgetKept(prefs)..removeWhere(fromWidget.contains)),
+      );
+    }
   }
 
   /// Shows the summary over two or more notes, else cancels it.

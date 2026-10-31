@@ -57,6 +57,10 @@ abstract final class NotificationIds {
   static const importCheckStart = 400000;
   static const importCheckEnd = 499999;
 
+  /// Subscription price-rise alerts, one per subscription (PriceRiseMonitor).
+  static const priceRiseStart = 500000;
+  static const priceRiseEnd = 599999;
+
   /// Every range with its owner, for the overlap test. A fixed id is a
   /// range of one.
   static const ranges = <({int start, int end, String owner})>[
@@ -75,6 +79,7 @@ abstract final class NotificationIds {
     (start: unusualStart, end: unusualEnd, owner: 'Unusual spending'),
     (start: customBudgetStart, end: customBudgetEnd, owner: 'Custom budgets'),
     (start: importCheckStart, end: importCheckEnd, owner: 'Payments to check'),
+    (start: priceRiseStart, end: priceRiseEnd, owner: 'Price rises'),
   ];
 
   static int _hashed(int start, int end, String key) =>
@@ -101,4 +106,7 @@ abstract final class NotificationIds {
 
   static int importCheck(String txId) =>
       _hashed(importCheckStart, importCheckEnd, txId);
+
+  static int priceRise(String hitKey) =>
+      _hashed(priceRiseStart, priceRiseEnd, hitKey);
 }

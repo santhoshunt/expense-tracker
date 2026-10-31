@@ -30,6 +30,8 @@
     <string name="home_widget_week_compact_description">This week\'s spend so far against a usual week, as one bar.</string>
     <string name="home_widget_accounts_label">Accounts</string>
     <string name="home_widget_accounts_description">What you spent and what is left on the bank accounts, cards and wallets you pick.</string>
+    <string name="home_widget_checks_label">Payments to check</string>
+    <string name="home_widget_checks_description">Payments an import counted with a guessed category or as To sort, with Keep to confirm a guess.</string>
     <string name="home_widget_empty">Open Expense Tracker to set up this widget.</string>
     <string name="home_widget_accounts_empty">Pick accounts: hold the widget, then Reconfigure</string>
     <!-- Text inside the widgets. -->
@@ -40,6 +42,11 @@
     <string name="home_widget_big_bills_title">Big bills</string>
     <string name="home_widget_week_title">This week</string>
     <string name="home_widget_accounts_title">Accounts</string>
+    <string name="home_widget_checks_title">Payments to check</string>
+    <string name="home_widget_checks_done">All checked</string>
+    <string name="home_widget_checks_done_hint">New imports with a guessed category show here with Keep.</string>
+    <string name="home_widget_checks_open">Open Transactions</string>
+    <string name="home_widget_checks_keep">Keep</string>
     <string name="home_widget_usual_marker">│ usual by today</string>
     <string name="home_widget_add">+ Add</string>
     <string name="home_widget_action_expense">− Expense</string>

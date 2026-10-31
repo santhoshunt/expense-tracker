@@ -75,7 +75,7 @@ void main() {
       await source.setSubscriptionPins({key: SubscriptionCycle.monthly});
 
       final data = jsonDecode(jsonEncode(source.exportData())) as Map;
-      expect(data['version'], 31);
+      expect(data['version'], 32);
       final exported = (data['transactions'] as List).single as Map;
       expect(exported.containsKey('smsBody'), isFalse);
       expect(exported['smsMerchant'], SmsTxnParser.merchantOf(body));

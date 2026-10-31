@@ -337,13 +337,13 @@ void main() {
     expect(opened?.query, 'netflix');
   });
 
-  testWidgets('the Breakdown line opens the Subscriptions tab', (tester) async {
+  testWidgets('the Ahead line opens the Subscriptions tab', (tester) async {
     final p = await seeded();
     await tester.pumpWidget(
       app(p, await settings(), const Scaffold(body: DashboardScreen())),
     );
     await tester.pumpAndSettle();
-    await openDashboardView(tester, 'Breakdown');
+    await openDashboardView(tester, 'Ahead');
 
     // Folded at first: open it, then tap its card.
     await openDashboardSection(tester, 'subscriptions');

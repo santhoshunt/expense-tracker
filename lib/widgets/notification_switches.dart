@@ -11,8 +11,9 @@ import 'glossy.dart';
 import 'info_tip.dart';
 
 /// The alert switches of Settings, Notifications: Budget alerts with its
-/// 80/90/overshoot levels, Unusual spending alerts, Weekly digest and
-/// Payment reminders, plus a warning when Android blocks notifications.
+/// 80/90/overshoot levels, Unusual spending alerts, Weekly digest, Payments
+/// to check, Payment reminders and Subscription price rises, plus a warning
+/// when Android blocks notifications.
 /// Turning a switch on requests notification permission.
 class NotificationSwitches extends StatefulWidget {
   const NotificationSwitches({super.key});
@@ -118,7 +119,8 @@ class _NotificationSwitchesState extends State<NotificationSwitches>
                     settings.unusualAlerts ||
                     settings.weeklyDigest ||
                     settings.importChecks ||
-                    settings.upcomingReminders) &&
+                    settings.upcomingReminders ||
+                    settings.priceRiseAlerts) &&
                 _notifStatus != null &&
                 _notifStatus != NotificationStatus.enabled)
               Padding(
@@ -302,6 +304,38 @@ class _NotificationSwitchesState extends State<NotificationSwitches>
                   await context.read<SettingsProvider>().setUpcomingReminders(
                     on,
                   );
+                  if (on) {
+                    await NotificationService.instance.requestPermission();
+                  }
+                  await _checkNotifications();
+                },
+              ),
+            ),
+            // Independent of any budget: it follows the Up mark on
+            // Subscriptions.
+            _SwitchWithTip(
+              tip: const InfoTip(
+                title: 'Subscription price rises',
+                message:
+                    'A subscription alerts once for each payment that is at '
+                    'least ₹10 and 5% more than the payment before it, the '
+                    'same rule as the Up mark on Subscriptions. Payments '
+                    'older than 31 days, hidden subscriptions and stopped '
+                    'ones never alert. Alerts are checked when the app opens '
+                    'and about every 6 hours while it is closed. Tapping an '
+                    'alert opens Subscriptions.',
+              ),
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Subscription price rises'),
+                subtitle: Text(
+                  'Notify when a subscription charges more than the payment '
+                  'before',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                value: settings.priceRiseAlerts,
+                onChanged: (on) async {
+                  await context.read<SettingsProvider>().setPriceRiseAlerts(on);
                   if (on) {
                     await NotificationService.instance.requestPermission();
                   }

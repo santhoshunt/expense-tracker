@@ -9,12 +9,16 @@ import 'settings_screen.dart';
 import 'transactions_screen.dart';
 
 /// What the Dashboard puts in Home's app bar: the month or year, its arrows
-/// and the Month or Year switch. Its ⋮ entries go through [PageMenu]. The
-/// Dashboard owns the month and Year view state and [update]s this after
-/// each change; Home's bar listens. Null callbacks leave their control
-/// disabled.
+/// and the Month or Year switch, or on a page with no month (Ahead) a fixed
+/// title over a [subtitle] with no arrows. Its ⋮ entries go through
+/// [PageMenu]. The Dashboard owns the month and Year view state and
+/// [update]s this after each change; Home's bar listens. Null callbacks
+/// leave their control disabled.
 class DashboardHeader extends ChangeNotifier {
   String label = '';
+
+  /// A muted line under [label] on a page with no month (Ahead): the arrows hide and the label is not a picker.
+  String? subtitle;
   bool yearMode = false;
   VoidCallback? onPrev;
   VoidCallback? onNext;
@@ -38,10 +42,12 @@ class DashboardHeader extends ChangeNotifier {
     required VoidCallback? onNext,
     required VoidCallback onPick,
     VoidCallback? onToggleView,
+    String? subtitle,
   }) {
     final changed =
         owner != _owner ||
         label != this.label ||
+        subtitle != this.subtitle ||
         yearMode != this.yearMode ||
         (onPrev == null) != (this.onPrev == null) ||
         (onNext == null) != (this.onNext == null) ||
@@ -49,6 +55,7 @@ class DashboardHeader extends ChangeNotifier {
         this.onPick == null;
     _owner = owner;
     this.label = label;
+    this.subtitle = subtitle;
     this.yearMode = yearMode;
     this.onPrev = onPrev;
     this.onNext = onNext;
@@ -337,6 +344,7 @@ void goCockpitTags(BuildContext c) =>
 void goCockpitDashboard(BuildContext c, DashboardPage page) =>
     AppNav.instance.openCockpit(c, switch (page) {
       DashboardPage.overview => kCockpitTabDashOverview,
+      DashboardPage.ahead => kCockpitTabDashAhead,
       DashboardPage.trends => kCockpitTabDashTrends,
       DashboardPage.breakdown => kCockpitTabDashBreakdown,
     });

@@ -315,8 +315,22 @@ void main() {
       return p;
     }
 
+    /// Next 7 days sits on Ahead, folded at first.
+    Future<void> openUpcoming(WidgetTester tester) async {
+      await openDashboardView(tester, 'Ahead');
+      await openDashboardSection(tester, 'upcoming');
+    }
+
+    /// The Netflix row inside Next 7 days: the Expected balance section
+    /// above it lists the payment too.
+    final upcomingRow = find.descendant(
+      of: find.byKey(const ValueKey('fold-upcoming')),
+      matching: find.text('Netflix'),
+    );
+
     Future<void> openRow(WidgetTester tester) async {
-      final row = find.text('Netflix');
+      await openUpcoming(tester);
+      final row = upcomingRow;
       await tester.scrollUntilVisible(
         row,
         300,
@@ -386,7 +400,8 @@ void main() {
       tester,
     ) async {
       await pumpDashboard(tester, await seeded());
-      final row = find.text('Netflix');
+      await openUpcoming(tester);
+      final row = upcomingRow;
       await tester.scrollUntilVisible(
         row,
         300,

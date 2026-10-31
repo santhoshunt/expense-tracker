@@ -42,6 +42,11 @@ void main() {
     bool lastMonthData = true,
     void Function(String id, DateTime month)? onViewCategory,
   }) async {
+    // Tall enough that the recap sits on screen under the Month-end
+    // forecast card and its See chart row.
+    tester.view.physicalSize = const Size(800, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     recapClock = () => DateTime(now.year, now.month, day, 10);
     final p = FinanceProvider();
     await p.load();

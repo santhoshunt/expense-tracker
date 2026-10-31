@@ -106,7 +106,7 @@ bool isBillRow(Tx t, Map<String, double?> billKeys, List<Reminder> reminders) {
   for (final r in reminders) {
     final expected = r.expectedAmount;
     if (expected == null || (t.amount - expected).abs() >= 1) continue;
-    if (isTransferCategory(r.categoryId)) continue;
+    if (isTransferCategory(r.categoryId) || reminderIsIncome(r)) continue;
     if ((r.autoAdd || t.source == TxSource.manual) &&
         r.categoryId != t.categoryId) {
       continue;
@@ -124,12 +124,16 @@ bool isBillRow(Tx t, Map<String, double?> billKeys, List<Reminder> reminders) {
 
 /// The forecast for [now]'s month; null on a ledger with no confirmed rows.
 /// [cap] <= 0 means no monthly cap.
+///
+/// [wholeMonth] true measures each past month's everyday spend per day over
+/// all its days, the figure the 31-day projection spreads.
 MonthForecast? computeMonthForecast(
   FinanceProvider finance, {
   required List<RecurringHit> patterns,
   required Set<String> hidden,
   required DateTime now,
   double cap = 0,
+  bool wholeMonth = false,
 }) {
   final first = finance.firstTransactionDate;
   if (first == null) return null;
@@ -214,13 +218,14 @@ MonthForecast? computeMonthForecast(
   // missing-records test. A month too short to have such days (February
   // on the 30th) can't say.
   final measured = <({double perDay, double capped})>[];
+  final fromDay = wholeMonth ? 0 : now.day;
   for (final (m, rows) in rowsByMonth) {
-    final days = daysInMonth(m.year, m.month) - now.day;
+    final days = daysInMonth(m.year, m.month) - fromDay;
     if (days <= 0) continue;
     var sum = 0.0;
     var capped = 0.0;
     for (final t in rows) {
-      if (t.effectiveDate.day <= now.day) continue;
+      if (t.effectiveDate.day <= fromDay) continue;
       final spend = finance.netSpendOf(t);
       sum += spend;
       capped += math.min(spend, rowCap);

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderParagraph;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -218,6 +219,79 @@ void main() {
         tester.getBottomLeft(find.text('−${fmtMoney(40)}')).dy,
       ),
     );
+  });
+
+  testWidgets('a search reason stays whole when line two ellipsizes', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'shopping',
+      amount: 650,
+      payee: 'Sample Gifts',
+      note: 'Birthday gift for a close friend from college',
+      date: date,
+    );
+    // A short reason and wide screens: the test font draws every glyph a
+    // square as wide as the font size, about twice a phone font, so line
+    // two measures only 70dp at 320dp here and 150dp at 400dp, where
+    // " · via ABC" takes 124dp. A longer reason, or a narrower screen, would
+    // not fit whole in this test even though it does on a phone.
+    Future<void> at(double width, double scale, {bool guessed = false}) => pump(
+      tester,
+      p,
+      ListView(
+        children: [
+          TransactionTile(
+            tx: p.transactions.single.copyWith(categoryGuessed: guessed),
+            matchNote: 'via ABC',
+          ),
+        ],
+      ),
+      size: Size(width, 800),
+      textScale: scale,
+    );
+    RenderParagraph paragraph(Finder f) =>
+        tester.renderObject<RenderParagraph>(f);
+    void expectWhole(String where) {
+      final reason = find.textContaining('via ABC');
+      expect(reason, findsOneWidget, reason: where);
+      expect(paragraph(reason).didExceedMaxLines, isFalse, reason: where);
+    }
+
+    // The category and note ellipsize; the reason after them stays whole.
+    for (final width in <double>[400, 480]) {
+      await at(width, 1);
+      final where = 'width $width';
+      expect(tester.takeException(), isNull, reason: where);
+      final base = find.textContaining('Birthday gift');
+      expect(paragraph(base).didExceedMaxLines, isTrue, reason: where);
+      expect(find.text(' · via ABC'), findsOneWidget, reason: where);
+      expectWhole(where);
+    }
+    // A guessed category's pill gives way to the reason too, up to half the
+    // line.
+    for (final width in <double>[560, 600]) {
+      await at(width, 1, guessed: true);
+      final where = 'guessed, width $width';
+      expect(tester.takeException(), isNull, reason: where);
+      expect(find.textContaining('guessed'), findsOneWidget, reason: where);
+      expectWhole(where);
+    }
+    // Narrower, larger text: where " · via ABC" no longer fits, the reason
+    // alone takes the line.
+    for (final scale in [1.0, 1.3, 2.0, 3.0]) {
+      for (final width in <double>[280, 320]) {
+        for (final guessed in [false, true]) {
+          await at(width, scale, guessed: guessed);
+          final where = 'width $width, scale $scale, guessed $guessed';
+          expect(tester.takeException(), isNull, reason: where);
+          expect(find.textContaining('via ABC'), findsOneWidget, reason: where);
+        }
+      }
+    }
   });
 
   // From 280dp: below that the tile's fixed parts (padding, icon, gaps and

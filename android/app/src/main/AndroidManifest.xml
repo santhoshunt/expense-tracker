@@ -359,6 +359,23 @@
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
             </intent-filter>
         </activity>
+        <receiver
+            android:name=".PaymentsToCheckWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_checks_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_checks_info"/>
+        </receiver>
+        <!-- Keep on a Payments to check widget row, queued for
+             ImportChecks.applyKept; not exported, so no other app can
+             confirm a guess. -->
+        <receiver
+            android:exported="false"
+            android:name=".CheckKeepReceiver" />
         <!-- Background SMS import (BackgroundImport.kt). Off in the manifest;
              switched on only while Auto-import is Every SMS. Only the system
              SMS broadcaster (BROADCAST_SMS) can reach it. -->

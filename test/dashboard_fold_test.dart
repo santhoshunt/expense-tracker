@@ -147,10 +147,16 @@ void main() {
     await pump(tester);
     await openDashboardView(tester, 'Trends');
     // 900 this month against 400 on the same days last month: past a
-    // doubling, so "times", not a percentage.
+    // doubling, so "times", not a percentage. On the month's last day the
+    // comparison takes the month whole, so no "so far".
+    final now = DateTime.now();
+    final lastDay = DateTime(now.year, now.month + 1, 0).day;
     expect(
       fold(tester, 'pace').summary,
-      allOf(startsWith('₹900 so far, '), endsWith(' times last month')),
+      allOf(
+        startsWith(now.day < lastDay ? '₹900 so far, ' : '₹900, '),
+        endsWith(' times last month'),
+      ),
     );
     // One month on record: no usual yet, so no category reads as up.
     await tester.scrollUntilVisible(

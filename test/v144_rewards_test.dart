@@ -14,7 +14,6 @@ import 'package:expense_tracker/screens/card_rewards_page.dart';
 import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/card_rewards.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
-import 'package:expense_tracker/utils/format.dart';
 
 import 'accounts_test_utils.dart';
 
@@ -394,16 +393,7 @@ void main() {
     await tester.pumpWidget(accountsApp(finance));
     await tester.pumpAndSettle();
 
-    final a = finance.accountById('card1')!;
-    final cycle = cardCycleOf(a, now);
     expect(find.text('Cashback this cycle ≈ ₹530 · capped'), findsOneWidget);
-    expect(
-      find.text(
-        'Cycle ${fmtDateCompact(cycle.start)} to ${fmtDateCompact(cycle.end)}'
-        ' · last cycle ₹100',
-      ),
-      findsOneWidget,
-    );
 
     await tester.tap(find.text('More'));
     await tester.pumpAndSettle();

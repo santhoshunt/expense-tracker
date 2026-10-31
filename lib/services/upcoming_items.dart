@@ -136,7 +136,8 @@ List<UpcomingItem> buildUpcomingItems(
         urgent: days <= 0,
         muted: false,
         categoryId: r.categoryId,
-        type: TxType.expense,
+        // A salary reminder is money in, and shows in green.
+        type: reminderIsIncome(r) ? TxType.income : TxType.expense,
         reminder: r,
       ),
     );

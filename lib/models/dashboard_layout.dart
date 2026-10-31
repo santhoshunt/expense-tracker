@@ -1,5 +1,8 @@
 /// The dashboard's pages, as the tab bar shows them.
-enum DashboardPage { overview, trends, breakdown }
+enum DashboardPage { overview, ahead, trends, breakdown }
+
+/// The Ahead page's window in days, today included: the app bar's range and the 31-day projection both read it.
+const int kAheadDays = 31;
 
 /// Every section the dashboard can reorder, hide or fold. A label that a
 /// card also shows as its own heading matches it word for word: inside a
@@ -15,12 +18,14 @@ enum DashboardSection {
   monthlyBudget(DashboardPage.overview, 'Monthly budget', true),
   forecast(DashboardPage.overview, 'Month-end forecast', true),
   recap(DashboardPage.overview, "Last month's recap", true),
-  upcoming(DashboardPage.overview, 'Next 7 days', true),
-  // After Upcoming, never between the monthly budget and the forecast:
-  // those two merge into one card only when next to each other.
-  bigBills(DashboardPage.overview, 'Big bills ahead', true),
   budgets(DashboardPage.overview, 'Budgets', true),
   owed(DashboardPage.overview, 'Who owes you', true),
+  // Ahead
+  // The 31-day expected balance: open, so the page leads with it.
+  projection(DashboardPage.ahead, 'Expected balance', true),
+  upcoming(DashboardPage.ahead, 'Next 7 days', false),
+  bigBills(DashboardPage.ahead, 'Big bills ahead', false),
+  subscriptions(DashboardPage.ahead, 'Subscriptions', false),
   // Trends
   pace(DashboardPage.trends, 'This month so far', true),
   usual(DashboardPage.trends, 'This month vs usual', false),
@@ -34,7 +39,6 @@ enum DashboardSection {
   byCategory(DashboardPage.breakdown, 'By category', true),
   byTags(DashboardPage.breakdown, 'By tags', false),
   merchants(DashboardPage.breakdown, 'Top merchants', false),
-  subscriptions(DashboardPage.breakdown, 'Subscriptions', false),
   groups(DashboardPage.breakdown, 'By group', false),
   heatmap(DashboardPage.breakdown, 'Spending heatmap', false),
   transfers(DashboardPage.breakdown, 'Transfers', false);
@@ -44,7 +48,8 @@ enum DashboardSection {
   final DashboardPage page;
   final String label;
 
-  /// Trends opens its first section, Breakdown its first two, so each page
+  /// Ahead opens its first section (Expected balance), Trends its first,
+  /// Breakdown its first two, so each page
   /// fits about one screen until more are opened. Trends' year comparison is open
   /// too: it shows only in Year view, where the month sections above it
   /// step aside. Overview never folds.

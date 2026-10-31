@@ -84,6 +84,19 @@ void main() {
       expect(find.text('Recent transactions'), findsNothing);
       expect(find.text('Categories vs usual'), findsNothing);
       expect(find.text('Spending heatmap'), findsNothing);
+      expect(find.text('Next 7 days'), findsNothing);
+
+      await openDashboardView(tester, 'Ahead');
+      // Below the Expected balance section, which leads the page.
+      await tester.scrollUntilVisible(
+        find.text('Next 7 days'),
+        300,
+        scrollable: verticalScrollable(),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Next 7 days'), findsOneWidget);
+      expect(find.text('Spent'), findsNothing);
+      expect(find.byKey(const ValueKey('balance')), findsNothing);
 
       await openDashboardView(tester, 'Trends');
       expect(find.text('This month so far'), findsOneWidget);
@@ -108,7 +121,7 @@ void main() {
       expect(find.text('Spent'), findsNothing);
     });
 
-    testWidgets('the Overview reads balance, month, Upcoming, Budgets, '
+    testWidgets('the Overview reads balance, month, Budgets, '
         'then what friends owe', (tester) async {
       final p = FinanceProvider();
       await p.load();
@@ -154,7 +167,6 @@ void main() {
         find.byTooltip('Previous month'),
         find.byKey(const ValueKey('balance')),
         find.text('Spent'),
-        find.text('Next 7 days'),
         find.text('Budgets'),
         find.text('Who owes you'),
       ];
@@ -175,6 +187,10 @@ void main() {
         await tester.pumpAndSettle();
       }
 
+      // Ahead leads with its Expected balance section.
+      await swipe(-300);
+      expect(find.text('Expected balance'), findsOneWidget);
+
       await swipe(-300);
       expect(find.text('This month so far'), findsOneWidget);
 
@@ -188,6 +204,8 @@ void main() {
       // And right goes back, as far as the Overview.
       await swipe(300);
       expect(find.text('This month so far'), findsOneWidget);
+      await swipe(300);
+      expect(find.text('Expected balance'), findsOneWidget);
       await swipe(300);
       expect(find.byKey(const ValueKey('balance')), findsOneWidget);
     });

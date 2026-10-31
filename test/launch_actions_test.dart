@@ -283,8 +283,6 @@ void main() {
     final settings = tester
         .element(find.byType(HomeScreen))
         .read<SettingsProvider>();
-    // Folded by the user.
-    await settings.toggleSection('upcoming');
     await settle(tester);
     final row = find.text('Test rent');
     expect(row.hitTestable(), findsNothing);
@@ -293,13 +291,13 @@ void main() {
     await settle(tester);
     await tester.pumpAndSettle();
     expect(row.hitTestable(), findsOneWidget, reason: 'open for the visit');
-    expect(settings.isSectionCollapsed('upcoming'), isTrue);
+    expect(settings.sectionOpen(DashboardSection.upcoming), isFalse);
 
     // A header tap ends the visit: folded again, the stored choice kept.
     await tester.tap(find.text('Next 7 days'));
     await tester.pumpAndSettle();
     expect(row.hitTestable(), findsNothing);
-    expect(settings.isSectionCollapsed('upcoming'), isTrue);
+    expect(settings.sectionOpen(DashboardSection.upcoming), isFalse);
   });
 
   testWidgets("an unusual spending alert opens the category's history on "
@@ -408,7 +406,6 @@ void main() {
     final settings = tester
         .element(find.byType(HomeScreen))
         .read<SettingsProvider>();
-    await settings.toggleSection('upcoming');
     await settle(tester);
     // Off the Dashboard, as a tap from the shade often finds the app.
     await tester.tap(find.text('Transactions').last);
@@ -420,7 +417,7 @@ void main() {
     await settle(tester);
     await tester.pumpAndSettle();
     expect(row.hitTestable(), findsOneWidget, reason: 'open for the visit');
-    expect(settings.isSectionCollapsed('upcoming'), isTrue);
+    expect(settings.sectionOpen(DashboardSection.upcoming), isFalse);
     expect(LaunchActions.instance.pending.value, isNull);
   });
 

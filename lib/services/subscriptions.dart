@@ -29,6 +29,10 @@ class SubscriptionItem {
 
   double get monthly => yearly / 12;
 
+  /// A marked transfer (a chit paid To savings): money set aside, not
+  /// spent. The kind comes from the category.
+  bool get isSavings => isTransferCategory(hit.categoryId);
+
   /// The payee identity, for the Transactions search deep link.
   String get identity => hit.key.substring(hit.key.indexOf('|') + 1);
 }
@@ -53,9 +57,18 @@ class SubscriptionSummary {
     required this.hidden,
   });
 
-  /// Only the active ones: a stopped payment no longer costs anything.
-  double get monthlyTotal => active.fold(0, (s, i) => s + i.monthly);
-  double get yearlyTotal => active.fold(0, (s, i) => s + i.yearly);
+  /// Only the active ones: a stopped payment no longer costs anything. Both
+  /// are spending only; savings items keep their own totals below.
+  double get monthlyTotal =>
+      active.where((i) => !i.isSavings).fold(0, (s, i) => s + i.monthly);
+  double get yearlyTotal =>
+      active.where((i) => !i.isSavings).fold(0, (s, i) => s + i.yearly);
+
+  /// The active savings items ([SubscriptionItem.isSavings]).
+  double get savingsMonthlyTotal =>
+      active.where((i) => i.isSavings).fold(0, (s, i) => s + i.monthly);
+  double get savingsYearlyTotal =>
+      active.where((i) => i.isSavings).fold(0, (s, i) => s + i.yearly);
 
   bool get isEmpty => active.isEmpty && stopped.isEmpty && hidden.isEmpty;
 }
@@ -75,6 +88,7 @@ SubscriptionSummary buildSubscriptions(
     now: now,
     alias: alias,
     pinned: pinned,
+    transfers: true,
   )) {
     final isHidden = hidden.contains(h.key);
     // Income is never a subscription, but one hidden from Upcoming joins
@@ -89,7 +103,8 @@ SubscriptionSummary buildSubscriptions(
       // and the row reads "monthly", so a detected plan is 12 payments,
       // not 365 days over its average gap.
       yearly: (cycle ?? SubscriptionCycle.monthly).yearlyCost(h.expectedAmount),
-      priceRise: _priceRise(h),
+      // A chit amount changes by agreement, not as a surprise charge.
+      priceRise: isTransferCategory(h.categoryId) ? null : _priceRise(h),
     );
     if (isHidden) {
       hiddenItems.add(item);

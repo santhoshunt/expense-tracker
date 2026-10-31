@@ -244,6 +244,33 @@ class SmsTxnParser {
     r'|dr\.?(?=\s*(?:inr|rs|₹|from\b|to\b)))(?![a-z])',
     caseSensitive: false,
   );
+
+  /// "ATM" as a word not next to pos and not followed by pin, card, cum or
+  /// debit card (a footer's "Never share your ATM PIN", "Block your
+  /// ATM/Debit card", an "ATM cum debit card", a purchase's "POS/ATM
+  /// txn"), or "cash withdrawal" / "cash wdl".
+  static final RegExp _atmRe = RegExp(
+    r'(?<![a-z])(?<!pos[\s/-])atm(?![a-z])'
+    r'(?![\s/-]*(?:pin|card|cum|debit[\s/-]*card|pos))'
+    r'|cash\s*(?:withdrawal|wdl)',
+    caseSensitive: false,
+  );
+
+  /// A bank charge ("ATM txn charges", "ATM WDL CHGS", "annual fee"): such an
+  /// alert names the ATM but the money went to the bank, not into Cash.
+  static final RegExp _bankChargeRe = RegExp(
+    r'(?<![a-z])(?:charges?|chgs?|chrgs?|fees?|surcharge)(?![a-z])',
+    caseSensitive: false,
+  );
+
+  /// Whether [body] reads as an ATM cash withdrawal. Used only to ask about
+  /// or move a withdrawal to Cash ([FinanceProvider.isAtmCandidate]), never
+  /// to parse: the row's amount, type and account come from the usual rules.
+  /// An alert that names a charge or fee never counts, so a missed
+  /// withdrawal stays an ordinary expense rather than a fee landing in Cash.
+  static bool looksLikeAtmWithdrawal(String body) =>
+      _atmRe.hasMatch(body) && !_bankChargeRe.hasMatch(body);
+
   static final RegExp _incomeVerbRe = RegExp(
     // "Cr." only before an amount or "to <account>", never "Rs 1 Cr to
     // spend" or a balance's trailing "CR."; "Transaction Reversed!" is

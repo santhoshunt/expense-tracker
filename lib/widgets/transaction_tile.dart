@@ -58,6 +58,11 @@ class TransactionTile extends StatelessWidget {
   /// row (the app's "no time known").
   final bool showDate;
 
+  /// The global search's reason a row matched ("paid to SWIGGY"), joined to
+  /// line two after " · ", where the rest of the line ellipsizes before it
+  /// does. Null everywhere else.
+  final String? matchNote;
+
   const TransactionTile({
     super.key,
     required this.tx,
@@ -68,6 +73,7 @@ class TransactionTile extends StatelessWidget {
     this.groupedFirst = false,
     this.groupedLast = false,
     this.showDate = true,
+    this.matchNote,
   });
 
   /// "₹2,200 to get back · Arun, Priya" (or "Settled · …") on a split that
@@ -96,62 +102,121 @@ class TransactionTile extends StatelessWidget {
         : 'Settled · $names';
   }
 
-  /// Line two of an unseen row: [text] (the category and any note the title
-  /// did not use) ending in " · new", or "new" alone when [text] is null.
+  /// Line two's text: [base] (the category and any note the title did not
+  /// use), then the search's [reason] after " · ".
   ///
-  /// " · new" is its own rigid text, so [text] ellipsizes before "new"
-  /// does. Where even that is wider than the line, "new" alone takes the
-  /// line (TalkBack still reads [text]); where "new" itself can't fit, the
-  /// line is [text] alone. The dot before the line carries "New" for
-  /// TalkBack, so the text leaves it out.
-  Widget _secondLine(String? text, TextStyle? lineStyle) => LayoutBuilder(
-    builder: (context, constraints) {
-      final width = constraints.maxWidth;
-      final read = text ?? '';
-      final full = read.isEmpty ? 'new' : ' · new';
-      final withNew = _textWidth(context, full, lineStyle) <= width;
-      if (!withNew && _textWidth(context, 'new', lineStyle) <= width) {
-        return Semantics(
-          label: read,
-          child: ExcludeSemantics(
-            child: Text('new', maxLines: 1, style: lineStyle),
-          ),
-        );
-      }
-      final suffix = withNew
-          ? ExcludeSemantics(child: Text(full, maxLines: 1, style: lineStyle))
-          : null;
-      return Row(
-        children: [
-          if (text != null)
-            Flexible(
+  /// " · reason" is its own rigid text, so [base] ellipsizes before the
+  /// reason does and a search row always says why it matched. Where
+  /// " · reason" is wider than the line, the reason alone takes it
+  /// (TalkBack still reads [base]).
+  Widget _lineText(String? base, String? reason, TextStyle? lineStyle) {
+    if (base == null || reason == null) {
+      return Text(
+        base ?? reason ?? '',
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: lineStyle,
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final tail = ' · $reason';
+        if (_textWidth(context, tail, lineStyle) > constraints.maxWidth) {
+          return Semantics(
+            label: '$base$tail',
+            child: ExcludeSemantics(
               child: Text(
-                text,
+                reason,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: lineStyle,
               ),
             ),
-          ?suffix,
-        ],
+          );
+        }
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Text(
+                base,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: lineStyle,
+              ),
+            ),
+            Text(tail, maxLines: 1, style: lineStyle),
+          ],
+        );
+      },
+    );
+  }
+
+  /// Line two of an unseen row: [base] and any search [reason], as
+  /// [_lineText] lays them out, ending in " · new"; "new" alone when both
+  /// are null.
+  ///
+  /// " · new" is its own rigid text, so the text ellipsizes before "new"
+  /// does. Where even that is wider than the line, "new" alone takes the
+  /// line (TalkBack still reads the text); where "new" itself can't fit, the
+  /// line is the text alone. The dot before the line carries "New" for
+  /// TalkBack, so the text leaves it out.
+  Widget _secondLine(String? base, String? reason, TextStyle? lineStyle) =>
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final width = constraints.maxWidth;
+          final read = [?base, ?reason].join(' · ');
+          final full = read.isEmpty ? 'new' : ' · new';
+          final withNew = _textWidth(context, full, lineStyle) <= width;
+          if (!withNew && _textWidth(context, 'new', lineStyle) <= width) {
+            return Semantics(
+              label: read,
+              child: ExcludeSemantics(
+                child: Text('new', maxLines: 1, style: lineStyle),
+              ),
+            );
+          }
+          final suffix = withNew
+              ? ExcludeSemantics(
+                  child: Text(full, maxLines: 1, style: lineStyle),
+                )
+              : null;
+          return Row(
+            children: [
+              if (read.isNotEmpty)
+                Flexible(child: _lineText(base, reason, lineStyle)),
+              ?suffix,
+            ],
+          );
+        },
       );
-    },
-  );
 
   /// Line two of a row whose category the import guessed, or left To sort:
   /// [label] in an outlined pill with a [border] of that kind, then any
-  /// [note], then " · new" on an unseen row. The note ellipsizes first, the
-  /// pill next; "new" gives way only where it would take half the line.
+  /// [note] and search [reason] as [_lineText] lays them out, then " · new"
+  /// on an unseen row. The note ellipsizes first, the pill next, the reason
+  /// only past half the line; "new" gives way only where it would take half
+  /// the line.
   Widget _pillLine(
     String label,
     Color border,
     String? note,
+    String? reason,
     TextStyle? lineStyle,
   ) => LayoutBuilder(
     builder: (context, constraints) {
       final width = constraints.maxWidth;
       final newWidth = _textWidth(context, ' · new', lineStyle);
       final showNew = tx.unseen && newWidth <= width / 2;
+      // A search reason keeps up to half the line: the pill gives way to it
+      // rather than hide why the row matched.
+      final reasonText = note == null ? reason : ' · $reason';
+      // 6 for the gap before it, 1 to spare against rounding.
+      final reasonWant = reasonText == null
+          ? 0.0
+          : 7 + _textWidth(context, reasonText, lineStyle);
+      final reasonWidth = reasonWant < width / 2 ? reasonWant : width / 2;
+      final pillMax = (showNew ? width - newWidth : width) - reasonWidth;
       final pill = Container(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
         decoration: BoxDecoration(
@@ -168,21 +233,14 @@ class TransactionTile extends StatelessWidget {
       return Row(
         children: [
           ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: showNew ? width - newWidth : width,
-            ),
+            constraints: BoxConstraints(maxWidth: pillMax > 0 ? pillMax : 0),
             child: pill,
           ),
-          if (note != null)
+          if (note != null || reason != null)
             Flexible(
               child: Padding(
                 padding: const EdgeInsets.only(left: 6),
-                child: Text(
-                  note,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: lineStyle,
-                ),
+                child: _lineText(note, reason, lineStyle),
               ),
             ),
           if (showNew)
@@ -299,11 +357,14 @@ class TransactionTile extends StatelessWidget {
     final splitLabel = splitAt == null
         ? null
         : '${splitAt.$1} of ${splitAt.$2}';
-    final String? second = refundFor != null || pillLabel != null
+    final String? baseSecond = refundFor != null || pillLabel != null
         ? extraNote
         : rowTitle == null
         ? (splitLabel == null ? null : 'Part $splitLabel')
         : [cat.label, ?splitLabel, ?extraNote].join(' · ');
+    // The search's reason ends line two, kept whole while the rest of the
+    // line ellipsizes (see _lineText).
+    final extra = matchNote;
     // The refund line under line two: "₹500 refunded · 4 Oct" on the
     // purchase, "For 25 Sep purchase" on the refund. Days only: the time
     // would crowd the line.
@@ -331,17 +392,12 @@ class TransactionTile extends StatelessWidget {
     // and "new" ends it, until the row is opened or marked seen.
     final isNew = tx.unseen;
     final Widget? line = pillLabel != null
-        ? _pillLine(pillLabel, pillBorder, second, lineStyle)
+        ? _pillLine(pillLabel, pillBorder, baseSecond, extra, lineStyle)
         : isNew
-        ? _secondLine(second, lineStyle)
-        : second == null
+        ? _secondLine(baseSecond, extra, lineStyle)
+        : baseSecond == null && extra == null
         ? null
-        : Text(
-            second,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: lineStyle,
-          );
+        : _lineText(baseSecond, extra, lineStyle);
     final Widget? noteLine = line == null || !isNew
         ? line
         : Row(

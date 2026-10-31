@@ -513,6 +513,27 @@ void main() {
       expect(row(p, already).repaidBy, 'Priya');
     });
 
+    test('a bulk category change never files a money-in split part as a '
+        'repayment', () async {
+      final p = await loaded();
+      final credit = await p.addTransaction(
+        type: TxType.income,
+        categoryId: 'salary',
+        amount: 6200,
+        note: '',
+        date: DateTime(2026, 9, 3),
+      );
+      final split = await p.splitTransaction(credit, const [
+        (categoryId: 'salary', amount: 5500),
+        (categoryId: kTransferInCategoryId, amount: 700),
+      ]);
+      final part = split.afterIds[1];
+      expect(await p.setCategoryForMany({part}, kRepaidToMeCategoryId), 0);
+      expect(row(p, part).categoryId, kTransferInCategoryId);
+      expect(await p.setCategoryForMany({part}, 'gift'), 1);
+      expect(row(p, part).categoryId, 'gift');
+    });
+
     test('mark settled, one bill or all, with Undo', () async {
       final p = await loaded();
       final first = await dinner(p, people: const [arun]);
@@ -618,7 +639,7 @@ void main() {
       final bill = await dinner(p);
       await repaid(p, 'Priya', 500);
       final data = p.exportData();
-      expect(data['version'], 31);
+      expect(data['version'], 32);
 
       final fresh = await loaded();
       await fresh.importData(

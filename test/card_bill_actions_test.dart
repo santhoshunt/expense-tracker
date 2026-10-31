@@ -31,13 +31,18 @@ void main() {
     child: const MaterialApp(home: Scaffold(body: DashboardScreen())),
   );
 
-  /// The Upcoming card sits below the balance and the month block, so the
-  /// surface is tall enough to keep it on screen for taps.
+  /// The Upcoming card sits on Ahead, folded at first: this opens the tab
+  /// and the fold, on a surface tall enough to keep it on screen for taps.
   Future<void> pumpApp(WidgetTester tester, FinanceProvider finance) async {
     tester.view.physicalSize = const Size(800, 1800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(app(finance));
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.tap(find.text('Ahead'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.tap(find.text('Next 7 days'));
   }
 
   /// A card due today with ₹5,000 outstanding (manual figure, stamped well

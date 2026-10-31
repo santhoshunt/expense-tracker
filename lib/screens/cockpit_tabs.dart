@@ -270,7 +270,9 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
                 'yearly cost is the usual amount over a year. "Up" means the '
                 'last payment was more than the one before. A payment more '
                 'than a week past its date moves to Stopped. Hiding one here '
-                'also hides it from Upcoming.',
+                'also hides it from Upcoming. A transfer you mark, such as a '
+                'chit paid To savings, shows as Savings and keeps its own '
+                'total.',
           ),
         ),
         const SizedBox(height: 4),
@@ -278,6 +280,12 @@ class _SubscriptionsTabState extends State<SubscriptionsTab> {
           count == 0
               ? 'Regular payments show here once the app spots them or you '
                     'mark one.'
+              : summary.active.any((i) => i.isSavings)
+              ? '$count regular ${count == 1 ? 'payment' : 'payments'} · '
+                    '${fmtMoneyTidy(summary.monthlyTotal)} spending + '
+                    '${fmtMoneyTidy(summary.savingsMonthlyTotal)} savings a '
+                    'month · ${fmtMoneyTidy(summary.yearlyTotal)} + '
+                    '${fmtMoneyTidy(summary.savingsYearlyTotal)} a year'
               : '$count regular ${count == 1 ? 'payment' : 'payments'} · '
                     '${fmtMoneyTidy(summary.monthlyTotal)} a month · '
                     '${fmtMoneyTidy(summary.yearlyTotal)} a year',
@@ -388,6 +396,19 @@ class _SubscriptionTile extends StatelessWidget {
                 context.read<SettingsProvider>().unhideUpcoming(hit.key),
             child: const Text('Unhide'),
           )
+        : item.isSavings
+        // Colour on the border only: the text stays muted.
+        ? Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              border: Border.all(color: AppColors.of(context).green),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              'Savings',
+              style: text.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+            ),
+          )
         : rise == null || kind != _SubKind.active
         ? null
         // Colour on the border and text only, never a filled badge.
@@ -466,11 +487,12 @@ class _SubscriptionTile extends StatelessWidget {
                 title: const Text('See transactions'),
                 onTap: () => Navigator.pop(ctx, 'see'),
               ),
-              ListTile(
-                leading: const Icon(Icons.edit_outlined),
-                title: const Text('Rename'),
-                onTap: () => Navigator.pop(ctx, 'rename'),
-              ),
+              if (!item.isSavings)
+                ListTile(
+                  leading: const Icon(Icons.edit_outlined),
+                  title: const Text('Rename'),
+                  onTap: () => Navigator.pop(ctx, 'rename'),
+                ),
               // Reminders are for money going out; a hidden income pattern
               // has no bill to remind of.
               if (hit.type == TxType.expense)
@@ -524,7 +546,11 @@ class _SubscriptionTile extends StatelessWidget {
           context,
           // The subscription's own tab: All would also list uncounted wallet
           // rows that its figures leave out.
-          TxFilterRequest(type: hit.type, query: item.identity),
+          TxFilterRequest(
+            type: item.isSavings ? null : hit.type,
+            categoryId: item.isSavings ? hit.categoryId : null,
+            query: item.identity,
+          ),
         );
       case 'rename':
         await showRenameMerchantDialog(
@@ -816,6 +842,14 @@ class _CustomBudgetsSection extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
 
     String subtitle(SpendBudget b) {
+      if (b.tag case final tag?) {
+        return switch (b.range) {
+          final r? =>
+            'Tagged $tag · ${fmtMoneyTidy(b.limit)} for '
+                '${fmtDayRange(r, DateTime.now())}',
+          null => 'Tagged $tag · ${fmtMoneyTidy(b.limit)} a month',
+        };
+      }
       final n = b.categoryIds.length;
       final scope = b.mode == BudgetMode.include
           ? 'Only $n ${n == 1 ? 'category' : 'categories'}'
@@ -959,7 +993,7 @@ class _RemindersSection extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Text(
                   'Quarterly, half-yearly and yearly reminders with an amount '
-                  'also show in Big bills ahead on the Overview.',
+                  'also show in Big bills ahead on the Ahead tab.',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),

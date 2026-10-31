@@ -12,6 +12,7 @@ import 'budget_dialog.dart';
 import 'category_donut_chart.dart';
 import 'info_tip.dart';
 import 'motion.dart';
+import 'trip_budget_card.dart';
 
 /// How many months the sheet's bar chart shows.
 const int kBudgetChartMonths = 6;
@@ -89,6 +90,9 @@ Future<void> showBudgetDetailSheet(
   DateTime month, {
   void Function(String budgetId, DateTime month)? onViewTransactions,
   void Function(String categoryId, DateTime month)? onViewCategory,
+  // A tag budget's slice: that budget's rows in that category.
+  void Function(String budgetId, String categoryId, DateTime month)?
+  onViewBudgetCategory,
 }) {
   // The shown month and budget are sheet-local state: switching here must
   // not move the dashboard behind the sheet. Outside the builder: the
@@ -117,6 +121,9 @@ Future<void> showBudgetDetailSheet(
             if (b.id == shownId) lastSeen = b;
           }
           final budget = lastSeen;
+          // A dated budget is one total for its days: no months to step,
+          // and its trend is day by day.
+          final range = budget.range;
           // -1 when the shown budget was deleted: the arrows and the count
           // hide until the sheet closes.
           final index = budgets.indexWhere((b) => b.id == shownId);
@@ -170,8 +177,9 @@ Future<void> showBudgetDetailSheet(
           final trend = [
             for (final m in months) finance.budgetSpentFor(budget, m),
           ];
-          String emptyText(DateTime m) =>
-              'Nothing counted toward this budget in ${fmtMonth(m)}.';
+          String emptyText(DateTime m) => range != null
+              ? 'Nothing counted toward this budget yet.'
+              : 'Nothing counted toward this budget in ${fmtMonth(m)}.';
 
           // Room for the window's busiest month, so stepping months inside
           // the window never changes the sheet's height. An empty month's
@@ -199,8 +207,16 @@ Future<void> showBudgetDetailSheet(
               ),
           ];
 
-          final onCategoryTap =
-              onViewCategory == null && onViewTransactions == null
+          // A tag budget counts only its tagged rows, over its own dates,
+          // so a whole-category list would not add up to its slice.
+          final void Function(String id)? viewSlice = budget.tag != null
+              ? (onViewBudgetCategory == null
+                    ? null
+                    : (id) => onViewBudgetCategory(budget.id, id, shown))
+              : (onViewCategory == null
+                    ? null
+                    : (id) => onViewCategory(id, shown));
+          final onCategoryTap = viewSlice == null && onViewTransactions == null
               ? null
               : (String id) {
                   if (id == _kOtherId) {
@@ -209,9 +225,9 @@ Future<void> showBudgetDetailSheet(
                     onViewTransactions(budget.id, shown);
                     return;
                   }
-                  if (onViewCategory == null) return;
+                  if (viewSlice == null) return;
                   Navigator.pop(ctx);
-                  onViewCategory(id, shown);
+                  viewSlice(id);
                 };
 
           return SafeArea(
@@ -295,31 +311,38 @@ Future<void> showBudgetDetailSheet(
                     const SizedBox(height: 2),
                     Row(
                       children: [
-                        IconButton(
-                          tooltip: 'Previous month',
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(Icons.chevron_left, size: 20),
-                          onPressed:
-                              firstMonth != null && !shown.isAfter(firstMonth)
-                              ? null
-                              : () => showMonth(
-                                  DateTime(shown.year, shown.month - 1),
-                                ),
-                        ),
-                        Text(
-                          fmtMonth(shown),
-                          style: Theme.of(ctx).textTheme.bodyMedium,
-                        ),
-                        IconButton(
-                          tooltip: 'Next month',
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(Icons.chevron_right, size: 20),
-                          onPressed: shown.isBefore(latest)
-                              ? () => showMonth(
-                                  DateTime(shown.year, shown.month + 1),
-                                )
-                              : null,
-                        ),
+                        if (range != null)
+                          Text(
+                            fmtDayRange(range, now),
+                            style: Theme.of(ctx).textTheme.bodyMedium,
+                          )
+                        else ...[
+                          IconButton(
+                            tooltip: 'Previous month',
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.chevron_left, size: 20),
+                            onPressed:
+                                firstMonth != null && !shown.isAfter(firstMonth)
+                                ? null
+                                : () => showMonth(
+                                    DateTime(shown.year, shown.month - 1),
+                                  ),
+                          ),
+                          Text(
+                            fmtMonth(shown),
+                            style: Theme.of(ctx).textTheme.bodyMedium,
+                          ),
+                          IconButton(
+                            tooltip: 'Next month',
+                            visualDensity: VisualDensity.compact,
+                            icon: const Icon(Icons.chevron_right, size: 20),
+                            onPressed: shown.isBefore(latest)
+                                ? () => showMonth(
+                                    DateTime(shown.year, shown.month + 1),
+                                  )
+                                : null,
+                          ),
+                        ],
                         const Spacer(),
                         IconButton(
                           tooltip: 'Edit budget',
@@ -361,7 +384,13 @@ Future<void> showBudgetDetailSheet(
                               const SizedBox(height: 4),
                               // In the ring's colour.
                               Text(
-                                over
+                                range != null
+                                    ? over
+                                          ? '${fmtMoneyWhole(spent - limit)} '
+                                                'over the limit'
+                                          : '${fmtMoneyWhole(limit - spent)} '
+                                                'left'
+                                    : over
                                     ? '${fmtMoneyWhole(spent - limit)} '
                                           'over the limit'
                                           '${shown == current ? '' : ' $when'}'
@@ -380,42 +409,57 @@ Future<void> showBudgetDetailSheet(
                     // Above Where it went: that section holds the window's
                     // tallest month, and below the chart the room it keeps
                     // on a one-category month sits at the sheet's end.
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: InfoLabel(
-                        // Names its months: once the window pages back,
-                        // they are no longer the last six.
-                        label: Text(
-                          '${months.length} months: '
-                          '${DateFormat('MMM').format(months.first)} to '
-                          '${DateFormat('MMM').format(months.last)}',
-                          style: Theme.of(ctx).textTheme.titleSmall,
-                        ),
-                        tip: const InfoTip(
-                          title: '$kBudgetChartMonths months',
-                          message:
-                              "Each bar is that month's spending in this "
-                              'budget, with its amount above it when there '
-                              'is any. The line '
-                              'marks the limit. Months before your records '
-                              'start show a flat line. The six months stay '
-                              'put while you step through them; stepping '
-                              'past either end moves six months. Tap a bar '
-                              'to show that month.',
+                    if (range != null) ...[
+                      Text(
+                        'Day by day',
+                        style: Theme.of(ctx).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      TripDayBars(
+                        byDay: finance.budgetSpendByDay(budget),
+                        range: range,
+                        limit: limit,
+                        spent: spent,
+                        today: now,
+                      ),
+                    ] else ...[
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: InfoLabel(
+                          // Names its months: once the window pages back,
+                          // they are no longer the last six.
+                          label: Text(
+                            '${months.length} months: '
+                            '${DateFormat('MMM').format(months.first)} to '
+                            '${DateFormat('MMM').format(months.last)}',
+                            style: Theme.of(ctx).textTheme.titleSmall,
+                          ),
+                          tip: const InfoTip(
+                            title: '$kBudgetChartMonths months',
+                            message:
+                                "Each bar is that month's spending in this "
+                                'budget, with its amount above it when there '
+                                'is any. The line '
+                                'marks the limit. Months before your records '
+                                'start show a flat line. The six months stay '
+                                'put while you step through them; stepping '
+                                'past either end moves six months. Tap a bar '
+                                'to show that month.',
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 8),
-                    _BudgetTrendBars(
-                      months: months,
-                      spent: trend,
-                      limit: limit,
-                      selected: shown,
-                      firstMonth: firstMonth,
-                      // A bar shows its month: the sheet steps there, as
-                      // the chevrons do.
-                      onSelect: showMonth,
-                    ),
+                      const SizedBox(height: 8),
+                      _BudgetTrendBars(
+                        months: months,
+                        spent: trend,
+                        limit: limit,
+                        selected: shown,
+                        firstMonth: firstMonth,
+                        // A bar shows its month: the sheet steps there, as
+                        // the chevrons do.
+                        onSelect: showMonth,
+                      ),
+                    ],
                     const SizedBox(height: 20),
                     Text(
                       'Where it went',

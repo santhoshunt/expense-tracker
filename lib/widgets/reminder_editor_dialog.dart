@@ -90,8 +90,9 @@ Future<void> showReminderEditor(
     accountId = null;
   }
 
-  // Money-out categories only; transfer ones are tagged so "To savings"
-  // reads as what it is.
+  // Money-out categories, transfer ones tagged so "To savings" reads as what
+  // it is, then income ones: a salary reminder adds to the expected balance
+  // on the Ahead tab and is never a bill.
   final categoryItems = <PickerItem<String>>[
     const PickerItem.header('Expenses'),
     for (final c in allCategories)
@@ -109,6 +110,14 @@ Future<void> showReminderEditor(
           label: '${c.label} · money out',
           leading: Icon(c.icon, color: c.color, size: 20),
         ),
+    const PickerItem.header('Income'),
+    for (final c in allCategories)
+      if (c.type == TxType.income && !c.isTransfer && !isToSortCategory(c.id))
+        PickerItem(
+          value: c.id,
+          label: c.label,
+          leading: Icon(c.icon, color: c.color, size: 20),
+        ),
   ];
   if (!categoryItems.any((i) => i.value == selectedCategory)) {
     selectedCategory = 'other_expense';
@@ -124,8 +133,16 @@ Future<void> showReminderEditor(
           final amount = amountText.isEmpty ? null : parseAmount(amountText);
           final amountBad =
               amountText.isNotEmpty && (amount == null || amount <= 0);
+          // Money expected in: nothing to add for the user.
+          final income =
+              categoryById(
+                    selectedCategory,
+                    fallbackType: TxType.expense,
+                  ).type ==
+                  TxType.income &&
+              !isTransferCategory(selectedCategory);
           // Adding the expense needs to know how much.
-          final amountMissing = autoAdd && amountText.isEmpty;
+          final amountMissing = autoAdd && !income && amountText.isEmpty;
           final shownDate = onceDate;
           final valid =
               nameCtrl.text.trim().isNotEmpty &&
@@ -269,7 +286,7 @@ Future<void> showReminderEditor(
                       decimal: true,
                     ),
                     decoration: InputDecoration(
-                      labelText: autoAdd
+                      labelText: autoAdd && !income
                           ? 'Amount'
                           : 'Expected amount (optional)',
                       prefixText: '₹ ',
@@ -303,32 +320,39 @@ Future<void> showReminderEditor(
                     ],
                   ),
                   const SizedBox(height: 8),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Add it for me on the due day'),
-                    subtitle: const Text(
-                      'Adds the expense itself. Use it for cash or bills '
-                      'with no bank SMS.',
+                  if (!income) ...[
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Add it for me on the due day'),
+                      subtitle: const Text(
+                        'Adds the expense itself. Use it for cash or bills '
+                        'with no bank SMS.',
+                      ),
+                      value: autoAdd,
+                      onChanged: (v) => setState(() => autoAdd = v),
                     ),
-                    value: autoAdd,
-                    onChanged: (v) => setState(() => autoAdd = v),
-                  ),
-                  if (autoAdd) ...[
-                    const SizedBox(height: 8),
-                    AppDropdownField<String>(
-                      label: 'Paid from',
-                      value: accountId,
-                      items: [
-                        const PickerItem(value: null, label: 'No account'),
-                        for (final a in accounts)
-                          PickerItem(value: a.id, label: a.displayName),
-                      ],
-                      onChanged: (v) => setState(() => accountId = v),
-                    ),
+                    if (autoAdd) ...[
+                      const SizedBox(height: 8),
+                      AppDropdownField<String>(
+                        label: 'Paid from',
+                        value: accountId,
+                        items: [
+                          const PickerItem(value: null, label: 'No account'),
+                          for (final a in accounts)
+                            PickerItem(value: a.id, label: a.displayName),
+                        ],
+                        onChanged: (v) => setState(() => accountId = v),
+                      ),
+                    ],
                   ],
                   const SizedBox(height: 8),
                   Text(
-                    autoAdd
+                    income
+                        ? 'Shows on the Next 7 days card a week ahead and '
+                              'adds to the expected balance on the Ahead tab '
+                              'from the day after it is due. Mark it paid '
+                              'from the Next 7 days card once it arrives.'
+                        : autoAdd
                         ? 'Shows on the Next 7 days card a week ahead, and '
                               'records the expense on the due day when you '
                               'open the app or a background import runs.'
@@ -385,7 +409,9 @@ Future<void> showReminderEditor(
                               // rule the Due month(s) dropdown shows.
                               _ => (month - 1) % repeats.months + 1,
                             };
-                        final account = autoAdd ? accountId : null;
+                        // Money expected in adds nothing for the user.
+                        final adds = autoAdd && !income;
+                        final account = adds ? accountId : null;
                         if (existing == null) {
                           finance.addReminder(
                             name: nameCtrl.text.trim(),
@@ -394,7 +420,7 @@ Future<void> showReminderEditor(
                             categoryId: selectedCategory,
                             cycle: saveCycle,
                             anchorMonth: anchor,
-                            autoAdd: autoAdd,
+                            autoAdd: adds,
                             accountId: account,
                             onDate: onceKey,
                           );
@@ -420,7 +446,7 @@ Future<void> showReminderEditor(
                               categoryId: selectedCategory,
                               cycle: saveCycle,
                               anchorMonth: anchor,
-                              autoAdd: autoAdd,
+                              autoAdd: adds,
                               accountId: account,
                               clearAccountId: account == null,
                               onDate: onceKey,

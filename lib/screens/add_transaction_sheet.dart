@@ -11,6 +11,7 @@ import '../services/card_rewards.dart';
 import '../services/recurring_detector.dart';
 import '../services/refund_matching.dart';
 import '../services/subscriptions.dart';
+import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../widgets/category_split_sheet.dart';
 import '../widgets/date_time_picker.dart';
@@ -431,9 +432,10 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
           );
 
   /// The key a Subscription mark would use, or null when the switch has
-  /// nothing to mark (not an expense, a transfer, or no merchant).
+  /// nothing to mark. An income row, a Card bill or an incoming transfer has
+  /// nothing to mark.
   String? _subscriptionKey() =>
-      _kind == _EntryKind.expense ? recurringKeyOf(_draft()) : null;
+      _kind == _EntryKind.income ? null : subscriptionKeyOf(_draft());
 
   Set<String> _hiddenUpcoming() {
     try {
@@ -523,13 +525,36 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
               ),
           ],
         ),
+        if (isTransferCategory(_categoryId))
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.savings,
+                  size: 16,
+                  color: AppColors.of(context).green,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Shows as Savings, because '
+                    '${categoryById(_categoryId).label} is a transfer',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
       ],
       const SizedBox(height: 16),
     ];
   }
 
   /// To sort is never offered: it is where an import waits for a pick. A
-  /// split part's transfers are money out only, so the part stays money out.
+  /// split part's transfers keep the split's direction.
   List<TxCategory> _categoriesFor(_EntryKind kind) => _ordered([
     for (final c in allCategories)
       if (!isToSortCategory(c.id) &&
@@ -537,7 +562,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             _EntryKind.expense => c.type == TxType.expense && !c.isTransfer,
             _EntryKind.income => c.type == TxType.income && !c.isTransfer,
             _EntryKind.transfer =>
-              c.isTransfer && (!_inSplit || c.type == TxType.expense),
+              c.isTransfer &&
+                  (!_inSplit || isSplitPartCategory(c, widget.existing!.type)),
           })
         c,
   ]);
@@ -1315,8 +1341,11 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         ),
       ];
     }
-    // A repayment from a friend is not a refund.
-    if (tx.categoryId == kRepaidToMeCategoryId) return const [];
+    // A repayment from a friend is not a refund, and a split credit stays
+    // unlinked.
+    if (tx.categoryId == kRepaidToMeCategoryId || tx.splitId != null) {
+      return const [];
+    }
     return [
       Align(
         alignment: AlignmentDirectional.centerStart,
@@ -1895,17 +1924,20 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
                 SegmentedButton<_EntryKind>(
                   showSelectedIcon: false,
                   segments: [
-                    const ButtonSegment(
+                    ButtonSegment(
                       value: _EntryKind.expense,
-                      label: FittedBox(
+                      enabled:
+                          !_inSplit || widget.existing!.type == TxType.expense,
+                      label: const FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Text('Expense', maxLines: 1),
                       ),
                     ),
-                    // A split part stays money out.
+                    // A split part keeps its direction.
                     ButtonSegment(
                       value: _EntryKind.income,
-                      enabled: !_inSplit,
+                      enabled:
+                          !_inSplit || widget.existing!.type == TxType.income,
                       label: const FittedBox(
                         fit: BoxFit.scaleDown,
                         child: Text('Income', maxLines: 1),

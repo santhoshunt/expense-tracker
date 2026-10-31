@@ -196,6 +196,8 @@ void main() {
       final p = await three();
       final ids = [for (final r in p.reminders) r.id];
       await pumpDashboard(tester, p);
+      await openDashboardView(tester, 'Ahead');
+      await openDashboardSection(tester, 'upcoming');
 
       await tester.tap(find.text('Test internet'));
       await tester.pumpAndSettle();

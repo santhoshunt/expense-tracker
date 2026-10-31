@@ -1,5 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/spend_budget.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/format.dart';
@@ -39,15 +40,22 @@ class BudgetMonitor {
       _rerunRequested = true;
       return;
     }
+    final now = DateTime.now();
     final hasCap = settings.monthlyBudget > 0;
-    final customBudgets = finance.budgets.where((b) => b.limit > 0).toList();
+    // A dated budget alerts only while its dates run.
+    final customBudgets = finance.budgets
+        .where(
+          (b) =>
+              b.limit > 0 &&
+              (b.range == null || b.stageOn(now) == TripStage.running),
+        )
+        .toList();
     if (!settings.budgetAlerts || (!hasCap && customBudgets.isEmpty)) return;
     // With every threshold switched off no check can fire — skip the spend
     // computation entirely (this runs on every provider notification).
     if (!settings.alert80 && !settings.alert90 && !settings.alertOver) return;
     _busy = true;
     try {
-      final now = DateTime.now();
       final month = DateTime(now.year, now.month);
       final prefs = await SharedPreferences.getInstance();
 
@@ -95,7 +103,7 @@ class BudgetMonitor {
                     finance.budgetSpentFor(b, month) -
                     finance.guessedSpendFor(b, month),
                 cap: b.limit,
-                key: customBudgetAlertKey(b.id, now),
+                key: budgetAlertKeyFor(b, now),
                 // Stable per budget, in its own 300000 range: the old
                 // 92000-based range ran over every fixed id from 93000 up.
                 id: NotificationIds.customBudget(b.id),

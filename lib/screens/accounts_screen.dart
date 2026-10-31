@@ -7,7 +7,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/card_bill.dart';
-import '../services/card_rewards.dart';
+import '../widgets/card_spend_chart.dart';
 import '../services/savings_goal.dart';
 import '../services/sms_parser.dart';
 import '../utils/app_theme.dart';
@@ -44,19 +44,26 @@ class AccountsScreen extends StatefulWidget {
 class _AccountsScreenState extends State<AccountsScreen> {
   AccountType? _typeFilter; // null = all
 
-  /// Order the pager steps through, and its chips: Savings only while
-  /// there is a savings account, open or closed ([_orderFor]).
+  /// Order the pager steps through, and its chips: Cash right after All,
+  /// and Savings, each only while there is such an account, open or closed
+  /// ([_orderFor]).
   List<AccountType?> _filterOrder = _orderFor(null);
 
   /// The pages for [finance]'s accounts; every page when null.
   static List<AccountType?> _orderFor(FinanceProvider? finance) {
     bool savings(Account a) => a.type == AccountType.savings;
+    bool cash(Account a) => a.isCash;
     final hasSavings =
         finance == null ||
         finance.openAccounts.any(savings) ||
         finance.closedAccounts.any(savings);
+    final hasCash =
+        finance == null ||
+        finance.openAccounts.any(cash) ||
+        finance.closedAccounts.any(cash);
     return [
       null,
+      if (hasCash) AccountType.cash,
       AccountType.bank,
       AccountType.creditCard,
       if (hasSavings) AccountType.savings,
@@ -72,6 +79,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
     AccountType.debitCard => 'Debit cards',
     AccountType.savings => 'Savings',
     AccountType.wallet => 'Wallets',
+    AccountType.cash => 'Cash',
   };
 
   /// [t]'s page, or All's when [t] has no page.
@@ -187,6 +195,15 @@ class _AccountsScreenState extends State<AccountsScreen> {
             overflow: TextOverflow.ellipsis,
           ),
           amount: fmtMoney(finance.bankBalanceTotal),
+        ),
+      if (finance.cashBalanceCount > 0)
+        _NetLine(
+          label: const Text(
+            'Cash in hand',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          amount: fmtMoney(finance.cashBalanceTotal),
         ),
       if (cardCount > 0)
         _NetLine(
@@ -353,6 +370,22 @@ class _AccountsScreenState extends State<AccountsScreen> {
     ];
   }
 
+  /// The open Cash accounts as one card: the Cash in hand total with Count
+  /// cash on top, then a row per account. Nothing for an empty list.
+  List<Widget> _cashGroup(FinanceProvider finance, List<Account> cash) {
+    if (cash.isEmpty) return const [];
+    return [
+      _CashInHandCard(total: finance.cashBalanceTotal),
+      for (final (i, a) in cash.indexed)
+        _AccountCard(
+          account: a,
+          onView: widget.onViewAccount,
+          first: false,
+          last: i == cash.length - 1,
+        ),
+    ];
+  }
+
   /// [accounts] drawn as one card, a row each: the first rounds the top
   /// corners, the last the bottom. [closed] dims them, as closed accounts.
   List<Widget> _cardRun(List<Account> accounts, {bool closed = false}) {
@@ -422,8 +455,19 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   for (final a in accounts)
                     if (a.isWallet) a,
                 ];
+                final cash = [
+                  for (final a in accounts)
+                    if (a.isCash) a,
+                ];
                 final items = <Widget>[
                   if (t == null) ...[
+                    if (cash.isNotEmpty) ...[
+                      UppercaseSectionHeader(
+                        'Cash',
+                        color: scheme.onSurfaceVariant,
+                      ),
+                      ..._cashGroup(finance, cash),
+                    ],
                     // Cards: credit cards, then debit cards, in one run.
                     for (final (types, header) in const [
                       ([AccountType.bank], 'Banks'),
@@ -454,6 +498,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                     ],
                   ] else if (t == AccountType.wallet)
                     ..._walletGroups(finance, wallets)
+                  else if (t == AccountType.cash)
+                    ..._cashGroup(finance, cash)
                   else
                     ..._cardRun(accounts),
                   if (closed.isNotEmpty) ...[
@@ -493,6 +539,56 @@ class _AccountsScreenState extends State<AccountsScreen> {
                 );
               },
             ),
+    );
+  }
+}
+
+/// The top of the Cash group: the cash in hand across every open Cash
+/// account, large, with Count cash to set what is in hand now.
+class _CashInHandCard extends StatelessWidget {
+  final double total;
+
+  const _CashInHandCard({required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+      child: GroupedSurface(
+        first: true,
+        last: false,
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpace.card),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Cash in hand',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: MorphingAmount(
+                  value: total,
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              FilledButton.tonalIcon(
+                icon: const Icon(Icons.calculate_outlined, size: 18),
+                label: const Text('Count cash'),
+                onPressed: () => showCountCashDialog(context),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -568,6 +664,11 @@ class _AccountCard extends StatelessWidget {
     } else {
       figure = fmtMoney(finance.accountBalance(account));
     }
+    // Among two or more Cash accounts, the one ATM withdrawals go to says so.
+    final cashDefault =
+        account.isCash &&
+        finance.cashBalanceCount >= 2 &&
+        finance.defaultCashAccount?.id == account.id;
 
     return Padding(
       padding: EdgeInsets.fromLTRB(16, first ? 6 : 0, 16, last ? 6 : 0),
@@ -638,7 +739,25 @@ class _AccountCard extends StatelessWidget {
                                 // Cards share one section, so a debit card
                                 // says what it is; its month's spend is
                                 // money out, in red.
-                                child: account.isDebitCard
+                                child: cashDefault
+                                    ? Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            'Default · ',
+                                            style: TextStyle(
+                                              color: scheme.onSurfaceVariant,
+                                            ),
+                                          ),
+                                          Text(
+                                            figure,
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      )
+                                    : account.isDebitCard
                                     ? Row(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
@@ -870,8 +989,8 @@ class _WalletServiceHeader extends StatelessWidget {
 InfoTip _netTip({String? Function()? example}) => InfoTip(
   title: 'Net balance',
   message:
-      'Bank balances minus credit card outstanding. Savings, asset and '
-      'wallet accounts are not included.',
+      'Bank and cash balances minus credit card outstanding. Savings, asset '
+      'and wallet accounts are not included.',
   example: example,
 );
 
@@ -972,6 +1091,10 @@ class _BankBalance extends StatelessWidget {
                     ? 'The balance you set, plus transactions dated '
                           'after it, counted as spending or not. '
                           'Wallets stay out of net balance.'
+                    : account.isCash
+                    ? 'The cash you counted last, plus cash payments and '
+                          'ATM withdrawals after it. Cash counts in net '
+                          'balance.'
                     : 'The newest known balance wins, whether you set it '
                           'or a bank alert stated it. Transactions after it '
                           'are added on.',
@@ -1165,7 +1288,7 @@ Future<void> showSetBalanceDialog(BuildContext context, Account account) async {
                   ? 'Current points'
                   : 'Current balance',
               prefixText: perPoint == null ? '₹ ' : null,
-              helperText: account.isWallet
+              helperText: account.isWallet || account.isCash
                   ? (perPoint != null && parseAmount(ctrl.text) != null
                         ? '= ${fmtMoney(parseAmount(ctrl.text)! * perPoint)}'
                         : 'Transactions after it are added on. Leave blank '
@@ -1206,6 +1329,164 @@ Future<void> showSetBalanceDialog(BuildContext context, Account account) async {
             ),
           ],
         ),
+      ),
+    ),
+  );
+}
+
+/// Count cash: the cash in hand now re-anchors a Cash account's balance
+/// ([FinanceProvider.setManualBalance]), and the gap to the recorded balance
+/// shows as it is typed. Less in hand than recorded can be logged as one
+/// To sort expense, dated just before the count so the balance leaves it
+/// out. [initial] is the account to count, else the Default one; with two
+/// or more Cash accounts a switch picks among them.
+Future<void> showCountCashDialog(
+  BuildContext context, {
+  Account? initial,
+}) async {
+  final finance = context.read<FinanceProvider>();
+  final picked = initial ?? finance.defaultCashAccount;
+  if (picked == null) return;
+  final messenger = ScaffoldMessenger.of(context);
+  final ctrl = TextEditingController();
+  var pickedId = picked.id;
+  String? error;
+  Future<void> save(BuildContext ctx, double counted, {double? log}) async {
+    final acct = finance.accountById(pickedId);
+    if (acct == null) return;
+    Navigator.pop(ctx);
+    await finance.setManualBalance(acct.id, counted);
+    if (log != null) {
+      final at =
+          finance.accountById(acct.id)?.manualBalanceAt ?? DateTime.now();
+      final txId = await finance.addTransaction(
+        type: TxType.expense,
+        categoryId: kToSortExpenseId,
+        amount: log,
+        note: 'Cash spent, not recorded',
+        date: at.subtract(const Duration(seconds: 1)),
+      );
+      await finance.assignAccount(txId, acct.id);
+    }
+    showAppToastOn(
+      messenger,
+      '${acct.name} set to ${fmtMoney(counted)}'
+      '${log == null ? '' : ' · ${fmtMoney(log)} logged in To sort'}',
+      tone: AppToastTone.success,
+      icon: Icons.payments_outlined,
+    );
+  }
+
+  await showDialog(
+    context: context,
+    builder: (ctx) => DisposeScope(
+      disposables: [ctrl],
+      child: StatefulBuilder(
+        builder: (ctx, setState) {
+          final scheme = Theme.of(ctx).colorScheme;
+          final cash = [
+            for (final a in finance.openAccounts)
+              if (a.isCash) a,
+          ];
+          final acct = finance.accountById(pickedId) ?? picked;
+          final text = ctrl.text.trim();
+          final counted = text.isEmpty ? null : parseAmount(text);
+          final gap = counted == null
+              ? null
+              : finance.accountBalance(acct) - counted;
+          final Widget? gapLine = gap == null
+              ? null
+              : gap > 0.005
+              ? Text(
+                  '${fmtMoney(gap)} not recorded',
+                  style: TextStyle(
+                    color: moneyColor(ctx, type: TxType.expense),
+                    fontWeight: FontWeight.w600,
+                  ),
+                )
+              : gap < -0.005
+              ? Text(
+                  '${fmtMoney(-gap)} more than recorded',
+                  style: TextStyle(
+                    color: moneyColor(ctx, type: TxType.income),
+                    fontWeight: FontWeight.w600,
+                  ),
+                )
+              : Text(
+                  'Matches the recorded balance',
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                );
+          void submit({bool log = false}) {
+            final v = parseAmount(ctrl.text.trim());
+            if (v == null) {
+              setState(() => error = 'Enter a number, e.g. 4400');
+              return;
+            }
+            final g = finance.accountBalance(acct) - v;
+            save(ctx, v, log: log && g > 0.005 ? g : null);
+          }
+
+          return AlertDialog(
+            scrollable: true,
+            title: const Text('Count cash'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (cash.length >= 2) ...[
+                  SegmentedButton<String>(
+                    showSelectedIcon: false,
+                    segments: [
+                      for (final a in cash)
+                        ButtonSegment(
+                          value: a.id,
+                          label: Text(
+                            a.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    selected: {acct.id},
+                    onSelectionChanged: (s) =>
+                        setState(() => pickedId = s.first),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                TextField(
+                  controller: ctrl,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  onChanged: (_) => setState(() => error = null),
+                  decoration: InputDecoration(
+                    labelText: 'Cash you have now',
+                    prefixText: '₹ ',
+                    errorText:
+                        error ??
+                        (text.isNotEmpty && counted == null
+                            ? 'Enter a number, e.g. 4400'
+                            : null),
+                  ),
+                ),
+                if (gapLine != null) ...[const SizedBox(height: 8), gapLine],
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              if (gap != null && gap > 0.005)
+                TextButton(
+                  onPressed: () => submit(log: true),
+                  child: Text('Log ${fmtMoneyTidy(gap)} as spent'),
+                ),
+              FilledButton(onPressed: submit, child: const Text('Save')),
+            ],
+          );
+        },
       ),
     ),
   );
@@ -1448,7 +1729,7 @@ Future<void> showCardCycleDialog(BuildContext context, Account account) async {
 class _CardFigures extends StatelessWidget {
   final Account account;
 
-  /// Opens this card's transactions (the Spent this month tip's link).
+  /// Opens this card's transactions (the Spent tip's link).
   final void Function(String accountId) onView;
   const _CardFigures({required this.account, required this.onView});
 
@@ -1459,7 +1740,6 @@ class _CardFigures extends StatelessWidget {
     final outstanding = finance.accountOutstanding(account);
     final available = finance.accountAvailable(account);
     final limit = finance.accountCreditLimit(account);
-    final spent = finance.accountSpentThisMonth(account);
     final p = finance.accountProvenance(account);
 
     return Column(
@@ -1567,34 +1847,12 @@ class _CardFigures extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 6),
-        InfoLabel(
-          // The label muted, the figure red: it is money out.
-          label: Text.rich(
-            TextSpan(
-              text: 'Spent this month ',
-              children: [
-                TextSpan(
-                  text: fmtMoney(spent),
-                  style: TextStyle(
-                    color: moneyColor(context, type: TxType.expense),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-          ),
-          tip: InfoTip(
-            title: 'Spent this month',
-            message:
-                'Spending on this card in the current calendar month, '
-                'whatever month the dashboard shows. Transfers are left out.',
-            link: InfoLink(
-              prompt: 'See what makes it up?',
-              label: "This card's transactions",
-              onTap: (_) => onView(account.id),
-            ),
-          ),
+        // Keyed by card, so when the list reorders another card never
+        // takes over this tile's Month or Cycle choice and paging.
+        CardSpendSection(
+          key: ValueKey(account.id),
+          account: account,
+          onView: onView,
         ),
         if (finance.cardRewardsFor(account) case final earned?) ...[
           const SizedBox(height: 6),
@@ -1622,17 +1880,6 @@ class _CardFigures extends StatelessWidget {
               ),
             ),
           ),
-          if (finance.cardRewardsFor(account, back: 1) case final last?) ...[
-            const SizedBox(height: 2),
-            Text(
-              rewardCycleLine(
-                account,
-                cardCycleOf(account, DateTime.now()),
-                last,
-              ),
-              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-            ),
-          ],
         ],
         if (account.dueDay != null) ...[
           const SizedBox(height: 6),
@@ -1847,6 +2094,8 @@ class _AccountMenu extends StatelessWidget {
             showWalletDetailsDialog(context, account);
           case 'type':
             _toggleType(context);
+          case 'atm':
+            context.read<FinanceProvider>().setDefaultCash(account.id);
           case 'draws':
             pickDrawsFromFlow(context, account);
           case 'kind':
@@ -1883,8 +2132,9 @@ class _AccountMenu extends StatelessWidget {
             ]
           : <PopupMenuEntry<String>>[
               const PopupMenuItem(value: 'rename', child: Text('Rename')),
-              // Wallets are entered by hand; no bank number resolves to one.
-              if (!account.isWallet)
+              // Wallets and Cash are entered by hand; no bank number
+              // resolves to one.
+              if (!account.isWallet && !account.isCash)
                 const PopupMenuItem(
                   value: 'numbers',
                   child: Text('Linked numbers…'),
@@ -1895,6 +2145,13 @@ class _AccountMenu extends StatelessWidget {
                   child: Text('Wallet details…'),
                 ),
               const PopupMenuItem(value: 'type', child: Text('Change type…')),
+              if (account.isCash &&
+                  context.read<FinanceProvider>().defaultCashAccount?.id !=
+                      account.id)
+                const PopupMenuItem(
+                  value: 'atm',
+                  child: Text('Use for ATM withdrawals'),
+                ),
               if (account.type == AccountType.savings)
                 const PopupMenuItem(value: 'kind', child: Text('Kind & icon…')),
               if (account.type == AccountType.savings)
@@ -1926,7 +2183,9 @@ class _AccountMenu extends StatelessWidget {
               // Close and Delete each make it go away.
               const PopupMenuDivider(),
               const PopupMenuItem(value: 'merge', child: Text('Merge into…')),
-              if (account.type == AccountType.savings || account.isWallet)
+              if (account.type == AccountType.savings ||
+                  account.isWallet ||
+                  account.isCash)
                 const PopupMenuItem(
                   value: 'close',
                   child: Text('Close account'),
@@ -2101,14 +2360,18 @@ class _AccountMenu extends StatelessWidget {
   Future<void> _toggleType(BuildContext context) async {
     final finance = context.read<FinanceProvider>();
     final walletOk = finance.canBecomeWallet(account);
+    // Cash holds hand-assigned rows only ([FinanceProvider.setAccountType]).
+    final cashOk =
+        account.isCash || account.keys.every((k) => k.startsWith('manual:'));
     final result = await showPickerSheet<AccountType>(
       context: context,
       title: 'Account type',
       items: [
         for (final t in AccountType.values)
           // An account with linked bank or card numbers can't be a wallet:
-          // its SMS rows would land there.
-          if (t != AccountType.wallet || walletOk || account.isWallet)
+          // its SMS rows would land there. Nor Cash.
+          if ((t != AccountType.wallet || walletOk || account.isWallet) &&
+              (t != AccountType.cash || cashOk))
             PickerItem(
               value: t,
               label: t.label,
@@ -2141,14 +2404,15 @@ class _AccountMenu extends StatelessWidget {
                 (toWallet || !r.walletCounted),
           )
           .length;
-      // Only banks, credit cards and unlinked debit cards make up net
-      // balance; savings stay out anyway.
+      // Only banks, Cash, credit cards and unlinked debit cards make up
+      // net balance; savings stay out anyway.
       final netType = toWallet ? account.type : t;
       final unlinked = toWallet
           ? finance.linkedAccountOf(account) == null
           : link == null;
       final netMoves =
           netType == AccountType.bank ||
+          netType == AccountType.cash ||
           netType == AccountType.creditCard ||
           (netType == AccountType.debitCard && unlinked);
       final net = !netMoves
@@ -2294,16 +2558,23 @@ void closeAccountFlow(BuildContext context, Account account) {
 
 Future<void> mergeAccountFlow(BuildContext context, Account account) async {
   final finance = context.read<FinanceProvider>();
-  // Wallets merge only with wallets, money accounts only with money
-  // accounts (see FinanceProvider.mergeAccounts).
+  // Wallets merge only with wallets, Cash only with Cash, other money
+  // accounts only with each other (see FinanceProvider.mergeAccounts).
   final others = finance.openAccounts
-      .where((a) => a.id != account.id && a.isWallet == account.isWallet)
+      .where(
+        (a) =>
+            a.id != account.id &&
+            a.isWallet == account.isWallet &&
+            a.isCash == account.isCash,
+      )
       .toList();
   if (others.isEmpty) {
     showAppToast(
       context,
       account.isWallet
           ? 'No other wallet to merge into.'
+          : account.isCash
+          ? 'No other Cash account to merge into.'
           : 'No other account to merge into.',
     );
     return;
@@ -2675,18 +2946,20 @@ Future<void> showAddAccountDialog(
       child: StatefulBuilder(
         builder: (ctx, setState) {
           final wallet = type == AccountType.wallet;
+          final cash = type == AccountType.cash;
           final pointValue = parseAmount(pointValueCtrl.text);
           final balanceText = balanceCtrl.text.trim();
           final balance = parseAmount(balanceText);
           // Points need a value per point to be stored in ₹; a typed
-          // balance must read as a number.
+          // balance must read as a number, a wallet's or Cash's.
           final walletReady =
-              !wallet ||
-              ((!holdsPoints || (pointValue != null && pointValue > 0)) &&
-                  (balanceText.isEmpty || balance != null));
+              (!wallet ||
+                  ((!holdsPoints || (pointValue != null && pointValue > 0)) &&
+                      (balanceText.isEmpty || balance != null))) &&
+              (!cash || balanceText.isEmpty || balance != null);
           return AlertDialog(
             title: const Text('New account'),
-            // Narrower side margins than the 40dp default: four type
+            // Narrower side margins than the 40dp default: five type
             // segments need the width on a small phone.
             insetPadding: const EdgeInsets.symmetric(
               horizontal: 16,
@@ -2747,9 +3020,29 @@ Future<void> showAddAccountDialog(
                     decoration: InputDecoration(
                       labelText: wallet
                           ? 'Login label (e.g. me, mom)'
+                          : cash
+                          ? 'Name (e.g. Home cash)'
                           : 'Name (e.g. HDFC Salary)',
                     ),
                   ),
+                  if (cash) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: balanceCtrl,
+                      onChanged: (_) => setState(() {}),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: InputDecoration(
+                        labelText: 'Cash in hand now (optional)',
+                        prefixText: '₹ ',
+                        helperText: 'Counts in net balance.',
+                        errorText: balanceText.isNotEmpty && balance == null
+                            ? 'Enter a number, e.g. 840'
+                            : null,
+                      ),
+                    ),
+                  ],
                   if (wallet) ...[
                     const SizedBox(height: 12),
                     SegmentedButton<bool>(
@@ -2822,8 +3115,9 @@ Future<void> showAddAccountDialog(
                       style: Theme.of(ctx).textTheme.bodySmall,
                     ),
                   ],
-                  // Wallets are entered by hand: no bank number to link.
-                  if (!wallet) ...[
+                  // Wallets and Cash are entered by hand: no bank number to
+                  // link.
+                  if (!wallet && !cash) ...[
                     const SizedBox(height: 12),
                     OutlinedButton.icon(
                       icon: Icon(
@@ -2897,13 +3191,15 @@ Future<void> showAddAccountDialog(
                                 : null,
                           );
                           // Stored in ₹: points at their value.
-                          if (wallet && balance != null) {
+                          if ((wallet || cash) && balance != null) {
                             await finance.setManualBalance(
                               id,
-                              holdsPoints ? balance * pointValue! : balance,
+                              wallet && holdsPoints
+                                  ? balance * pointValue!
+                                  : balance,
                             );
                           }
-                          if (key != null && !wallet) {
+                          if (key != null && !wallet && !cash) {
                             final ok = await finance.addAccountKey(id, key!);
                             if (!ok) {
                               showAppToastOn(

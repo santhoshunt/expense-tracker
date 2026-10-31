@@ -80,6 +80,26 @@ Future<void> showBalanceBreakdownSheet(
                           );
                         },
                       ),
+                      // Opens Accounts on its Cash filter.
+                      if (finance.cashBalanceCount > 0)
+                        BreakdownRow(
+                          icon: Icons.payments_outlined,
+                          color: AppColors.of(ctx).green,
+                          label: 'Cash in hand',
+                          // A hand-kept Cash total can be below zero; it
+                          // then keeps fmtMoney's own minus.
+                          amount:
+                              fmtMoney(finance.cashBalanceTotal).startsWith('−')
+                              ? fmtMoney(finance.cashBalanceTotal)
+                              : '+${fmtMoney(finance.cashBalanceTotal)}',
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            AppNav.instance.openAccounts(
+                              context,
+                              type: AccountType.cash,
+                            );
+                          },
+                        ),
                       BreakdownRow(
                         icon: Icons.credit_card,
                         color: Theme.of(ctx).colorScheme.error,

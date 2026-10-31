@@ -303,7 +303,8 @@ class _ReviewSheetState extends State<_ReviewSheet> {
       );
     } else {
       final labelled =
-          (q.pairs.isNotEmpty || q.refunds.isNotEmpty) && q.rows.isNotEmpty;
+          (q.atm.isNotEmpty || q.pairs.isNotEmpty || q.refunds.isNotEmpty) &&
+          q.rows.isNotEmpty;
       DateTime? lastDay;
       body = ListView(
         padding: EdgeInsets.only(bottom: 16 + navInset),
@@ -313,6 +314,9 @@ class _ReviewSheetState extends State<_ReviewSheet> {
               padding: EdgeInsets.symmetric(horizontal: 16),
               child: SectionLabel('Suggestions'),
             ),
+          // Cash taken out of an ATM is a move to cash in hand, not spend.
+          for (final t in q.atm)
+            _AtmSuggestionRow(tx: t, offerUndo: _offerUndo),
           // Two legs of one own-account move arrive as an expense and an
           // income; pairing books both as transfers so neither inflates
           // Spent or Income.
@@ -536,6 +540,56 @@ class _RefundSuggestionRow extends StatelessWidget {
           finance.restoreEditedTransactions([before]);
           if (!before.pending) finance.restoreRefundReviewId(before.id);
         }, icon: Icons.link);
+      },
+    );
+  }
+}
+
+/// One ATM withdrawal waiting for review: move it to Cash, so only the cash
+/// payments after it count as spending, or keep it as spending. The first
+/// Move turns on automatic moves for later withdrawals
+/// ([FinanceProvider.atmAutoMove]); its Undo turns them off again.
+class _AtmSuggestionRow extends StatelessWidget {
+  final Tx tx;
+  final _OfferUndo offerUndo;
+
+  const _AtmSuggestionRow({required this.tx, required this.offerUndo});
+
+  @override
+  Widget build(BuildContext context) {
+    final finance = context.read<FinanceProvider>();
+    return _SuggestionCard(
+      icon: Icons.local_atm,
+      kind: '${fmtMoneyTidy(tx.amount)} ATM withdrawal: move it to Cash?',
+      sides: [(label: _side(finance, tx), tx: tx)],
+      dismissLabel: 'Keep as spending',
+      onDismiss: () {
+        final before = tx;
+        finance.confirmTransaction(before.id);
+        offerUndo(
+          'Kept as spending',
+          () => finance.restoreEditedTransactions([before]),
+          icon: Icons.done_all,
+          tone: AppToastTone.success,
+        );
+      },
+      acceptLabel: 'Move',
+      onAccept: () async {
+        final wasAuto = finance.atmAutoMove;
+        final m = await finance.moveToCash(tx.id);
+        if (m == null) return;
+        if (!wasAuto) await finance.setAtmAutoMove(true);
+        final name =
+            finance.accountById(m.cashAccountId)?.displayName ?? 'Cash';
+        offerUndo(
+          'Moved ${fmtMoneyTidy(m.bankLegBefore.amount)} to $name'
+          '${wasAuto ? '' : '. Later ATM withdrawals move on their own'}',
+          () async {
+            await finance.undoCashMoves([m]);
+            if (!wasAuto) await finance.setAtmAutoMove(false);
+          },
+          icon: Icons.local_atm,
+        );
       },
     );
   }

@@ -461,9 +461,8 @@ void main() {
     expect(find.text('cab'), findsNothing);
   });
 
-  testWidgets('upcoming card collapses to its header and re-expands', (
-    tester,
-  ) async {
+  testWidgets('Next 7 days folds on Ahead with its count and opens to the '
+      'due rows', (tester) async {
     final p = FinanceProvider();
     await p.load();
     final id = await p.addAccount(
@@ -472,45 +471,21 @@ void main() {
     );
     await p.setManualBalance(id, 5000); // outstanding → bill row appears
     await p.setCardCycle(id, dueDay: DateTime.now().day);
-    // Upcoming sits below the balance and the month block: a tall surface
-    // keeps it on screen.
     tester.view.physicalSize = const Size(800, 1800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(app(p));
     await tester.pumpAndSettle();
 
-    expect(find.text('HDFC Card bill'), findsOneWidget);
-
-    // The header count is static in both states — animating it (an
-    // AnimatedOpacity fade) rendered the glyphs in halves on Impeller.
-    final header = find
-        .ancestor(of: find.text('Next 7 days'), matching: find.byType(Row))
-        .first;
-    final count = find.descendant(of: header, matching: find.text('1'));
-    expect(count, findsOneWidget);
-    // (The tab switcher above fades whole pages; only the header row itself
-    // must be free of opacity animation.)
-    expect(
-      find.descendant(of: header, matching: find.byType(AnimatedOpacity)),
-      findsNothing,
-    );
-
-    // AnimatedFold keeps the folded child mounted at zero height, so assert
-    // on the fold's rendered height, not text absence.
-    final fold = find.byType(AnimatedFold).first;
-    expect(tester.getSize(fold).height, greaterThan(50));
+    await tester.tap(find.text('Ahead'));
+    await tester.pumpAndSettle();
+    // Folded at first: the summary counts what is due.
+    expect(find.text('1 due in the next 7 days'), findsOneWidget);
 
     await tester.tap(find.text('Next 7 days'));
     await tester.pumpAndSettle();
-    expect(tester.getSize(fold).height, lessThan(1));
-    expect(count, findsOneWidget);
-
-    await tester.tap(find.text('Next 7 days'));
-    await tester.pumpAndSettle();
-    expect(tester.getSize(fold).height, greaterThan(50));
+    expect(find.text('1 due'), findsOneWidget);
     expect(find.text('HDFC Card bill'), findsOneWidget);
-    expect(count, findsOneWidget);
   });
 
   testWidgets('the review sheet folds spam; Discard all discards with Undo', (

@@ -142,7 +142,7 @@ void main() {
         final t = p.transactions.firstWhere((t) => t.id == id);
         expect(t.payee, 'Kappa Cafe');
         expect(p.rowTitleFor(t), 'Kappa Cafe');
-        expect(p.exportData()['version'], 31);
+        expect(p.exportData()['version'], 32);
         // The stored ledger keeps it across a restart.
         final again = await loaded();
         expect(

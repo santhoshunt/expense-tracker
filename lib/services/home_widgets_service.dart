@@ -15,6 +15,9 @@ import '../utils/format.dart';
 import 'big_bills.dart';
 import 'budget_widget_service.dart';
 import 'card_bill.dart';
+import 'import_checks.dart';
+import 'launch_actions.dart';
+import 'notification_ids.dart';
 import 'recurring_detector.dart';
 import 'safe_to_spend.dart';
 import 'spend_comparison.dart';
@@ -32,7 +35,8 @@ int epochDay(DateTime d) =>
     Duration.millisecondsPerDay;
 
 /// Feeds the Month pace, Upcoming, Today and Add, Spending split, Recent,
-/// Big bills, This week and Accounts widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart
+/// Big bills, This week, Accounts and Payments to check widgets
+/// (HomeWidgets.kt). Like [BudgetWidgetService], Dart
 /// computes and native draws; the snapshot carries dates and a usual-by-day
 /// curve so the widgets stay right across midnight without the app running.
 class HomeWidgetsService {
@@ -207,6 +211,38 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
     if (!bigBills.isEmpty) 'bigBills': _bigBills(bigBills, month),
     'week': _week(finance, now, toReview, reviewAmountLabel),
     'accounts': _accounts(finance),
+    // Left out while the ledger failed to load: no row could be confirmed.
+    // Shown whatever the payment-to-check notes switch says.
+    if (finance.loadWarnings.isEmpty)
+      'checks': _checks(finance, hideIncome, light),
+  };
+}
+
+/// The Payments to check widget's block: how many rows wait for a check
+/// ([needsImportCheck]) and the newest [kCheckWidgetRows] of them, each a
+/// Recent row plus its id, whether its category is a guess, its note's id
+/// (Kotlin cancels the note on Keep) and, on guessed rows, the Keep payload.
+Map<String, dynamic> _checks(
+  FinanceProvider finance,
+  bool hideIncome,
+  bool light,
+) {
+  final rows = [
+    for (final t in finance.transactions)
+      if (needsImportCheck(t)) t,
+  ];
+  return {
+    'count': rows.length,
+    'rows': [
+      for (final t in rows.take(kCheckWidgetRows))
+        {
+          ..._recentRow(finance, t, hideIncome, light),
+          'id': t.id,
+          'guessed': t.categoryGuessed,
+          'noteId': NotificationIds.importCheck(t.id),
+          if (t.categoryGuessed) 'keep': importCheckPayload(t.id, t.categoryId),
+        },
+    ],
   };
 }
 
@@ -224,13 +260,14 @@ double _reviewAmount(FinanceProvider finance, bool hideIncome) {
 }
 
 /// The Accounts widget's rows: every open account in the Accounts screen's
-/// order (banks, credit cards, debit cards, savings, wallets). Each widget
+/// order (cash, banks, credit cards, debit cards, savings, wallets). Each widget
 /// shows the ones picked for it. A credit card's spend is its statement
 /// cycle's and its left is the available limit; a debit card drawing from a
 /// bank has no left of its own (its money is the bank's); any other account
 /// shows this month's spend and its balance.
 List<Map<String, dynamic>> _accounts(FinanceProvider finance) {
   const order = [
+    AccountType.cash,
     AccountType.bank,
     AccountType.creditCard,
     AccountType.debitCard,
@@ -265,6 +302,7 @@ Map<String, dynamic> _accountRow(FinanceProvider finance, Account a) {
       AccountType.debitCard => 'debit',
       AccountType.savings => 'savings',
       AccountType.wallet => 'wallet',
+      AccountType.cash => 'cash',
     },
     'spentLabel': fmtMoneyWhole(spent),
     'leftLabel': left == null ? '' : fmtMoneyWhole(left),
@@ -334,6 +372,11 @@ double _toSortInWeek(FinanceProvider finance, DateTime start, DateTime now) {
 
 /// Rows the Recent widget shows: the newest confirmed transactions.
 const int kRecentWidgetRows = 4;
+
+/// Rows the Payments to check widget carries. It shows up to 3; the rest
+/// refill slots whose Keep was tapped on the home screen, before the app
+/// has run again.
+const int kCheckWidgetRows = 6;
 
 /// How a widget colours an amount (the snapshot's `kind`): 'in' green,
 /// 'out' red, and 'neutral' plain for money that is neither income nor

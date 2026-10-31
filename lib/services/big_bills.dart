@@ -73,7 +73,8 @@ bool reminderIsBigBill(Reminder r) =>
     !r.isOnce &&
     r.cycle != SubscriptionCycle.monthly &&
     r.expectedAmount != null &&
-    !isTransferCategory(r.categoryId);
+    !isTransferCategory(r.categoryId) &&
+    !reminderIsIncome(r);
 
 /// Builds the plan as of [now] from [finance]'s reminders and the marked
 /// quarterly, half-yearly and yearly merchants in [patterns] whose keys are

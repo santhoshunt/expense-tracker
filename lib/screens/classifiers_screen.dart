@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:provider/provider.dart';
 
 import '../models/import_rule.dart';
+import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../models/dashboard_layout.dart';
 import '../providers/finance_provider.dart';
@@ -51,6 +52,7 @@ const int kCockpitTabDashOverview = 8;
 const int kCockpitTabDashTrends = 9;
 const int kCockpitTabDashBreakdown = 10;
 const int kCockpitTabGroups = 11;
+const int kCockpitTabDashAhead = 12;
 
 /// The Cockpit's groups, each one page holding the tabs in [tabs]
 /// (kCockpitTab* ids, in tab order). Six tabs on one bar were too many to
@@ -74,6 +76,7 @@ enum CockpitGroup {
   ]),
   dashboard('Dashboard layout', Icons.dashboard_customize_outlined, [
     kCockpitTabDashOverview,
+    kCockpitTabDashAhead,
     kCockpitTabDashTrends,
     kCockpitTabDashBreakdown,
   ]);
@@ -103,6 +106,7 @@ const Map<int, String> _kCockpitTabLabels = {
   kCockpitTabSubscriptions: 'Subscriptions',
   kCockpitTabTags: 'Tags',
   kCockpitTabDashOverview: 'Overview',
+  kCockpitTabDashAhead: 'Ahead',
   kCockpitTabDashTrends: 'Trends',
   kCockpitTabDashBreakdown: 'Breakdown',
 };
@@ -165,11 +169,15 @@ class _CockpitHub extends StatelessWidget {
     final now = DateTime.now();
     final month = DateTime(now.year, now.month);
     // Limits this month's counted spending has passed: the custom budgets
-    // and the monthly cap, which heads the Budgets tab.
+    // and the monthly cap, which heads the Budgets tab. A trip counts only
+    // while its dates run.
     final over =
         finance.budgets
             .where(
-              (b) => b.limit > 0 && finance.budgetSpentFor(b, month) > b.limit,
+              (b) =>
+                  b.limit > 0 &&
+                  (b.range == null || b.stageOn(now) == TripStage.running) &&
+                  finance.budgetSpentFor(b, month) > b.limit,
             )
             .length +
         (cap > 0 && finance.budgetSpentInMonth(month) > cap ? 1 : 0);
@@ -373,6 +381,7 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
     kCockpitTabDashOverview => const DashboardLayoutTab(
       page: DashboardPage.overview,
     ),
+    kCockpitTabDashAhead => const DashboardLayoutTab(page: DashboardPage.ahead),
     kCockpitTabDashTrends => const DashboardLayoutTab(
       page: DashboardPage.trends,
     ),
@@ -493,7 +502,6 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
 /// trimmed; empty matches everything). Matches every OR-condition — not just
 /// the one the tile headline shows — and the target category's label ('Spam'
 /// for spam rules, which have no category to look up).
-@visibleForTesting
 bool ruleMatchesQuery(ClassifierRule rule, String query) {
   if (query.isEmpty) return true;
   if (rule.patterns.any((p) => p.toLowerCase().contains(query))) return true;

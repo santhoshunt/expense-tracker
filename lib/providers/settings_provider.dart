@@ -80,6 +80,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kUnusualAlerts = 'unusual_alerts_enabled_v1';
   static const _kWeeklyDigest = 'weekly_digest_v1';
   static const _kImportChecks = 'import_checks_v1';
+  static const _kPriceRiseAlerts = 'price_rise_alerts_v1';
   static const _kUpcomingHidden = 'upcoming_hidden_v1';
   static const _kCollapsedSections = 'collapsed_sections_v1';
   static const _kExpandedAccounts = 'accounts_expanded_v1';
@@ -101,6 +102,8 @@ class SettingsProvider extends ChangeNotifier {
   static const _kUpdateDismissed = 'update_dismissed_tag_v1';
   static const _kUpdateInstalling = 'update_installing_tag_v1';
   static const _kRecapDismissed = 'recap_dismissed_v1';
+  static const _kRecentSearches = 'recent_searches_v1';
+  static const _kAheadView = 'ahead_view_v1';
 
   /// Set once the pre-1.23 coral default accent has been moved to azure.
   static const _kAccentAzureMigrated = 'accent_azure_migrated_v1';
@@ -130,6 +133,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _unusualAlerts = true;
   bool _weeklyDigest = true;
   bool _importChecks = true;
+  bool _priceRiseAlerts = true;
   Set<String> _upcomingHidden = {};
   Set<String> _collapsedSections = {};
   Set<String> _expandedAccounts = {};
@@ -150,6 +154,8 @@ class SettingsProvider extends ChangeNotifier {
   String? _updateDismissedTag;
   String? _updateInstallingTag;
   String? _recapDismissed;
+  List<String> _recentSearches = [];
+  String _aheadView = 'chart';
   bool _loaded = false;
 
   ThemeMode get mode => _mode;
@@ -182,6 +188,10 @@ class SettingsProvider extends ChangeNotifier {
   /// A note for each payment a background import counted with a guessed
   /// category or as To sort (services/import_checks.dart).
   bool get importChecks => _importChecks;
+
+  /// Notify when a subscription charges clearly more than its payment before
+  /// (services/price_rise_monitor.dart).
+  bool get priceRiseAlerts => _priceRiseAlerts;
 
   /// Recurring-detection keys the user hid from the Upcoming card.
   Set<String> get hiddenUpcoming => Set.unmodifiable(_upcomingHidden);
@@ -237,6 +247,14 @@ class SettingsProvider extends ChangeNotifier {
   /// month's recap stays hidden, the next month's shows as usual.
   String? get recapDismissed => _recapDismissed;
 
+  /// The Ahead tab opens in the view last used: the balance chart or the
+  /// calendar.
+  bool get aheadCalendar => _aheadView == 'calendar';
+
+  /// The global search's last 5 queries, newest first. Per device: backups
+  /// leave them out.
+  List<String> get recentSearches => List.unmodifiable(_recentSearches);
+
   bool get loaded => _loaded;
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -285,6 +303,14 @@ class SettingsProvider extends ChangeNotifier {
     );
     _weeklyDigest = tryRead(() => prefs.getBool(_kWeeklyDigest) ?? true, true);
     _importChecks = tryRead(() => prefs.getBool(_kImportChecks) ?? true, true);
+    _priceRiseAlerts = tryRead(
+      () => prefs.getBool(_kPriceRiseAlerts) ?? true,
+      true,
+    );
+    _recentSearches = tryRead(
+      () => List<String>.of(prefs.getStringList(_kRecentSearches) ?? const []),
+      <String>[],
+    );
     _upcomingHidden = tryRead(
       () => (prefs.getStringList(_kUpcomingHidden) ?? const []).toSet(),
       <String>{},
@@ -363,6 +389,11 @@ class SettingsProvider extends ChangeNotifier {
       null,
     );
     _recapDismissed = tryRead(() => prefs.getString(_kRecapDismissed), null);
+    // A string compare, never byName: an unknown value reads as the chart.
+    _aheadView = tryRead(
+      () => prefs.getString(_kAheadView) == 'calendar' ? 'calendar' : 'chart',
+      'chart',
+    );
     _updateInstallingTag = tryRead(
       () => prefs.getString(_kUpdateInstalling),
       null,
@@ -421,6 +452,38 @@ class SettingsProvider extends ChangeNotifier {
       (p) => month == null
           ? p.remove(_kRecapDismissed)
           : p.setString(_kRecapDismissed, month),
+    );
+  }
+
+  /// Puts [query] first in [recentSearches], dropping an equal entry
+  /// (ignoring case) and keeping 5. An empty query is ignored.
+  Future<void> addRecentSearch(String query) async {
+    final q = query.trim();
+    if (q.isEmpty) return;
+    final lower = q.toLowerCase();
+    _recentSearches
+      ..removeWhere((s) => s.toLowerCase() == lower)
+      ..insert(0, q);
+    if (_recentSearches.length > 5) {
+      _recentSearches = _recentSearches.sublist(0, 5);
+    }
+    notifyListeners();
+    final saved = List<String>.of(_recentSearches);
+    await _persistPref(
+      _kRecentSearches,
+      (p) => p.setStringList(_kRecentSearches, saved),
+    );
+  }
+
+  /// Shows the Ahead tab's calendar ([on]) or its balance chart.
+  Future<void> setAheadCalendar(bool on) async {
+    final value = on ? 'calendar' : 'chart';
+    if (value == _aheadView) return;
+    _aheadView = value;
+    notifyListeners();
+    await _persistPref(
+      _kAheadView,
+      (p) => p.setString(_kAheadView, _aheadView),
     );
   }
 
@@ -572,6 +635,16 @@ class SettingsProvider extends ChangeNotifier {
     await _persistPref(
       _kImportChecks,
       (p) => p.setBool(_kImportChecks, enabled),
+    );
+  }
+
+  Future<void> setPriceRiseAlerts(bool enabled) async {
+    if (enabled == _priceRiseAlerts) return;
+    _priceRiseAlerts = enabled;
+    notifyListeners();
+    await _persistPref(
+      _kPriceRiseAlerts,
+      (p) => p.setBool(_kPriceRiseAlerts, enabled),
     );
   }
 
@@ -819,6 +892,7 @@ class SettingsProvider extends ChangeNotifier {
     'unusualAlerts': _unusualAlerts,
     'weeklyDigest': _weeklyDigest,
     'importChecks': _importChecks,
+    'priceRiseAlerts': _priceRiseAlerts,
     'upcomingHidden': _upcomingHidden.toList(),
     'hideIncome': _hideIncome,
     'dismissedPairs': _dismissedPairs.toList(),
@@ -827,7 +901,9 @@ class SettingsProvider extends ChangeNotifier {
     'yearStart': _yearStart.name,
     'palette': _palette.name,
     'dashboardLayout': _dashboardLayoutJson(),
+    'aheadView': _aheadView,
     // appLock is intentionally absent — see setAppLock.
+    // recentSearches is per device and intentionally absent.
   };
 
   /// Restores [toBackupMap]'s block. Missing or wrongly-typed keys keep the
@@ -863,6 +939,9 @@ class SettingsProvider extends ChangeNotifier {
     if (map['importChecks'] is bool) {
       _importChecks = map['importChecks'] as bool;
     }
+    if (map['priceRiseAlerts'] is bool) {
+      _priceRiseAlerts = map['priceRiseAlerts'] as bool;
+    }
     if (map['upcomingHidden'] is List) {
       _upcomingHidden = {
         for (final k in map['upcomingHidden'] as List)
@@ -888,6 +967,9 @@ class SettingsProvider extends ChangeNotifier {
     if (map['dashboardLayout'] is Map) {
       _readDashboardLayout(map['dashboardLayout']);
     }
+    if (map['aheadView'] is String) {
+      _aheadView = map['aheadView'] == 'calendar' ? 'calendar' : 'chart';
+    }
     // A backup from before 1.23 may carry the old coral default.
     if (accent is int && map['accentVersion'] == null) {
       _accent = _migrateAccent(_accent, _palette);
@@ -906,6 +988,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setBool(_kUnusualAlerts, _unusualAlerts);
       await p.setBool(_kWeeklyDigest, _weeklyDigest);
       await p.setBool(_kImportChecks, _importChecks);
+      await p.setBool(_kPriceRiseAlerts, _priceRiseAlerts);
       await p.setStringList(_kUpcomingHidden, _upcomingHidden.toList());
       await p.setBool(_kHideIncome, _hideIncome);
       await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());
@@ -914,6 +997,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setString(_kYearStart, _yearStart.name);
       await p.setString(_kPalette, _palette.name);
       await p.setString(_kDashboardLayout, jsonEncode(_dashboardLayoutJson()));
+      await p.setString(_kAheadView, _aheadView);
     });
     notifyListeners();
   }

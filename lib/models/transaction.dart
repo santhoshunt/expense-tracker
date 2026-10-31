@@ -537,8 +537,8 @@ class Tx {
   /// field existed.
   final DateTime? smsAt;
 
-  /// Category split: one payment divided into rows of several money-out
-  /// categories shares this id. The row that holds the alert (its text,
+  /// Category split: one payment or credit divided into rows of several
+  /// categories of its direction shares this id. The row that holds the alert (its text,
   /// reference and balance) is the anchor; the others are plain parts on
   /// the same account and date. Null for the ordinary single-row case.
   final String? splitId;
@@ -1036,6 +1036,15 @@ bool isToSortCategory(String id) =>
 /// spending and transfer-out alike, except To sort.
 bool isMoneyOutCategory(TxCategory c) =>
     c.type == TxType.expense && !isToSortCategory(c.id);
+
+/// A category one part of a category split may take in the split's
+/// direction: money out as isMoneyOutCategory allows, or money in, income
+/// and transfers in alike, except To sort and Repaid to me.
+bool isSplitPartCategory(TxCategory c, TxType type) => type == TxType.expense
+    ? isMoneyOutCategory(c)
+    : c.type == TxType.income &&
+          !isToSortCategory(c.id) &&
+          c.id != kRepaidToMeCategoryId;
 
 /// User-defined categorisation rule: when an SMS body contains [pattern]
 /// (case-insensitive), the imported transaction gets [categoryId] — or is

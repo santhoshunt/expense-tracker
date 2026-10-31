@@ -8,6 +8,7 @@ import 'budget_widget_service.dart';
 import 'home_widgets_service.dart';
 import 'import_checks.dart';
 import 'notification_service.dart';
+import 'price_rise_monitor.dart';
 import 'sms_import_service.dart';
 import 'unusual_spend_monitor.dart';
 import 'upcoming_monitor.dart';
@@ -222,8 +223,8 @@ Future<BackgroundImportResult> runBackgroundImport(
   return (imported: imported, ok: ok);
 }
 
-/// Budget, unusual spending and payment-due checks, for an engine with no
-/// Home screen to run them. One failing never stops the others.
+/// Budget, unusual spending, payment-due and price-rise checks, for an
+/// engine with no Home screen to run them. One failing never stops the others.
 /// [notifications] is the tests' stand-in for the plugin.
 Future<void> runAlertChecks(
   FinanceProvider finance,
@@ -245,6 +246,12 @@ Future<void> runAlertChecks(
     (
       'Upcoming',
       () => UpcomingMonitor(
+        notifications: notifications,
+      ).check(finance, settings),
+    ),
+    (
+      'Price rise',
+      () => PriceRiseMonitor(
         notifications: notifications,
       ).check(finance, settings),
     ),

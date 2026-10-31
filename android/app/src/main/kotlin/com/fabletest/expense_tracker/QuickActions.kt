@@ -38,6 +38,14 @@ object QuickActions {
     /** The Accounts widget: the Accounts tab. */
     const val OPEN_ACCOUNTS = "open_accounts"
 
+    /** The Payments to check widget's +N more line: Transactions filtered to
+     * the rows waiting when the tap arrives. */
+    const val OPEN_CHECKS = "open_checks"
+
+    /** Prefix on a Payments to check widget row tap, followed by the row id:
+     * that row's edit sheet. */
+    const val OPEN_TX_PREFIX = "open_tx:"
+
     /** Opens the enabled launcher entry with [action].
      *
      * The component comes from getLaunchIntentForPackage, never from
@@ -68,8 +76,10 @@ object QuickActions {
             ADD_EXPENSE, ADD_INCOME, IMPORT_SMS, OPEN_BUDGET, OPEN_BUDGETS,
             OPEN_PACE, OPEN_UPCOMING, OPEN_TODAY, OPEN_BREAKDOWN,
             OPEN_TRANSACTIONS, OPEN_BIG_BILLS, OPEN_WEEKLY_DIGEST,
-            OPEN_REVIEW, OPEN_ACCOUNTS -> action
-            else -> null
+            OPEN_REVIEW, OPEN_ACCOUNTS, OPEN_CHECKS -> action
+            else -> action?.takeIf {
+                it.startsWith(OPEN_TX_PREFIX) && it.length > OPEN_TX_PREFIX.length
+            }
         }
     }
 

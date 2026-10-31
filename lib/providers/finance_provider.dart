@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show DateTimeRange;
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -42,6 +43,18 @@ typedef CardPaymentResult = ({
   String? pairId,
   Tx? bankLegBefore,
   String? prevPaidMonth,
+});
+
+/// What [FinanceProvider.moveToCash] did, so an Undo
+/// ([FinanceProvider.undoCashMoves]) can reverse it: delete the Transfer in
+/// leg [txId], restore the bank row's pre-pair copy [bankLegBefore], and
+/// delete [createdAccountId] when the move made that Cash account and it is
+/// still empty. [cashAccountId] is the Cash account the leg landed on.
+typedef CashMove = ({
+  String txId,
+  Tx bankLegBefore,
+  String cashAccountId,
+  String? createdAccountId,
 });
 
 /// What [FinanceProvider.splitTransaction] or [FinanceProvider.mergeSplit]
@@ -361,6 +374,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _refundsLinkedKey = 'refunds_linked_v1';
   static const _refundSuggestIdsKey = 'refund_suggest_ids_v1';
   static const _discardedImportsKey = 'discarded_imports_v1';
+  static const _atmAutoMoveKey = 'atm_auto_move_v1';
 
   final List<Tx> _transactions = [];
   final List<ClassifierRule> _rules = [];
@@ -471,6 +485,32 @@ class FinanceProvider extends ChangeNotifier {
   @visibleForTesting
   int get lastImportCounted => _lastImportCounted;
   int _lastImportCounted = 0;
+
+  /// Whether [addImported] moves ATM withdrawals to Cash on its own. Off
+  /// until the person taps Move on the review sheet's ATM card once; off
+  /// again from the Settings switch ([setAtmAutoMove]).
+  bool get atmAutoMove => _atmAutoMove;
+  bool _atmAutoMove = false;
+
+  /// Moves [addImported] made since the last [takeAtmMoves], for the import
+  /// toast's Undo.
+  final List<CashMove> _atmMoves = [];
+
+  /// The moves imports made since the last call, oldest first; clears them.
+  List<CashMove> takeAtmMoves() {
+    final moves = List<CashMove>.of(_atmMoves);
+    _atmMoves.clear();
+    return moves;
+  }
+
+  /// Turns automatic ATM moves on or off ([atmAutoMove]).
+  Future<void> setAtmAutoMove(bool on) async {
+    if (on == _atmAutoMove) return;
+    _atmAutoMove = on;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_atmAutoMoveKey, on);
+  }
 
   /// Hashed identities ([_discardKeysOf]) of imported alerts the user
   /// deleted or discarded, oldest first, so a rescan does not bring them
@@ -1101,8 +1141,14 @@ class FinanceProvider extends ChangeNotifier {
   /// included via include mode.
   /// Whether one transaction counts toward [b] — the row-level twin of
   /// [budgetSpentFor]; the two must stay in agreement.
+  /// A tag budget counts every money-out row carrying its tag, in any
+  /// category and money-out transfers too, on the days its dates cover.
   bool countsTowardBudget(Tx t, SpendBudget b) {
     if (t.type != TxType.expense || !countsInTotals(t)) return false;
+    if (b.tag case final tag?) {
+      return b.coversDay(t.effectiveDate) &&
+          t.tags.any((x) => tagKey(x) == tagKey(tag));
+    }
     switch (b.mode) {
       case BudgetMode.include:
         return b.categoryIds.contains(t.categoryId);
@@ -1123,8 +1169,29 @@ class FinanceProvider extends ChangeNotifier {
   /// The part of [budgetSpentFor] that rests on guessed categories
   /// ([Tx.categoryGuessed]). Budget alerts leave it out until the user
   /// confirms or changes those rows.
-  double guessedSpendFor(SpendBudget b, DateTime month) =>
-      _guessedSpend(month, (t) => countsTowardBudget(t, b));
+  double guessedSpendFor(SpendBudget b, DateTime month) {
+    var sum = 0.0;
+    for (final t in _budgetRows(b, month)) {
+      if (t.categoryGuessed && countsTowardBudget(t, b)) sum += netSpendOf(t);
+    }
+    return _paise(sum);
+  }
+
+  /// The confirmed rows [b] can count in [month]: that month's rows, or for
+  /// a dated budget the rows of every month its dates touch, whatever
+  /// [month] is. [countsTowardBudget] still decides each row.
+  List<Tx> _budgetRows(SpendBudget b, DateTime month) {
+    final r = b.range;
+    if (r == null) return confirmedInMonth(month);
+    return [
+      for (
+        var m = DateTime(r.start.year, r.start.month);
+        !m.isAfter(r.end);
+        m = DateTime(m.year, m.month + 1)
+      )
+        ...confirmedInMonth(m),
+    ];
+  }
 
   /// The guessed part of [categoryId]'s spend in [month], as
   /// [expenseByCategory] counts it.
@@ -1163,6 +1230,16 @@ class FinanceProvider extends ChangeNotifier {
     SpendBudget b,
     DateTime month,
   ) {
+    if (b.tag != null) {
+      // Totals over exactly the rows the budget's list shows, so the bar,
+      // the pie and the Transactions filter stay equal.
+      final t = _totals([
+        for (final r in _budgetRows(b, month))
+          if (countsTowardBudget(r, b)) r,
+      ]);
+      return [...t.byCategory, ...t.transferOutByCategory]
+        ..sort((a, b) => b.value.compareTo(a.value));
+    }
     final t = _monthTotals(month);
     final entries = switch (b.mode) {
       BudgetMode.include => <MapEntry<TxCategory, double>>[
@@ -1178,6 +1255,23 @@ class FinanceProvider extends ChangeNotifier {
     };
     entries.sort((a, b) => b.value.compareTo(a.value));
     return entries;
+  }
+
+  /// A dated budget's spend for each day of its range, first day first;
+  /// empty for a monthly budget. Counted as [budgetBreakdownFor] counts:
+  /// transfers at [netAmountOf], other rows at [netSpendOf].
+  List<double> budgetSpendByDay(SpendBudget b) {
+    final r = b.range;
+    if (r == null) return const [];
+    final days = List<double>.filled(daysCovered(r.start, r.end), 0.0);
+    for (final t in _budgetRows(b, r.start)) {
+      if (!countsTowardBudget(t, b)) continue;
+      final i = daysCovered(r.start, t.effectiveDate) - 1;
+      days[i] += isTransferCategory(t.categoryId)
+          ? netAmountOf(t)
+          : netSpendOf(t);
+    }
+    return [for (final d in days) _paise(d)];
   }
 
   /// Collection names whose stored blob failed to decode during [load] and
@@ -1773,6 +1867,7 @@ class FinanceProvider extends ChangeNotifier {
     _discardedImports
       ..clear()
       ..addAll(prefs.getStringList(_discardedImportsKey) ?? const []);
+    _atmAutoMove = prefs.getBool(_atmAutoMoveKey) ?? false;
     // Once, on the first launch of 1.42.0: refunds from the last 90 days
     // are linked to their purchase when sure, or offered for review
     // ([_linkPastRefunds]). Not when the ledger, the accounts or the
@@ -1803,7 +1898,9 @@ class FinanceProvider extends ChangeNotifier {
       if (_tagColors.length != before) await _persist(marks: true);
     }
     // A mark whose merchant has no payment left inside detection's 24-month
-    // reach never shows as a subscription, so it could not be removed.
+    // reach never shows as a subscription, so it could not be removed. The
+    // prune uses the key the Subscription switch saves ([subscriptionKeyOf]),
+    // so a savings mark on a transfer survives.
     if (_subscriptionPins.isNotEmpty &&
         !_loadWarnings.contains('transactions')) {
       final now = DateTime.now();
@@ -1811,7 +1908,7 @@ class FinanceProvider extends ChangeNotifier {
       final seen = <String>{};
       for (final t in _transactions) {
         if (t.pending || t.date.isBefore(reach)) continue;
-        final key = recurringKeyOf(t);
+        final key = subscriptionKeyOf(t);
         if (key != null && _subscriptionPins.containsKey(key)) seen.add(key);
       }
       final before = _subscriptionPins.length;
@@ -2363,11 +2460,12 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// Whether [t] can be split by category ([splitTransaction]): confirmed
-  /// money out, not a transfer leg, not a refund or refunded, with no group
-  /// split share. A row already split is judged by its whole payment: a
-  /// re-split may drop a part, and a part's group split would go with it.
+  /// money out or money in, not a transfer leg, not a refund or refunded,
+  /// with no group split share, and not a friend's repayment or a
+  /// refund-worded credit. A row already split is judged by its whole
+  /// payment: a re-split may drop a part, and a part's group split would go
+  /// with it.
   bool canSplit(Tx t) {
-    if (t.type != TxType.expense) return false;
     if (t.splitId != null) {
       return splitPartsOf(t).every(
         (p) =>
@@ -2381,19 +2479,24 @@ class FinanceProvider extends ChangeNotifier {
         t.pairId == null &&
         t.myShare == null &&
         t.refundOf == null &&
-        refundedFor(t) == 0;
+        refundedFor(t) == 0 &&
+        // A friend's repayment or a refund links to the whole credit.
+        !(t.type == TxType.income &&
+            ((t.categoryId == kRepaidToMeCategoryId && t.repaidBy != null) ||
+                isRefundWorded(t.smsText)));
   }
 
-  /// Divides payment [id] into rows of several money-out categories that
-  /// share one [Tx.splitId]. The first of [parts] goes to the row holding
+  /// Divides payment or credit [id] into rows of several categories of its
+  /// direction that share one [Tx.splitId]. The first of [parts] goes to the row holding
   /// the alert (the anchor), which keeps its id, text, reference and
   /// balance; the rest become plain rows on its account, date and counted
   /// month. On a payment already split, [parts] replace its parts: the
   /// existing rows are reused in order, then added or removed.
   ///
   /// Throws [ArgumentError] unless the row can split ([canSplit]), there
-  /// are at least 2 parts, each above 0 in a money-out category
-  /// ([isMoneyOutCategory]), and they add up to the payment to the paisa.
+  /// are at least 2 parts, each above 0 in a category of the row's
+  /// direction ([isSplitPartCategory]), and they add up to the payment to
+  /// the paisa.
   Future<SplitChange> splitTransaction(
     String id,
     List<({String categoryId, double amount})> parts,
@@ -2413,8 +2516,12 @@ class FinanceProvider extends ChangeNotifier {
         throw ArgumentError.value(p.amount, 'parts', 'Must be above 0');
       }
       final cat = categoryById(p.categoryId);
-      if (cat.id != p.categoryId || !isMoneyOutCategory(cat)) {
-        throw ArgumentError.value(p.categoryId, 'parts', 'Not money out');
+      if (cat.id != p.categoryId || !isSplitPartCategory(cat, row.type)) {
+        throw ArgumentError.value(
+          p.categoryId,
+          'parts',
+          row.type == TxType.income ? 'Not money in' : 'Not money out',
+        );
       }
       sum += _inPaise(p.amount);
     }
@@ -2799,10 +2906,12 @@ class FinanceProvider extends ChangeNotifier {
   /// The refund side of a link: confirmed money in that counts, in any
   /// category, transfers too: a refund pair is money that went out and came
   /// back, neither income nor spend, whatever each row is filed as. Not a
-  /// transfer pair's leg, and not a friend's repayment, which settles a
-  /// split bill instead.
+  /// transfer pair's leg, not a friend's repayment, which settles a split
+  /// bill instead, and not a part of a category split, which stays
+  /// unlinked.
   bool _isRefundRow(Tx t) =>
       t.type == TxType.income &&
+      t.splitId == null &&
       !t.pending &&
       t.pairId == null &&
       t.categoryId != kRepaidToMeCategoryId &&
@@ -3004,6 +3113,11 @@ class FinanceProvider extends ChangeNotifier {
     final paired = {
       for (final s in pairs) ...[s.out.id, s.incoming.id],
     };
+    // A withdrawal a transfer suggestion shows gets that card instead.
+    final atm = [
+      for (final t in pending)
+        if (!paired.contains(t.id) && isAtmCandidate(t)) t,
+    ];
     final refunds = [
       for (final s in refundSuggestions([
         for (final t in pending)
@@ -3016,6 +3130,7 @@ class FinanceProvider extends ChangeNotifier {
     ];
     final shown = {
       ...paired,
+      for (final t in atm) t.id,
       for (final s in refunds) ...[s.refund.id, s.purchase.id],
     };
     return _d.reviewQueue = ReviewQueue(
@@ -3027,6 +3142,7 @@ class FinanceProvider extends ChangeNotifier {
         for (final t in pending)
           if (!shown.contains(t.id)) t,
       ],
+      atm: atm,
     );
   }
 
@@ -3491,15 +3607,21 @@ class FinanceProvider extends ChangeNotifier {
     setCustomCategories(customCategories.where((c) => c.id != id));
     final detached = _detachCategory(id);
     // Reminders on the deleted category follow the rows' remap when the
-    // target is money-out, else fall back to "Other" expense.
+    // target keeps their direction (a bill stays money-out, a salary stays
+    // money in, see [reminderIsIncome]), else fall back to the matching
+    // "Other".
+    final wasIncome = category.type == TxType.income && !category.isTransfer;
+    final reminderTarget =
+        target != null &&
+            (wasIncome
+                ? target.type == TxType.income && !isTransferCategory(target.id)
+                : target.type == TxType.expense)
+        ? target.id
+        : (wasIncome ? 'other_income' : 'other_expense');
     var remindersChanged = false;
     for (var i = 0; i < _reminders.length; i++) {
       if (_reminders[i].categoryId != id) continue;
-      _reminders[i] = _reminders[i].copyWith(
-        categoryId: target != null && target.type == TxType.expense
-            ? target.id
-            : 'other_expense',
-      );
+      _reminders[i] = _reminders[i].copyWith(categoryId: reminderTarget);
       remindersChanged = true;
     }
     // Rows moved out of the transfer categories are no longer a transfer.
@@ -3743,6 +3865,8 @@ class FinanceProvider extends ChangeNotifier {
     required BudgetMode mode,
     required Set<String> categoryIds,
     String? iconKey,
+    String? tag,
+    DateTimeRange? range,
   }) async {
     final id = 'bud_${DateTime.now().microsecondsSinceEpoch}_${_idSeq++}';
     _budgets.add(
@@ -3753,6 +3877,8 @@ class FinanceProvider extends ChangeNotifier {
         mode: mode,
         categoryIds: {...categoryIds},
         iconKey: iconKey,
+        tag: tag,
+        range: range,
       ),
     );
     notifyListeners();
@@ -3763,8 +3889,8 @@ class FinanceProvider extends ChangeNotifier {
   Future<void> updateBudget(SpendBudget updated) async {
     final current = _budgets.where((b) => b.id == updated.id).firstOrNull;
     if (current == null) return;
-    // A new limit, mode or set of categories changes what the alerts
-    // measure, so they may fire again; a new name or icon does not.
+    // A new limit, mode, set of categories, tag or dates changes what the
+    // alerts measure, so they may fire again; a new name or icon does not.
     // Clear the fired-alert marker BEFORE notifying: the budget monitor is
     // a provider listener, so notify-first let it fire against the new
     // limit + old marker, record a level, and then have a later clear
@@ -3772,9 +3898,13 @@ class FinanceProvider extends ChangeNotifier {
     // change.
     if (current.limit != updated.limit ||
         current.mode != updated.mode ||
-        !setEquals(current.categoryIds, updated.categoryIds)) {
+        !setEquals(current.categoryIds, updated.categoryIds) ||
+        tagKey(current.tag ?? '') != tagKey(updated.tag ?? '') ||
+        current.range != updated.range) {
+      final now = DateTime.now();
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(customBudgetAlertKey(updated.id, DateTime.now()));
+      await prefs.remove(budgetAlertKeyFor(current, now));
+      await prefs.remove(budgetAlertKeyFor(updated, now));
     }
     // Re-lookup AFTER the awaits: an index captured before them could point
     // at a different (or removed) budget if a delete/clear/import landed in
@@ -3799,7 +3929,7 @@ class FinanceProvider extends ChangeNotifier {
     final budget = _budgets.removeAt(i);
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
-    final alertKey = customBudgetAlertKey(id, DateTime.now());
+    final alertKey = budgetAlertKeyFor(budget, DateTime.now());
     final alertLevel = prefs.getInt(alertKey);
     await prefs.remove(alertKey);
     await _persist(budgets: true);
@@ -3821,7 +3951,7 @@ class FinanceProvider extends ChangeNotifier {
     // alerts. A marker from a month that has since ended is dropped rather
     // than written, since the new month's alerts have not fired yet.
     if (d.alertLevel != null &&
-        d.alertKey == customBudgetAlertKey(d.budget.id, DateTime.now())) {
+        d.alertKey == budgetAlertKeyFor(d.budget, DateTime.now())) {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(d.alertKey, d.alertLevel!);
     }
@@ -4118,16 +4248,21 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(reminders: true);
   }
 
-  /// Reminders are money-out by definition: an unknown or income-typed
-  /// category (deleted, or flipped by a built-in override) falls back to
-  /// "Other" expense. Returns whether anything changed.
+  /// A reminder is a bill (any expense-typed category) or money expected in
+  /// ([reminderIsIncome]: an income category that is not a transfer). An
+  /// unknown category (deleted) falls back to "Other" expense, an income
+  /// transfer to "Other" income so money in stays money in. Returns whether
+  /// anything changed.
   bool _sanitizeReminders() {
     var changed = false;
     for (var i = 0; i < _reminders.length; i++) {
       var r = _reminders[i];
       final known = allCategories.any((c) => c.id == r.categoryId);
-      if (!known || categoryById(r.categoryId).type != TxType.expense) {
+      if (!known) {
         r = r.copyWith(categoryId: 'other_expense');
+      } else if (categoryById(r.categoryId).type != TxType.expense &&
+          !reminderIsIncome(r)) {
+        r = r.copyWith(categoryId: 'other_income');
       }
       // A deleted account: the added expenses then go on no account. Not
       // while the accounts failed to load: they only look deleted.
@@ -4162,7 +4297,7 @@ class FinanceProvider extends ChangeNotifier {
     for (var i = 0; i < _reminders.length; i++) {
       var r = _reminders[i];
       final amount = r.expectedAmount;
-      if (!r.autoAdd || amount == null) continue;
+      if (!r.autoAdd || amount == null || reminderIsIncome(r)) continue;
       final since = DateTime.tryParse(r.autoSince ?? '');
       if (since == null) continue;
       var from = DateTime(since.year, since.month, since.day);
@@ -4212,7 +4347,8 @@ class FinanceProvider extends ChangeNotifier {
   /// typed in by hand must also share the reminder's category: a ₹499
   /// grocery bill is not the ₹499 broadband. Add it for me reminders never
   /// match: they add their own row, and a match would count a cash bill
-  /// twice. On a reminder with a history (a mark, or a created date), a
+  /// twice. Nor do income reminders: money out is not a salary in. On a
+  /// reminder with a history (a mark, or a created date), a
   /// match more than 3 days before its due date also needs the occurrence
   /// before it done. Rows go oldest first: a scan reads the inbox newest
   /// first, and last month's bill must be marked before this month's early
@@ -4263,7 +4399,8 @@ class FinanceProvider extends ChangeNotifier {
       for (var i = 0; i < _reminders.length; i++) {
         final r = _reminders[i];
         final expected = r.expectedAmount;
-        if (r.autoAdd || expected == null) continue;
+        // Money out never pays a salary in.
+        if (r.autoAdd || expected == null || reminderIsIncome(r)) continue;
         if ((t.amount - expected).abs() >= 1) continue;
         if (t.source == TxSource.manual && t.categoryId != r.categoryId) {
           continue;
@@ -4756,6 +4893,23 @@ class FinanceProvider extends ChangeNotifier {
   bool countsInTotals(Tx t) =>
       t.walletCounted || accountForKey(t.acctKey)?.type != AccountType.wallet;
 
+  /// Whether [t] is a bank or debit card ATM withdrawal [moveToCash] can
+  /// turn into a move to Cash: an unpaired, unsplit, non-spam expense
+  /// outside the transfer categories whose alert reads as one
+  /// ([SmsTxnParser.looksLikeAtmWithdrawal]).
+  bool isAtmCandidate(Tx t) =>
+      t.type == TxType.expense &&
+      t.pairId == null &&
+      t.splitId == null &&
+      !t.isSplit &&
+      !t.suspectedSpam &&
+      !isTransferCategory(t.categoryId) &&
+      switch (accountForKey(t.acctKey)?.type) {
+        AccountType.bank || AccountType.debitCard => true,
+        _ => false,
+      } &&
+      SmsTxnParser.looksLikeAtmWithdrawal(t.smsText);
+
   /// [transactions] that count ([countsInTotals]), newest first. For
   /// callers that fold rows themselves (top merchants, recurring detection).
   List<Tx> get countedTransactions => _d.counted ??= [
@@ -5193,6 +5347,24 @@ class FinanceProvider extends ChangeNotifier {
       )
       .fold(0.0, (s, a) => s + accountBalance(a));
 
+  /// Open Cash accounts: money in hand, inside [netWorth].
+  Iterable<Account> get _cashAccounts =>
+      _accounts.where((a) => !a.isClosed && a.isCash);
+
+  /// Sum of open Cash accounts' balances. Kept apart from
+  /// [bankBalanceTotal], which prints under bank labels.
+  double get cashBalanceTotal =>
+      _cashAccounts.fold(0.0, (s, a) => s + accountBalance(a));
+
+  /// How many accounts [cashBalanceTotal] sums.
+  int get cashBalanceCount => _cashAccounts.length;
+
+  /// Where ATM withdrawals go: the Cash account marked
+  /// [Account.cashDefault], else the first open one; null with none.
+  Account? get defaultCashAccount =>
+      _cashAccounts.where((a) => a.cashDefault).firstOrNull ??
+      _cashAccounts.firstOrNull;
+
   /// Sum of credit-card outstanding amounts (0 where unknown — see
   /// [cardsMissingLimit], which counts what this is silently omitting).
   double get cardOutstandingTotal =>
@@ -5203,17 +5375,18 @@ class FinanceProvider extends ChangeNotifier {
       _cardTotalAccounts.where((a) => accountOutstanding(a) != null).length;
 
   /// Open accounts of the kinds [netWorth] is made of: banks, debit cards
-  /// linked to none and credit cards. Emptied accounts and cards with no
-  /// known outstanding count here though no total adds them.
+  /// linked to none, Cash and credit cards. Emptied accounts and cards with
+  /// no known outstanding count here though no total adds them.
   int get netAccountCount => _accounts
-      .where((a) => !a.isClosed && (_isBankLike(a) || a.isCard))
+      .where((a) => !a.isClosed && (_isBankLike(a) || a.isCard || a.isCash))
       .length;
 
-  /// Liquid money on hand: bank balances minus card outstanding. Savings/
-  /// asset accounts are NOT included — they aren't spendable. The
+  /// Liquid money on hand: bank and cash balances minus card outstanding.
+  /// Savings/asset accounts are NOT included — they aren't spendable. The
   /// authoritative figure once accounts exist, since bank-stated balances
   /// don't depend on the SMS history being complete.
-  double get netWorth => bankBalanceTotal - cardOutstandingTotal;
+  double get netWorth =>
+      bankBalanceTotal + cashBalanceTotal - cardOutstandingTotal;
 
   /// Open wallets' balances in ₹, points at their value. Shown beside net
   /// balance, never inside it: wallet money only spends on its platform.
@@ -5279,6 +5452,64 @@ class FinanceProvider extends ChangeNotifier {
     return estimateRewards(rules, charges);
   }
 
+  /// [account]'s spending in the period [back] periods before the one
+  /// [now] falls in, on the terms of [cardCycleSpend].
+  CardPeriod _cardPeriod(Account account, DateTime now, int back) {
+    final cycle = cardCycleOf(account, now, back: back);
+    var sum = 0.0;
+    var count = 0;
+    for (final t in _rowsInCycle(account, cycle)) {
+      if (t.type == TxType.expense && !isTransferCategory(t.categoryId)) {
+        sum += netSpendOf(t);
+        count++;
+      }
+    }
+    return (
+      cycle: cycle,
+      back: back,
+      spent: _paise(sum),
+      payments: count,
+      rewards: cardRewardsFor(account, back: back),
+    );
+  }
+
+  /// Six of [account]'s periods for the card tile chart, ending with the
+  /// one today falls in, or [skip] periods before it. A closed card's
+  /// window ends at the period holding its closing date. A card with no
+  /// statement day uses calendar months.
+  CardSpendWindow cardSpendWindow(Account account, {int skip = 0}) {
+    final now = figuresClock();
+    var newest = 0;
+    final closedAt = account.closedAt;
+    if (closedAt != null) {
+      while (cardCycleOf(account, now, back: newest).start.isAfter(closedAt)) {
+        newest++;
+      }
+    }
+    newest += skip;
+    final bars = <CardPeriod>[
+      for (var back = newest + 5; back >= newest; back--)
+        _cardPeriod(account, now, back),
+    ];
+    final current = newest == 0 ? bars.last : _cardPeriod(account, now, 0);
+    DateTime utcDay(DateTime d) => DateTime.utc(d.year, d.month, d.day);
+    final start = utcDay(current.cycle.start);
+    final day = utcDay(now).difference(start).inDays + 1;
+    final days = utcDay(current.cycle.end).difference(start).inDays + 1;
+    final rows = _byAccount[account.id];
+    final hasOlder =
+        rows != null &&
+        rows.isNotEmpty &&
+        rows.first.date.isBefore(bars.first.cycle.start);
+    return (
+      current: current,
+      day: day,
+      days: days,
+      bars: bars,
+      hasOlder: hasOlder,
+    );
+  }
+
   /// The category that sets the card reward rate of [t]'s payment: the
   /// first of its rows, in [splitPartsOf] order, in a category that earns
   /// ([earnsCardRewards]); [t]'s own for an unsplit row. Null when none
@@ -5321,6 +5552,17 @@ class FinanceProvider extends ChangeNotifier {
     notifyListeners();
     await _persist(accounts: true);
     return acc.id;
+  }
+
+  /// Makes Cash account [id] the one ATM withdrawals go to
+  /// ([defaultCashAccount]); every other Cash account stops being it.
+  Future<void> setDefaultCash(String id) async {
+    for (var i = 0; i < _accounts.length; i++) {
+      final a = _accounts[i];
+      if (a.isCash) _accounts[i] = a.copyWith(cashDefault: a.id == id);
+    }
+    notifyListeners();
+    await _persist(accounts: true);
   }
 
   /// Custom kind label + icon for a savings/asset account ("Stocks",
@@ -5391,7 +5633,8 @@ class FinanceProvider extends ChangeNotifier {
   /// Links an account/card number key (`"BANK:1234"`) to [accountId] so SMS
   /// carrying that fragment resolve to it — past transactions included.
   /// Returns false when another account already owns the key, or when a
-  /// wallet is asked to own a bank number (wallets are entered by hand).
+  /// wallet or Cash account is asked to own a bank number (both are entered
+  /// by hand).
   /// [byHand] records it as typed in ([Account.linkedByHand]); false puts
   /// back a number an SMS made (the Unlink undo).
   Future<bool> addAccountKey(
@@ -5404,7 +5647,7 @@ class FinanceProvider extends ChangeNotifier {
     if (owner != null && owner != accountId) return false;
     final i = _accounts.indexWhere((a) => a.id == accountId);
     if (i == -1) return false;
-    if (_accounts[i].isWallet) return false;
+    if (_accounts[i].isWallet || _accounts[i].isCash) return false;
     final a = _accounts[i];
     // A number the account holds already keeps how it was linked: typing
     // in an SMS-made one again doesn't make it hand-linked. Nor does one
@@ -5449,7 +5692,8 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// Returns false, changing nothing, when [type] is Wallet and the account
-  /// can't be one ([canBecomeWallet]).
+  /// can't be one ([canBecomeWallet]), or Cash and the account holds a
+  /// number an SMS or a person linked.
   ///
   /// Crossing the wallet line clears "Count as spending" on the account's
   /// rows, so an old setting can't come back from an earlier stint as a
@@ -5468,6 +5712,12 @@ class FinanceProvider extends ChangeNotifier {
     if (i == -1) return false;
     final before = _accounts[i];
     if (type == AccountType.wallet && !canBecomeWallet(before)) return false;
+    // Cash holds hand-assigned rows only: an account with SMS numbers
+    // would read as emptied.
+    if (type == AccountType.cash &&
+        !before.keys.every((k) => k.startsWith('manual:'))) {
+      return false;
+    }
     final crossing = before.isWallet != (type == AccountType.wallet);
     final leaving = before.isWallet && crossing;
     final toDebit = type == AccountType.debitCard;
@@ -5770,6 +6020,62 @@ class FinanceProvider extends ChangeNotifier {
     );
   }
 
+  /// Turns ATM withdrawal [bankTxId] ([isAtmCandidate]) into a move from
+  /// the bank to Cash, as [recordCardPayment] does for a card bill: a manual
+  /// Transfer in row on [defaultCashAccount] (a new "Cash" account when
+  /// there is none), paired with the bank row so neither counts as spend.
+  /// The returned record carries everything [undoCashMoves] needs; null
+  /// when the row is gone, is no candidate, or the pairing failed (the leg
+  /// and any account made for it are removed again).
+  Future<CashMove?> moveToCash(String bankTxId) async {
+    final before = _transactions.where((t) => t.id == bankTxId).firstOrNull;
+    if (before == null || !isAtmCandidate(before)) return null;
+    var cash = defaultCashAccount;
+    String? createdAccountId;
+    if (cash == null) {
+      createdAccountId = await addAccount(name: 'Cash', type: AccountType.cash);
+      cash = accountById(createdAccountId);
+      if (cash == null) return null;
+    }
+    final txId = await addTransaction(
+      type: TxType.income,
+      categoryId: kTransferInCategoryId,
+      amount: before.amount,
+      note: 'ATM withdrawal',
+      date: before.date,
+    );
+    await assignAccount(txId, cash.id);
+    final pairId = await pairTransactions(before.id, txId);
+    if (pairId == null) {
+      await deleteTransactions([txId]);
+      if (createdAccountId != null) await deleteAccount(createdAccountId);
+      return null;
+    }
+    return (
+      txId: txId,
+      bankLegBefore: before,
+      cashAccountId: cash.id,
+      createdAccountId: createdAccountId,
+    );
+  }
+
+  /// Reverses [moves] ([moveToCash]): deletes the Cash legs, puts the bank
+  /// rows back as they were, and deletes each Cash account a move created
+  /// that holds no rows and no set balance now.
+  Future<void> undoCashMoves(List<CashMove> moves) async {
+    if (moves.isEmpty) return;
+    await deleteTransactions([for (final m in moves) m.txId]);
+    await restoreEditedTransactions([for (final m in moves) m.bankLegBefore]);
+    for (final m in moves) {
+      final id = m.createdAccountId;
+      if (id == null) continue;
+      final acct = accountById(id);
+      if (acct == null || acct.manualBalance != null) continue;
+      if (_transactions.any((t) => acct.keys.contains(t.acctKey))) continue;
+      await deleteAccount(id);
+    }
+  }
+
   /// User-entered balance (banks) / outstanding (cards). Stamped with "now"
   /// so a later SMS-reported figure takes over again. Null clears it.
   Future<void> setManualBalance(String id, double? value) async {
@@ -5816,6 +6122,8 @@ class FinanceProvider extends ChangeNotifier {
     // Wallets and money accounts never fuse: bank numbers would land on a
     // wallet, or wallet rows would start counting.
     if (_accounts[si].isWallet != _accounts[ti].isWallet) return;
+    // Cash holds hand-assigned rows only: a bank's numbers must not land on it.
+    if (_accounts[si].isCash != _accounts[ti].isCash) return;
     final merged = {..._accounts[ti].keys, ..._accounts[si].keys};
     _accounts[ti] = _accounts[ti].copyWith(
       keys: merged,
@@ -5973,15 +6281,19 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Applies [categoryId] to every transaction in [ids] whose type matches
   /// the category's type — an expense category cannot land on an income row.
+  /// A part of a category split takes only a category [isSplitPartCategory]
+  /// allows, so a money-in part never becomes a friend's repayment.
   /// Returns how many rows changed.
   Future<int> setCategoryForMany(Set<String> ids, String categoryId) async {
-    final catType = categoryById(categoryId).type;
+    final cat = categoryById(categoryId);
+    final catType = cat.type;
     final intoTransfer = isTransferCategory(categoryId);
     var changed = 0;
     for (var i = 0; i < _transactions.length; i++) {
       final t = _transactions[i];
       if (!ids.contains(t.id) || t.type != catType) continue;
       if (t.categoryId == categoryId) continue;
+      if (t.splitId != null && !isSplitPartCategory(cat, t.type)) continue;
       // Without the sanitizer, bulk-moving a split row into "To savings"
       // kept a stale share that resurfaced if the row later moved back.
       _transactions[i] = _sanitizeSplit(
@@ -6171,7 +6483,8 @@ class FinanceProvider extends ChangeNotifier {
   /// Renames tag [from] to [to] on every row. When [to] already exists the
   /// two merge: its rows take [to]'s spelling too, and normalizeTags drops
   /// the duplicate on rows that had both. The colour follows the rename,
-  /// unless [to] already has one of its own.
+  /// unless [to] already has one of its own, and so do the budgets on
+  /// either tag ([restoreBudgets] undoes that).
   Future<List<Tx>> renameTag(String from, String to) async {
     final keys = {tagKey(from), tagKey(to)};
     final fromKey = tagKey(from);
@@ -6184,21 +6497,33 @@ class FinanceProvider extends ChangeNotifier {
         colourMoved = true;
       }
     }
+    var budgetsMoved = false;
+    for (var i = 0; i < _budgets.length; i++) {
+      final b = _budgets[i];
+      if (b.tag == null || !keys.contains(tagKey(b.tag!))) continue;
+      _budgets[i] = b.copyWith(tag: to);
+      budgetsMoved = true;
+    }
     final before = await _editTags(
       (t) => t.tags.any((tag) => keys.contains(tagKey(tag))),
       (tags) => [for (final tag in tags) keys.contains(tagKey(tag)) ? to : tag],
     );
-    if (colourMoved) {
+    if (colourMoved || budgetsMoved) {
       if (before.isEmpty) notifyListeners();
-      await _persist(marks: true);
+      await _persist(marks: colourMoved, budgets: budgetsMoved);
     }
     return before;
   }
 
-  /// Removes tag [tag] from every row that carries it, and its colour.
+  /// Removes tag [tag] from every row that carries it, its colour and the
+  /// budgets on it ([restoreBudgets] undoes that). Their alert markers stay,
+  /// so an Undo does not re-send alerts.
   Future<List<Tx>> deleteTag(String tag) async {
     final k = tagKey(tag);
     final hadColour = _tagColors.remove(k) != null;
+    final budgetCount = _budgets.length;
+    _budgets.removeWhere((b) => b.tag != null && tagKey(b.tag!) == k);
+    final budgetsGone = _budgets.length != budgetCount;
     final before = await _editTags(
       (t) => t.tags.any((x) => tagKey(x) == k),
       (tags) => [
@@ -6206,11 +6531,22 @@ class FinanceProvider extends ChangeNotifier {
           if (tagKey(x) != k) x,
       ],
     );
-    if (hadColour) {
+    if (hadColour || budgetsGone) {
       if (before.isEmpty) notifyListeners();
-      await _persist(marks: true);
+      await _persist(marks: hadColour, budgets: budgetsGone);
     }
     return before;
+  }
+
+  /// Puts the budget list back to [snapshot] (a [budgets] read taken before
+  /// a tag rename or delete), for that action's Undo.
+  Future<void> restoreBudgets(List<SpendBudget> snapshot) async {
+    if (listEquals(snapshot, _budgets)) return;
+    _budgets
+      ..clear()
+      ..addAll(snapshot);
+    notifyListeners();
+    await _persist(budgets: true);
   }
 
   /// [tag]'s colour, or null for the theme default.
@@ -6405,9 +6741,11 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// Whether [t] may be filed as a repayment: money in outside the transfer
-  /// categories, or an unpaired "Transfer in", and not flagged as spam.
+  /// categories, or an unpaired "Transfer in", not flagged as spam, and not
+  /// a part of a category split.
   bool _canBeRepayment(Tx t) =>
       t.type == TxType.income &&
+      t.splitId == null &&
       t.pairId == null &&
       !t.suspectedSpam &&
       (!isTransferCategory(t.categoryId) ||
@@ -6587,6 +6925,13 @@ class FinanceProvider extends ChangeNotifier {
   /// ([_isSureImport]) counts at once with the "new" marker ([Tx.unseen]);
   /// every other row waits pending for review. `counted` says how many of
   /// the added rows counted at once.
+  ///
+  /// ATM withdrawals ([isAtmCandidate]): while [atmAutoMove] is off, a sure
+  /// one waits in review too, so the review sheet asks whether to move it
+  /// to Cash. Once it is on, every new one stays pending through the save,
+  /// then moves to Cash ([moveToCash]), counts at once as a transfer, and is
+  /// kept for the import toast's Undo ([takeAtmMoves]). It never counts as
+  /// spending in between, so the budget monitors never see it as spend.
   ///
   /// Rule handling: a matching spam rule drops the message entirely; a
   /// matching category rule overrides the parser's category guess and clears
@@ -6925,6 +7270,8 @@ class FinanceProvider extends ChangeNotifier {
       );
       added++;
     }
+    // This batch's rows, for the ATM moves after the save.
+    final newIds = <String>[];
     if (added > 0) {
       // Sure rows count at once, marked new; the rest wait in review. Every
       // row was added pending first, so the pair check sees the whole batch,
@@ -6970,11 +7317,16 @@ class FinanceProvider extends ChangeNotifier {
           keysWithConfirmed: keysWithConfirmed,
           pairPool: pairPool,
         );
-        if (sure) {
+        // An ATM withdrawal waits for the review sheet's question until the
+        // person has answered Move once.
+        if (sure && !isAtmCandidate(t)) {
           _transactions[i] = t.copyWith(pending: false, unseen: true);
           counted++;
           continue;
         }
+        // With the flag on, a sure withdrawal stays pending until moveToCash
+        // below pairs it, so no listener sees it count as spending first.
+        if (sure && _atmAutoMove) continue;
         // The review queue never suggests a pair with a spam suspect.
         if (t.suspectedSpam) continue;
         for (final other in pairPool()[_inPaise(t.amount)] ?? const <Tx>[]) {
@@ -7000,6 +7352,9 @@ class FinanceProvider extends ChangeNotifier {
         // Back in review, they pay no reminder until confirmed again.
         paid = _unmarkRemindersPaidBy(backToReview);
       }
+      for (var i = firstNew; i < _transactions.length; i++) {
+        newIds.add(_transactions[i].id);
+      }
       // A bank alert for a reminder's amount near its due day pays it, once
       // it counts: the sure rows here, the rest when confirmed.
       paid = _markRemindersPaidBy(_transactions.sublist(firstNew)) || paid;
@@ -7008,6 +7363,21 @@ class FinanceProvider extends ChangeNotifier {
       _lastImportCounted = counted;
       notifyListeners();
       await _persist(tx: true, accounts: true, reminders: paid);
+      // Once the person has answered Move, each ATM withdrawal moves to
+      // Cash; the import toast offers Undo ([takeAtmMoves]). A move confirms
+      // a row that waited in review, so it counts at once.
+      if (_atmAutoMove) {
+        for (final id in newIds) {
+          final t = _transactions.where((r) => r.id == id).firstOrNull;
+          if (t == null || !isAtmCandidate(t)) continue;
+          final wasPending = t.pending;
+          final move = await moveToCash(id);
+          if (move == null) continue;
+          _atmMoves.add(move);
+          if (wasPending) counted++;
+        }
+        _lastImportCounted = counted;
+      }
     }
     return (added, spamDropped, counted);
   }
@@ -7478,6 +7848,8 @@ class FinanceProvider extends ChangeNotifier {
             .where(
               (k) =>
                   k.startsWith('budget_alert_fired_') ||
+                  k.startsWith(kRangeBudgetAlertPrefix) ||
+                  k.startsWith('price_rise_fired_') ||
                   k.startsWith('unusual_alert_fired_'),
             )
             .toList()) {
@@ -7492,6 +7864,10 @@ class FinanceProvider extends ChangeNotifier {
     // With the rows gone, a rescan may bring back any alert.
     _discardedImports.clear();
     await prefs.remove(_discardedImportsKey);
+    // With no Cash account left, the first ATM alert asks again.
+    _atmAutoMove = false;
+    _atmMoves.clear();
+    await prefs.remove(_atmAutoMoveKey);
     if (includeConfig) {
       _rules.clear();
       _importRules.clear();
@@ -7573,7 +7949,8 @@ class FinanceProvider extends ChangeNotifier {
     // v31: transactions may carry `splitId`, `guessed` and `noCashback`;
     // credit cards may carry `rewards`; rows may sit in the built-in
     // `to_sort_expense` and `to_sort_income` categories.
-    'version': 31,
+    // v32: budgets may carry 'tag', 'from' and 'to'; accounts may be type 'cash' and carry 'cashDefault'; 'atmAutoMove'.
+    'version': 32,
     'transactions': [for (final t in _transactions) _backupJsonOf(t)],
     'discardedImports': _discardedImports.toList(),
     'accounts': _accounts.map((a) => a.toJson()).toList(),
@@ -7605,6 +7982,8 @@ class FinanceProvider extends ChangeNotifier {
       for (final e in _subscriptionPins.entries) e.key: e.value.name,
     },
     'patternPaid': Map<String, String>.from(_patternPaid),
+    // v32 addition: whether ATM withdrawals move to Cash on import.
+    'atmAutoMove': _atmAutoMove,
   };
 
   /// [t] as a backup holds it: no alert text, the merchant it names instead.
@@ -7755,6 +8134,9 @@ class FinanceProvider extends ChangeNotifier {
               if (e is String && RegExp(r'^[0-9a-f]{16}$').hasMatch(e)) e,
           ]
         : null;
+    // v32 addition, same absent-means-keep rule; replace mode only.
+    final rawAtmAutoMove = data['atmAutoMove'];
+    final importedAtmAutoMove = rawAtmAutoMove is bool ? rawAtmAutoMove : null;
     // v13 addition, same absent-means-keep rule.
     final rawReminders = data['reminders'];
     final importedReminders = rawReminders is List
@@ -7908,6 +8290,7 @@ class FinanceProvider extends ChangeNotifier {
           ..addAll(importedDiscarded);
         _capDiscarded();
       }
+      if (importedAtmAutoMove != null) _atmAutoMove = importedAtmAutoMove;
       // Registry is final now — safe to enforce the type/category invariant
       // (CSV imports get this via importTransactions; this path didn't).
       sanitizeTail(_transactions.length);
@@ -7958,6 +8341,10 @@ class FinanceProvider extends ChangeNotifier {
             importedPatternPaid != null,
         discards: importedDiscarded != null,
       );
+      if (importedAtmAutoMove != null) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool(_atmAutoMoveKey, importedAtmAutoMove);
+      }
       return txs.length;
     }
 

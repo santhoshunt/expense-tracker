@@ -1,5 +1,6 @@
 import '../models/reminder.dart';
 import '../models/subscription_cycle.dart';
+import '../models/transaction.dart';
 import '../utils/dates.dart';
 
 /// Due-date math for manual reminders. Pure, mirrors the detector's window:
@@ -14,6 +15,14 @@ const int kReminderEarlyPayDays = 15;
 
 /// Most occurrences [reminderDueDatesBetween] lists: two years of monthly.
 const int kMaxReminderCatchUp = 24;
+
+/// Money expected in (a salary): a reminder in an income category that is
+/// not a transfer. It is no bill, so the bill paths leave it out, and the
+/// Ahead projection adds it to the expected balance.
+bool reminderIsIncome(Reminder r) =>
+    categoryById(r.categoryId, fallbackType: TxType.expense).type ==
+        TxType.income &&
+    !isTransferCategory(r.categoryId);
 
 const _monthNames = [
   'Jan',

@@ -1124,8 +1124,9 @@ class BackupService {
                   [
                     a.displayName,
                     a.typeLabel,
-                    // A wallet's keys are per-row by-hand links, not numbers.
-                    a.keys.isEmpty || a.isWallet
+                    // A wallet's or Cash account's keys are per-row by-hand
+                    // links, not numbers.
+                    a.keys.isEmpty || a.isWallet || a.isCash
                         ? '—'
                         : [
                             for (final k in a.keys) k.replaceFirst(':', ' ••'),
@@ -1147,6 +1148,8 @@ class BackupService {
             pw.SizedBox(height: 6),
             // The same roll-up the in-app balance breakdown shows.
             _netLine('Bank balances', _money.format(finance.bankBalanceTotal)),
+            if (finance.cashBalanceCount > 0)
+              _netLine('Cash in hand', _money.format(finance.cashBalanceTotal)),
             _netLine(
               'Credit card outstanding',
               '− ${_money.format(finance.cardOutstandingTotal)}',

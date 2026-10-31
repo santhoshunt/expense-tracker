@@ -41,17 +41,19 @@ void main() {
 
     test('drops unknown, foreign and repeated names', () {
       final l = DashboardPageLayout.fromJson(DashboardPage.overview, {
-        'order': ['owed', 'nope', 'owed', 'heatmap', 'upcoming'],
+        'order': ['owed', 'nope', 'owed', 'heatmap', 'upcoming', 'recap'],
         'hidden': ['heatmap', 'budgets', 'x'],
       });
       // The stored pair keeps its order; the missing ones return around it.
       expect(
         l.order.indexOf(DashboardSection.owed) <
-            l.order.indexOf(DashboardSection.upcoming),
+            l.order.indexOf(DashboardSection.recap),
         isTrue,
       );
       expect(l.order.where((s) => s == DashboardSection.owed), hasLength(1));
       expect(l.order.contains(DashboardSection.heatmap), isFalse);
+      // Next 7 days moved to Ahead in 2.0: an older Overview order drops it.
+      expect(l.order.contains(DashboardSection.upcoming), isFalse);
       expect(l.hidden, {DashboardSection.budgets});
       expect(
         l.order.toSet(),
@@ -63,12 +65,10 @@ void main() {
       final l = DashboardPageLayout.fromJson(DashboardPage.overview, {
         'order': ['upcoming', 'monthlyBudget', 'recap', 'budgets', 'owed'],
       });
-      // 1.39 adds the This week row, back in at the top, and 1.40 Big
-      // bills ahead right after Upcoming.
+      // 1.39 adds the This week row, back in at the top; 2.0 moves Next 7
+      // days to Ahead.
       expect(l.order, [
         DashboardSection.week,
-        DashboardSection.upcoming,
-        DashboardSection.bigBills,
         DashboardSection.monthlyBudget,
         DashboardSection.forecast,
         DashboardSection.recap,
@@ -77,20 +77,22 @@ void main() {
       ]);
     });
 
-    test('defaults put Big bills ahead after Upcoming, not between the '
-        'monthly budget and the forecast', () {
+    test('defaults put Big bills ahead after Upcoming on Ahead, and the '
+        'forecast right after the monthly budget', () {
+      expect(DashboardSection.of(DashboardPage.ahead), [
+        DashboardSection.projection,
+        DashboardSection.upcoming,
+        DashboardSection.bigBills,
+        DashboardSection.subscriptions,
+      ]);
       final order = DashboardSection.of(DashboardPage.overview);
-      expect(
-        order.indexOf(DashboardSection.bigBills),
-        order.indexOf(DashboardSection.upcoming) + 1,
-      );
       expect(
         order.indexOf(DashboardSection.forecast),
         order.indexOf(DashboardSection.monthlyBudget) + 1,
       );
     });
 
-    test('a 1.39 Overview order gains Big bills ahead after Upcoming', () {
+    test('a 1.39 Overview order drops the sections that moved to Ahead', () {
       final l = DashboardPageLayout.fromJson(DashboardPage.overview, {
         'order': [
           'monthlyBudget',
@@ -106,8 +108,6 @@ void main() {
         DashboardSection.monthlyBudget,
         DashboardSection.forecast,
         DashboardSection.owed,
-        DashboardSection.upcoming,
-        DashboardSection.bigBills,
         DashboardSection.week,
         DashboardSection.recap,
         DashboardSection.budgets,

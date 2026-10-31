@@ -14,7 +14,9 @@ import 'package:expense_tracker/services/notification_service.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/reminder_editor_dialog.dart';
 
-/// Big bills ahead on screen: the Overview card, its sheet, the Cockpit
+import 'dashboard_test_utils.dart';
+
+/// Big bills ahead on screen: the Ahead card, its sheet, the Cockpit
 /// Reminders note, and the editor's Half-yearly choice.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -98,13 +100,16 @@ void main() {
   Finder inSheet(Finder f) =>
       find.descendant(of: find.byType(BottomSheet), matching: f);
 
-  group('Overview card', () {
+  group('Ahead card', () {
     testWidgets('shows the monthly figure and the next two bills, and opens '
         'a sheet listing every bill', (tester) async {
       final p = await withReminders(threeBills());
       await pumpDashboard(tester, p);
+      await openDashboardView(tester, 'Ahead');
 
       expect(find.text('Big bills ahead'), findsOneWidget);
+      // Folded at first on Ahead: open it to reach the card.
+      await openDashboardSection(tester, 'bigBills');
       expect(find.text(fmtMoneyTidy(3000)), findsWidgets);
       expect(find.text('a month to set aside'), findsOneWidget);
       expect(find.text('+1 more'), findsOneWidget);
@@ -162,6 +167,9 @@ void main() {
         size: const Size(320, 1400),
         textScale: 1.3,
       );
+      expect(tester.takeException(), isNull);
+      await openDashboardView(tester, 'Ahead');
+      await openDashboardSection(tester, 'bigBills');
       expect(tester.takeException(), isNull);
       final card = find.text('a month to set aside');
       await tester.ensureVisible(card);

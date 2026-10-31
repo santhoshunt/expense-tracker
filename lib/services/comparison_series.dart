@@ -4,6 +4,10 @@ import 'month_forecast.dart';
 import 'safe_to_spend.dart';
 import 'spend_comparison.dart';
 
+/// One spend item due on a day of the chart: a bill, a reminder or a
+/// detected payment. [due] is its own date, so an overdue one keeps it.
+typedef DayDue = ({String label, double amount, DateTime due});
+
 /// The lines of the Trends comparison chart: this month's spend so far,
 /// the forecast from today to the month's end, and the month it is set
 /// against (last month, or a usual month). Each is cumulative: entry `i`
@@ -34,6 +38,10 @@ class ComparisonSeries {
   /// months.
   final List<double>? usual;
 
+  /// Day of month to the spend items due that day; empty without a
+  /// forecast line.
+  final Map<int, List<DayDue>> dueByDay;
+
   const ComparisonSeries({
     required this.month,
     required this.previousMonth,
@@ -43,6 +51,7 @@ class ComparisonSeries {
     required this.predicted,
     required this.lastMonth,
     required this.usual,
+    this.dueByDay = const {},
   });
 
   /// The forecast's total, or null for a month that has ended.
@@ -72,6 +81,7 @@ ComparisonSeries buildComparisonSeries(
   required DateTime now,
   required MonthForecast? forecast,
   required bool lastMonthOnRecord,
+  Map<int, List<DayDue>> dueByDay = const {},
 }) {
   final anchor = DateTime(month.year, month.month);
   final days = daysInMonth(anchor.year, anchor.month);
@@ -121,5 +131,6 @@ ComparisonSeries buildComparisonSeries(
           )
         : null,
     usual: usual == null ? null : _cutUsual(usual, days),
+    dueByDay: predicted == null ? const {} : dueByDay,
   );
 }

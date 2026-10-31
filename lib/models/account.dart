@@ -29,7 +29,12 @@ enum AccountType {
   /// Pay, Zomato Money, Swiggy coins). Out of net balance, and its rows
   /// count in spending only when the user turns that on per row
   /// (`Tx.walletCounted`).
-  wallet('Wallet');
+  wallet('Wallet'),
+
+  /// Money in hand (Home cash, Travel cash). Counts in net balance, its
+  /// spends count, it holds only hand-assigned rows (`manual:` keys) and it
+  /// receives ATM withdrawals ([Account.cashDefault]).
+  cash('Cash');
 
   final String label;
   const AccountType(this.label);
@@ -40,6 +45,7 @@ enum AccountType {
     debitCard => Icons.payment,
     savings => Icons.savings_outlined,
     wallet => Icons.account_balance_wallet_outlined,
+    cash => Icons.payments_outlined,
   };
 }
 
@@ -137,6 +143,10 @@ class Account {
   /// which the cycle's reward estimate reads. Null = not set up.
   final CardRewards? rewards;
 
+  /// Cash accounts only: ATM withdrawals go here
+  /// ([FinanceProvider.defaultCashAccount]). At most one is set.
+  final bool cashDefault;
+
   Account({
     required this.id,
     required this.name,
@@ -158,6 +168,7 @@ class Account {
     this.pointValue,
     this.linkedAccountId,
     this.rewards,
+    this.cashDefault = false,
   });
 
   /// Credit cards only: debit cards have no limit, outstanding or bill.
@@ -166,6 +177,8 @@ class Account {
   bool get isDebitCard => type == AccountType.debitCard;
 
   bool get isWallet => type == AccountType.wallet;
+
+  bool get isCash => type == AccountType.cash;
 
   bool get isClosed => closedAt != null;
 
@@ -228,6 +241,7 @@ class Account {
     bool clearLinkedAccountId = false,
     CardRewards? rewards,
     bool clearRewards = false,
+    bool? cashDefault,
   }) => Account(
     id: id,
     name: name ?? this.name,
@@ -259,6 +273,7 @@ class Account {
         ? null
         : (linkedAccountId ?? this.linkedAccountId),
     rewards: clearRewards ? null : (rewards ?? this.rewards),
+    cashDefault: cashDefault ?? this.cashDefault,
   );
 
   Map<String, dynamic> toJson() => {
@@ -283,6 +298,7 @@ class Account {
     if (pointValue != null) 'pointValue': pointValue,
     if (linkedAccountId != null) 'linkedAccountId': linkedAccountId,
     if (rewards != null) 'rewards': rewards!.toJson(),
+    if (cashDefault) 'cashDefault': true,
   };
 
   factory Account.fromJson(Map<String, dynamic> json) {
@@ -330,6 +346,7 @@ class Account {
           ? json['linkedAccountId'] as String
           : null,
       rewards: CardRewards.tryFromJson(json['rewards']),
+      cashDefault: json['cashDefault'] == true,
     );
   }
 

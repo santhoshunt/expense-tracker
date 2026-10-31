@@ -164,6 +164,7 @@ class AccountsWidgetConfigActivity : Activity() {
         "debit" -> "Debit card"
         "savings" -> "Savings"
         "wallet" -> "Wallet"
+        "cash" -> "Cash"
         else -> "Bank"
     }
 

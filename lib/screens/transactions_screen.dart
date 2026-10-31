@@ -90,6 +90,11 @@ class TxFilterRequest {
   /// Rows carrying this tag (matched ignoring case) — the Tags tab's rows.
   final String? tag;
 
+  /// The rows with these ids whatever they look like now, set by the
+  /// Payments to check widget's "+N more" line so opening a row (which
+  /// clears its check) does not drop it from the list.
+  final Set<String>? ids;
+
   const TxFilterRequest({
     this.type,
     this.accountId,
@@ -102,6 +107,7 @@ class TxFilterRequest {
     this.rangeCounted = false,
     this.rangeLabel,
     this.tag,
+    this.ids,
   });
 }
 
@@ -217,6 +223,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   /// Selected tags, by tagKey — shows rows carrying any of them.
   final Set<String> _tagFilter = {};
+
+  /// A fixed set of row ids ([TxFilterRequest.ids]), or null for none.
+  Set<String>? _idFilter;
   double? _minAmount;
   double? _maxAmount;
   String? _accountId;
@@ -341,6 +350,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         (id, OutlinedPill(leading: avatar, label: label, onRemove: onDeleted));
 
     return [
+      if (_idFilter != null)
+        chip(
+          id: 'ids',
+          avatar: const Icon(Icons.fact_check_outlined, size: 16),
+          label: 'To check · ${_idFilter!.length}',
+          onDeleted: () => setState(() => _idFilter = null),
+        ),
       if (activeAccount != null)
         chip(
           id: 'account',
@@ -435,6 +451,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _groupFilter.clear();
     _budgetFilter.clear();
     _tagFilter.clear();
+    _idFilter = null;
     _minAmount = null;
     _maxAmount = null;
     _accountId = null;
@@ -493,6 +510,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (req?.groupId != null) _groupFilter.add(req!.groupId!);
       if (req?.budgetId != null) _budgetFilter.add(req!.budgetId!);
       if (req?.tag != null) _tagFilter.add(tagKey(req!.tag!));
+      _idFilter = req?.ids;
       // A deep-link is a jump, not a sideways step. Post-frame because
       // didUpdateWidget runs during build and a synchronous jumpToPage
       // would mutate scroll positions mid-build.
@@ -572,6 +590,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         : finance.budgets.where((b) => _budgetFilter.contains(b.id)).toList();
     final r = _rangeFilter;
     return all.where((t) {
+      if (_idFilter != null && !_idFilter!.contains(t.id)) return false;
       // A bank lists its linked debit cards' rows too, the rows its balance
       // runs over; a card lists its own.
       if (_accountId != null) {
@@ -663,6 +682,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     (_groupFilter.toList()..sort()).join(','),
     (_budgetFilter.toList()..sort()).join(','),
     (_tagFilter.toList()..sort()).join(','),
+    (_idFilter?.toList()?..sort())?.join(','),
     _minAmount,
     _maxAmount,
     _accountId,
@@ -1311,7 +1331,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           if (shape.day case final day?)
-                            _DayHeader(day: tx!.date, txs: day),
+                            TxDayHeader(day: tx!.date, txs: day),
                           TransactionTile(
                             // Keyed by row: a search or sort hands this
                             // slot another transaction, whose tint must
@@ -1968,6 +1988,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         : refund.categoryId == kRepaidToMeCategoryId
         ? 'A friend\'s repayment settles a split bill, so it can\'t be '
               'a refund.'
+        : refund.splitId != null
+        ? 'Part of a split credit can\'t be a refund.'
         // A refund on such a wallet is counted when linked; the purchase
         // must count already.
         : !finance.countsInTotals(purchase)
@@ -3356,14 +3378,15 @@ double _monthHeaderRowHeight(BuildContext context) =>
 /// The label above a day's rows under a date sort: "Today", "Yesterday" or
 /// the weekday and date, with the day's net on the right, on the rows'
 /// amount edge, green when money came in on balance and red when it went
-/// out. The rows under it show their times, not the date again.
-class _DayHeader extends StatelessWidget {
+/// out. The rows under it show their times, not the date again. The global
+/// search's payment list draws it too.
+class TxDayHeader extends StatelessWidget {
   final DateTime day;
 
   /// That day's rows in this month's list.
   final List<Tx> txs;
 
-  const _DayHeader({required this.day, required this.txs});
+  const TxDayHeader({super.key, required this.day, required this.txs});
 
   /// Totals per day list, as [_MonthHeader] caches its own.
   static final _totals = Expando<(double, double)>();

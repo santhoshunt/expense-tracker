@@ -9,6 +9,35 @@ import 'card_bill.dart';
 /// cycle. A card with no statement day uses the calendar month.
 typedef CardCycle = ({DateTime start, DateTime end});
 
+/// One card period's spending.
+/// - `cycle`: the period's dates.
+/// - `back`: the number of periods before the one today falls in.
+/// - `spent`: `netSpendOf` over expense rows that are not transfers, by
+///   `t.date`.
+/// - `payments`: the number of rows summed.
+/// - `rewards`: `cardRewardsFor(account, back: back)`.
+typedef CardPeriod = ({
+  CardCycle cycle,
+  int back,
+  double spent,
+  int payments,
+  RewardEstimate? rewards,
+});
+
+/// A card's spending window for the tile chart.
+/// - `current`: the period today falls in.
+/// - `day`: today's day number inside the current cycle, from 1.
+/// - `days`: the current cycle's length in days.
+/// - `bars`: six periods, oldest first.
+/// - `hasOlder`: the card has a row before the first bar.
+typedef CardSpendWindow = ({
+  CardPeriod current,
+  int day,
+  int days,
+  List<CardPeriod> bars,
+  bool hasOlder,
+});
+
 /// The cycle [now] falls in, or the one [back] cycles before it.
 CardCycle cardCycleOf(Account a, DateTime now, {int back = 0}) {
   final today = DateTime(now.year, now.month, now.day);

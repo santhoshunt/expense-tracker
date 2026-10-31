@@ -22,12 +22,17 @@ class ReviewQueue {
   /// [pending] less the rows a suggestion already shows.
   final List<Tx> rows;
 
+  /// Pending ATM withdrawals the sheet asks to move to Cash, in no transfer
+  /// suggestion.
+  final List<Tx> atm;
+
   const ReviewQueue({
     required this.pending,
     required this.spam,
     required this.pairs,
     required this.refunds,
     required this.rows,
+    this.atm = const [],
   });
 
   static const empty = ReviewQueue(

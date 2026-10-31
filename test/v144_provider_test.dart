@@ -610,7 +610,7 @@ void main() {
       expect(byId(p, row.id).splitId, isNull);
     });
 
-    test('canSplit says no to income, pending, paired and shared rows', () {
+    test('canSplit says no to pending, paired and shared rows', () {
       final p = FinanceProvider();
       Tx t({
         TxType type = TxType.expense,
@@ -629,7 +629,7 @@ void main() {
         myShare: myShare,
       );
       expect(p.canSplit(t()), isTrue);
-      expect(p.canSplit(t(type: TxType.income)), isFalse);
+      expect(p.canSplit(t(type: TxType.income)), isTrue);
       expect(p.canSplit(t(pending: true)), isFalse);
       expect(p.canSplit(t(pairId: 'pair_1')), isFalse);
       expect(p.canSplit(t(myShare: 40)), isFalse);

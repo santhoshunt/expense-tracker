@@ -144,8 +144,10 @@ List<Map<String, dynamic>> buildWidgetSnapshot(
     String name,
     double spent,
     double limit,
-    String icon,
-  ) => {
+    String icon, {
+    // A dated budget's days, shown where a monthly one names its month.
+    String? period,
+  }) => {
     'id': id,
     'name': name,
     'spent': spent,
@@ -161,8 +163,8 @@ List<Map<String, dynamic>> buildWidgetSnapshot(
         ? '${tidy(spent - limit)} over'
         : '${tidy(limit - spent)} left',
     'icon': icon,
-    'monthLabel': fmtMonth(month),
-    'monthName': DateFormat('MMMM').format(month),
+    'monthLabel': period ?? fmtMonth(month),
+    'monthName': period ?? DateFormat('MMMM').format(month),
     'updatedLabel': fmtDate(now),
     'updatedShort': DateFormat('d MMM').format(now),
   };
@@ -177,13 +179,26 @@ List<Map<String, dynamic>> buildWidgetSnapshot(
         kWalletWidgetIcon,
       ),
     for (final b in finance.budgets)
-      if (b.limit > 0)
+      if (b.limit > 0 && b.range == null)
         entry(
           b.id,
           b.name,
           finance.budgetSpentFor(b, month),
           b.limit,
           budgetWidgetIcon(b),
+        ),
+    // Trips until their last day: one total for their dates.
+    for (final b in finance.budgets)
+      if (b.limit > 0 &&
+          (b.stageOn(now) == TripStage.upcoming ||
+              b.stageOn(now) == TripStage.running))
+        entry(
+          b.id,
+          b.name,
+          finance.budgetSpentFor(b, month),
+          b.limit,
+          budgetWidgetIcon(b),
+          period: fmtDayRange(b.range!, now),
         ),
   ];
 }

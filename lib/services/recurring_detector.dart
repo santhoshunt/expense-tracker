@@ -81,6 +81,27 @@ String? recurringKeyOf(Tx t) {
 /// payee's debits and refunds alike.
 String? merchantIdentityOf(Tx t) {
   if (t.suspectedSpam || isTransferCategory(t.categoryId)) return null;
+  return _identityOf(t);
+}
+
+/// The key the Subscription switch saves and the Subscriptions list groups
+/// by: [recurringKeyOf], except that an expense-typed transfer other than a
+/// Card bill (a chit paid To savings) keys as `transfer|<identity>`. Only the
+/// Subscriptions path (and the pin prune that keeps its marks) reads it, so
+/// spend paths never see a savings pattern.
+String? subscriptionKeyOf(Tx t) {
+  if (t.type != TxType.expense ||
+      t.suspectedSpam ||
+      t.categoryId == kCardBillCategoryId ||
+      !isTransferCategory(t.categoryId)) {
+    return recurringKeyOf(t);
+  }
+  final identity = _identityOf(t);
+  return identity == null ? null : 'transfer|$identity';
+}
+
+/// [merchantIdentityOf] without its spam and transfer guard.
+String? _identityOf(Tx t) {
   // Never key on t.sender — it is the bank's DLT channel, so every debit
   // from the same bank would collapse into one "pattern".
   var identity = alertMerchantOf(t).toLowerCase();
@@ -150,11 +171,15 @@ List<RecurringHit> detectRecurring(
 /// one payment in the last 24 months, whatever the gaps, and is due one
 /// cycle after its last payment: a yearly plan paid 11 months ago is still
 /// active, one paid 14 months ago shows as stopped.
+///
+/// [transfers] keys rows by [subscriptionKeyOf], so a marked transfer (a
+/// savings subscription) joins; only the Subscriptions list passes it.
 List<RecurringHit> detectRecurringPatterns(
   List<Tx> confirmed, {
   required DateTime now,
   MerchantAliasLookup? alias,
   Map<String, SubscriptionCycle> pinned = const {},
+  bool transfers = false,
 }) {
   final horizon = DateTime(now.year - 1, now.month, now.day);
   final pinnedHorizon = DateTime(now.year - 2, now.month, now.day);
@@ -165,8 +190,14 @@ List<RecurringHit> detectRecurringPatterns(
   final oldest = pinned.isEmpty ? horizon : pinnedHorizon;
   for (final t in foldCategorySplits(confirmed)) {
     if (t.date.isAfter(now) || t.date.isBefore(oldest)) continue;
-    final key = recurringKeyOf(t);
+    final key = transfers ? subscriptionKeyOf(t) : recurringKeyOf(t);
     if (key == null) continue;
+    // A transfer joins only as a marked subscription.
+    if (transfers &&
+        isTransferCategory(t.categoryId) &&
+        !pinned.containsKey(key)) {
+      continue;
+    }
     if (t.date.isBefore(horizon) && !pinned.containsKey(key)) continue;
     (groups[key] ??= []).add(t);
   }

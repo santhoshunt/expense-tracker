@@ -11,7 +11,7 @@ import 'undo_snackbar.dart';
 /// Shows a split's Undo offer: the message and what Undo runs.
 typedef SplitUndoOffer = void Function(String message, VoidCallback undo);
 
-/// Opens the editor that divides one money-out payment into category parts
+/// Opens the editor that divides one payment or credit into category parts
 /// ([FinanceProvider.splitTransaction]), or reshapes or merges back the split
 /// [row] belongs to. Completes with true when the payment changed.
 ///
@@ -94,7 +94,7 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
     } else {
       // The row's own category holds the whole payment, and an empty row
       // waits for the first part to move out of it.
-      final own = isMoneyOutCategory(_anchor.category)
+      final own = isSplitPartCategory(_anchor.category, _anchor.type)
           ? _anchor.categoryId
           : null;
       _parts
@@ -202,24 +202,103 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
     );
   }
 
-  List<PickerItem<String>> _categoryItems() => [
-    const PickerItem.header('Expenses'),
-    for (final c in allCategories)
-      if (isMoneyOutCategory(c) && !c.isTransfer)
-        PickerItem(
-          value: c.id,
-          label: c.label,
-          leading: Icon(c.icon, color: c.color, size: 20),
+  List<PickerItem<String>> _categoryItems() {
+    final type = _anchor.type;
+    final dir = type == TxType.income ? 'in' : 'out';
+    return [
+      PickerItem.header(type == TxType.income ? 'Income' : 'Expenses'),
+      for (final c in allCategories)
+        if (isSplitPartCategory(c, type) && !c.isTransfer)
+          PickerItem(
+            value: c.id,
+            label: c.label,
+            leading: Icon(c.icon, color: c.color, size: 20),
+          ),
+      const PickerItem.header('Transfers'),
+      for (final c in allCategories)
+        if (isSplitPartCategory(c, type) && c.isTransfer)
+          PickerItem(
+            value: c.id,
+            label: '${c.label} · money $dir',
+            leading: Icon(c.icon, color: c.color, size: 20),
+          ),
+    ];
+  }
+
+  /// The credit a money-in split divides: a green left bar, the account
+  /// and merchant, and the amount in green over its date.
+  Widget _creditHeader(BuildContext context, String merchant) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final green = AppColors.of(context).green;
+    final account = context.read<FinanceProvider>().accountForKey(
+      _anchor.acctKey,
+    );
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 2),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          // No radius here: a one-sided border with a radius asserts, so the
+          // ClipRRect rounds the corners instead.
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHigh,
+            border: Border(left: BorderSide(color: green, width: 3)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      account == null
+                          ? 'Money in'
+                          : 'Money in · ${account.displayName}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: text.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    Text(
+                      merchant,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: text.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '+${fmtMoney(_total)}',
+                    style: text.bodyLarge?.copyWith(
+                      color: green,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    fmtDateCompact(_anchor.date),
+                    style: text.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
-    const PickerItem.header('Transfers'),
-    for (final c in allCategories)
-      if (isMoneyOutCategory(c) && c.isTransfer)
-        PickerItem(
-          value: c.id,
-          label: '${c.label} · money out',
-          leading: Icon(c.icon, color: c.color, size: 20),
-        ),
-  ];
+      ),
+    );
+  }
 
   Widget _partRow(_Part p, List<PickerItem<String>> items) => Padding(
     // Keyed by the part: removing a row mid-list must not hand its
@@ -294,14 +373,19 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 4),
-            Text(
-              '$merchant · ${fmtMoney(_total)} · '
-              '${fmtDateCompact(_anchor.date)}',
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
-            ),
+            if (_anchor.type == TxType.income)
+              _creditHeader(context, merchant)
+            else
+              Text(
+                '$merchant · ${fmtMoney(_total)} · '
+                '${fmtDateCompact(_anchor.date)}',
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: text.bodyMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
             for (final p in _parts) _partRow(p, items),
             Align(
               alignment: AlignmentDirectional.centerStart,

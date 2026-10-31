@@ -1,3 +1,5 @@
+import '../models/spend_budget.dart';
+
 /// Pure budget-threshold logic, separated from the notification plumbing so
 /// it can be unit-tested.
 ///
@@ -34,6 +36,20 @@ String budgetAlertMonthKey(DateTime month) =>
 String customBudgetAlertKey(String budgetId, DateTime month) =>
     'budget_alert_fired_${budgetId}_${month.year}-'
     '${month.month.toString().padLeft(2, '0')}';
+
+/// Prefix of a dated budget's alert marker. It holds no month, so the
+/// monthly sweep of `budget_alert_fired_` markers never matches it.
+const String kRangeBudgetAlertPrefix = 'budget_range_alert_';
+
+/// SharedPreferences key holding the highest level already notified for
+/// the dated budget [id], for its whole range.
+String rangeBudgetAlertKey(String id) => '$kRangeBudgetAlertPrefix$id';
+
+/// [b]'s alert marker: one per range for a dated budget, else one per
+/// month of [now].
+String budgetAlertKeyFor(SpendBudget b, DateTime now) => b.range == null
+    ? customBudgetAlertKey(b.id, now)
+    : rangeBudgetAlertKey(b.id);
 
 /// Human-readable alert text for a crossed [level] (80 / 90 / 100).
 /// Pass [name] for a custom budget; without it the text describes the

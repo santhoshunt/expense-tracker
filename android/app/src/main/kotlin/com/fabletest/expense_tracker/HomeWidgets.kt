@@ -1,19 +1,24 @@
 package com.fabletest.expense_tracker
 
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
+import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
 import java.util.Locale
@@ -22,12 +27,14 @@ import kotlin.math.abs
 /**
  * The Month pace, Upcoming, Today and Add, Spending split, Budgets
  * list, Recent, Quick actions, Big bills and This week widgets (the last
- * two in a 4x2 and a compact 4x1 size), and Accounts. Pure display, like
- * [BudgetWidgetProvider]: the Dart side writes the snapshots
- * (`flutter.home_widget_data_v1`, home_widgets_service.dart, and the budget
- * one for Budgets list) and this draws them. The snapshot carries dates
- * rather than "today" labels, so a redraw after midnight (every 30 minutes,
- * see the *_info.xml files) shows the new day without the app running.
+ * two in a 4x2 and a compact 4x1 size), Accounts and Payments to check.
+ * Pure display, like [BudgetWidgetProvider]: the Dart side writes the
+ * snapshots (`flutter.home_widget_data_v1`, home_widgets_service.dart, and
+ * the budget one for Budgets list) and this draws them. The snapshot
+ * carries dates rather than "today" labels, so a redraw after midnight
+ * (every 30 minutes, see the *_info.xml files) shows the new day without
+ * the app running. The one write is Payments to check's Keep, which queues
+ * the tap under [KEPT_KEY] for the app to apply ([CheckKeepReceiver]).
  */
 object HomeWidgets {
     /** The shared snapshot; the Accounts widget's setup screen lists its
@@ -52,12 +59,47 @@ object HomeWidgets {
     /** The This week widget's review count. */
     const val PURPOSE_REVIEW = 6
 
+    /** The Payments to check widget's "+N more" line. */
+    const val PURPOSE_CHECKS_MORE = 7
+
+    /** A Payments to check row tap, plus the row's slot (0 to 2). */
+    const val PURPOSE_CHECK_ROW = 8
+
+    /** A Payments to check row's Keep, plus the row's slot (0 to 2). */
+    const val PURPOSE_CHECK_KEEP = 11
+
+    /** Keep taps from the Payments to check widget not yet applied: a JSON
+     * array of the rows' Keep payloads, written as a plain string so the
+     * shared_preferences plugin hands it to Dart as it is
+     * (ImportChecks.applyKept drains it). */
+    const val KEPT_KEY = "flutter.import_checks_widget_kept_v1"
+
+    /** [CheckKeepReceiver]'s extras: the Keep payload and the row's note id. */
+    const val EXTRA_KEEP = "keep"
+    const val EXTRA_NOTE = "note_id"
+
     /** One request code per widget and purpose. Every tap is an ACTION_RUN
      * intent on the same activity, and intents differing only in extras are
      * the same PendingIntent: a shared code would let one widget's tap
-     * overwrite another's. Widget ids are unique and purposes stay below 8,
+     * overwrite another's. Widget ids are unique and purposes stay below 16,
      * so id and purpose never collide. */
-    fun requestCode(id: Int, purpose: Int): Int = id * 8 + purpose
+    fun requestCode(id: Int, purpose: Int): Int = id * 16 + purpose
+
+    /** The Keep payloads queued under [KEPT_KEY]; empty when none are. */
+    fun keptPayloads(context: Context): List<String> {
+        val arr = WidgetKit.readArray(context, KEPT_KEY) ?: return emptyList()
+        return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+    }
+
+    /** Adds [payload] to the [KEPT_KEY] queue, once. */
+    fun queueKeep(context: Context, payload: String) {
+        val queued = keptPayloads(context)
+        if (payload in queued) return
+        context.getSharedPreferences(WidgetKit.FLUTTER_PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEPT_KEY, JSONArray(queued + payload).toString())
+            .apply()
+    }
 
     private val providers = listOf(
         MonthPaceWidgetProvider::class.java,
@@ -72,6 +114,7 @@ object HomeWidgets {
         ThisWeekWidgetProvider::class.java,
         ThisWeekCompactWidgetProvider::class.java,
         AccountsWidgetProvider::class.java,
+        PaymentsToCheckWidgetProvider::class.java,
     )
 
     private fun today(): Long = LocalDate.now().toEpochDay()
@@ -123,6 +166,8 @@ object HomeWidgets {
                     ({ w, h, b -> thisWeekCompact(context, w, h, b, id, data, theme) })
                 AccountsWidgetProvider::class.java.name ->
                     ({ w, h, _ -> accounts(context, w, h, id, data, theme) })
+                PaymentsToCheckWidgetProvider::class.java.name ->
+                    ({ w, h, _ -> checks(context, w, h, id, data, theme) })
                 else -> return
             }
             // The fallbacks are the smallest a launcher gives: 4 columns of
@@ -1315,7 +1360,7 @@ object HomeWidgets {
     private fun accountIcon(kind: String): Int = when (kind) {
         "card", "debit" -> R.drawable.widget_ic_card
         "wallet" -> R.drawable.widget_ic_wallet
-        "savings" -> R.drawable.widget_ic_income
+        "savings", "cash" -> R.drawable.widget_ic_income
         else -> R.drawable.widget_ic_bank
     }
 
@@ -1393,6 +1438,189 @@ object HomeWidgets {
             R.id.hw_empty,
             if (data == null) context.getString(R.string.home_widget_empty)
             else context.getString(R.string.home_widget_accounts_empty)
+        )
+        return views
+    }
+
+    // --- Payments to check --------------------------------------------------
+
+    private class CheckRow(
+        val row: Int,
+        val divider: Int?,
+        val name: Int,
+        val pillBg: Int,
+        val pill: Int,
+        val amount: Int,
+        val keep: Int,
+        val keepBg: Int,
+        val keepLabel: Int,
+        val go: Int,
+    )
+
+    private val checkRows = listOf(
+        CheckRow(
+            R.id.hw_row1, null, R.id.hw_name1, R.id.hw_pill_bg1, R.id.hw_pill1,
+            R.id.hw_amt1, R.id.hw_keep1, R.id.hw_keep_bg1, R.id.hw_keep_label1, R.id.hw_go1,
+        ),
+        CheckRow(
+            R.id.hw_row2, R.id.hw_div2, R.id.hw_name2, R.id.hw_pill_bg2, R.id.hw_pill2,
+            R.id.hw_amt2, R.id.hw_keep2, R.id.hw_keep_bg2, R.id.hw_keep_label2, R.id.hw_go2,
+        ),
+        CheckRow(
+            R.id.hw_row3, R.id.hw_div3, R.id.hw_name3, R.id.hw_pill_bg3, R.id.hw_pill3,
+            R.id.hw_amt3, R.id.hw_keep3, R.id.hw_keep_bg3, R.id.hw_keep_label3, R.id.hw_go3,
+        ),
+    )
+
+    /** The rows a background import counted with a guessed category or as
+     * To sort and nobody has opened yet, newest first: the merchant over a
+     * Guessed or To sort pill, the amount, and Keep on a guessed row or a
+     * chevron on a To sort one. A row whose Keep was tapped here leaves at
+     * once, before the app has applied it. Past what the height holds, one
+     * row fewer and "+N more"; with nothing waiting, "All checked". */
+    private fun checks(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_checks, theme, id, QuickActions.OPEN_TRANSACTIONS
+        )
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setInt(R.id.hw_head_go, "setColorFilter", theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val block = data?.optJSONObject("checks")
+        if (block == null) {
+            views.setViewVisibility(R.id.hw_body, View.GONE)
+            views.setViewVisibility(R.id.hw_empty, View.VISIBLE)
+            return views
+        }
+        val kept = keptPayloads(context).toSet()
+        val all = block.optJSONArray("rows")
+        val rows = mutableListOf<JSONObject>()
+        var hidden = 0
+        if (all != null) {
+            for (i in 0 until all.length()) {
+                val o = all.optJSONObject(i) ?: continue
+                val keep = if (o.isNull("keep")) "" else o.optString("keep")
+                if (keep.isNotEmpty() && keep in kept) hidden++ else rows += o
+            }
+        }
+        val waiting = maxOf(block.optInt("count", 0) - hidden, 0)
+        views.setTextViewText(
+            R.id.hw_title,
+            if (waiting > 0) "${context.getString(R.string.home_widget_checks_title)} · $waiting"
+            else context.getString(R.string.home_widget_checks_title)
+        )
+        if (waiting == 0) {
+            views.setViewVisibility(R.id.hw_body, View.GONE)
+            views.setViewVisibility(R.id.hw_done, View.VISIBLE)
+            views.setInt(R.id.hw_done_icon, "setColorFilter", theme.safe)
+            views.setTextColor(R.id.hw_done_title, theme.text)
+            views.setTextColor(R.id.hw_done_hint, theme.textSecondary)
+            views.setTextColor(R.id.hw_done_link, theme.accentText)
+            views.setInt(R.id.hw_done_link_go, "setColorFilter", theme.accentText)
+            // The hint goes first where the height cannot hold it: the
+            // title line, the link line, their gaps and two 12sp lines.
+            val room = heightDp - 2 * PAD_V - maxOf(WidgetKit.lineDp(context, 12f), 18f)
+            val doneDp = 6 + maxOf(22f, WidgetKit.lineDp(context, 17f)) + 6 +
+                maxOf(16f, WidgetKit.lineDp(context, 12f))
+            val hintDp = 4 + 2 * WidgetKit.lineDp(context, 12f)
+            views.setViewVisibility(
+                R.id.hw_done_hint,
+                if (doneDp + hintDp <= room) View.VISIBLE else View.GONE
+            )
+            return views
+        }
+        // As many rows as the height holds under the header (the 12sp title
+        // or the 18dp chevron): a row is its 6dp padding above and below and
+        // the 40dp Keep target or the name over the pill, whichever is
+        // taller; each row after the first adds its 1dp divider and 4dp of
+        // margin.
+        val room = heightDp - 2 * PAD_V - maxOf(WidgetKit.lineDp(context, 12f), 18f)
+        val rowDp = 12 + maxOf(
+            40f,
+            WidgetKit.lineDp(context, 13f) + 2 + WidgetKit.lineDp(context, 11f) + 2
+        )
+        val fit = WidgetKit.rowsThatFit(room + 5, rowDp + 5, 1, checkRows.size)
+        val shown = minOf(
+            rows.size,
+            when {
+                waiting <= fit -> waiting
+                fit >= 2 -> fit - 1
+                else -> 1
+            },
+        )
+        checkRows.forEachIndexed { i, ids ->
+            val o = if (i < shown) rows.getOrNull(i) else null
+            val visibility = if (o == null) View.GONE else View.VISIBLE
+            views.setViewVisibility(ids.row, visibility)
+            ids.divider?.let {
+                views.setViewVisibility(it, visibility)
+                views.setInt(it, "setColorFilter", theme.track)
+            }
+            if (o == null) return@forEachIndexed
+            val merchant = if (o.isNull("merchant")) "" else o.optString("merchant")
+            val label = o.optString("label")
+            views.setTextViewText(ids.name, merchant.ifEmpty { label })
+            views.setTextColor(ids.name, theme.text)
+            val guessed = o.optBoolean("guessed", false)
+            val keep = if (o.isNull("keep")) "" else o.optString("keep")
+            val pillColor = if (guessed) theme.accentText else theme.warn
+            views.setTextViewText(ids.pill, if (guessed) "Guessed $label" else "To sort")
+            views.setTextColor(ids.pill, pillColor)
+            views.setInt(ids.pillBg, "setColorFilter", if (guessed) theme.accent else theme.warn)
+            views.setTextViewText(ids.amount, o.optString("amountLabel"))
+            views.setTextColor(ids.amount, theme.moneyColor(o.optString("kind")))
+            views.setOnClickPendingIntent(
+                ids.row,
+                openApp(
+                    context, id,
+                    QuickActions.OPEN_TX_PREFIX + o.optString("id"),
+                    PURPOSE_CHECK_ROW + i,
+                )
+            )
+            val canKeep = guessed && keep.isNotEmpty()
+            views.setViewVisibility(ids.keep, if (canKeep) View.VISIBLE else View.GONE)
+            views.setViewVisibility(ids.go, if (canKeep) View.GONE else View.VISIBLE)
+            if (canKeep) {
+                views.setInt(ids.keepBg, "setColorFilter", theme.accent)
+                views.setTextColor(ids.keepLabel, theme.accentText)
+                // The payload as the data URI gives each row its own token:
+                // a second tap on a row already kept, landing after the
+                // redraw moved the next row into this slot, still carries
+                // the kept payload, which queueKeep drops as a duplicate.
+                views.setOnClickPendingIntent(
+                    ids.keep,
+                    PendingIntent.getBroadcast(
+                        context,
+                        requestCode(id, PURPOSE_CHECK_KEEP + i),
+                        Intent(context, CheckKeepReceiver::class.java)
+                            .setData(Uri.fromParts("keep", keep, null))
+                            .putExtra(EXTRA_KEEP, keep)
+                            .putExtra(EXTRA_NOTE, o.optInt("noteId", 0)),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
+            } else {
+                views.setInt(ids.go, "setColorFilter", theme.textSecondary)
+            }
+        }
+        // With every carried row kept here and more still waiting, the line
+        // stands alone at any height.
+        val more = waiting - shown
+        views.setViewVisibility(
+            R.id.hw_more,
+            if (more > 0 && (fit >= 2 || shown == 0)) View.VISIBLE else View.GONE
+        )
+        views.setTextViewText(R.id.hw_more, "+$more more")
+        views.setTextColor(R.id.hw_more, theme.textSecondary)
+        views.setOnClickPendingIntent(
+            R.id.hw_more,
+            openApp(context, id, QuickActions.OPEN_CHECKS, PURPOSE_CHECKS_MORE)
         )
         return views
     }
@@ -1512,6 +1740,29 @@ class AccountsWidgetProvider : HomeWidgetProviderBase() {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
         for (id in appWidgetIds) prefs.remove("$KEY_PREFIX$id")
         prefs.apply()
+    }
+}
+
+/** Payments to check (4x2): the rows an import counted with a guessed
+ * category or as To sort, with Keep on guessed ones. */
+class PaymentsToCheckWidgetProvider : HomeWidgetProviderBase()
+
+/** Keep on a Payments to check widget row. Queues the row's payload under
+ * [HomeWidgets.KEPT_KEY], cancels its payment-to-check note and redraws the
+ * widget without the row. The app applies the queue on its next open,
+ * resume or background run (ImportChecks.applyKept). Not exported, so no
+ * other app can confirm a guess. */
+class CheckKeepReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val payload = intent.getStringExtra(HomeWidgets.EXTRA_KEEP)
+        if (payload.isNullOrEmpty()) return
+        HomeWidgets.queueKeep(context, payload)
+        val noteId = intent.getIntExtra(HomeWidgets.EXTRA_NOTE, 0)
+        if (noteId != 0) {
+            (context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+                ?.cancel(noteId)
+        }
+        HomeWidgets.refresh(context, PaymentsToCheckWidgetProvider::class.java)
     }
 }
 

@@ -599,7 +599,7 @@ void main() {
       );
       await p.linkDebitCard(card, bank);
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 31);
+      expect(data['version'], 32);
 
       SharedPreferences.setMockInitialValues({});
       final q = await loaded();
@@ -792,7 +792,7 @@ void main() {
       expect(after.linkedAccountId, bank);
     });
 
-    testWidgets('New account keeps four types, no Debit card', (tester) async {
+    testWidgets('New account offers five types, no Debit card', (tester) async {
       final p = await loaded();
       await tester.pumpWidget(accountsApp(p));
       await tester.pumpAndSettle();
@@ -806,6 +806,7 @@ void main() {
         AccountType.creditCard,
         AccountType.savings,
         AccountType.wallet,
+        AccountType.cash,
       ]);
     });
   });

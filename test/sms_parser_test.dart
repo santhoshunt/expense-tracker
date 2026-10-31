@@ -840,4 +840,37 @@ void main() {
       expect(SmsTxnParser.senderLooksBankBrand('Bank of Baroda'), isTrue);
     });
   });
+
+  group('ATM withdrawal wording', () {
+    test('reads withdrawals', () {
+      for (final body in [
+        'Rs 5000.00 withdrawn at ATM from A/c XX9001 on 02-07-26',
+        'ATM WDL of INR 2000 from A/c XX9001',
+        'Cash withdrawal of Rs 1500 from A/c XX9001',
+        'Rs 3000 debited from A/c XX9001 for cash wdl',
+      ]) {
+        expect(SmsTxnParser.looksLikeAtmWithdrawal(body), isTrue, reason: body);
+      }
+    });
+
+    test('ignores footers, card purchases and charges that name the ATM', () {
+      for (final body in [
+        'Rs 450.00 spent at TESTMART on your Debit Card XX9002. Not you? '
+            'Block your ATM/Debit card at 1800-000-0000',
+        'INR 1200 debited from A/c XX9003 for POS/ATM txn at SAMPLESHOP',
+        'Rs 99 spent at TESTMART. Never share your ATM PIN with anyone',
+        'Rs 250 spent on your ATM cum debit card XX9004 at SAMPLESHOP',
+        'Rs.23.60 debited from A/c XX9005 towards ATM txn charges',
+        'ATM balance enquiry charges Rs 5.90 debited from A/c XX9005',
+        'INR 21.00 debited from A/c XX9005 for ATM WDL CHGS',
+        'Rs 20 debited from A/c XX9005, cash withdrawal fee',
+      ]) {
+        expect(
+          SmsTxnParser.looksLikeAtmWithdrawal(body),
+          isFalse,
+          reason: body,
+        );
+      }
+    });
+  });
 }

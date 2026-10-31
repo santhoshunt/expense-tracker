@@ -368,6 +368,9 @@ void main() {
         }
       },
     );
+    // Next 7 days sits on Ahead, folded at first.
+    await openDashboardView(tester, 'Ahead');
+    await openDashboardSection(tester, 'upcoming');
     final showAll = find.text('Show all 8 upcoming');
     await tester.scrollUntilVisible(
       showAll,

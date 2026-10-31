@@ -1,3 +1,4 @@
+import '../models/reminder.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/dates.dart';
@@ -104,8 +105,9 @@ class DueBill {
 
 /// Unpaid bills due from [from] through [to] (calendar dates), soonest
 /// first: each reminder occurrence not yet paid, and each detected payment
-/// in [patterns] ([detectRecurringPatterns]) that is not hidden, not paid
-/// by an alert still waiting for review, and not already a reminder. Card
+/// in [patterns] ([detectRecurringPatterns]) that is not hidden and not
+/// already a reminder. Neither counts when an alert still waiting for
+/// review paid it, since that alert already counts as spend. Card
 /// bills are left out (the card's spending is counted as it happens) and
 /// so are transfers (the budget cap does not cover them).
 List<DueBill> billsDue(
@@ -119,11 +121,42 @@ List<DueBill> billsDue(
   final start = DateTime(from.year, from.month, from.day);
   final end = DateTime(to.year, to.month, to.day);
   final out = <DueBill>[];
+  // A reminder's payment waiting for review already counts as spend, but
+  // marks nothing paid until confirmed: each such row (up to today) takes
+  // the first occurrence it could pay, on the rules a confirmed row pays by.
+  final tomorrow = DateTime(now.year, now.month, now.day + 1);
+  final pendingPaid = [
+    for (final t in finance.pendingTransactions)
+      if (pendingIsSpend(finance, t) && t.date.isBefore(tomorrow)) t,
+  ];
+  bool paidByPending(Reminder r, DateTime due) {
+    if (r.autoAdd) return false;
+    for (var i = 0; i < pendingPaid.length; i++) {
+      final t = pendingPaid[i];
+      final day = DateTime(t.date.year, t.date.month, t.date.day);
+      if ((t.amount - r.expectedAmount!).abs() >= 1 ||
+          (t.source == TxSource.manual && t.categoryId != r.categoryId) ||
+          due.isBefore(
+            day.subtract(const Duration(days: kReminderGraceDays)),
+          ) ||
+          due.isAfter(day.add(const Duration(days: kReminderEarlyPayDays)))) {
+        continue;
+      }
+      pendingPaid.removeAt(i);
+      return true;
+    }
+    return false;
+  }
+
   for (final r in finance.reminders) {
     final amount = r.expectedAmount;
-    if (amount == null || isTransferCategory(r.categoryId)) continue;
+    if (amount == null ||
+        isTransferCategory(r.categoryId) ||
+        reminderIsIncome(r)) {
+      continue;
+    }
     for (final due in reminderDueDatesBetween(r, start, end)) {
-      if (!reminderOccurrenceDone(r, due)) {
+      if (!reminderOccurrenceDone(r, due) && !paidByPending(r, due)) {
         out.add(
           DueBill(due: due, label: r.name, amount: amount, reminderId: r.id),
         );

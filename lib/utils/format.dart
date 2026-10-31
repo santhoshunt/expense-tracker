@@ -176,3 +176,22 @@ String fmtDateRange(DateTimeRange r) {
   }
   return '${fmtDate(a)} – ${fmtDate(b)}';
 }
+
+/// The "to" style range used by the Ahead title, trip budgets and card
+/// cycles: "12 Dec", "12 to 18 Dec", "28 Nov to 3 Dec", with the end year
+/// added when it is not [now]'s year, and "28 Dec 2026 to 3 Jan 2027" when
+/// the ends sit in different years.
+String fmtDayRange(DateTimeRange r, DateTime now) {
+  final a = DateTime(r.start.year, r.start.month, r.start.day);
+  final b = DateTime(r.end.year, r.end.month, r.end.day);
+  if (a.year != b.year) return '${fmtDate(a)} to ${fmtDate(b)}';
+  final String range;
+  if (a == b) {
+    range = _dayMonth.format(a);
+  } else if (a.month == b.month) {
+    range = '${a.day} to ${_dayMonth.format(b)}';
+  } else {
+    range = '${_dayMonth.format(a)} to ${_dayMonth.format(b)}';
+  }
+  return b.year != now.year ? '$range ${b.year}' : range;
+}
