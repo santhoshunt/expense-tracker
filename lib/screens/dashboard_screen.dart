@@ -81,8 +81,8 @@ enum DashboardView {
   /// The landing view: the net balance, the picked month's figures (last
   /// month's recap among them), budgets, and what friends owe.
   overview('Overview'),
-  ahead('Ahead'),
   trends('Trends'),
+  ahead('Ahead'),
   breakdown('Breakdown');
 
   final String label;
@@ -413,7 +413,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _openedForVisit.add(DashboardSection.pace);
         _openedAtLayout = settings.dashboardLayoutKey;
-        // The slide from Overview passes Ahead, which must not end the visit.
+        // The slide from Breakdown passes Ahead, which must not end the visit.
         _jumpingTo = _view == DashboardView.trends
             ? null
             : DashboardPage.trends;
@@ -481,7 +481,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   };
 
   /// Where a home-screen widget lands: [section]'s page on this month,
-  /// its fold opened for this visit (any on Ahead, Trends and Breakdown),
+  /// its fold opened for this visit (any on Trends, Ahead and Breakdown),
   /// scrolled into view. A section hidden in Cockpit leaves
   /// the page as it is.
   void _showSection(DashboardSection section) {
@@ -2797,8 +2797,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             children: [
               for (final (page, ahead) in [
                 (overviewChildren, 5000.0),
-                (aheadChildren, 2500.0),
                 (trendsChildren, 2500.0),
+                (aheadChildren, 2500.0),
                 (breakdownChildren, 2500.0),
               ])
                 // Transparent ColoredBox: a PageView only receives drags

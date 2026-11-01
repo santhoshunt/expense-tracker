@@ -187,12 +187,12 @@ void main() {
         await tester.pumpAndSettle();
       }
 
+      await swipe(-300);
+      expect(find.text('This month so far'), findsOneWidget);
+
       // Ahead leads with its Expected balance section.
       await swipe(-300);
       expect(find.text('Expected balance'), findsOneWidget);
-
-      await swipe(-300);
-      expect(find.text('This month so far'), findsOneWidget);
 
       await swipe(-300);
       expect(find.byType(CategoryDonutChart), findsOneWidget);
@@ -203,9 +203,9 @@ void main() {
 
       // And right goes back, as far as the Overview.
       await swipe(300);
-      expect(find.text('This month so far'), findsOneWidget);
-      await swipe(300);
       expect(find.text('Expected balance'), findsOneWidget);
+      await swipe(300);
+      expect(find.text('This month so far'), findsOneWidget);
       await swipe(300);
       expect(find.byKey(const ValueKey('balance')), findsOneWidget);
     });

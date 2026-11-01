@@ -63,7 +63,9 @@ void main() {
         categoryId: 'transport',
         amount: 400,
         note: 'Metro pass',
-        date: DateTime(lastMonth.year, lastMonth.month, 2),
+        // Day 1, so the pace card's last-month-by-today bar holds it
+        // even when the real clock reads the 1st.
+        date: DateTime(lastMonth.year, lastMonth.month, 1),
       );
       await p.addTransaction(
         type: TxType.income,

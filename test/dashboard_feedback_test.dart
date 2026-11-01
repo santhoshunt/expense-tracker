@@ -177,6 +177,108 @@ void main() {
       // No figure carries paise.
       expect(find.textContaining(RegExp(r'₹[\d,]+\.\d')), findsNothing);
     });
+
+    testWidgets('a picked day reads two lines, inside 320dp at text x2', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 1400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final series = ComparisonSeries(
+        month: DateTime(2026, 10),
+        previousMonth: DateTime(2026, 9),
+        days: 31,
+        today: 10,
+        actual: [for (var d = 1; d <= 10; d++) d * 120.0],
+        predicted: [for (var d = 10; d <= 31; d++) d * 120.0],
+        lastMonth: [for (var d = 1; d <= 30; d++) d * 100.0],
+        usual: [for (var d = 1; d <= 31; d++) d * 90.0],
+        dueByDay: {
+          12: [(label: 'Rent', amount: 500, due: DateTime(2026, 10, 12))],
+        },
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: ElevatedButton(
+                  onPressed: () => showComparisonChartSheet(
+                    context,
+                    series: series,
+                    startOnUsual: false,
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      final chart = tester.getRect(
+        find.byWidgetPredicate(
+          (w) =>
+              w is CustomPaint &&
+              '${w.painter.runtimeType}' == '_ComparisonChartPainter',
+        ),
+      );
+      // Right of the axis labels, near each edge: day 1, then the last.
+      Future<Rect> pick(Offset at, String first, String second) async {
+        await tester.tapAt(at);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(find.text(first), findsOneWidget);
+        expect(find.text(second), findsOneWidget);
+        return tester.getRect(
+          find
+              .ancestor(
+                of: find.text(first),
+                matching: find.byType(IgnorePointer),
+              )
+              .first,
+        );
+      }
+
+      for (final bubble in [
+        await pick(chart.topLeft + const Offset(41, 100), 'Thu Oct 1', 'Sep 1'),
+        await pick(
+          chart.topRight + const Offset(-1, 100),
+          'Sat Oct 31',
+          'All Sep',
+        ),
+      ]) {
+        // Whole on screen, below the Today label, above the day dial.
+        expect(bubble.left, greaterThanOrEqualTo(chart.left - 16));
+        expect(bubble.right, lessThanOrEqualTo(chart.right + 16));
+        expect(bubble.top, greaterThanOrEqualTo(chart.top + 14));
+        expect(bubble.bottom, lessThanOrEqualTo(chart.bottom));
+      }
+      expect(find.text(fmtMoneyWhole(3720)), findsOneWidget);
+      expect(find.text(fmtMoneyWhole(3000)), findsOneWidget);
+      for (final gone in ['That day', 'Rent', 'Expected by then']) {
+        expect(find.textContaining(gone), findsNothing, reason: gone);
+      }
+
+      await tester.tap(
+        find.descendant(
+          of: find.byType(SegmentedButton<bool>),
+          matching: find.text('Usual'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      // A usual month on the last day: all of it, labelled Usual.
+      expect(find.text('All Sep'), findsNothing);
+      expect(find.text(fmtMoneyWhole(2790)), findsOneWidget);
+    });
   });
 
   group('folds', () {

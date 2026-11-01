@@ -76,8 +76,8 @@ enum CockpitGroup {
   ]),
   dashboard('Dashboard layout', Icons.dashboard_customize_outlined, [
     kCockpitTabDashOverview,
-    kCockpitTabDashAhead,
     kCockpitTabDashTrends,
+    kCockpitTabDashAhead,
     kCockpitTabDashBreakdown,
   ]);
 

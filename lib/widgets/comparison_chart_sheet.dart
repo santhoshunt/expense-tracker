@@ -167,7 +167,6 @@ class _ComparisonChartBody extends StatelessWidget {
           reference: reference,
           referenceName: refName,
           usual: usual,
-          prevName: prevName,
         ),
         const SizedBox(height: 10),
         Wrap(
@@ -224,6 +223,8 @@ class _ComparisonChartBody extends StatelessWidget {
   }
 }
 
+const _chartHeight = 200.0;
+
 /// The chart with a picked day: a horizontal drag or a tap on the chart, or
 /// a turn of the dial under it, picks one; a tap on the Today tick puts it
 /// back. The guide line, the readout bubble and the dial follow the same
@@ -233,14 +234,12 @@ class _ScrubChart extends StatefulWidget {
   final List<double>? reference;
   final String referenceName;
   final bool usual;
-  final String prevName;
 
   const _ScrubChart({
     required this.series,
     required this.reference,
     required this.referenceName,
     required this.usual,
-    required this.prevName,
   });
 
   @override
@@ -310,15 +309,6 @@ class _ScrubChartState extends State<_ScrubChart> {
         final gx = day == null
             ? 0.0
             : _ComparisonChartPainter.xFor(day, s.days, width);
-        final onLeft = gx < width / 2;
-        // The bubble flips sides to stay beside the line, but never past
-        // the sheet's 20dp side padding, so a narrow screen keeps it whole.
-        const bw = _ReadoutBubble.width;
-        final bubbleLeft = (onLeft ? gx + 12 : gx - 12 - bw)
-            .clamp(-16.0, math.max(-16.0, width + 16 - bw))
-            .toDouble();
-        // One Stack around the chart and the dial: a tall bubble paints
-        // over the dial, not under it.
         return Stack(
           clipBehavior: Clip.none,
           children: [
@@ -326,7 +316,7 @@ class _ScrubChartState extends State<_ScrubChart> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 SizedBox(
-                  height: 200,
+                  height: _chartHeight,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onHorizontalDragStart: (d) =>
@@ -384,16 +374,22 @@ class _ScrubChartState extends State<_ScrubChart> {
                 ),
               ],
             ),
+            // Over the chart alone, reaching into the sheet's 20dp side
+            // padding, so a narrow screen keeps the bubble whole.
             if (day != null)
               Positioned(
-                top: 4,
-                left: bubbleLeft,
-                child: _ReadoutBubble(
-                  series: s,
-                  day: day,
-                  reference: widget.reference,
-                  usual: widget.usual,
-                  prevName: widget.prevName,
+                top: 0,
+                left: -16,
+                right: -16,
+                height: _chartHeight,
+                child: CustomSingleChildLayout(
+                  delegate: _BubblePlacement(gx: gx + 16),
+                  child: _ReadoutBubble(
+                    series: s,
+                    day: day,
+                    reference: widget.reference,
+                    usual: widget.usual,
+                  ),
                 ),
               ),
           ],
@@ -403,23 +399,57 @@ class _ScrubChartState extends State<_ScrubChart> {
   }
 }
 
-/// The picked day's figures beside the guide line: spend by then and on
-/// the day, the spend items due that day, and the reference by then.
+/// Places the readout bubble beside the guide line at [gx]: right of it
+/// on the chart's left half, left of it on the right half, held inside the
+/// box. It starts below the Today label and ends above the day dial.
+class _BubblePlacement extends SingleChildLayoutDelegate {
+  final double gx;
+
+  const _BubblePlacement({required this.gx});
+
+  static const _top = _ComparisonChartPainter._top + 2;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) =>
+      BoxConstraints(
+        // Never wider than the chart itself.
+        maxWidth: math.max(
+          0,
+          math.min(_ReadoutBubble.maxWidth, constraints.maxWidth - 32),
+        ),
+        maxHeight: math.max(0, constraints.maxHeight - _top),
+      );
+
+  @override
+  Offset getPositionForChild(Size size, Size child) {
+    final x = gx < size.width / 2 ? gx + 12 : gx - 12 - child.width;
+    return Offset(
+      x.clamp(0.0, math.max(0.0, size.width - child.width)).toDouble(),
+      _top,
+    );
+  }
+
+  @override
+  bool shouldRelayout(_BubblePlacement old) => old.gx != gx;
+}
+
+/// The picked day's figures beside the guide line, two lines as wide as
+/// they need: the day and this month's spend by then, bold, and under it
+/// the reference by that day, muted. On the month's last day the
+/// reference is all of last month, or a usual month.
 class _ReadoutBubble extends StatelessWidget {
   final ComparisonSeries series;
   final int day;
   final List<double>? reference;
   final bool usual;
-  final String prevName;
 
-  static const width = 176.0;
+  static const maxWidth = 240.0;
 
   const _ReadoutBubble({
     required this.series,
     required this.day,
     required this.reference,
     required this.usual,
-    required this.prevName,
   });
 
   @override
@@ -427,121 +457,79 @@ class _ReadoutBubble extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final muted = text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant);
-    final orange = AppColors.of(context).orange;
     final s = series;
     final d = day;
-    final predicted = s.predicted;
-    final today = DateTime(s.month.year, s.month.month, s.today);
+    final prev = s.previousMonth;
 
-    Widget row(
-      String label,
-      String value, {
-      TextStyle? labelStyle,
-      TextStyle? valueStyle,
-      Widget? lead,
-    }) => Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Row(
-        children: [
-          if (lead != null) ...[lead, const SizedBox(width: 6)],
-          Expanded(child: Text(label, style: labelStyle ?? muted)),
-          const SizedBox(width: 8),
-          Text(value, style: valueStyle ?? text.bodyMedium),
-        ],
-      ),
+    // One row each, the figures lined up at the right.
+    Widget line(String label, String value, TextStyle? style) => Row(
+      children: [
+        Expanded(child: Text(label, style: style)),
+        const SizedBox(width: 12),
+        Text(value, style: style),
+      ],
     );
 
     final by = _spendBy(s, d);
-    final double? thatDay;
-    if (by == null) {
-      thatDay = null;
-    } else if (predicted == null || d < s.today) {
-      thatDay = s.actual[d - 1] - (d > 1 ? s.actual[d - 2] : 0);
-    } else if (d == s.today) {
-      thatDay = predicted[0] - (s.today > 1 ? s.actual[s.today - 2] : 0);
+    final ref = reference;
+    final refAt = _referenceBy(ref, d, s.days);
+    final String refLabel;
+    if (usual) {
+      refLabel = 'Usual';
+    } else if (d >= s.days) {
+      refLabel = 'All ${DateFormat('MMM').format(prev)}';
     } else {
-      final i = d - s.today;
-      thatDay = predicted[i] - predicted[i - 1];
+      // As _referenceBy reads it: a shorter last month stops at its end.
+      final refDay = math.min(d, ref?.length ?? d);
+      refLabel = DateFormat(
+        'MMM d',
+      ).format(DateTime(prev.year, prev.month, refDay));
     }
-    final due = s.dueByDay[d] ?? const <DayDue>[];
-    final refAt = _referenceBy(reference, d, s.days);
-    final last = d >= s.days;
 
+    // Large text past the width or height it may take shrinks to fit
+    // rather than wrap or cover the day dial.
     return IgnorePointer(
-      child: Container(
-        width: width,
-        padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(AppRadius.control),
-          border: Border.all(color: scheme.outlineVariant),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.4),
-              blurRadius: 14,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              fmtDayHeading(DateTime(s.month.year, s.month.month, d)),
-              style: text.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-            ),
-            if (by != null) ...[
-              row(
-                predicted == null || d < s.today
-                    ? 'Spent by then'
-                    : 'Expected by then',
-                fmtMoneyWhole(by),
-                valueStyle: text.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: scheme.onSurface,
-                ),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(AppRadius.control),
+            border: Border.all(color: scheme.outlineVariant),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.4),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
               ),
-              row('That day', fmtMoneyWhole(thatDay!)),
             ],
-            for (final item in due.take(3))
-              row(
-                DateTime(
-                      item.due.year,
-                      item.due.month,
-                      item.due.day,
-                    ).isBefore(today)
-                    ? '${item.label} · overdue'
-                    : item.label,
-                fmtMoneyWhole(item.amount),
-                valueStyle: muted,
-                lead: Container(
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: orange,
-                    shape: BoxShape.circle,
+          ),
+          child: by == null && refAt == null
+              ? Text('No figures after today', style: muted)
+              : IntrinsicWidth(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // The day leads even with no figure of its own, as
+                      // on a future day with no forecast.
+                      line(
+                        DateFormat(
+                          'EEE MMM d',
+                        ).format(DateTime(s.month.year, s.month.month, d)),
+                        by == null ? '' : fmtMoneyWhole(by),
+                        text.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: scheme.onSurface,
+                        ),
+                      ),
+                      if (refAt != null) const SizedBox(height: 2),
+                      if (refAt != null)
+                        line(refLabel, fmtMoneyWhole(refAt), muted),
+                    ],
                   ),
                 ),
-              ),
-            if (due.length > 3)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text('and ${due.length - 3} more', style: muted),
-              ),
-            if (refAt != null)
-              row(
-                last
-                    ? (usual ? 'A usual month' : 'All of $prevName')
-                    : (usual ? 'Usually by day $d' : '$prevName by day $d'),
-                fmtMoneyWhole(refAt),
-              ),
-            if (by == null && refAt == null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text('No figures after today', style: muted),
-              ),
-          ],
         ),
       ),
     );

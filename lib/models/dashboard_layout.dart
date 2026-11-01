@@ -1,5 +1,5 @@
 /// The dashboard's pages, as the tab bar shows them.
-enum DashboardPage { overview, ahead, trends, breakdown }
+enum DashboardPage { overview, trends, ahead, breakdown }
 
 /// The Ahead page's window in days, today included: the app bar's range and the 31-day projection both read it.
 const int kAheadDays = 31;

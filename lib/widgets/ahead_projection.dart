@@ -145,70 +145,74 @@ class _AheadProjectionState extends State<AheadProjection> {
     );
     final view = (series: series, hideIncome: hideIncome, selected: selected);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _Headline(series: series),
-        const SizedBox(height: 12),
-        SegmentedButton<bool>(
-          showSelectedIcon: false,
-          segments: const [
-            ButtonSegment(
-              value: false,
-              icon: Icon(Icons.show_chart),
-              label: Text('Chart'),
+    // The fold heading's and the other cards' inset: the fold adds none.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.card),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _Headline(series: series),
+          const SizedBox(height: 12),
+          SegmentedButton<bool>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(
+                value: false,
+                icon: Icon(Icons.show_chart),
+                label: Text('Chart'),
+              ),
+              ButtonSegment(
+                value: true,
+                icon: Icon(Icons.calendar_month),
+                label: Text('Calendar'),
+              ),
+            ],
+            selected: {calendar},
+            onSelectionChanged: (s) =>
+                context.read<SettingsProvider>().setAheadCalendar(s.first),
+          ),
+          const SizedBox(height: 8),
+          if (calendar) ...[
+            _DayCalendar(
+              view: view,
+              onSelect: (i) {
+                Haptics.tick();
+                _select(i);
+                _scrollToSelected();
+              },
             ),
-            ButtonSegment(
-              value: true,
-              icon: Icon(Icons.calendar_month),
-              label: Text('Calendar'),
+            const SizedBox(height: 4),
+            Text('Tap a day. The list below follows it.', style: muted),
+          ] else ...[
+            _BalanceChart(
+              height: 132,
+              view: view,
+              dragging: _dragging,
+              onDragStart: () => setState(() => _dragging = true),
+              onSelect: _select,
+              onDragEnd: () {
+                setState(() => _dragging = false);
+                _scrollToSelected();
+              },
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Press and hold, then drag. The list below follows the day.',
+              style: muted,
             ),
           ],
-          selected: {calendar},
-          onSelectionChanged: (s) =>
-              context.read<SettingsProvider>().setAheadCalendar(s.first),
-        ),
-        const SizedBox(height: 8),
-        if (calendar) ...[
-          _DayCalendar(
-            view: view,
-            onSelect: (i) {
-              Haptics.tick();
-              _select(i);
-              _scrollToSelected();
-            },
+          const Divider(height: 24),
+          _Totals(
+            series: series,
+            headline: _headline,
+            waiting: _waiting,
+            hideIncome: hideIncome,
           ),
-          const SizedBox(height: 4),
-          Text('Tap a day. The list below follows it.', style: muted),
-        ] else ...[
-          _BalanceChart(
-            height: 132,
-            view: view,
-            dragging: _dragging,
-            onDragStart: () => setState(() => _dragging = true),
-            onSelect: _select,
-            onDragEnd: () {
-              setState(() => _dragging = false);
-              _scrollToSelected();
-            },
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Press and hold, then drag. The list below follows the day.',
-            style: muted,
-          ),
+          const Divider(height: 24),
+          const SectionLabel('Day by day'),
+          _DayRows(view: view, rowKeys: _rowKeys),
         ],
-        const Divider(height: 24),
-        _Totals(
-          series: series,
-          headline: _headline,
-          waiting: _waiting,
-          hideIncome: hideIncome,
-        ),
-        const Divider(height: 24),
-        const SectionLabel('Day by day'),
-        _DayRows(view: view, rowKeys: _rowKeys),
-      ],
+      ),
     );
   }
 }
@@ -346,8 +350,32 @@ class _BalanceChart extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final width = constraints.maxWidth;
-          int dayAt(double dx) =>
-              n <= 1 ? 0 : (dx / width * (n - 1)).round().clamp(0, n - 1);
+          final painter = _BalanceLinePainter(
+            balances: [for (final d in series.days) d.balance],
+            dates: [for (final d in series.days) d.date],
+            selected: view.selected,
+            lowest: series.days.indexOf(lowest),
+            line: scheme.primary,
+            guide: scheme.onSurfaceVariant,
+            grid: scheme.outlineVariant,
+            ring: colors.orange,
+            edge: Colors.white,
+            labelStyle:
+                Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ) ??
+                TextStyle(color: scheme.onSurfaceVariant),
+            textDirection: Directionality.of(context),
+            textScaler: MediaQuery.textScalerOf(context),
+          );
+          // The painter's own plot, so a finger lands on the day under it.
+          final plot = painter.layout(Size(width, height)).plot;
+          int dayAt(double dx) => n <= 1 || plot.width <= 0
+              ? 0
+              : ((dx - plot.left) / plot.width * (n - 1)).round().clamp(
+                  0,
+                  n - 1,
+                );
           var current = view.selected;
           void move(double dx) {
             final i = dayAt(dx);
@@ -357,7 +385,9 @@ class _BalanceChart extends StatelessWidget {
             onSelect(i);
           }
 
-          final x = n <= 1 ? 0.0 : view.selected / (n - 1) * width;
+          final x = n <= 1
+              ? plot.left
+              : plot.left + view.selected / (n - 1) * plot.width;
           final bubbleWidth = math.min(200.0, width * 0.6);
           final onLeft = x > width / 2;
           return GestureDetector(
@@ -376,28 +406,7 @@ class _BalanceChart extends StatelessWidget {
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  Positioned.fill(
-                    child: CustomPaint(
-                      painter: _BalanceLinePainter(
-                        balances: [for (final d in series.days) d.balance],
-                        dates: [for (final d in series.days) d.date],
-                        selected: view.selected,
-                        lowest: series.days.indexOf(lowest),
-                        line: scheme.primary,
-                        guide: scheme.onSurfaceVariant,
-                        grid: scheme.outlineVariant,
-                        ring: colors.orange,
-                        edge: Colors.white,
-                        labelStyle:
-                            Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: scheme.onSurfaceVariant,
-                            ) ??
-                            TextStyle(color: scheme.onSurfaceVariant),
-                        textDirection: Directionality.of(context),
-                        textScaler: MediaQuery.textScalerOf(context),
-                      ),
-                    ),
-                  ),
+                  Positioned.fill(child: CustomPaint(painter: painter)),
                   if (dragging)
                     Positioned(
                       top: 0,
@@ -527,40 +536,88 @@ class _BalanceLinePainter extends CustomPainter {
     maxLines: 1,
   )..layout();
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final n = balances.length;
-    if (n == 0) return;
-    final sample = _text('9 Sep');
-    const top = 6.0;
-    final bottom = size.height - sample.height - 6;
-    if (bottom <= top) return;
-    var lo = balances.reduce(math.min);
-    var hi = balances.reduce(math.max);
+  /// Kept clear round the plot: the lowest ring's 5dp radius and half its
+  /// 2dp stroke, which covers the chosen dot's 5.5dp too. A marker on the
+  /// first or last day, or at the top or bottom, stays whole.
+  static const _inset = 6.0;
+
+  /// Between a grid label and the plot, and above the day labels.
+  static const _gap = 6.0;
+
+  /// The plot's rect in [size], the balance range and the labelled grid
+  /// levels. A left gutter as wide as the widest grid label holds the
+  /// labels beside the line, not on it; the day labels sit under it. The
+  /// chart maps a finger through the same rect.
+  ({
+    Rect plot,
+    double lo,
+    double hi,
+    List<(double level, double top, TextPainter label)> levels,
+  })
+  layout(Size size) {
+    var lo = balances.isEmpty ? 0.0 : balances.reduce(math.min);
+    var hi = balances.isEmpty ? 0.0 : balances.reduce(math.max);
     if (hi - lo < 1) {
       lo -= 1;
       hi += 1;
     }
-    double xFor(int i) => n <= 1 ? 0 : i / (n - 1) * size.width;
+    const top = _inset;
+    final bottom = size.height - _text('9 Sep').height - _gap - _inset;
     double yFor(double v) => top + (hi - v) / (hi - lo) * (bottom - top);
 
-    // Two dashed grid lines at round rupee levels inside the range.
+    // Two dashed grid lines at round rupee levels inside the range; at
+    // large text a label that would overlap the other is left out.
     final span = hi - lo;
     final unit = math
         .pow(10, (math.log(span / 2) / math.ln10).floor())
         .toDouble();
+    final levels = <(double, double, TextPainter)>[];
+    for (final level in <double>{
+      for (final share in const [0.25, 0.75])
+        ((lo + span * share) / unit).round() * unit,
+    }.where((v) => v >= lo && v <= hi)) {
+      final label = _text(fmtMoneyCompact(level));
+      final labelTop = (yFor(level) - label.height / 2)
+          .clamp(0.0, math.max(0.0, bottom + _inset - label.height))
+          .toDouble();
+      if (levels.any(
+        (g) => labelTop < g.$2 + g.$3.height && g.$2 < labelTop + label.height,
+      )) {
+        continue;
+      }
+      levels.add((level, labelTop, label));
+    }
+    final gutter = levels.isEmpty
+        ? 0.0
+        : levels.map((g) => g.$3.width).reduce(math.max) + _gap;
+    return (
+      plot: Rect.fromLTRB(gutter + _inset, top, size.width - _inset, bottom),
+      lo: lo,
+      hi: hi,
+      levels: levels,
+    );
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final n = balances.length;
+    if (n == 0) return;
+    final (:plot, :lo, :hi, :levels) = layout(size);
+    if (plot.width <= 0 || plot.height <= 0) return;
+    final top = plot.top;
+    final bottom = plot.bottom;
+    final gutter = plot.left - _inset;
+    double xFor(int i) =>
+        n <= 1 ? plot.left : plot.left + i / (n - 1) * plot.width;
+    double yFor(double v) => top + (hi - v) / (hi - lo) * plot.height;
+
     final gridPaint = Paint()
       ..color = grid
       ..strokeWidth = 1;
-    final levels = <double>{
-      for (final share in const [0.25, 0.75])
-        ((lo + span * share) / unit).round() * unit,
-    }.where((v) => v >= lo && v <= hi);
-    for (final level in levels) {
+    for (final (level, labelTop, label) in levels) {
       final y = yFor(level);
-      _dashed(canvas, Offset(0, y), Offset(size.width, y), gridPaint);
-      final label = _text(fmtMoneyCompact(level));
-      label.paint(canvas, Offset(0, y - label.height - 1));
+      _dashed(canvas, Offset(gutter, y), Offset(size.width, y), gridPaint);
+      label.paint(canvas, Offset(gutter - _gap - label.width, labelTop));
     }
 
     // Area and line.
@@ -606,17 +663,20 @@ class _BalanceLinePainter extends CustomPainter {
     canvas.drawCircle(dot, 5.5, Paint()..color = edge);
     canvas.drawCircle(dot, 4, Paint()..color = line);
 
-    // Day labels: first, chosen (bold) and last; an end label that would
-    // touch the chosen one is left out.
-    final labelY = bottom + 4;
+    // Day labels under the plot, from the gutter to the right edge: first,
+    // chosen (bold) and last; an end label that would touch the chosen one
+    // is left out.
+    final labelY = bottom + _inset + _gap;
     final chosen = _text(fmtDateCompact(dates[selected]), bold: true);
     final chosenX = (sx - chosen.width / 2)
-        .clamp(0.0, math.max(0.0, size.width - chosen.width))
+        .clamp(gutter, math.max(gutter, size.width - chosen.width))
         .toDouble();
     chosen.paint(canvas, Offset(chosenX, labelY));
     if (selected != 0) {
       final first = _text(fmtDateCompact(dates[0]));
-      if (first.width + 8 < chosenX) first.paint(canvas, Offset(0, labelY));
+      if (gutter + first.width + 8 < chosenX) {
+        first.paint(canvas, Offset(gutter, labelY));
+      }
     }
     if (selected != n - 1) {
       final last = _text(fmtDateCompact(dates[n - 1]));
