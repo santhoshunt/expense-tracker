@@ -5,12 +5,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/account.dart';
+import 'package:expense_tracker/models/card_rewards.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/budget_widget_service.dart';
 import 'package:expense_tracker/services/card_bill.dart';
+import 'package:expense_tracker/services/forward_series.dart';
 import 'package:expense_tracker/services/home_widgets_service.dart';
 import 'package:expense_tracker/services/recurring_detector.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
@@ -487,6 +489,84 @@ void main() {
       expect(card['urgentDays'], kCardUrgentWindowDays);
     },
   );
+
+  test('the snapshot carries the Ahead balances and each credit card\'s '
+      'cycle', () async {
+    FinanceProvider.figuresClock = () => now;
+    addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
+    final p = FinanceProvider();
+    await p.load();
+    final s = SettingsProvider();
+    await s.load();
+    final bank = await p.addAccount(name: 'Test bank', type: AccountType.bank);
+    await p.setManualBalance(bank, 52000);
+    final card = await p.addAccount(
+      name: 'Test card',
+      type: AccountType.creditCard,
+      creditLimit: 80000,
+    );
+    await p.setCardCycle(card, statementDay: 25, dueDay: 12);
+    await p.setCardRewards(card, const CardRewards(baseRate: 1));
+    final buy = await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'shopping',
+      amount: 2000,
+      note: 'Test store',
+      date: DateTime(2026, 7, 10, 11),
+    );
+    await p.assignAccount(buy, card);
+    final plain = await p.addAccount(
+      name: 'Second card',
+      type: AccountType.creditCard,
+    );
+
+    final snap =
+        jsonDecode(
+              jsonEncode(
+                buildHomeWidgetSnapshot(
+                  p,
+                  s,
+                  now,
+                  const [],
+                  patterns: const [],
+                ),
+              ),
+            )
+            as Map<String, dynamic>;
+    final ahead = snap['ahead'] as Map<String, dynamic>;
+    expect(ahead['startDay'], epochDay(now));
+    final balances = ahead['balances'] as List;
+    expect(balances, hasLength(31));
+    // Day 0 already holds today's items, so it is not the start figure.
+    final series = aheadSeries(
+      p,
+      patterns: const [],
+      hidden: s.hiddenUpcoming,
+      now: now,
+    ).series;
+    expect(balances[0], series.days[0].balance.round());
+
+    final cards = snap['cards'] as List;
+    expect([for (final c in cards) c['id']], [card, plain]);
+    final c = cards.first as Map<String, dynamic>;
+    expect(c['name'], 'Test card');
+    expect(c['spentLabel'], '₹2,000');
+    expect(c['limitLabel'], '₹80,000');
+    expect(c['statementDay'], epochDay(DateTime(2026, 7, 25)));
+    // The cycle's last day, which tells a widget drawn after it that the
+    // figures belong to an ended cycle.
+    expect(c['cycleEnd'], epochDay(DateTime(2026, 7, 25)));
+    expect(
+      c['dueDay'],
+      epochDay(cardBillStatus(p.accountById(card)!, now)!.due),
+    );
+    expect(c['rewardsLabel'], startsWith('≈ '));
+    final second = cards.last as Map<String, dynamic>;
+    expect(second.containsKey('statementDay'), isFalse);
+    // No statement day: the cycle is the calendar month.
+    expect(second['cycleEnd'], epochDay(DateTime(2026, 7, 31)));
+    expect(second['rewardsLabel'], isNull);
+  });
 
   test('epochDay counts local calendar days from 1970', () {
     expect(epochDay(DateTime(1970, 1, 2, 23, 59)), 1);

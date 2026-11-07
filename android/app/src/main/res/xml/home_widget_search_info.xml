@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Search bar (4x1). Shows no figures, so it needs no redraw
+     (updatePeriodMillis=0); it redraws when the app pushes the theme. No
+     configure step. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/home_widget_search_description"
+    android:initialLayout="@layout/home_widget_search"
+    android:minWidth="250dp"
+    android:minHeight="40dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:previewLayout="@layout/home_widget_search_preview"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

@@ -200,6 +200,27 @@ void main() {
       expect(find.text('−${fmtMoney(1234.6)}'), findsOneWidget);
     });
 
+    testWidgets('a past day with spend offers Add an expense on this day', (
+      tester,
+    ) async {
+      final p = await spent();
+      final s = SettingsProvider();
+      await s.load();
+      await tester.pumpWidget(app(p, s, SpendingHeatmap(month: month)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.bySemanticsLabel(RegExp(r'^10 ')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Add an expense on this day'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('when-date')),
+          matching: find.text(fmtDate(DateTime(2026, 9, 10))),
+        ),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('a day with neither cannot be tapped', (tester) async {
       final p = await spent();
       final s = SettingsProvider();

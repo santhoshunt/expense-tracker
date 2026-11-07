@@ -94,11 +94,18 @@ bool _anyIn(_Hits h) =>
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
 
+  /// Whether a search screen is open, so the Search bar widget does not
+  /// stack a second one.
+  static bool get isOpen => _SearchScreenState._open > 0;
+
   @override
   State<SearchScreen> createState() => _SearchScreenState();
 }
 
 class _SearchScreenState extends State<SearchScreen> {
+  /// Search screens mounted now ([SearchScreen.isOpen]).
+  static int _open = 0;
+
   final _ctrl = TextEditingController();
   Timer? _debounce;
   String _query = '';
@@ -122,12 +129,14 @@ class _SearchScreenState extends State<SearchScreen> {
   @override
   void initState() {
     super.initState();
+    _open++;
     _settings = context.read<SettingsProvider>();
     _finance = context.read<FinanceProvider>();
   }
 
   @override
   void dispose() {
+    _open--;
     _debounce?.cancel();
     _ctrl.dispose();
     super.dispose();

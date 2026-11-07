@@ -9,10 +9,13 @@ import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/utils/app_theme.dart';
 import 'package:expense_tracker/utils/dates.dart';
 import 'package:expense_tracker/utils/format.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
+import 'package:expense_tracker/widgets/info_tip.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -105,6 +108,7 @@ void main() {
     expect(find.text(fmtMoneyWhole(5000)), findsNothing);
 
     // Reopening offers the undo.
+    final paidMonth = finance.accountById(id)!.billPaidMonth;
     await tester.tap(find.text('HDFC Card bill'));
     await pumpThrough(tester);
     expect(find.text('Mark unpaid'), findsOneWidget);
@@ -112,6 +116,12 @@ void main() {
     await pumpThrough(tester);
     expect(finance.accountById(id)!.billPaidMonth, isNull);
     expect(find.textContaining('Due '), findsOneWidget);
+
+    // Its toast puts the mark back, once it has slid in.
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Undo'));
+    await pumpThrough(tester);
+    expect(finance.accountById(id)!.billPaidMonth, paidMonth);
   });
 
   testWidgets('an overdue bill reads overdue, and mark paid flags its cycle', (
@@ -156,11 +166,13 @@ void main() {
     expect(find.text('Record a payment'), findsOneWidget);
     await tester.enterText(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(EditorSheetBody),
         matching: find.byType(TextField),
       ),
       '2000',
     );
+    // Save enables on the rebuild that follows the typed amount.
+    await tester.pump();
     await tester.tap(find.text('Save'));
     await pumpThrough(tester);
 
@@ -175,14 +187,39 @@ void main() {
     expect(find.text('Paid'), findsOneWidget);
     expect(find.textContaining('Next bill '), findsOneWidget);
 
-    // Empty / junk amounts are rejected inline, not saved.
+    // An empty amount cannot be saved, and the sheet says why.
     await tester.tap(find.text('HDFC Card bill'));
     await pumpThrough(tester);
     await tester.tap(find.text('Record a payment…'));
     await pumpThrough(tester);
-    await tester.tap(find.text('Save'));
-    await tester.pump();
+    expect(
+      tester
+          .widget<FilledButton>(find.widgetWithText(FilledButton, 'Save'))
+          .onPressed,
+      isNull,
+    );
     expect(find.text('Enter the amount you paid'), findsOneWidget);
+  });
+
+  testWidgets('picking today in Record a payment leaves nothing to discard', (
+    tester,
+  ) async {
+    final (finance, _) = await seeded();
+    await pumpApp(tester, finance);
+    await pumpThrough(tester);
+    await tester.tap(find.text('HDFC Card bill'));
+    await pumpThrough(tester);
+    await tester.tap(find.text('Record a payment…'));
+    await pumpThrough(tester);
+
+    await tester.tap(find.byKey(const ValueKey('payment-date')));
+    await pumpThrough(tester);
+    await tester.tap(find.text('OK'));
+    await pumpThrough(tester);
+    await tester.binding.handlePopRoute();
+    await pumpThrough(tester);
+    expect(find.text('Discard changes?'), findsNothing);
+    expect(find.text('Record a payment'), findsNothing);
   });
 
   testWidgets('actions sheet opens the statement & due dates dialog', (
@@ -194,13 +231,81 @@ void main() {
 
     await tester.tap(find.text('HDFC Card bill'));
     await pumpThrough(tester);
-    expect(find.text('Statement & due dates…'), findsOneWidget);
+    expect(find.text('Statement and due dates…'), findsOneWidget);
 
-    await tester.tap(find.text('Statement & due dates…'));
+    await tester.tap(find.text('Statement and due dates…'));
     await pumpThrough(tester);
-    expect(find.text('Statement & due dates'), findsOneWidget);
+    expect(find.text('Statement and due dates'), findsOneWidget);
     expect(find.text('Statement day'), findsOneWidget);
     expect(find.text('Payment due day'), findsOneWidget);
+  });
+
+  testWidgets('the due day preview names the next bill', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'accounts_v1': jsonEncode([
+        Account(
+          id: 'card1',
+          name: 'Demo Card',
+          type: AccountType.creditCard,
+          keys: const {},
+        ).toJson(),
+      ]),
+    });
+    final finance = FinanceProvider();
+    await finance.load();
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: finance,
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () =>
+                    showCardCycleDialog(context, finance.accountById('card1')!),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.text('Set a due day to see the next bill'), findsOneWidget);
+    // The tip beside the preview keeps what the due day does.
+    await tester.tap(find.byType(InfoTip));
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'The due day sets the bill due reminder. Days 29 to 31 fall on the '
+        'last day of a shorter month.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Got it'));
+    await tester.pumpAndSettle();
+
+    // 32 rows: the search narrows them to the day wanted.
+    Future<void> pick(String field, String query, String day) async {
+      await tester.tap(find.text(field));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), query);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(day));
+      await tester.pumpAndSettle();
+    }
+
+    await pick('Statement day', '18', '18th');
+    await pick('Payment due day', '6', '6th');
+    final preview = find.textContaining('Next bill due ');
+    expect(preview, findsOneWidget);
+    expect(tester.widget<Text>(preview).data, contains(', for '));
+
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    final card = finance.accountById('card1')!;
+    expect(card.statementDay, 18);
+    expect(card.dueDay, 6);
   });
 
   testWidgets('a card not billed yet is left off Next 7 days', (tester) async {

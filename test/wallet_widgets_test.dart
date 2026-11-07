@@ -77,8 +77,13 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(TextField, 'Service'), findsNothing);
+      // The type list comes first.
+      expect(find.text('Bank account'), findsOneWidget);
+      expect(find.text('Wallet'), findsOneWidget);
 
+      // At 2x text the list scrolls.
+      await tester.ensureVisible(find.text('Wallet'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Wallet'));
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
@@ -96,7 +101,7 @@ void main() {
         'Swiggy',
       );
       await tester.enterText(
-        find.widgetWithText(TextField, 'Login label (e.g. me, mom)'),
+        find.widgetWithText(TextField, 'Login label'),
         'me',
       );
       // Points need a value per point before Create enables.
@@ -125,6 +130,53 @@ void main() {
       expect(p.accountBalance(a), 125);
     });
   }
+
+  testWidgets('a credit card can start with its limit, and Back returns to '
+      'the list', (tester) async {
+    final p = await loaded();
+    await pump(
+      tester,
+      p,
+      Builder(
+        builder: (context) => TextButton(
+          onPressed: () => showAddAccountDialog(context),
+          child: const Text('open'),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Credit card'));
+    await tester.pumpAndSettle();
+    expect(find.text('New credit card'), findsOneWidget);
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(find.text('Bank account'), findsOneWidget);
+
+    await tester.tap(find.text('Credit card'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Demo Card');
+    await tester.pump();
+    // Typed input: Back asks before dropping it.
+    await tester.tap(find.byTooltip('Back'));
+    await tester.pumpAndSettle();
+    expect(find.text('Discard changes?'), findsOneWidget);
+    await tester.tap(find.text('Keep editing'));
+    await tester.pumpAndSettle();
+    expect(find.text('New credit card'), findsOneWidget);
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Credit limit (optional)'),
+      '150000',
+    );
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Create'));
+    await tester.pumpAndSettle();
+
+    final a = p.accounts.single;
+    expect(a.isCard, isTrue);
+    expect(a.creditLimit, 150000);
+  });
 
   testWidgets('the Wallets section groups by service with its total', (
     tester,

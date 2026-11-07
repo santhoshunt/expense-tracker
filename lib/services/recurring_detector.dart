@@ -1,3 +1,4 @@
+import '../models/card_rewards.dart';
 import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
 import 'sms_parser.dart';
@@ -98,6 +99,17 @@ String? subscriptionKeyOf(Tx t) {
   }
   final identity = _identityOf(t);
   return identity == null ? null : 'transfer|$identity';
+}
+
+/// The merchant a card's reward groups match against: [_identityOf] with
+/// only the spam guard, so Paid for Others and other transfers on a card
+/// have one too; words as [rewardWordText] writes them.
+String? rewardMerchantOf(Tx t) {
+  if (t.suspectedSpam) return null;
+  final identity = _identityOf(t);
+  if (identity == null) return null;
+  final words = rewardWordText(identity);
+  return words.isEmpty ? null : words;
 }
 
 /// [merchantIdentityOf] without its spam and transfer guard.

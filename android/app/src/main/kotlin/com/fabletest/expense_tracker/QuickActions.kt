@@ -46,6 +46,16 @@ object QuickActions {
      * that row's edit sheet. */
     const val OPEN_TX_PREFIX = "open_tx:"
 
+    /** The Expected balance widgets: the Expected balance section on Ahead. */
+    const val OPEN_AHEAD = "open_ahead"
+
+    /** Prefix on a Card cycle widget tap, followed by the card's account id:
+     * that card on Accounts. */
+    const val OPEN_CARD_PREFIX = "open_card:"
+
+    /** The Search bar widget: the search screen with the keyboard up. */
+    const val OPEN_SEARCH = "open_search"
+
     /** Opens the enabled launcher entry with [action].
      *
      * The component comes from getLaunchIntentForPackage, never from
@@ -76,9 +86,11 @@ object QuickActions {
             ADD_EXPENSE, ADD_INCOME, IMPORT_SMS, OPEN_BUDGET, OPEN_BUDGETS,
             OPEN_PACE, OPEN_UPCOMING, OPEN_TODAY, OPEN_BREAKDOWN,
             OPEN_TRANSACTIONS, OPEN_BIG_BILLS, OPEN_WEEKLY_DIGEST,
-            OPEN_REVIEW, OPEN_ACCOUNTS, OPEN_CHECKS -> action
+            OPEN_REVIEW, OPEN_ACCOUNTS, OPEN_CHECKS, OPEN_AHEAD,
+            OPEN_SEARCH -> action
             else -> action?.takeIf {
-                it.startsWith(OPEN_TX_PREFIX) && it.length > OPEN_TX_PREFIX.length
+                (it.startsWith(OPEN_TX_PREFIX) && it.length > OPEN_TX_PREFIX.length) ||
+                    (it.startsWith(OPEN_CARD_PREFIX) && it.length > OPEN_CARD_PREFIX.length)
             }
         }
     }

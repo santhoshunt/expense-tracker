@@ -105,7 +105,12 @@ void main() {
     expect(inSheet(find.text('Clear all')), findsOneWidget);
     expect(inSheet(find.text('Sort by')), findsNothing);
     expect(inSheet(find.text('Export CSV')), findsNothing);
-    await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
+    await tester.tap(
+      find.ancestor(
+        of: find.textContaining(RegExp(r'^Show ')),
+        matching: find.byType(FilledButton),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(sheet, findsNothing);
 

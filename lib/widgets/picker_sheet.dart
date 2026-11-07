@@ -11,6 +11,9 @@ class PickerItem<T> {
   final String label;
   final Widget? leading;
 
+  /// One line under the label ("4 transactions move").
+  final String? subtitle;
+
   /// Non-selectable section label (EXPENSES / INCOME / …). Hidden when the
   /// search query empties its whole section.
   final bool isHeader;
@@ -19,12 +22,14 @@ class PickerItem<T> {
     this.value,
     required this.label,
     this.leading,
+    this.subtitle,
     this.isHeader = false,
   });
 
   const PickerItem.header(this.label)
     : value = null,
       leading = null,
+      subtitle = null,
       isHeader = true;
 }
 
@@ -37,16 +42,22 @@ class PickerResult<T> {
 }
 
 /// The app's one value-picker presentation: a modal bottom sheet with a
-/// bold title, an always-present search field, and full-width option rows —
-/// the selected row tinted with the label in primary and a trailing
-/// check-circle. Short lists yield short sheets; long ones cap at 75% of
-/// the screen and scroll, auto-scrolled to the current selection.
+/// bold title, a search field, and full-width option rows — the selected
+/// row tinted with the label in primary and a trailing check-circle. Short
+/// lists yield short sheets; long ones cap at 75% of the screen and scroll,
+/// auto-scrolled to the current selection.
+///
+/// [searchable] null shows the search from 8 selectable rows up. A null
+/// [selected] ticks nothing unless [selectedIsSet] is true, which makes it
+/// pick the null-valued row ("Not linked yet").
 Future<PickerResult<T>?> showPickerSheet<T>({
   required BuildContext context,
   required String title,
   String? subtitle,
   required List<PickerItem<T>> items,
   T? selected,
+  bool? searchable,
+  bool selectedIsSet = false,
 }) {
   return showModalBottomSheet<PickerResult<T>>(
     context: context,
@@ -66,6 +77,8 @@ Future<PickerResult<T>?> showPickerSheet<T>({
         subtitle: subtitle,
         items: items,
         selected: selected,
+        searchable: searchable ?? items.where((i) => !i.isHeader).length >= 8,
+        selectedIsSet: selectedIsSet,
       ),
     ),
   );
@@ -76,12 +89,16 @@ class _PickerSheetBody<T> extends StatefulWidget {
   final String? subtitle;
   final List<PickerItem<T>> items;
   final T? selected;
+  final bool searchable;
+  final bool selectedIsSet;
 
   const _PickerSheetBody({
     required this.title,
     required this.subtitle,
     required this.items,
     required this.selected,
+    required this.searchable,
+    required this.selectedIsSet,
   });
 
   @override
@@ -110,14 +127,16 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
     }
   }
 
-  /// Rows surviving the query: matching items, plus the selected item
+  /// Rows surviving the query: items matching on their label or subtitle
+  /// (a sender or date lives only there), plus the selected item
   /// (deselecting must stay possible mid-search — filter-sheet precedent),
   /// plus headers that still own at least one visible row.
   List<PickerItem<T>> get _visible {
     if (_query.isEmpty) return widget.items;
     bool matches(PickerItem<T> i) =>
         i.label.toLowerCase().contains(_query) ||
-        (i.value != null && i.value == widget.selected);
+        (i.subtitle ?? '').toLowerCase().contains(_query) ||
+        _isSelected(i);
     final out = <PickerItem<T>>[];
     for (var i = 0; i < widget.items.length; i++) {
       final item = widget.items[i];
@@ -137,6 +156,13 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
     }
     return out;
   }
+
+  /// A null [_PickerSheetBody.selected] picks the null-valued row only
+  /// when the caller says null is the value.
+  bool _isSelected(PickerItem<T> item) =>
+      !item.isHeader &&
+      (widget.selected != null || widget.selectedIsSet) &&
+      item.value == widget.selected;
 
   @override
   Widget build(BuildContext context) {
@@ -166,39 +192,41 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
               child: Text(widget.subtitle!, style: textTheme.bodySmall),
             ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-            // Listen to the controller so the ✕ appears on the first
-            // keystroke (main search bar precedent).
-            child: ValueListenableBuilder<TextEditingValue>(
-              valueListenable: _searchCtrl,
-              builder: (context, value, _) => TextField(
-                controller: _searchCtrl,
-                autofocus: false,
-                decoration: InputDecoration(
-                  hintText: 'Search…',
-                  prefixIcon: const Icon(Icons.search, size: 18),
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 10,
+          // A short list reads at a glance; search only gets in the way.
+          if (widget.searchable)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+              // Listen to the controller so the ✕ appears on the first
+              // keystroke (main search bar precedent).
+              child: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _searchCtrl,
+                builder: (context, value, _) => TextField(
+                  controller: _searchCtrl,
+                  autofocus: false,
+                  decoration: InputDecoration(
+                    hintText: 'Search…',
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 10,
+                    ),
+                    suffixIcon: value.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Clear search',
+                            icon: const Icon(Icons.close, size: 16),
+                            onPressed: () {
+                              _searchCtrl.clear();
+                              setState(() => _query = '');
+                            },
+                          ),
                   ),
-                  suffixIcon: value.text.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: 'Clear search',
-                          icon: const Icon(Icons.close, size: 16),
-                          onPressed: () {
-                            _searchCtrl.clear();
-                            setState(() => _query = '');
-                          },
-                        ),
+                  onChanged: (v) =>
+                      setState(() => _query = v.trim().toLowerCase()),
                 ),
-                onChanged: (v) =>
-                    setState(() => _query = v.trim().toLowerCase()),
               ),
             ),
-          ),
           Flexible(
             child: visible.isEmpty
                 ? Padding(
@@ -237,7 +265,7 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
   }
 
   Widget _row(PickerItem<T> item, ColorScheme scheme) {
-    final isSelected = widget.selected != null && item.value == widget.selected;
+    final isSelected = _isSelected(item);
     return Semantics(
       button: true,
       selected: isSelected,
@@ -262,18 +290,32 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
                     const SizedBox(width: 12),
                   ],
                   Expanded(
-                    child: Text(
-                      item.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: isSelected
-                          // Plain text on the tinted row: the tint marks
-                          // the choice.
-                          ? TextStyle(
-                              color: scheme.onSurface,
-                              fontWeight: FontWeight.w600,
-                            )
-                          : null,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          item.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: isSelected
+                              // Plain text on the tinted row: the tint marks
+                              // the choice.
+                              ? TextStyle(
+                                  color: scheme.onSurface,
+                                  fontWeight: FontWeight.w600,
+                                )
+                              : null,
+                        ),
+                        if (item.subtitle != null)
+                          Text(
+                            item.subtitle!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                      ],
                     ),
                   ),
                   if (isSelected)
@@ -301,6 +343,11 @@ class AppDropdownField<T> extends StatelessWidget {
   /// A line under the field explaining the current choice.
   final String? helper;
 
+  /// A leading icon inside the field, as a text field's prefix icon. With
+  /// it, the value leaves out the chosen item's own icon: one icon per
+  /// field, so the caller passes the chosen item's icon here.
+  final Widget? icon;
+
   const AppDropdownField({
     super.key,
     required this.items,
@@ -309,6 +356,7 @@ class AppDropdownField<T> extends StatelessWidget {
     required this.label,
     this.hint,
     this.helper,
+    this.icon,
   });
 
   @override
@@ -329,6 +377,9 @@ class AppDropdownField<T> extends StatelessWidget {
           title: label,
           items: items,
           selected: value,
+          // The field shows the null-valued row ("Not set") as chosen; so
+          // does the sheet.
+          selectedIsSet: selectedItem != null,
         );
         if (result != null) onChanged(result.value);
       },
@@ -336,6 +387,7 @@ class AppDropdownField<T> extends StatelessWidget {
         decoration: InputDecoration(
           labelText: label,
           helperText: helper,
+          prefixIcon: icon,
           suffixIcon: const Icon(Icons.arrow_drop_down),
         ),
         isEmpty: selectedItem == null,
@@ -343,7 +395,7 @@ class AppDropdownField<T> extends StatelessWidget {
             ? (hint == null ? null : Text(hint!, maxLines: 1))
             : Row(
                 children: [
-                  if (selectedItem.leading != null) ...[
+                  if (icon == null && selectedItem.leading != null) ...[
                     selectedItem.leading!,
                     const SizedBox(width: 10),
                   ],
@@ -352,6 +404,8 @@ class AppDropdownField<T> extends StatelessWidget {
                       selectedItem.label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      // A typed field's size, as in the fields around it.
+                      style: Theme.of(context).textTheme.bodyLarge,
                     ),
                   ),
                 ],

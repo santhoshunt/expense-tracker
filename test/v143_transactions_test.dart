@@ -136,7 +136,13 @@ void main() {
       await settle(tester);
       final save = find.widgetWithText(FilledButton, 'Save and confirm');
       expect(save, findsOneWidget);
-      // An SMS row keeps its Sender field and, since v1.43.2, has Paid to.
+      // An SMS row keeps its Sender field, in the Bank SMS group, and,
+      // since v1.43.2, has Paid to.
+      final fold = find.byKey(const ValueKey('fold-sms'));
+      await tester.ensureVisible(fold);
+      await settle(tester);
+      await tester.tap(fold);
+      await settle(tester);
       expect(
         find.widgetWithText(TextFormField, 'Sender (optional)'),
         findsOneWidget,
@@ -289,6 +295,62 @@ void main() {
       await tester.pumpAndSettle();
       expect(p.transactions, isEmpty);
     });
+
+    testWidgets('a new entry never shows Bank SMS, and a hand-made row with a '
+        'sender shows only the Sender', (tester) async {
+      tester.view.physicalSize = const Size(400, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final p = FinanceProvider();
+      await p.load();
+      await tester.pumpWidget(opener(p));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      final fold = find.byKey(const ValueKey('fold-sms'));
+      expect(fold, findsNothing);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+
+      final id = await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 75,
+        note: 'tea',
+        sender: 'Demo Sender',
+        date: DateTime(2026, 10, 3, 9),
+      );
+      await tester.pumpWidget(
+        page(
+          p,
+          Builder(
+            builder: (context) => Center(
+              child: TextButton(
+                onPressed: () => showAddTransactionSheet(
+                  context,
+                  existing: p.transactions.singleWhere((t) => t.id == id),
+                ),
+                child: const Text('edit'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('edit'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(of: fold, matching: find.text('Demo Sender')),
+        findsOneWidget,
+      );
+      await tester.ensureVisible(fold);
+      await tester.pumpAndSettle();
+      await tester.tap(fold);
+      await tester.pumpAndSettle();
+      expect(
+        find.widgetWithText(TextFormField, 'Sender (optional)'),
+        findsOneWidget,
+      );
+      expect(find.text('Original SMS'), findsNothing);
+    });
   });
 
   group('accounts', () {
@@ -434,23 +496,28 @@ void main() {
       await tester.pumpAndSettle();
       await tester.longPress(find.text('Demo Kiosk'));
       await tester.pump(const Duration(milliseconds: 300));
+      // Two categories: no row is ticked, and a ticked row would stay in
+      // view through any search.
+      await tester.tap(find.text('Sample Cab'));
+      await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(find.byTooltip('Set category'));
       await tester.pumpAndSettle();
       expect(find.text('Set category'), findsWidgets);
+      final sheet = find.byType(BottomSheet);
       final search = find.descendant(
-        of: find.byType(BottomSheet),
+        of: sheet,
         matching: find.byType(TextField),
       );
       await tester.enterText(search, 'trans');
       await tester.pumpAndSettle();
       expect(
-        find.descendant(
-          of: find.byType(BottomSheet),
-          matching: find.byType(ActionChip),
-        ),
+        find.descendant(of: sheet, matching: find.text('Transport')),
         findsWidgets,
       );
-      expect(find.widgetWithText(ActionChip, 'Food & Dining'), findsNothing);
+      expect(
+        find.descendant(of: sheet, matching: find.text('Food & Dining')),
+        findsNothing,
+      );
       await tester.enterText(search, 'zzzz');
       await tester.pumpAndSettle();
       expect(find.text('No matches.'), findsOneWidget);

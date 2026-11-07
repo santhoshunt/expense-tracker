@@ -154,11 +154,11 @@ void main() {
         )
         .first;
     await tester.scrollUntilVisible(
-      find.text('No custom budgets yet.'),
+      find.text('No budgets yet.'),
       300,
       scrollable: list,
     );
-    expect(find.text('No custom budgets yet.'), findsOneWidget);
+    expect(find.text('No budgets yet.'), findsOneWidget);
     // Back up: scrolling down hides the FAB.
     await tester.drag(list, const Offset(0, 600));
     await pumpThrough(tester);
@@ -208,7 +208,7 @@ void main() {
       await tester.tap(find.text(group));
       await pumpThrough(tester);
       expect(find.text('Monthly cap', skipOffstage: false), findsNothing);
-      expect(find.text('Custom budgets', skipOffstage: false), findsNothing);
+      expect(find.text('Monthly budgets', skipOffstage: false), findsNothing);
       expect(find.text('Add reminder', skipOffstage: false), findsNothing);
       await tester.pageBack();
       await pumpThrough(tester);

@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/services.dart' show Clipboard;
 import 'package:provider/provider.dart';
 
 import '../models/import_rule.dart';
@@ -22,11 +24,11 @@ import '../widgets/animated_fold.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/dialog_expander.dart';
 import '../widgets/dispose_scope.dart';
+import '../widgets/editor_sheet.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
 import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
-import '../widgets/keyboard_unfocus.dart';
 import '../widgets/motion.dart';
 import '../widgets/row_chevron.dart';
 import '../widgets/section_header.dart';
@@ -215,7 +217,11 @@ class _CockpitHub extends StatelessWidget {
       ],
       CockpitGroup.organise: [
         _count(finance.groups.length, 'group', 'groups'),
-        _count(finance.allTags.length, 'tag', 'tags'),
+        _count(
+          finance.allTags.length + finance.emptyTags.length,
+          'tag',
+          'tags',
+        ),
       ],
       // A limit passed leads: it is the one thing here that needs acting on.
       CockpitGroup.plan: [
@@ -636,7 +642,9 @@ class _RulesTabState extends State<_RulesTab> {
       duration: const Duration(seconds: 5),
       actionLabel: 'Undo',
       onAction: () {
-        finance.restoreRules(before);
+        // As the Make rule merge's Undo: no re-sort, the moved rows back.
+        finance.restoreRules(before, reapply: false);
+        finance.restoreEditedTransactions(applied.reclassifiedRows);
         if (applied.dropped.isNotEmpty) {
           finance.restoreEditedTransactions(
             applied.dropped,
@@ -1269,10 +1277,10 @@ class _TestMessageCard extends StatelessWidget {
           ),
           subtitle: const Text('Paste a bank SMS to see what import would do'),
           trailing: OutlinedButton(
-            onPressed: () => _showTestMessageDialog(context),
+            onPressed: () => _showTestMessageSheet(context),
             child: const Text('Test'),
           ),
-          onTap: () => _showTestMessageDialog(context),
+          onTap: () => _showTestMessageSheet(context),
         ),
       ),
     );
@@ -1792,20 +1800,42 @@ class _ClassificationTile extends StatelessWidget {
   }
 
   /// Long-press shortcut: opens the rule dialog with the transaction body
-  /// pre-filled as the pattern, making it easy to codify a manual correction.
-  Future<void> _showRuleFromTransaction(BuildContext context) =>
-      showRuleDialog(context, patternSuggestion: _rulePatternFor(tx));
+  /// pre-filled as the pattern and the row's own category, making it easy
+  /// to codify a manual correction. A row with no text to match opens
+  /// nothing, as Make rule does.
+  Future<void> _showRuleFromTransaction(BuildContext context) async {
+    final pattern = _rulePatternFor(tx);
+    if (pattern.isEmpty) return;
+    await showRuleDialog(
+      context,
+      patternSuggestion: pattern,
+      categorySuggestion: isToSortCategory(tx.categoryId)
+          ? null
+          : tx.categoryId,
+    );
+  }
 }
 
 // ── Shared dialog helpers ─────────────────────────────────────────────────────
 
 /// Sectioned category rows for anchored pickers: Expenses / Income /
-/// Transfers (+ the Spam pseudo-category when classifying). To sort is left
-/// out: a rule always names a real category.
+/// Transfers, led by the Spam pseudo-category when classifying, so it is
+/// never a row to scroll past. To sort is left out: a rule always names a
+/// real category.
 List<PickerItem<String>> _categoryPickerItems(
   BuildContext context, {
   bool includeSpam = true,
 }) => [
+  if (includeSpam)
+    PickerItem(
+      value: kSpamCategoryId,
+      label: 'Spam: never import',
+      leading: Icon(
+        Icons.block,
+        color: Theme.of(context).colorScheme.error,
+        size: 20,
+      ),
+    ),
   const PickerItem.header('Expenses'),
   for (final c in allCategories)
     if (c.type == TxType.expense && !c.isTransfer && !isToSortCategory(c.id))
@@ -1817,18 +1847,6 @@ List<PickerItem<String>> _categoryPickerItems(
   const PickerItem.header('Transfers'),
   for (final c in allCategories)
     if (c.isTransfer) _categoryPickerItem(c),
-  if (includeSpam) ...[
-    const PickerItem.header('Spam'),
-    PickerItem(
-      value: kSpamCategoryId,
-      label: 'Spam, do not import',
-      leading: Icon(
-        Icons.block,
-        color: Theme.of(context).colorScheme.error,
-        size: 20,
-      ),
-    ),
-  ],
 ];
 
 PickerItem<String> _categoryPickerItem(TxCategory c) => PickerItem(
@@ -1837,156 +1855,300 @@ PickerItem<String> _categoryPickerItem(TxCategory c) => PickerItem(
   leading: Icon(c.icon, color: c.color, size: 20),
 );
 
-/// Paste any SMS to see exactly how the importer would treat it — which
-/// check rejects it, or what it imports as (type, category, account).
-Future<void> _showTestMessageDialog(BuildContext context) async {
+/// What Test a message found: a one-line [headline], then the rows the
+/// import would fill, each left out when it has no value. [held] marks a
+/// suspected spam message the import holds for review.
+typedef _TestVerdict = ({
+  String headline,
+  bool rejected,
+  bool held,
+  List<(String, String)> rows,
+});
+
+/// Runs [sender] and [body] through the importer's checks and the user's
+/// rules, as an import would. An empty [sender] is not checked: the body
+/// is tested as if a bank sent it.
+_TestVerdict _testVerdict(FinanceProvider finance, String sender, String body) {
+  final noSender = sender.isEmpty;
+  // Any recognised bank code passes the sender check; its bank is never
+  // shown (the Account row drops it below).
+  final from = noSender ? 'VM-HDFCBK' : sender;
+  final explained = SmsTxnParser.explain(
+    from,
+    body,
+    DateTime.now(),
+    ignorePhrases: finance.ignorePhrases,
+    spamSignals: finance.spamSignals,
+  );
+  if (!explained.startsWith('Imports as')) {
+    return (
+      headline: explained.split('\n').first,
+      rejected: true,
+      held: false,
+      rows: const [],
+    );
+  }
+  final parsed = SmsTxnParser.parse(
+    from,
+    body,
+    DateTime.now(),
+    relaxedSender: true,
+    ignorePhrases: finance.ignorePhrases,
+    spamSignals: finance.spamSignals,
+  );
+  // The provider layer applies classifier rules on import: walk them
+  // exactly like _matchRule does so the verdict shows the real outcome,
+  // including matches that are SKIPPED for targeting the wrong direction
+  // (the tool used to claim a mismatched rule "applies" when the import
+  // would ignore it).
+  // Every rule the walk meets, skipped ones included, in order.
+  final rule = <String>[];
+  var dropped = false;
+  ClassifierRule? applied;
+  String? categoryId = parsed?.categoryId;
+  for (final r in finance.rules) {
+    if (!r.matches(body)) continue;
+    if (r.isSpamRule) {
+      rule.add('Dropped by your spam rule "${r.pattern}". Never imported.');
+      dropped = true;
+      break;
+    }
+    final target = categoryById(r.categoryId);
+    if (parsed != null && target.type != parsed.type) {
+      rule.add(
+        'Rule "${r.pattern}" matches but targets '
+        '${target.type == TxType.income ? 'income' : 'expense'}, so this '
+        '${parsed.type == TxType.income ? 'income' : 'expense'} message '
+        'skips it. Add a rule for the other direction to classify both '
+        'ways.',
+      );
+      continue;
+    }
+    rule.add('Rule "${r.pattern}" applies → ${target.label}.');
+    categoryId = r.categoryId;
+    applied = r;
+    break;
+  }
+  final income = parsed?.type == TxType.income;
+  // A spam rule's drop wins: such a message is never imported at all. A
+  // rule of the user's own lifts the hold, as the import does; a built-in
+  // one does not.
+  final held =
+      !dropped &&
+      (parsed?.spamSuspect ?? false) &&
+      !(applied != null && !applied.isBuiltIn);
+  // What explain says beyond the rows: how the date was read, the spam
+  // signal that matched, and its notes (a brand-name sender, a flipped
+  // direction).
+  final lines = explained.split('\n');
+  final dated = lines.firstWhere(
+    (l) => l.startsWith('Dated: '),
+    orElse: () => '',
+  );
+  final timeSource = RegExp(r'\(([^()]*)\)$').firstMatch(dated)?.group(1);
+  final signal = RegExp(r'\(matches "(.*)"\)')
+      .firstMatch(
+        lines.firstWhere(
+          (l) => l.startsWith('Flagged as suspected spam'),
+          orElse: () => '',
+        ),
+      )
+      ?.group(1);
+  final acctKey = parsed?.acctKey;
+  return (
+    // The same walk as the Rule row, so the two never disagree.
+    headline: dropped
+        ? 'Not imported: a spam rule matched'
+        : held
+        ? 'Held for review: looks like spam'
+        : income
+        ? 'Imports as income'
+        : 'Imports as an expense',
+    rejected: dropped,
+    held: held,
+    rows: [
+      if (noSender) ('Sender', 'Not checked'),
+      if (parsed != null) ...[
+        ('Type', income ? 'Income' : 'Expense'),
+        ('Amount', fmtMoney(parsed.amount)),
+        (
+          'Date',
+          '${fmtDateMaybeTime(parsed.date)}'
+              '${timeSource == null ? '' : ' ($timeSource)'}',
+        ),
+        if (acctKey != null)
+          (
+            'Account',
+            // With no sender, the digits alone: the stand-in's bank is not
+            // the message's.
+            '${noSender ? '••${acctKey.substring(acctKey.indexOf(':') + 1)}' : acctKey}'
+                '${parsed.isCard ? ' (card)' : ''}',
+          ),
+        // The alert's Avl Bal, or Avl Lmt on a card.
+        if (parsed.balanceAfter case final b?)
+          (parsed.isCard ? 'Available limit' : 'Balance', fmtMoney(b)),
+        if (parsed.ref case final ref? when ref.isNotEmpty) ('Reference', ref),
+      ],
+      if (categoryId != null) ('Category', categoryById(categoryId).label),
+      if (rule.isNotEmpty) ('Rule', rule.join(' ')),
+      if (held && signal != null && signal.isNotEmpty) ('Signal', signal),
+      for (final l in lines)
+        if (l.startsWith('Note: ')) ('Note', l.substring(6)),
+    ],
+  );
+}
+
+/// Paste any SMS to see exactly how the importer would treat it: which
+/// check rejects it, whether it is held for review as suspected spam, or
+/// what it imports as (type, amount, date, account, the reported balance,
+/// the reference, category and the rule that fires).
+Future<void> _showTestMessageSheet(BuildContext context) async {
   final senderCtrl = TextEditingController();
   final bodyCtrl = TextEditingController();
-  String? verdict;
+  // Cleared by any edit, so it never describes text no longer there.
+  _TestVerdict? verdict;
+  // The verdict lands under the fields: Test scrolls to it.
+  final verdictKey = GlobalKey();
 
-  await showDialog(
-    context: context,
+  await showEditorSheet<void>(
+    context,
     builder: (ctx) => DisposeScope(
       disposables: [senderCtrl, bodyCtrl],
       child: StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: const Text('Test a message'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  controller: senderCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Sender',
-                    hintText: 'e.g. VM-HDFCBK or "Yes Bank"',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: bodyCtrl,
-                  minLines: 3,
-                  maxLines: 6,
-                  onChanged: (_) => setState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Message text',
-                    alignLabelWithHint: true,
-                  ),
-                ),
-                if (verdict != null) ...[
-                  const SizedBox(height: 16),
-                  Builder(
-                    builder: (ctx) {
-                      final scheme = Theme.of(ctx).colorScheme;
-                      // Rejected outright, or matched but killed by a spam rule.
-                      final rejected =
-                          verdict!.startsWith('Not imported') ||
-                          verdict!.contains('Dropped by your spam rule');
-                      final tint = rejected ? scheme.error : scheme.primary;
-                      return Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(12),
-                        // Pass or fail lives on the outline and icon; the
-                        // text stays plain so it never sits on a tint.
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: tint.withValues(alpha: 0.6),
-                          ),
-                        ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(
-                              rejected
-                                  ? Icons.cancel_outlined
-                                  : Icons.check_circle_outline,
-                              size: 18,
-                              color: tint,
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                verdict!,
-                                style: Theme.of(ctx).textTheme.bodySmall
-                                    ?.copyWith(fontWeight: FontWeight.w500),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Close'),
-            ),
-            FilledButton(
-              // Disabled on an empty body — a confident verdict about
-              // nothing reads as broken.
-              onPressed: bodyCtrl.text.trim().isEmpty
-                  ? null
-                  : () {
-                      final finance = ctx.read<FinanceProvider>();
-                      var v = SmsTxnParser.explain(
+        builder: (ctx, setState) {
+          final theme = Theme.of(ctx);
+          final scheme = theme.colorScheme;
+          final v = verdict;
+          return EditorSheetBody(
+            title: 'Test a message',
+            footerLabel: 'Test',
+            // Disabled on an empty body: a confident verdict about nothing
+            // reads as broken.
+            onSave: bodyCtrl.text.trim().isEmpty
+                ? null
+                : () {
+                    // With the keyboard up the verdict lands out of sight:
+                    // the keyboard goes and the verdict scrolls into view.
+                    FocusScope.of(ctx).unfocus();
+                    setState(
+                      () => verdict = _testVerdict(
+                        ctx.read<FinanceProvider>(),
                         senderCtrl.text.trim(),
                         bodyCtrl.text,
-                        DateTime.now(),
-                        ignorePhrases: finance.ignorePhrases,
-                        spamSignals: finance.spamSignals,
-                      );
-                      // The provider layer applies classifier rules on import —
-                      // walk them exactly like _matchRule does so the verdict shows
-                      // the real outcome, including matches that are SKIPPED for
-                      // targeting the wrong direction (the tool used to claim a
-                      // mismatched rule "applies" when the import would ignore it).
-                      if (v.startsWith('Imports as')) {
-                        final parsed = SmsTxnParser.parse(
-                          senderCtrl.text.trim(),
-                          bodyCtrl.text,
-                          DateTime.now(),
-                          relaxedSender: true,
-                          ignorePhrases: finance.ignorePhrases,
-                          spamSignals: finance.spamSignals,
+                      ),
+                    );
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      final at = verdictKey.currentContext;
+                      if (at != null && at.mounted) {
+                        Scrollable.ensureVisible(
+                          at,
+                          duration: const Duration(milliseconds: 200),
                         );
-                        for (final r in finance.rules) {
-                          if (!r.matches(bodyCtrl.text)) continue;
-                          if (r.isSpamRule) {
-                            v +=
-                                '\nDropped by your spam rule "${r.pattern}". '
-                                'Never imported.';
-                            break;
-                          }
-                          final target = categoryById(r.categoryId);
-                          if (parsed != null && target.type != parsed.type) {
-                            v +=
-                                '\nRule "${r.pattern}" matches but targets '
-                                '${target.type == TxType.income ? 'income' : 'expense'}'
-                                ', so this '
-                                '${parsed.type == TxType.income ? 'income' : 'expense'}'
-                                ' message skips it. Add a rule for the other '
-                                'direction '
-                                'to classify both ways.';
-                            continue;
-                          }
-                          v +=
-                              '\nRule "${r.pattern}" applies → '
-                              '${target.label}.';
-                          break;
-                        }
                       }
-                      setState(() => verdict = v);
-                    },
-              child: const Text('Test'),
-            ),
-          ],
-        ),
+                    });
+                  },
+            children: [
+              TextField(
+                key: const ValueKey('test-sender'),
+                controller: senderCtrl,
+                onChanged: (_) => setState(() => verdict = null),
+                decoration: const InputDecoration(
+                  labelText: 'Sender (optional)',
+                  hintText: 'e.g. VM-HDFCBK or "Yes Bank"',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('test-message'),
+                controller: bodyCtrl,
+                minLines: 3,
+                maxLines: 6,
+                onChanged: (_) => setState(() => verdict = null),
+                decoration: const InputDecoration(
+                  labelText: 'Message text',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: ActionChip(
+                  key: const ValueKey('test-paste'),
+                  avatar: const Icon(Icons.content_paste, size: 18),
+                  label: const Text('Paste'),
+                  onPressed: () async {
+                    final data = await Clipboard.getData(Clipboard.kTextPlain);
+                    final text = data?.text;
+                    if (text == null || text.isEmpty || !ctx.mounted) return;
+                    setState(() {
+                      bodyCtrl.text = text;
+                      verdict = null;
+                    });
+                  },
+                ),
+              ),
+              if (v != null) ...[
+                const SizedBox(height: 16),
+                // Pass or fail lives on the icon; the text stays plain so
+                // it never sits on a tint.
+                Row(
+                  key: verdictKey,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      v.rejected
+                          ? Icons.cancel_outlined
+                          : v.held
+                          ? Icons.warning_amber_rounded
+                          : Icons.check_circle_outline,
+                      size: 20,
+                      color: v.rejected
+                          ? scheme.error
+                          : v.held
+                          ? AppColors.of(ctx).orange
+                          : scheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        v.headline,
+                        key: const ValueKey('test-verdict'),
+                        style: theme.textTheme.titleSmall,
+                      ),
+                    ),
+                  ],
+                ),
+                if (v.rows.isNotEmpty) const SizedBox(height: 8),
+                for (final (i, (label, value)) in v.rows.indexed)
+                  GroupedSurface(
+                    first: i == 0,
+                    last: i == v.rows.length - 1,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
+                      // Label over value: a long rule line wraps under it
+                      // at any width.
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            label,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(value, style: theme.textTheme.bodyMedium),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ],
+          );
+        },
       ),
     ),
   );
@@ -2034,25 +2196,36 @@ Future<void> _showImportRuleDialog(
                   ),
                 ),
                 // The field's helper line already sits under it; a full 16
-                // on top of that left the dropdown floating apart.
+                // on top of that left the segment floating apart.
                 const SizedBox(height: 12),
-                // Short names fit the dialog's field; the helper explains.
-                AppDropdownField<ImportRuleKind>(
-                  label: 'Then',
-                  value: kind,
-                  helper: kind == ImportRuleKind.ignore
-                      ? 'Never imported.'
-                      : 'Imported, but held for you to review one by one.',
-                  items: const [
-                    PickerItem(value: ImportRuleKind.ignore, label: 'Ignore'),
-                    PickerItem(
+                Text('Then', style: Theme.of(ctx).textTheme.labelMedium),
+                const SizedBox(height: 4),
+                // Two choices in view rather than behind a dropdown; the
+                // helper explains the picked one.
+                SegmentedButton<ImportRuleKind>(
+                  key: const ValueKey('import-rule-kind'),
+                  segments: const [
+                    ButtonSegment(
+                      value: ImportRuleKind.ignore,
+                      label: Text('Ignore'),
+                    ),
+                    ButtonSegment(
                       value: ImportRuleKind.spamSignal,
-                      label: 'Flag as spam',
+                      label: Text('Flag as spam'),
                     ),
                   ],
-                  onChanged: (v) {
-                    if (v != null) setState(() => kind = v);
-                  },
+                  selected: {kind},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (s) => setState(() => kind = s.first),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  kind == ImportRuleKind.ignore
+                      ? 'Never imported.'
+                      : 'Imported, but held for you to review one by one.',
+                  style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ],
             ),
@@ -2085,6 +2258,8 @@ Future<void> _showImportRuleDialog(
                           .replaceAll(RegExp(r'\s+'), ' ')
                           .trim();
                       final finance = ctx.read<FinanceProvider>();
+                      // The page's messenger: the dialog's goes with it.
+                      final messenger = ScaffoldMessenger.of(context);
                       if (existing == null) {
                         finance.addImportRule(pattern, kind);
                       } else {
@@ -2093,6 +2268,16 @@ Future<void> _showImportRuleDialog(
                         );
                       }
                       Navigator.pop(ctx);
+                      showAppToastOn(
+                        messenger,
+                        existing != null
+                            ? 'Rule saved'
+                            : kind == ImportRuleKind.ignore
+                            ? 'Rule added to Ignored when containing'
+                            : 'Rule added to Flagged as spam when containing',
+                        tone: AppToastTone.success,
+                        icon: Icons.rule,
+                      );
                     },
               child: Text(existing == null ? 'Create' : 'Save'),
             ),
@@ -2127,9 +2312,45 @@ List<PickerItem<String?>> _oppositeDirectionItems(TxType type) => [
       ),
 ];
 
-/// The New rule / Edit rule dialog. [patternSuggestion] and
+/// The user rule a new rule's words go into instead of a second rule: the
+/// first in [rules] order that is not built in, classifies as
+/// [categoryId] (Spam meets only spam rules) and has the same shape. With
+/// no [otherCategoryId] that is a rule with no twin; with one, a rule
+/// whose twin classifies as it. A single rule never merges into one leg of
+/// a pair, since the twin shares the pattern and would gain the words too.
+ClassifierRule? ruleMergeTargetOf(
+  List<ClassifierRule> rules,
+  String categoryId,
+  String? otherCategoryId,
+) {
+  for (final r in rules) {
+    if (r.isBuiltIn || r.categoryId != categoryId) continue;
+    final twin = directionSiblingOf(r, rules);
+    if (otherCategoryId == null
+        ? twin == null
+        : twin?.categoryId == otherCategoryId) {
+      return r;
+    }
+  }
+  return null;
+}
+
+/// A rule named by its conditions, as the delete toast names it: the first
+/// condition in quotes, cut at 24 characters (a Make rule condition can be
+/// a whole SMS), then how many more.
+String _ruleConditionsName(ClassifierRule rule) {
+  final first = rule.patterns.firstOrNull ?? rule.pattern;
+  final cut = first.length > 24
+      ? '${first.substring(0, 24).trimRight()}…'
+      : first;
+  final more = rule.patterns.length - 1;
+  return '"$cut"${more > 0 ? ' (+$more)' : ''}';
+}
+
+/// The New rule / Edit rule sheet. [patternSuggestion] and
 /// [categorySuggestion] prefill a new rule; the edit sheet's Make rule
-/// passes the selected SMS text and the row's category.
+/// passes the selected SMS text and the row's category. A new rule with
+/// no suggestion starts with nothing in Classify as.
 Future<void> showRuleDialog(
   BuildContext context, {
   ClassifierRule? existing,
@@ -2141,18 +2362,24 @@ Future<void> showRuleDialog(
   // rule's patterns load as they are, duplicates included, so saving it
   // unchanged writes the same pattern back.
   final conditions = <String>[...?existing?.patterns];
-  // The Add box. An SMS suggestion (Make rule) lands here rather than as a
-  // chip: it can run 5-6 lines, and the user trims it before adding. Save
-  // counts text left here, so Make rule then Save still works in one step.
-  final addCtrl = TextEditingController(
-    text: existing == null ? (patternSuggestion ?? '') : '',
-  );
-  final addFocus = FocusNode();
   // Ignores case, after the same whitespace collapse save applies.
   bool isDuplicate(String text) {
     final key = _collapseSpaces(text).toLowerCase();
     return conditions.any((c) => _collapseSpaces(c).toLowerCase() == key);
   }
+
+  // A suggestion (Make rule, a long-press) lands as chips, split and
+  // collapsed the way save stores it, so the count is right from the start.
+  if (existing == null && patternSuggestion != null) {
+    for (final part in patternSuggestion.split('|')) {
+      final text = _collapseSpaces(part);
+      if (text.isNotEmpty && !isDuplicate(text)) conditions.add(text);
+    }
+  }
+  // The Add box. Save counts text left here, so typing a word then Save
+  // works in one step.
+  final addCtrl = TextEditingController();
+  final addFocus = FocusNode();
 
   // Add and the keyboard's done key: chip the box, clear it, and keep focus
   // there for the next word. A duplicate just clears the box, since the
@@ -2167,7 +2394,7 @@ Future<void> showRuleDialog(
     addFocus.requestFocus();
   }
 
-  var categoryId = existing?.categoryId ?? categorySuggestion ?? 'food';
+  String? categoryId = existing?.categoryId ?? categorySuggestion;
   // The opposite-direction twin (a second ordinary rule sharing the
   // pattern): pre-filled when editing a rule that already has one.
   final twin =
@@ -2185,15 +2412,29 @@ Future<void> showRuleDialog(
   // Delete pops the editor first; the caller's row then deletes the rule,
   // and its twin, with Undo.
   var deleteRequested = false;
+  // How the sheet opened, for the Discard guard.
+  final openedWith = (
+    conditions: List.of(conditions),
+    categoryId: categoryId,
+    otherCategoryId: otherCategoryId,
+  );
+  bool dirty() =>
+      addCtrl.text.trim().isNotEmpty ||
+      categoryId != openedWith.categoryId ||
+      otherCategoryId != openedWith.otherCategoryId ||
+      !listEquals(conditions, openedWith.conditions);
 
-  // What the rule matches, in one line under the fields: a pair stays
-  // readable while its expander is closed.
+  // What the rule matches, in one line above the button: a pair stays
+  // readable while its expander is closed. Empty until a category is
+  // picked.
   String helperLine() {
-    if (categoryId == kSpamCategoryId) {
+    final id = categoryId;
+    if (id == null) return '';
+    if (id == kSpamCategoryId) {
       return 'Ignores case. Matching messages are never imported.';
     }
     String side(TxCategory c) => c.type == TxType.income ? 'in' : 'out';
-    final first = categoryById(categoryId);
+    final first = categoryById(id);
     final other = otherCategoryId;
     if (other == null) {
       return 'Ignores case. Only money ${side(first)} matches '
@@ -2204,110 +2445,484 @@ Future<void> showRuleDialog(
         'money ${side(second)} matches ${second.label}.';
   }
 
-  await showDialog(
-    context: context,
+  // A condition [rule] already has, compared as isDuplicate does.
+  bool inRule(ClassifierRule rule, String text) {
+    final key = _collapseSpaces(text).toLowerCase();
+    return rule.patterns.any((p) => _collapseSpaces(p).toLowerCase() == key);
+  }
+
+  // The conditions a save writes, cleaned. Rules match single-line SMS
+  // text: collapse stray newlines and runs of whitespace so a wrapped edit
+  // can't silently stop matching. Conditions join with '|', the OR
+  // separator ClassifierRule.patterns splits on, so a literal '|' inside a
+  // condition (common in UPI alerts) must be neutralised or it silently
+  // splits into extra, broader conditions the user never wrote. Text left
+  // in the Add box counts as one more condition, unless it repeats a chip.
+  List<String> words() => [
+    for (final c in [
+      ...conditions,
+      if (addCtrl.text.trim().isNotEmpty && !isDuplicate(addCtrl.text))
+        addCtrl.text,
+    ])
+      if (c.replaceAll('|', ' ').replaceAll(RegExp(r'\s+'), ' ').trim()
+          case final w when w.isNotEmpty)
+        w,
+  ];
+
+  // The user rule a new rule's words go into ("Add to Food & Dining
+  // rule"), found again on every build, so changing Classify as, Other
+  // direction or the words moves the header at once. No target while a
+  // rule above it would still claim a message with the new words
+  // ([shadow]): merging in place keeps the target's position, so the words
+  // go into a new rule at the top instead.
+  ({ClassifierRule? target, ClassifierRule? shadow}) merge(
+    FinanceProvider finance,
+  ) {
+    final id = categoryId;
+    if (existing != null || id == null) return (target: null, shadow: null);
+    final rules = finance.rules;
+    final target = ruleMergeTargetOf(rules, id, otherCategoryId);
+    if (target == null) return (target: null, shadow: null);
+    final shadow = finance.ruleShadowingMerge(
+      target,
+      directionSiblingOf(target, rules),
+      [
+        for (final w in words())
+          if (!inRule(target, w)) w,
+      ],
+    );
+    return shadow == null
+        ? (target: target, shadow: null)
+        : (target: null, shadow: shadow);
+  }
+
+  String ruleLabel(ClassifierRule rule) =>
+      rule.isSpamRule ? 'spam' : categoryById(rule.categoryId).label;
+
+  // The footer's one line on what is missing, or null when Save can run.
+  String? footerReason(ClassifierRule? target) {
+    if (categoryId == null) return 'Pick what to classify as';
+    if (conditions.isEmpty && addCtrl.text.trim().isEmpty) {
+      return 'Add a word for the rule to match';
+    }
+    if (addCtrl.text.contains('|')) {
+      return 'Remove "|". Add each word on its own.';
+    }
+    if (target != null &&
+        conditions.every((c) => inRule(target, c)) &&
+        (addCtrl.text.trim().isEmpty || inRule(target, addCtrl.text))) {
+      return 'These words are already in your ${ruleLabel(target)} rule';
+    }
+    return null;
+  }
+
+  // What saving did to past rows, for the toast.
+  List<String> outcome(
+    ({
+      int reclassified,
+      int droppedPending,
+      List<Tx> dropped,
+      List<Tx> reclassifiedRows,
+    })
+    applied,
+  ) => [
+    if (applied.reclassified > 0)
+      '${applied.reclassified} transaction'
+          '${applied.reclassified == 1 ? '' : 's'} reclassified',
+    if (applied.droppedPending > 0)
+      '${applied.droppedPending} recent import'
+          '${applied.droppedPending == 1 ? '' : 's'} dropped as spam',
+  ];
+
+  // Runs only once footerReason() is null, so a category is picked.
+  Future<void> save(BuildContext ctx) async {
+    final picked = categoryId!;
+    final all = words();
+    final pattern = all.join(' | ');
+    final finance = ctx.read<FinanceProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    // Merging: the rule keeps its own conditions, in order, and gains the
+    // new ones after them.
+    final target = merge(finance).target;
+    final fresh = [
+      if (target != null)
+        for (final c in all)
+          if (!inRule(target, c)) c,
+    ];
+    final written = target == null
+        ? pattern
+        : [...target.patterns, ...fresh].join(' | ');
+    // Warn BEFORE touching the queue: spam rules delete matching pending
+    // imports, and incremental scans never bring them back.
+    final wouldDrop = finance.pendingSpamDropsFor(
+      written,
+      picked,
+      replacingRuleId: target?.id ?? existing?.id,
+    );
+    if (wouldDrop > 0) {
+      final ok = await showDialog<bool>(
+        context: ctx,
+        builder: (dCtx) => AlertDialog(
+          // Rows waiting for review and rows still marked
+          // new (already counted) both drop.
+          title: const Text('Drop recent imports?'),
+          content: Text(
+            'This rule matches $wouldDrop recent import'
+            '${wouldDrop == 1 ? '' : 's'} and will remove '
+            '${wouldDrop == 1 ? 'it' : 'them'} as spam.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dCtx, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dCtx, true),
+              child: const Text('Apply rule'),
+            ),
+          ],
+        ),
+      );
+      if (ok != true || !ctx.mounted) return;
+    }
+    Navigator.pop(ctx);
+    if (target != null) {
+      // Undo puts back the whole list, as merging selected rules does.
+      final before = List.of(finance.rules);
+      // Read before the write: the twin is found by the shared pattern.
+      final targetTwin = directionSiblingOf(target, finance.rules);
+      // In place: the rule keeps its position, so it shadows nothing new.
+      // A rule above it that claims a message with these words made this
+      // a new rule instead (merge()).
+      var applied = await finance.updateRule(target.copyWith(pattern: written));
+      if (targetTwin != null) {
+        final twinApplied = await finance.updateRule(
+          targetTwin.copyWith(pattern: written),
+        );
+        applied = (
+          reclassified: applied.reclassified + twinApplied.reclassified,
+          droppedPending: applied.droppedPending + twinApplied.droppedPending,
+          dropped: [...applied.dropped, ...twinApplied.dropped],
+          // The first write's copy is the original: last, so a restore
+          // ends on it.
+          reclassifiedRows: [
+            ...twinApplied.reclassifiedRows,
+            ...applied.reclassifiedRows,
+          ],
+        );
+      }
+      final label = ruleLabel(target);
+      showAppToastOn(
+        messenger,
+        [
+          fresh.length == 1
+              ? 'Added "${fresh.single}" to your $label rule'
+              : 'Added ${fresh.length} conditions to your $label rule',
+          ...outcome(applied),
+        ].join(' · '),
+        tone: AppToastTone.change,
+        icon: Icons.rule,
+        duration: const Duration(seconds: 5),
+        actionLabel: 'Undo',
+        onAction: () {
+          // No re-sort: a row no rule matches would keep the merged
+          // category. The rows the merge moved come back as they were.
+          finance.restoreRules(before, reapply: false);
+          finance.restoreEditedTransactions(applied.reclassifiedRows);
+          if (applied.dropped.isNotEmpty) {
+            finance.restoreEditedTransactions(
+              applied.dropped,
+              reAddMissing: true,
+            );
+          }
+        },
+      );
+      return;
+    }
+    var applied = existing == null
+        ? await finance.addRule(pattern, picked)
+        : await finance.updateRule(
+            existing.copyWith(pattern: pattern, categoryId: picked),
+          );
+    // The opposite-direction twin: create, repoint or
+    // drop it to match the second slot. Deleting never
+    // re-applies (rows keep their categories), same as the
+    // tile's delete.
+    final other = otherCategoryId;
+    if (other != null) {
+      final twinApplied = twin == null
+          ? await finance.addRule(pattern, other)
+          : await finance.updateRule(
+              twin.copyWith(pattern: pattern, categoryId: other),
+            );
+      applied = (
+        reclassified: applied.reclassified + twinApplied.reclassified,
+        droppedPending: applied.droppedPending + twinApplied.droppedPending,
+        dropped: [...applied.dropped, ...twinApplied.dropped],
+        reclassifiedRows: [
+          ...twinApplied.reclassifiedRows,
+          ...applied.reclassifiedRows,
+        ],
+      );
+    } else if (twin != null) {
+      await finance.deleteRule(twin.id);
+    }
+    // Rules re-apply to history immediately: say what that did. A broad
+    // spam rule silently emptying the review queue was the worst case, so
+    // dropped imports get a Restore action (the rule itself stays in
+    // force).
+    final parts = outcome(applied);
+    if (parts.isNotEmpty) {
+      final dropped = applied.dropped;
+      showAppToastOn(
+        messenger,
+        parts.join(' · '),
+        tone: dropped.isEmpty ? AppToastTone.info : AppToastTone.change,
+        icon: Icons.rule,
+        duration: const Duration(seconds: 5),
+        actionLabel: dropped.isEmpty ? null : 'Restore',
+        onAction: dropped.isEmpty
+            ? null
+            : () => finance.restoreEditedTransactions(
+                dropped,
+                reAddMissing: true,
+              ),
+      );
+    }
+  }
+
+  await showEditorSheet<void>(
+    context,
     builder: (ctx) => DisposeScope(
       disposables: [addCtrl, addFocus],
       child: StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: Text(
-            existing == null
+        builder: (ctx, setState) {
+          final theme = Theme.of(ctx);
+          final id = categoryId;
+          final (:target, :shadow) = merge(ctx.read<FinanceProvider>());
+          // While merging, a condition the rule already has shows once,
+          // as the rule's own plain chip.
+          bool shown(String c) => target == null || !inRule(target, c);
+          final count =
+              (target?.patterns.length ?? 0) + conditions.where(shown).length;
+          final reason = footerReason(target);
+          // A merge target has the picked category and pair shape, so this
+          // line is also the target's own.
+          final helper = helperLine();
+          return EditorSheetBody(
+            title: target != null
+                ? 'Add to ${ruleLabel(target)} rule'
+                : existing == null
                 ? 'New rule'
                 : twin == null
                 ? 'Edit rule'
                 : 'Edit rule pair',
-          ),
-          // Narrower side margins than the 40dp default, as in New account:
-          // the condition chips get a third more room per line on a small
-          // phone.
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 24,
-          ),
-          // Scrollable: autofocused field + keyboard on a small screen. Top
-          // padding keeps the first field's floating label from clipping.
-          // UnfocusOnScroll: dragging the dialog while a text field is
-          // focused left its selection handle floating over the title —
-          // handles render in an overlay the scroll viewport doesn't clip.
-          content: UnfocusOnScroll(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.only(top: 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+            menu: existing == null
+                ? null
+                : [
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text(
+                        twin == null ? 'Delete rule' : 'Delete rule pair',
+                        style: TextStyle(color: theme.colorScheme.error),
+                      ),
+                    ),
+                  ],
+            menuTooltip: 'Rule actions',
+            // The caller's row then deletes the rule, and its twin, with
+            // Undo.
+            onMenu: (_) {
+              deleteRequested = true;
+              Navigator.pop(ctx);
+            },
+            footerLabel: target != null
+                ? 'Add to rule'
+                : existing == null
+                ? 'Create'
+                : 'Save',
+            footerReason: reason,
+            footerExtra: helper.isEmpty
+                ? null
+                : Text(
+                    helper,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+            onSave: reason == null ? () => save(ctx) : null,
+            dirty: dirty(),
+            children: [
+              // In the body, not the footer: the footer's extra line hides
+              // while the keyboard is up, and a new rule opens with it up.
+              if (shadow != null) ...[
+                Text(
+                  'Your ${_ruleConditionsName(shadow)} rule comes first for '
+                  'a message with these words, so this is saved as a new '
+                  'rule above it.',
+                  key: const ValueKey('rule-shadow-line'),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              Row(
                 children: [
-                  // The category and the Add box first: with 10 or more
-                  // conditions they used to sit below the whole list. The
-                  // field already has a suffix (the arrow), so the tip
-                  // trails it.
-                  Row(
-                    children: [
-                      Expanded(
-                        child: AppDropdownField<String>(
-                          label: 'Classify as',
-                          value: categoryId,
-                          items: [..._categoryPickerItems(ctx)],
-                          onChanged: (v) {
-                            if (v == null) return;
-                            setState(() {
-                              categoryId = v;
-                              // The second slot must stay the OPPOSITE
-                              // direction; drop it when the first pick moves
-                              // onto its side (or becomes spam, which has no
-                              // direction).
-                              final other = otherCategoryId;
-                              if (v == kSpamCategoryId ||
-                                  (other != null &&
-                                      categoryById(other).type ==
-                                          categoryById(v).type)) {
-                                otherCategoryId = null;
-                              }
-                            });
-                          },
+                  Expanded(
+                    child: Text(
+                      'If the SMS contains any of ($count)',
+                      style: theme.textTheme.labelLarge?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  const InfoTip(
+                    title: 'If the SMS contains…',
+                    message:
+                        'Matches whole words in the SMS text, ignoring '
+                        'case: "RD Ac" matches "RD Ac 1234" but not '
+                        '"card account". Apart from spam rules, a rule '
+                        'fires only when the message moves money in its '
+                        "category's direction. Transactions added by "
+                        'hand are never matched.',
+                  ),
+                ],
+              ),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  // The rule's own conditions, plain, then the new ones
+                  // highlighted.
+                  if (target != null)
+                    for (final p in target.patterns)
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 220),
+                        child: Chip(
+                          label: Text(
+                            p,
+                            maxLines: 1,
+                            softWrap: false,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                          materialTapTargetSize:
+                              MaterialTapTargetSize.shrinkWrap,
                         ),
                       ),
-                      const InfoTip(
-                        title: 'Classify as',
-                        message:
-                            'Saving applies the rule to past SMS rows right '
-                            'away, except rows you categorised by hand. '
-                            'Spam: matching messages are never imported, and '
-                            'matching recent imports, waiting for review or '
-                            'still marked new, are deleted after you confirm.',
+                  for (var i = 0; i < conditions.length; i++)
+                    if (shown(conditions[i]))
+                      _ConditionChip(
+                        text: conditions[i],
+                        isNew: target != null,
+                        onRemove: () => setState(() => conditions.removeAt(i)),
+                        // Edited in place: the chip's text moves into the
+                        // Add box, and Add puts it back at the end. Text
+                        // already in the box becomes a chip first, so it
+                        // is not overwritten; with a "|" in it the footer
+                        // asks to remove that, and the tap does nothing.
+                        onEdit: () {
+                          if (addCtrl.text.contains('|')) return;
+                          setState(() {
+                            final edited = conditions.removeAt(i);
+                            final pending = _collapseSpaces(addCtrl.text);
+                            if (pending.isNotEmpty && !isDuplicate(pending)) {
+                              conditions.add(pending);
+                            }
+                            addCtrl.text = edited;
+                          });
+                          addFocus.requestFocus();
+                        },
                       ),
-                    ],
+                ],
+              ),
+              const SizedBox(height: 8),
+              _RuleAddBox(
+                key: const ValueKey('rule-add'),
+                controller: addCtrl,
+                focusNode: addFocus,
+                // A new rule types straight away; on an edit the keyboard
+                // would only shrink the sheet over the chips.
+                autofocus: existing == null,
+                onChanged: () => setState(() {}),
+                onAdd: () => addWord(setState),
+              ),
+              const SizedBox(height: 12),
+              // The field already has a suffix (the arrow), so the tip
+              // trails it.
+              Row(
+                children: [
+                  Expanded(
+                    child: AppDropdownField<String>(
+                      key: const ValueKey('rule-category'),
+                      label: 'Classify as',
+                      value: id,
+                      items: [..._categoryPickerItems(ctx)],
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() {
+                          categoryId = v;
+                          // The second slot must stay the OPPOSITE
+                          // direction; drop it when the first pick moves
+                          // onto its side (or becomes spam, which has no
+                          // direction).
+                          final other = otherCategoryId;
+                          if (v == kSpamCategoryId ||
+                              (other != null &&
+                                  categoryById(other).type ==
+                                      categoryById(v).type)) {
+                            otherCategoryId = null;
+                          }
+                        });
+                      },
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  _RuleAddBox(
-                    controller: addCtrl,
-                    focusNode: addFocus,
-                    // A new rule types straight away; on an edit the
-                    // keyboard would only shrink the dialog over the chips.
-                    autofocus: existing == null,
-                    onChanged: () => setState(() {}),
-                    onAdd: () => addWord(setState),
+                  const InfoTip(
+                    title: 'Classify as',
+                    message:
+                        'Saving applies the rule to past SMS rows right '
+                        'away, except rows you categorised by hand. '
+                        'Spam: matching messages are never imported, and '
+                        'matching recent imports, waiting for review or '
+                        'still marked new, are deleted after you confirm.',
                   ),
-                  // Rules only fire for alerts moving money in the category's
-                  // direction (the matcher skips the rest), so one keyword
-                  // needs a rule per direction to classify both ways. The
-                  // twin is a second ordinary rule sharing the pattern; most
-                  // rules need none, so it waits behind an expander.
-                  if (categoryId != kSpamCategoryId) ...[
-                    const SizedBox(height: 8),
-                    DialogExpander(
-                      title: categoryById(categoryId).type == TxType.income
-                          ? 'Money out goes to another category'
-                          : 'Money in goes to another category',
-                      open: otherOpen,
-                      onToggle: () => setState(() => otherOpen = !otherOpen),
+                ],
+              ),
+              // Rules only fire for alerts moving money in the category's
+              // direction (the matcher skips the rest), so one keyword
+              // needs a rule per direction to classify both ways. The
+              // twin is a second ordinary rule sharing the pattern; most
+              // rules need none, so it waits behind an expander. With no
+              // category yet there is no direction to oppose.
+              if (id != null && id != kSpamCategoryId) ...[
+                const SizedBox(height: 16),
+                // On a filled surface, as the other editors' folds.
+                GroupedSurface(
+                  first: true,
+                  last: true,
+                  child: DialogExpander(
+                    title: categoryById(id).type == TxType.income
+                        ? 'Money out goes to another category'
+                        : 'Money in goes to another category',
+                    value: otherCategoryId == null
+                        ? 'Not set'
+                        : categoryById(otherCategoryId!).label,
+                    keepClosed: false,
+                    open: otherOpen,
+                    onToggle: () => setState(() => otherOpen = !otherOpen),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                       child: Row(
                         children: [
                           Expanded(
                             child: AppDropdownField<String?>(
+                              key: const ValueKey('rule-other'),
                               label: 'Other direction',
                               value: otherCategoryId,
                               items: _oppositeDirectionItems(
-                                categoryById(categoryId).type == TxType.income
+                                categoryById(id).type == TxType.income
                                     ? TxType.expense
                                     : TxType.income,
                               ),
@@ -2330,225 +2945,12 @@ Future<void> showRuleDialog(
                         ],
                       ),
                     ),
-                  ],
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      helperLine(),
-                      style: Theme.of(ctx).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
                   ),
-                  const SizedBox(height: 12),
-                  // The conditions last: the list can grow long, and nothing
-                  // else in the dialog sits below it.
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'If the SMS contains any of (${conditions.length})',
-                          style: Theme.of(ctx).textTheme.labelLarge?.copyWith(
-                            color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                      const InfoTip(
-                        title: 'If the SMS contains…',
-                        message:
-                            'Matches whole words in the SMS text, ignoring '
-                            'case: "RD Ac" matches "RD Ac 1234" but not '
-                            '"card account". Apart from spam rules, a rule '
-                            'fires only when the message moves money in its '
-                            "category's direction. Transactions added by "
-                            'hand are never matched.',
-                      ),
-                    ],
-                  ),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      for (var i = 0; i < conditions.length; i++)
-                        _ConditionChip(
-                          text: conditions[i],
-                          onRemove: () =>
-                              setState(() => conditions.removeAt(i)),
-                          onEdit: () async {
-                            final edited = await _editConditionDialog(
-                              ctx,
-                              conditions[i],
-                              others: [
-                                for (var j = 0; j < conditions.length; j++)
-                                  if (j != i) conditions[j],
-                              ],
-                            );
-                            if (edited == null || !ctx.mounted) return;
-                            setState(() => conditions[i] = edited);
-                          },
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            if (existing != null)
-              TextButton(
-                style: TextButton.styleFrom(
-                  foregroundColor: Theme.of(ctx).colorScheme.error,
                 ),
-                onPressed: () {
-                  deleteRequested = true;
-                  Navigator.pop(ctx);
-                },
-                child: const Text('Delete'),
-              ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            // Disabled while there is no condition, chipped or typed,
-            // instead of a silent no-op.
-            FilledButton(
-              onPressed:
-                  (conditions.isEmpty && addCtrl.text.trim().isEmpty) ||
-                      addCtrl.text.contains('|')
-                  ? null
-                  : () async {
-                      // Rules match single-line SMS text — collapse stray
-                      // newlines/runs of whitespace so a wrapped edit can't
-                      // silently stop matching. Conditions join with '|',
-                      // the OR separator ClassifierRule.patterns splits on —
-                      // so a literal '|' inside a condition (common in UPI
-                      // alerts) must be neutralised or it silently splits
-                      // into extra, broader conditions the user never wrote.
-                      // Text left in the Add box counts as one more
-                      // condition, unless it repeats a chip.
-                      final pattern =
-                          [
-                                ...conditions,
-                                if (addCtrl.text.trim().isNotEmpty &&
-                                    !isDuplicate(addCtrl.text))
-                                  addCtrl.text,
-                              ]
-                              .map(
-                                (c) => c
-                                    .replaceAll('|', ' ')
-                                    .replaceAll(RegExp(r'\s+'), ' ')
-                                    .trim(),
-                              )
-                              .where((s) => s.isNotEmpty)
-                              .join(' | ');
-                      final finance = ctx.read<FinanceProvider>();
-                      final messenger = ScaffoldMessenger.of(context);
-                      // Warn BEFORE touching the queue: spam rules delete
-                      // matching pending imports, and incremental scans
-                      // never bring them back.
-                      final wouldDrop = finance.pendingSpamDropsFor(
-                        pattern,
-                        categoryId,
-                        replacingRuleId: existing?.id,
-                      );
-                      if (wouldDrop > 0) {
-                        final ok = await showDialog<bool>(
-                          context: ctx,
-                          builder: (dCtx) => AlertDialog(
-                            // Rows waiting for review and rows still marked
-                            // new (already counted) both drop.
-                            title: const Text('Drop recent imports?'),
-                            content: Text(
-                              'This rule matches $wouldDrop recent import'
-                              '${wouldDrop == 1 ? '' : 's'} and will remove '
-                              '${wouldDrop == 1 ? 'it' : 'them'} as spam.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(dCtx, false),
-                                child: const Text('Cancel'),
-                              ),
-                              FilledButton(
-                                onPressed: () => Navigator.pop(dCtx, true),
-                                child: const Text('Apply rule'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (ok != true || !ctx.mounted) return;
-                      }
-                      Navigator.pop(ctx);
-                      var applied = existing == null
-                          ? await finance.addRule(pattern, categoryId)
-                          : await finance.updateRule(
-                              existing.copyWith(
-                                pattern: pattern,
-                                categoryId: categoryId,
-                              ),
-                            );
-                      // The opposite-direction twin: create, repoint or
-                      // drop it to match the second slot. Deleting never
-                      // re-applies (rows keep their categories), same as the
-                      // tile's delete.
-                      final other = otherCategoryId;
-                      if (other != null) {
-                        final twinApplied = twin == null
-                            ? await finance.addRule(pattern, other)
-                            : await finance.updateRule(
-                                twin.copyWith(
-                                  pattern: pattern,
-                                  categoryId: other,
-                                ),
-                              );
-                        applied = (
-                          reclassified:
-                              applied.reclassified + twinApplied.reclassified,
-                          droppedPending:
-                              applied.droppedPending +
-                              twinApplied.droppedPending,
-                          dropped: [...applied.dropped, ...twinApplied.dropped],
-                        );
-                      } else if (twin != null) {
-                        await finance.deleteRule(twin.id);
-                      }
-                      // Rules re-apply to history immediately — say what that
-                      // did. A broad spam rule silently emptying the review
-                      // queue was the worst case, so dropped imports get a
-                      // Restore action (the rule itself stays in force).
-                      final parts = <String>[
-                        if (applied.reclassified > 0)
-                          '${applied.reclassified} transaction'
-                              '${applied.reclassified == 1 ? '' : 's'} '
-                              'reclassified',
-                        if (applied.droppedPending > 0)
-                          '${applied.droppedPending} recent import'
-                              '${applied.droppedPending == 1 ? '' : 's'} '
-                              'dropped as spam',
-                      ];
-                      if (parts.isNotEmpty) {
-                        final dropped = applied.dropped;
-                        showAppToastOn(
-                          messenger,
-                          parts.join(' · '),
-                          tone: dropped.isEmpty
-                              ? AppToastTone.info
-                              : AppToastTone.change,
-                          icon: Icons.rule,
-                          duration: const Duration(seconds: 5),
-                          actionLabel: dropped.isEmpty ? null : 'Restore',
-                          onAction: dropped.isEmpty
-                              ? null
-                              : () => finance.restoreEditedTransactions(
-                                  dropped,
-                                  reAddMissing: true,
-                                ),
-                        );
-                      }
-                    },
-              child: Text(existing == null ? 'Create' : 'Save'),
-            ),
-          ],
-        ),
+              ],
+            ],
+          );
+        },
       ),
     ),
   );
@@ -2572,6 +2974,7 @@ class _RuleAddBox extends StatelessWidget {
   final VoidCallback onAdd;
 
   const _RuleAddBox({
+    super.key,
     required this.controller,
     required this.focusNode,
     required this.autofocus,
@@ -2637,110 +3040,59 @@ class _RuleAddBox extends StatelessWidget {
   }
 }
 
-/// One condition in the rule dialog: tap to edit, the cross to remove. One
-/// line at most 220 wide, or the dialog's width when that is less, so a
-/// long phrase ends in an ellipsis instead of taking rows of its own.
+/// One condition in the rule sheet: tap to edit it in the Add box, the
+/// cross to remove. One line at most 220 wide, or the sheet's width when
+/// that is less, so a long phrase ends in an ellipsis instead of taking
+/// rows of its own.
 class _ConditionChip extends StatelessWidget {
   final String text;
   final VoidCallback onEdit;
   final VoidCallback onRemove;
 
+  /// A word a merge adds to an existing rule: selected, with " · new"
+  /// after it.
+  final bool isNew;
+
   const _ConditionChip({
     required this.text,
     required this.onEdit,
     required this.onRemove,
+    this.isNew = false,
   });
 
   @override
-  Widget build(BuildContext context) => ConstrainedBox(
-    // Wrap hands each child its full width, and ConstrainedBox keeps the
-    // tighter of the two; the chip then shrinks its label to fit.
-    constraints: const BoxConstraints(maxWidth: 220),
-    child: InputChip(
-      label: Text(
-        text,
-        maxLines: 1,
-        softWrap: false,
-        overflow: TextOverflow.ellipsis,
+  Widget build(BuildContext context) {
+    final chip = ConstrainedBox(
+      // Wrap hands each child its full width, and ConstrainedBox keeps the
+      // tighter of the two; the chip then shrinks its label to fit.
+      constraints: const BoxConstraints(maxWidth: 220),
+      child: InputChip(
+        selected: isNew,
+        showCheckmark: false,
+        label: Text(
+          isNew ? '$text · new' : text,
+          maxLines: 1,
+          softWrap: false,
+          overflow: TextOverflow.ellipsis,
+        ),
+        // Compact and with trimmed padding, so 15 conditions take a few lines
+        // rather than a screen. The cross gets a 20dp box instead of the
+        // chip's full height, which made it as wide as a short word; its tap
+        // area is that box plus the label's right padding.
+        visualDensity: VisualDensity.compact,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: const EdgeInsets.fromLTRB(2, 4, 2, 4),
+        labelPadding: const EdgeInsets.only(left: 6, right: 4),
+        deleteIconBoxConstraints: const BoxConstraints.tightFor(
+          width: 20,
+          height: 20,
+        ),
+        deleteIcon: const Icon(Icons.close, size: 18),
+        deleteButtonTooltipMessage: 'Remove condition',
+        onDeleted: onRemove,
+        onPressed: onEdit,
       ),
-      // Compact and with trimmed padding, so 15 conditions take a few lines
-      // rather than a screen. The cross gets a 20dp box instead of the
-      // chip's full height, which made it as wide as a short word; its tap
-      // area is that box plus the label's right padding.
-      visualDensity: VisualDensity.compact,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      padding: const EdgeInsets.fromLTRB(2, 4, 2, 4),
-      labelPadding: const EdgeInsets.only(left: 6, right: 4),
-      deleteIconBoxConstraints: const BoxConstraints.tightFor(
-        width: 20,
-        height: 20,
-      ),
-      deleteIcon: const Icon(Icons.close, size: 18),
-      deleteButtonTooltipMessage: 'Remove condition',
-      onDeleted: onRemove,
-      onPressed: onEdit,
-    ),
-  );
-}
-
-/// Edits one condition of the rule dialog. Returns the new text with its
-/// whitespace collapsed, or null on Cancel. [others] are the remaining
-/// conditions, for the duplicate check.
-Future<String?> _editConditionDialog(
-  BuildContext context,
-  String initial, {
-  required List<String> others,
-}) {
-  final ctrl = TextEditingController(text: initial);
-  return showDialog<String>(
-    context: context,
-    builder: (ctx) => DisposeScope(
-      disposables: [ctrl],
-      child: StatefulBuilder(
-        builder: (ctx, setState) {
-          final text = _collapseSpaces(ctrl.text);
-          final key = text.toLowerCase();
-          // Same '|' rule as the Add box; a repeat of another condition
-          // would only store it twice.
-          final error = ctrl.text.contains('|')
-              ? 'Remove "|". Add each word on its own.'
-              : others.any((o) => _collapseSpaces(o).toLowerCase() == key)
-              ? 'Already a condition.'
-              : null;
-          return AlertDialog(
-            title: const Text('Edit condition'),
-            // Top padding keeps the field's floating label from clipping.
-            content: SingleChildScrollView(
-              padding: const EdgeInsets.only(top: 8),
-              child: TextField(
-                controller: ctrl,
-                autofocus: true,
-                minLines: 1,
-                maxLines: 4,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  labelText: 'If the SMS contains…',
-                  errorText: error,
-                ),
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              // Disabled while empty: clearing a condition is the cross's
-              // job.
-              FilledButton(
-                onPressed: text.isEmpty || error != null
-                    ? null
-                    : () => Navigator.pop(ctx, text),
-                child: const Text('Save'),
-              ),
-            ],
-          );
-        },
-      ),
-    ),
-  );
+    );
+    return isNew ? Semantics(label: 'New condition $text', child: chip) : chip;
+  }
 }

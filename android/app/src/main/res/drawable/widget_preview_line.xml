@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Picker preview only: the Expected balance line, dipping early in the
+     month, with the ring on its lowest day. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="280dp"
+    android:height="40dp"
+    android:viewportWidth="280"
+    android:viewportHeight="40">
+    <path
+        android:pathData="M4,30L30,34L50,6L90,14L130,20L170,24L210,27L250,30L276,31"
+        android:strokeWidth="2"
+        android:strokeColor="#4A90E2"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M26.5,34a3.5,3.5 0,1 1,7 0a3.5,3.5 0,1 1,-7 0"
+        android:strokeWidth="2"
+        android:strokeColor="#FFB572" />
+</vector>

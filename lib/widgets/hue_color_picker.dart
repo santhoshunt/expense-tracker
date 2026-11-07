@@ -83,7 +83,7 @@ class HueColorPicker extends StatelessWidget {
       children: [
         Text(
           '$title · ${name(value)}',
-          style: Theme.of(context).textTheme.labelMedium,
+          style: Theme.of(context).textTheme.titleSmall,
         ),
         const SizedBox(height: 8),
         Row(

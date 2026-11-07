@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/models/subscription_cycle.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
@@ -119,11 +120,17 @@ void main() {
     await tester.enterText(find.byType(TextField).first, 'Gift');
     await tester.tap(find.text('Once'));
     await tester.pumpAndSettle();
+    // On the field only: the footer does not repeat it.
+    final dateField = find.byKey(const ValueKey('reminder-date'));
+    expect(
+      find.descendant(of: dateField, matching: find.text('Pick a date')),
+      findsOneWidget,
+    );
     expect(find.text('Pick a date'), findsOneWidget);
     expect(find.text('Due day'), findsNothing);
     expect(tester.widget<FilledButton>(button('Create')).onPressed, isNull);
 
-    await tester.tap(find.text('Pick a date'));
+    await tester.tap(dateField);
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
@@ -202,6 +209,157 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('the reminder sheet fits a small phone with the keyboard up', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 568) * 3;
+    tester.view.devicePixelRatio = 3;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 280 * 3);
+    addTearDown(tester.view.reset);
+    final p = FinanceProvider();
+    await p.load();
+    await pumpEditor(
+      tester,
+      p,
+      (context) => showReminderEditor(context),
+      textScale: 2,
+    );
+    expect(find.text('Monthly'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    expect(
+      find.byKey(const ValueKey('editor-save')).hitTestable(),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Due months goes under Due day on a 320dp phone at 1x text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final p = FinanceProvider();
+    await p.load();
+    await pumpEditor(tester, p, (context) => showReminderEditor(context));
+    await tester.tap(find.text('Quarterly'));
+    await tester.pumpAndSettle();
+
+    final day = tester.getRect(find.byKey(const ValueKey('reminder-day')));
+    final months = tester.getRect(
+      find.byKey(const ValueKey('reminder-months')),
+    );
+    expect(months.top, greaterThanOrEqualTo(day.bottom));
+    expect(tester.takeException(), isNull);
+  });
+
+  /// The summary line under the fields.
+  String summary(WidgetTester tester) => tester
+      .widget<Text>(
+        find.byWidgetPredicate(
+          (w) =>
+              w is Text &&
+              (w.data ?? '').startsWith(RegExp('Notifies from|Adds it for')),
+        ),
+      )
+      .data!;
+
+  testWidgets('a new reminder sums up its next due date on or after today', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    final now = DateTime.now().add(const Duration(milliseconds: 200));
+    // Three days ago: this month's, or last month's at the start of a
+    // month, neither of which a new reminder's line names.
+    final past = dateOnly(now.subtract(const Duration(days: 3)));
+    await pumpEditor(
+      tester,
+      p,
+      (context) => showReminderEditor(context, dayOfMonth: past.day),
+    );
+
+    final today = dateOnly(now);
+    final month = past.month == today.month
+        ? DateTime(today.year, today.month + 1)
+        : DateTime(today.year, today.month);
+    final expected = DateTime(
+      month.year,
+      month.month,
+      past.day.clamp(1, daysInMonth(month.year, month.month)),
+    );
+    expect(expected.isBefore(today), isFalse);
+    // This month's passed date is named as overdue after it; last month's
+    // (a reminder made at the start of a month) is before the reminder.
+    expect(
+      summary(tester),
+      past.month == today.month
+          ? endsWith(
+              '${fmtDateCompact(expected)}. ${fmtDateCompact(past)} shows as '
+              'overdue until you mark it paid.',
+            )
+          : endsWith(fmtDateCompact(expected)),
+    );
+  });
+
+  test('a new reminder made after this month\'s due day names next month; '
+      'a saved one keeps the unpaid one', () {
+    final now = DateTime(2026, 11, 7, 10);
+    const draft = Reminder(
+      id: '',
+      name: 'Gym',
+      dayOfMonth: 1,
+      categoryId: 'other_expense',
+      createdOn: '2026-11-07',
+    );
+    // And says the saved one will list 1 Nov as overdue, as the app will.
+    expect(
+      reminderSummaryLine(draft, now),
+      'Notifies from 2 days before ${fmtDateCompact(DateTime(2026, 12, 1))}. '
+      '${fmtDateCompact(DateTime(2026, 11, 1))} shows as overdue until you '
+      'mark it paid.',
+    );
+    // Saved: 1 Nov may still be unpaid, inside the grace days.
+    const saved = Reminder(
+      id: 'r1',
+      name: 'Gym',
+      dayOfMonth: 1,
+      categoryId: 'other_expense',
+      createdOn: '2026-11-07',
+    );
+    expect(
+      reminderSummaryLine(saved, now),
+      'Notifies from 2 days before ${fmtDateCompact(DateTime(2026, 11, 1))}',
+    );
+  });
+
+  testWidgets('editing an Add it for me reminder keeps its start in the '
+      'summary', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    final now = DateTime.now().add(const Duration(milliseconds: 200));
+    final past = dateOnly(now.subtract(const Duration(days: 3)));
+    // Switched on today: the occurrence three days ago is never added.
+    final existing = Reminder(
+      id: 'r1',
+      name: 'Rent',
+      dayOfMonth: past.day,
+      categoryId: 'other_expense',
+      expectedAmount: 500,
+      autoAdd: true,
+      autoSince: dayKey(now),
+      createdOn: '2025-01-01',
+    );
+    await pumpEditor(
+      tester,
+      p,
+      (context) => showReminderEditor(context, existing: existing),
+    );
+
+    final expected = reminderNextDue(existing, now);
+    expect(expected.isBefore(dateOnly(now)), isFalse);
+    expect(summary(tester), 'Adds it for you on ${fmtDateCompact(expected)}');
+  });
+
   testWidgets('Cockpit lists a finished once reminder as done, deletable', (
     tester,
   ) async {
@@ -241,11 +399,14 @@ void main() {
     expect(find.textContaining('Once, ${on.day} '), findsOneWidget);
     expect(find.textContaining(' · done'), findsOneWidget);
     expect(find.textContaining(' · paid'), findsNothing);
-    // A tap edits; Delete lives in the editor.
+    // A tap edits; Delete lives in the editor's ⋮.
     await tester.tap(find.textContaining(' · done'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 700));
-    await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+    await tester.tap(find.byTooltip('Reminder actions'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.tap(find.text('Delete reminder'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 700));
     expect(p.reminders, isEmpty);
@@ -272,7 +433,7 @@ void main() {
 
     await tester.tap(find.text('Once'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Pick a date'));
+    await tester.tap(find.byKey(const ValueKey('reminder-date')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();

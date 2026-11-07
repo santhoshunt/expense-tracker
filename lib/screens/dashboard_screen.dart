@@ -48,6 +48,8 @@ import '../widgets/budget_dialog.dart';
 import '../widgets/dashboard_fold.dart';
 import '../widgets/delta_note.dart';
 import '../widgets/dispose_scope.dart';
+import '../widgets/editor_sheet.dart';
+import '../widgets/grouped_surface.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/undo_snackbar.dart';
 import '../widgets/notice_stack.dart';
@@ -476,6 +478,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       DashboardSection.upcoming,
       DashboardSection.pace,
       DashboardSection.donut,
+      DashboardSection.projection,
     ])
       s: GlobalKey(),
   };
@@ -3282,7 +3285,7 @@ class _UpcomingCard extends StatelessWidget {
                           // Detected payments: view, make a reminder,
                           // hide.
                           onTap: e.reminder != null
-                              ? () => _showReminderActions(
+                              ? () => showReminderActions(
                                   context,
                                   e.reminder!,
                                   e.due,
@@ -3401,98 +3404,6 @@ class _UpcomingCard extends StatelessWidget {
     );
   }
 
-  /// Three plain actions for a manual reminder row. (showPickerSheet was
-  /// rejected here: its always-on search field is wrong for a 3-item menu.)
-  void _showReminderActions(BuildContext context, Reminder r, DateTime due) {
-    final finance = context.read<FinanceProvider>();
-    showModalBottomSheet<void>(
-      context: context,
-      useSafeArea: true,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              title: Text(r.name, style: Theme.of(ctx).textTheme.titleMedium),
-              subtitle: Text('Due ${fmtDate(due)}'),
-            ),
-            if (r.autoAdd)
-              // It records its own expense: paying early means recording it
-              // now, since marking it paid alone would leave it out.
-              ListTile(
-                leading: const Icon(Icons.add_task),
-                title: const Text('Add it now'),
-                subtitle: const Text(
-                  'Paid early: records it today, not on the due day',
-                ),
-                onTap: () async {
-                  Navigator.pop(ctx);
-                  final messenger = ScaffoldMessenger.of(context);
-                  final before = r;
-                  final txId = await finance.addReminderPaymentNow(
-                    r.id,
-                    due,
-                    DateTime.now(),
-                  );
-                  if (txId == null) return;
-                  showAppToastOn(
-                    messenger,
-                    'Added ${r.name}',
-                    tone: AppToastTone.success,
-                    icon: Icons.add_task,
-                    actionLabel: 'Undo',
-                    onAction: () async {
-                      await finance.deleteTransactions([txId]);
-                      await finance.updateReminder(before);
-                    },
-                    duration: const Duration(seconds: 5),
-                  );
-                },
-              )
-            else
-              ListTile(
-                leading: const Icon(Icons.check_circle_outline),
-                title: const Text('Mark paid'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  final before = r;
-                  finance.markReminderPaid(r.id, due);
-                  showUndoSnackBar(
-                    context,
-                    '${r.name} marked paid',
-                    () => finance.updateReminder(before),
-                    icon: Icons.task_alt,
-                    tone: AppToastTone.success,
-                  );
-                },
-              ),
-            ListTile(
-              leading: const Icon(Icons.edit_outlined),
-              title: const Text('Edit'),
-              onTap: () {
-                Navigator.pop(ctx);
-                showReminderEditor(context, existing: r);
-              },
-            ),
-            ListTile(
-              leading: Icon(
-                Icons.delete_outline,
-                color: Theme.of(ctx).colorScheme.error,
-              ),
-              title: const Text('Delete'),
-              onTap: () {
-                Navigator.pop(ctx);
-                deleteReminderWithUndo(context, r.id);
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-
   /// Mark paid / record payment for a card bill row. Both act on the current
   /// cycle ([CardBillStatus.cycleDue], an overdue one included): a paid row
   /// already DISPLAYS next cycle's date, but un-marking and the paid flag
@@ -3528,7 +3439,14 @@ class _UpcomingCard extends StatelessWidget {
                   title: const Text('Mark unpaid'),
                   onTap: () {
                     Navigator.pop(ctx);
+                    final prev = a.billPaidMonth;
                     finance.clearCardBillPaid(a.id);
+                    showUndoSnackBar(
+                      context,
+                      '${a.name} bill marked unpaid',
+                      () => finance.setCardBillPaidMonth(a.id, prev),
+                      icon: Icons.undo,
+                    );
                   },
                 )
               else
@@ -3569,7 +3487,7 @@ class _UpcomingCard extends StatelessWidget {
               // absence shows.
               ListTile(
                 leading: const Icon(Icons.edit_calendar_outlined),
-                title: const Text('Statement & due dates…'),
+                title: const Text('Statement and due dates…'),
                 onTap: () {
                   Navigator.pop(ctx);
                   showCardCycleDialog(context, a);
@@ -3590,99 +3508,113 @@ class _UpcomingCard extends StatelessWidget {
   ) async {
     final finance = context.read<FinanceProvider>();
     final ctrl = TextEditingController();
-    var paidOn = DateTime.now();
-    String? error;
-    await showDialog<void>(
-      context: context,
+    final openedAt = DateTime.now();
+    var paidOn = openedAt;
+    await showEditorSheet<void>(
+      context,
       builder: (ctx) => DisposeScope(
         disposables: [ctrl],
         child: StatefulBuilder(
-          builder: (ctx, setState) => AlertDialog(
-            scrollable: true,
-            title: const Text('Record a payment'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
+          builder: (ctx, setState) {
+            final v = parseAmount(ctrl.text.trim());
+            final valid = v != null && v > 0;
+            Future<void> pickDate() async {
+              final picked = await showDatePicker(
+                context: ctx,
+                initialDate: paidOn,
+                firstDate: DateTime.now().subtract(const Duration(days: 30)),
+                lastDate: DateTime.now(),
+              );
+              if (picked != null) setState(() => paidOn = picked);
+            }
+
+            Future<void> save() async {
+              final amount = v!;
+              Navigator.pop(ctx);
+              final result = await finance.recordCardPayment(
+                accountId: a.id,
+                amount: amount,
+                paidOn: paidOn,
+                due: due,
+              );
+              if (result == null || !context.mounted) return;
+              showUndoSnackBar(
+                context,
+                'Recorded ${fmtMoney(amount)} payment'
+                '${result.pairId != null ? ' · matched a bank debit' : ''}',
+                () async {
+                  await finance.deleteTransaction(result.txId);
+                  if (result.bankLegBefore != null) {
+                    await finance.restoreEditedTransactions([
+                      result.bankLegBefore!,
+                    ]);
+                  }
+                  await finance.setCardBillPaidMonth(
+                    a.id,
+                    result.prevPaidMonth,
+                  );
+                },
+                icon: Icons.payments_outlined,
+                tone: AppToastTone.success,
+              );
+            }
+
+            return EditorSheetBody(
+              title: 'Record a payment',
+              footerLabel: 'Save',
+              footerReason: valid ? null : 'Enter the amount you paid',
+              onSave: valid ? save : null,
+              // By day: the date picker returns midnight, so picking today
+              // again changes nothing.
+              dirty:
+                  ctrl.text.trim().isNotEmpty ||
+                  DateUtils.dateOnly(paidOn) != DateUtils.dateOnly(openedAt),
               children: [
                 TextField(
+                  key: const ValueKey('payment-amount'),
                   controller: ctrl,
                   autofocus: true,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  decoration: InputDecoration(
+                  textInputAction: TextInputAction.done,
+                  onChanged: (_) => setState(() {}),
+                  onSubmitted: (_) {
+                    if (valid) save();
+                  },
+                  decoration: const InputDecoration(
                     labelText: 'Amount paid',
                     prefixText: '₹ ',
                     helperText:
-                        'The bill amount you paid. This cycle is marked '
-                        'paid and the outstanding drops by it.',
-                    helperMaxLines: 4,
-                    errorText: error,
+                        'The cycle is marked paid and the outstanding drops '
+                        'by it.',
+                    helperMaxLines: 2,
                   ),
                 ),
-                const SizedBox(height: 12),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.event_outlined),
-                  title: const Text('Paid on'),
-                  subtitle: Text(fmtDate(paidOn)),
-                  onTap: () async {
-                    final picked = await showDatePicker(
-                      context: ctx,
-                      initialDate: paidOn,
-                      firstDate: DateTime.now().subtract(
-                        const Duration(days: 30),
+                const SizedBox(height: 16),
+                // One button for a screen reader: the field's label, value
+                // and icon would otherwise read as three parts.
+                Semantics(
+                  button: true,
+                  label: 'Paid on, ${fmtDate(paidOn)}',
+                  excludeSemantics: true,
+                  onTap: pickDate,
+                  child: InkWell(
+                    key: const ValueKey('payment-date'),
+                    borderRadius: BorderRadius.circular(AppRadius.control),
+                    onTap: pickDate,
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Paid on',
+                        suffixIcon: Icon(Icons.event_outlined, size: 18),
                       ),
-                      lastDate: DateTime.now(),
-                    );
-                    if (picked != null) setState(() => paidOn = picked);
-                  },
+                      child: Text(fmtDate(paidOn), maxLines: 1),
+                    ),
+                  ),
                 ),
               ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  final v = parseAmount(ctrl.text.trim());
-                  if (v == null || v <= 0) {
-                    setState(() => error = 'Enter the amount you paid');
-                    return;
-                  }
-                  Navigator.pop(ctx);
-                  final result = await finance.recordCardPayment(
-                    accountId: a.id,
-                    amount: v,
-                    paidOn: paidOn,
-                    due: due,
-                  );
-                  if (result == null || !context.mounted) return;
-                  showUndoSnackBar(
-                    context,
-                    'Recorded ${fmtMoney(v)} payment'
-                    '${result.pairId != null ? ' · matched a bank debit' : ''}',
-                    () async {
-                      await finance.deleteTransaction(result.txId);
-                      if (result.bankLegBefore != null) {
-                        await finance.restoreEditedTransactions([
-                          result.bankLegBefore!,
-                        ]);
-                      }
-                      await finance.setCardBillPaidMonth(
-                        a.id,
-                        result.prevPaidMonth,
-                      );
-                    },
-                    icon: Icons.payments_outlined,
-                    tone: AppToastTone.success,
-                  );
-                },
-                child: const Text('Save'),
-              ),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
@@ -4949,12 +4881,13 @@ Future<void> _showForecastBills(BuildContext context, MonthForecast f) {
     );
   }
 
+  // The theme's sheet, as every other list sheet: drag handle, its own
+  // surface and scrim.
   return showModalBottomSheet<void>(
     context: context,
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.black.withValues(alpha: 0.5),
     isScrollControlled: true,
     useSafeArea: true,
+    showDragHandle: true,
     builder: (ctx) => ListenableBuilder(
       listenable: finance,
       builder: (ctx, _) => StatefulBuilder(
@@ -4965,75 +4898,89 @@ Future<void> _showForecastBills(BuildContext context, MonthForecast f) {
           for (final b in f.bills) {
             if (!isPaid(b)) total += b.amount;
           }
+          final last = f.bills.length - 1;
           return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: FrostedPanel(
-                radius: BorderRadius.circular(28),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
                           'Due this month',
                           style: Theme.of(ctx).textTheme.titleLarge,
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Reminders not yet paid, and regular payments the '
-                          'app has spotted in your history, due by '
-                          '${fmtDateCompact(f.lastDay)} or up to a week '
-                          'overdue. Paid one already? Tap Paid: it leaves '
-                          'the forecast.',
-                          style: muted,
+                      ),
+                      InfoTip(
+                        title: 'Due this month',
+                        message:
+                            'Reminders not yet paid, and regular payments the '
+                            'app has spotted in your history, due by '
+                            '${fmtDateCompact(f.lastDay)} or up to a week '
+                            'overdue. Paid one already? Tap Paid: it leaves '
+                            'the forecast.',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Reminders and regular payments due by '
+                    '${fmtDateCompact(f.lastDay)}.',
+                    style: muted,
+                  ),
+                  const SizedBox(height: 12),
+                  for (final (i, b) in f.bills.indexed)
+                    GroupedSurface(
+                      first: i == 0,
+                      last: i == last,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 2, 14, 6),
+                        child: _ForecastBillRow(
+                          bill: b,
+                          today: today,
+                          paid: isPaid(b),
+                          // Add it for me records its own expense on the
+                          // due day: marking it paid would skip that.
+                          autoAdd: reminderOf(b)?.autoAdd ?? false,
+                          onPaid: () {
+                            final back = markPaid(b);
+                            if (back != null) {
+                              setState(() => undo[i] = back);
+                            }
+                          },
+                          onUndo: undo[i]?.current() ?? false
+                              ? () {
+                                  final back = undo.remove(i);
+                                  setState(() {});
+                                  back?.run();
+                                }
+                              : null,
                         ),
-                        const SizedBox(height: 8),
-                        for (final (i, b) in f.bills.indexed)
-                          _ForecastBillRow(
-                            bill: b,
-                            today: today,
-                            paid: isPaid(b),
-                            // Add it for me records its own expense on the
-                            // due day: marking it paid would skip that.
-                            autoAdd: reminderOf(b)?.autoAdd ?? false,
-                            onPaid: () {
-                              final back = markPaid(b);
-                              if (back != null) {
-                                setState(() => undo[i] = back);
-                              }
-                            },
-                            onUndo: undo[i]?.current() ?? false
-                                ? () {
-                                    final back = undo.remove(i);
-                                    setState(() {});
-                                    back?.run();
-                                  }
-                                : null,
+                      ),
+                    ),
+                  const SizedBox(height: 16),
+                  // Lined up with the rows' text inside their card.
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Total',
+                            style: TextStyle(fontWeight: FontWeight.w700),
                           ),
-                        const Divider(height: 24),
-                        Row(
-                          children: [
-                            const Expanded(
-                              child: Text(
-                                'Total',
-                                style: TextStyle(fontWeight: FontWeight.w700),
-                              ),
-                            ),
-                            Text(
-                              fmtMoneyWhole(total),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
+                        ),
+                        Text(
+                          fmtMoneyWhole(total),
+                          style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ],
                     ),
                   ),
-                ),
+                ],
               ),
             ),
           );

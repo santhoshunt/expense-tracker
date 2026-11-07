@@ -208,10 +208,11 @@ void main() {
     await select(tester, 'payday');
     await tester.tap(find.byTooltip('Count in another date'));
     await tester.pumpAndSettle();
-    // The pickers open on the 1st of the next month, midnight.
-    await tester.tap(find.text('OK'));
+    // The month field opens on the month after the newest row; the picker
+    // lists it under the field, so the picker's row is the last match.
+    await tester.tap(find.text('Month to count in'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('OK'));
+    await tester.tap(find.text('October 2026').last);
     await tester.pumpAndSettle();
     expect(find.textContaining("account balances don't change"), findsOne);
     await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
@@ -230,6 +231,34 @@ void main() {
     expect(p.incomeInMonth(DateTime(2026, 9)), 85000);
   });
 
+  testWidgets('bulk Count in opens on the month the rows share, and Apply '
+      'waits for another', (tester) async {
+    final p = await seeded();
+    final salary = p.transactions.firstWhere((t) => t.note == 'payday');
+    await p.setCountInForMany({salary.id}, DateTime(2026, 10, 15, 9));
+    await pump(tester, p);
+    await select(tester, 'payday');
+    await tester.tap(find.byTooltip('Count in another date'));
+    await tester.pumpAndSettle();
+
+    // Applying October again would only move the row to the 1st.
+    expect(find.text('Pick a different month'), findsOneWidget);
+    final apply = find.widgetWithText(FilledButton, 'Apply');
+    expect(tester.widget<FilledButton>(apply).onPressed, isNull);
+
+    await tester.tap(find.text('Month to count in'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('November 2026').last);
+    await tester.pumpAndSettle();
+    expect(find.text('Pick a different month'), findsNothing);
+    await tester.tap(apply);
+    await tester.pumpAndSettle();
+    expect(
+      p.transactions.firstWhere((t) => t.note == 'payday').countIn,
+      DateTime(2026, 11, 1),
+    );
+  });
+
   testWidgets('bulk Count in puts moved rows back, naming only those', (
     tester,
   ) async {
@@ -242,13 +271,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.byTooltip('Count in another date'));
     await tester.pumpAndSettle();
-    // One of the two is moved, so the option is singular.
+    // One of the two is moved, so the button is singular.
     await tester.tap(find.text('Count on its own date'));
     await tester.pumpAndSettle();
-    // Two selected, one moved: the dialog counts the one.
-    expect(find.text('Put 1 transaction back on its own date?'), findsOne);
-    await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
-    await tester.pumpAndSettle();
+    // Two selected, one moved: the toast counts the one.
     expect(find.text('1 transaction back on its own date.'), findsOne);
     expect(p.transactions.every((t) => t.countIn == null), isTrue);
     expect(p.incomeInMonth(DateTime(2026, 9)), 85000);

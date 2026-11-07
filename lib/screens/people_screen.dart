@@ -9,7 +9,9 @@ import '../utils/text_scale.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/fold_section.dart';
 import '../widgets/glossy.dart';
+import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
+import '../widgets/picker_sheet.dart';
 import '../widgets/undo_snackbar.dart';
 import 'add_transaction_sheet.dart';
 
@@ -261,16 +263,37 @@ class _PersonSheetState extends State<_PersonSheet> {
   Future<void> _link(PersonBalance b) async {
     final finance = context.read<FinanceProvider>();
     final page = widget.page;
+    // Closest to what they owe first: the first three lead.
     final candidates = finance.repaymentCandidates(near: b.owed);
     Navigator.pop(context);
-    final picked = await showModalBottomSheet<Tx>(
-      context: page,
-      useSafeArea: true,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (ctx) => _LinkPicker(name: b.name, candidates: candidates),
+    PickerItem<String> item(Tx t) => PickerItem(
+      value: t.id,
+      label: '+${fmtMoney(t.amount)} · ${t.category.label}',
+      subtitle: [
+        fmtDateCompact(t.date),
+        ?finance.rowTitleFor(t),
+        if (t.pending) 'to review',
+      ].join(' · '),
     );
-    if (picked == null || !page.mounted) return;
+    final result = await showPickerSheet<String>(
+      context: page,
+      title: 'Which payment was from ${b.name}?',
+      subtitle: 'Money in from the last 90 days. It moves to Repaid to me.',
+      // Nothing owed has nothing to be close to: one plain list.
+      items: b.owed > 0
+          ? [
+              PickerItem.header('Closest to ${fmtMoney(b.owed)}'),
+              for (final t in candidates.take(3)) item(t),
+              if (candidates.length > 3) ...[
+                const PickerItem.header('Other money in'),
+                for (final t in candidates.skip(3)) item(t),
+              ],
+            ]
+          : [for (final t in candidates) item(t)],
+    );
+    final pickedId = result?.value;
+    if (pickedId == null || !page.mounted) return;
+    final picked = candidates.firstWhere((t) => t.id == pickedId);
     final before = await finance.linkRepayment(picked.id, b.name);
     if (before == null || !page.mounted) return;
     showUndoSnackBar(
@@ -316,176 +339,191 @@ class _PersonSheetState extends State<_PersonSheet> {
     }
     final canLink = finance.repaymentCandidates(near: b.owed).isNotEmpty;
     String billTitle(Tx t) => finance.rowTitleFor(t) ?? t.category.label;
+    // One GroupedSurface row per item, the list's first and last rounded.
+    List<Widget> rows<T>(List<T> items, Widget Function(T) row) => [
+      for (final (i, item) in items.indexed)
+        GroupedSurface(
+          first: i == 0,
+          last: i == items.length - 1,
+          child: row(item),
+        ),
+    ];
+    Widget heading(String label) => Padding(
+      padding: const EdgeInsets.only(top: 16, bottom: 8),
+      child: Text(label, style: text.titleSmall),
+    );
 
     return SafeArea(
-      child: ListView(
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(b.name, style: text.titleLarge, textAlign: TextAlign.center),
-          const SizedBox(height: 4),
-          Text(
-            b.owed > 0
-                ? 'Owes you ${fmtMoney(b.owed)}'
-                : b.credit > 0
-                ? 'Paid ${fmtMoney(b.credit)} ahead'
-                : 'Settled up',
-            style: text.titleMedium,
-            textAlign: TextAlign.center,
-          ),
-          // The bills first: they are what the person owes for, and each
-          // settles on its own.
-          if (b.open.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('Open bills', style: text.titleSmall),
-            for (final s in b.open)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text(
-                  billTitle(s.bill),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                // What is left sits in the subtitle so Settle has the
-                // trailing slot to itself at large text.
-                subtitle: Text(
-                  '${_day(s.bill.date)} · ${fmtMoney(s.left)} '
-                  'left of ${fmtMoney(s.share)}',
-                ),
-                trailing: TextButton(
-                  onPressed: () => _settle(b, bill: s.bill),
-                  child: const Text('Settle'),
-                ),
-                onTap: () => showAddTransactionSheet(context, existing: s.bill),
-              ),
-          ],
-          const SizedBox(height: 12),
-          // No inset of their own: the actions line up with the bills above.
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.payments_outlined),
-            title: const Text('Record repayment'),
-            // A bank SMS for the same money would import it a second time.
-            subtitle: const Text(
-              'For cash. Paid by UPI or bank? Link its SMS instead',
-            ),
-            onTap: () => _record(b),
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.link),
-            title: const Text('Link a payment you received'),
-            subtitle: Text(
-              canLink
-                  ? 'A UPI credit or transfer already here'
-                  : 'No money in from the last 90 days to link',
-            ),
-            enabled: canLink,
-            onTap: () => _link(b),
-          ),
-          if (b.owed > 0)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.task_alt),
-              title: const Text('Mark all settled'),
-              subtitle: const Text('Paid outside the app, or let go'),
-              onTap: () => _settle(b),
-            ),
-          if (b.repayments.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('Repayments', style: text.titleSmall),
-            for (final r in b.repayments)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Text('+${fmtMoney(r.amount)}'),
-                subtitle: Text(_day(r.date)),
-                onTap: () => showAddTransactionSheet(context, existing: r),
-              ),
-          ],
-          if (b.settled.isNotEmpty)
-            FoldSection(
-              title: 'Settled bills (${b.settled.length})',
-              open: _settledOpen,
-              onToggle: () => setState(() => _settledOpen = !_settledOpen),
+          // Pinned header: who, and where they stand, above the scroll.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 8, 0),
+            child: Row(
               children: [
-                for (final s in b.settled.reversed)
-                  ListTile(
-                    dense: true,
-                    title: Text(
-                      billTitle(s.bill),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(_day(s.bill.date)),
-                    trailing: Text(fmtMoney(s.share)),
-                    onTap: () =>
-                        showAddTransactionSheet(context, existing: s.bill),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        b.name,
+                        style: text.titleLarge,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        b.owed > 0
+                            ? 'Owes you ${fmtMoney(b.owed)}'
+                            : b.credit > 0
+                            ? 'Paid ${fmtMoney(b.credit)} ahead'
+                            : 'Settled up',
+                        style: text.titleMedium,
+                      ),
+                    ],
+                  ),
+                ),
+                if (b.owed > 0)
+                  PopupMenuButton<String>(
+                    tooltip: 'Person actions',
+                    icon: const Icon(Icons.more_vert),
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                        value: 'settle',
+                        child: Text('Mark all settled'),
+                      ),
+                    ],
+                    onSelected: (_) => _settle(b),
                   ),
               ],
             ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Money-in rows that could be [name]'s repayment, closest to what they owe
-/// first. Pops with the picked row.
-class _LinkPicker extends StatelessWidget {
-  final String name;
-  final List<Tx> candidates;
-  const _LinkPicker({required this.name, required this.candidates});
-
-  @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    final finance = context.read<FinanceProvider>();
-    return SafeArea(
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.7,
-        ),
-        child: ListView(
-          shrinkWrap: true,
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          children: [
-            Text(
-              'Which payment was from $name?',
-              style: text.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Money in from the last 90 days. It moves to Repaid to me.',
-              style: text.bodySmall,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            if (candidates.isEmpty)
-              const EmptyState(
-                compact: true,
-                icon: Icons.inbox_outlined,
-                message: 'No money in over the last 90 days to link.',
-              ),
-            for (final t in candidates)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                title: Text('+${fmtMoney(t.amount)} · ${t.category.label}'),
-                subtitle: Text(
-                  [
-                    fmtDateCompact(t.date),
-                    ?finance.rowTitleFor(t),
-                    if (t.pending) 'to review',
-                  ].join(' · '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+          ),
+          Flexible(
+            child: ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              children: [
+                // The bills first: they are what the person owes for, and
+                // each settles on its own.
+                if (b.open.isNotEmpty) ...[
+                  heading('Open bills'),
+                  ...rows(
+                    b.open,
+                    (s) => ListTile(
+                      dense: true,
+                      title: Text(
+                        billTitle(s.bill),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      // What is left sits in the subtitle so Settle has the
+                      // trailing slot to itself at large text.
+                      subtitle: Text(
+                        '${_day(s.bill.date)} · ${fmtMoney(s.left)} '
+                        'left of ${fmtMoney(s.share)}',
+                      ),
+                      trailing: TextButton(
+                        onPressed: () => _settle(b, bill: s.bill),
+                        child: const Text('Settle'),
+                      ),
+                      onTap: () =>
+                          showAddTransactionSheet(context, existing: s.bill),
+                    ),
+                  ),
+                ],
+                // A bank SMS for the same money would import it again, so
+                // the cash path says so. In the scroll, under the bills:
+                // pinned, it took four lines at 2x on a small phone and
+                // left the bills little room.
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    'Record repayment is for cash. Paid by UPI or bank? Use '
+                    'Link a payment.',
+                    style: text.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
                 ),
-                onTap: () => Navigator.pop(context, t),
-              ),
-          ],
-        ),
+                if (b.repayments.isNotEmpty) ...[
+                  heading('Repayments'),
+                  ...rows(
+                    b.repayments,
+                    (r) => ListTile(
+                      dense: true,
+                      title: Text('+${fmtMoney(r.amount)}'),
+                      subtitle: Text(_day(r.date)),
+                      onTap: () =>
+                          showAddTransactionSheet(context, existing: r),
+                    ),
+                  ),
+                ],
+                if (b.settled.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  FoldSection(
+                    title: 'Settled bills (${b.settled.length})',
+                    open: _settledOpen,
+                    onToggle: () =>
+                        setState(() => _settledOpen = !_settledOpen),
+                    children: rows(
+                      b.settled.reversed.toList(),
+                      (s) => ListTile(
+                        dense: true,
+                        title: Text(
+                          billTitle(s.bill),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(_day(s.bill.date)),
+                        trailing: Text(fmtMoney(s.share)),
+                        onTap: () =>
+                            showAddTransactionSheet(context, existing: s.bill),
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          // Pinned footer: the two ways a repayment arrives.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (!canLink) ...[
+                  Text(
+                    'No money in from the last 90 days to link',
+                    style: text.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                ],
+                FilledButton(
+                  key: const ValueKey('person-record'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  onPressed: () => _record(b),
+                  child: const Text('Record repayment'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton(
+                  key: const ValueKey('person-link'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                  ),
+                  onPressed: canLink ? () => _link(b) : null,
+                  child: const Text('Link a payment'),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

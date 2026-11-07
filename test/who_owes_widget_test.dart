@@ -93,6 +93,14 @@ void main() {
 
   Finder field(String label) => find.widgetWithText(TextFormField, label);
 
+  /// Opens the sheet's Split group, folded until tapped. Settles first: a
+  /// field just typed in scrolls its caret back into view on the next
+  /// frame, which would undo the scroll to the group.
+  Future<void> openSplit(WidgetTester tester) async {
+    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byKey(const ValueKey('fold-split')));
+  }
+
   group('add sheet', () {
     testWidgets('names people, splits evenly with the paise to you, saves', (
       tester,
@@ -100,12 +108,13 @@ void main() {
       final p = await loaded();
       await openSheet(tester, p);
       await tester.enterText(field('Amount'), '1000');
+      await openSplit(tester);
       await tapVisible(tester, find.text('Group split payment'));
       await tapVisible(tester, find.text('Add who owes what'));
       await tester.enterText(field('Name'), 'Arun');
       await tapVisible(tester, find.text('Add person'));
       await tester.enterText(field('Name').last, 'Priya');
-      await tapVisible(tester, find.text('Split evenly'));
+      await tapVisible(tester, find.text('Split evenly, including you'));
       expect(find.text('333.33'), findsNWidgets(2));
       expect(find.text('Your share ${fmtMoney(333.34)}'), findsOneWidget);
 
@@ -124,6 +133,7 @@ void main() {
       final p = await loaded();
       await openSheet(tester, p);
       await tester.enterText(field('Amount'), '1000');
+      await openSplit(tester);
       await tapVisible(tester, find.text('Group split payment'));
       await tapVisible(tester, find.text('Add who owes what'));
       await tester.enterText(field('Name'), 'Arun');
@@ -144,6 +154,21 @@ void main() {
       await tapVisible(tester, find.widgetWithText(FilledButton, 'Add'));
       expect(find.text('arun is listed twice'), findsOneWidget);
       expect(p.transactions, isEmpty);
+    });
+
+    testWidgets('ten people show Up to 10 people', (tester) async {
+      final p = await loaded();
+      await openSheet(tester, p);
+      await tester.enterText(field('Amount'), '1000');
+      await openSplit(tester);
+      await tapVisible(tester, find.text('Group split payment'));
+      await tapVisible(tester, find.text('Add who owes what'));
+      for (var i = 1; i < kMaxSplitPeople; i++) {
+        await tapVisible(tester, find.text('Add person'));
+      }
+      expect(field('Name'), findsNWidgets(kMaxSplitPeople));
+      expect(find.text('Add person'), findsNothing);
+      expect(find.text('Up to 10 people'), findsOneWidget);
     });
 
     testWidgets('a changed amount owed counts as unsaved', (tester) async {
@@ -167,10 +192,103 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
+      await openSplit(tester);
       await tester.enterText(field('Owes').first, '900');
       await tester.pump();
       await back(tester);
       expect(find.text('Discard changes?'), findsOneWidget);
+    });
+
+    testWidgets('Save opens a closed Split to show its error', (tester) async {
+      final p = await loaded();
+      await openSheet(tester, p);
+      await tester.enterText(field('Amount'), '1000');
+      await openSplit(tester);
+      await tapVisible(tester, find.text('Group split payment'));
+      await tester.enterText(field('Your share'), '1500');
+      // Closed again by its title: the share's field is gone with its
+      // validator.
+      await tester.pumpAndSettle();
+      await tapVisible(tester, find.text('Split'));
+      expect(field('Your share'), findsNothing);
+
+      await tapVisible(tester, find.widgetWithText(FilledButton, 'Add'));
+      expect(field('Your share'), findsOneWidget);
+      expect(find.text('Must be less than the total amount'), findsOneWidget);
+      expect(p.transactions, isEmpty);
+    });
+
+    testWidgets('Split evenly between sets your share and divides again with '
+        'the amount', (tester) async {
+      final p = await loaded();
+      await openSheet(tester, p);
+      final people = find.byKey(const ValueKey('split-people'));
+      String peopleText() =>
+          tester.widget<TextFormField>(people).controller!.text;
+      await tester.enterText(field('Amount'), '2000');
+      await openSplit(tester);
+      await tapVisible(tester, find.text('Group split payment'));
+      await tester.enterText(field('Your share'), '400');
+      await tester.enterText(people, '3');
+      await tester.pump();
+      expect(find.text('666.67'), findsOneWidget);
+      expect(
+        find.text('₹2,000 ÷ 3 people. ₹1,333 tracked as Paid for Others.'),
+        findsOneWidget,
+      );
+
+      await tester.enterText(field('Amount'), '3000');
+      await tester.pump();
+      expect(find.text('1000.00'), findsOneWidget);
+
+      // Errors show as soon as the count is typed, with no Add tap.
+      await tester.enterText(people, '0');
+      await tester.pump();
+      expect(find.text('Enter 2 or more people'), findsOneWidget);
+      // Two digits at most. From a one-digit count: a full two-digit one
+      // stays as it is rather than being cut.
+      await tester.enterText(people, '123');
+      await tester.pump();
+      expect(peopleText(), '12');
+      await tester.enterText(people, '1');
+      await tester.pump();
+      expect(find.text('Enter 2 or more people'), findsOneWidget);
+      await tester.enterText(people, '51');
+      await tester.pump();
+      expect(find.text('Enter 50 or fewer people'), findsOneWidget);
+
+      // Cleared: the share typed before the count comes back.
+      await tester.enterText(people, '');
+      await tester.pump();
+      expect(find.text('400'), findsOneWidget);
+      expect(find.text('Enter 2 or more people'), findsNothing);
+      expect(find.text('Enter 50 or fewer people'), findsNothing);
+
+      // A share typed by hand clears the count.
+      await tester.enterText(people, '3');
+      await tester.pump();
+      await tester.enterText(field('Your share'), '500');
+      await tester.pump();
+      expect(peopleText(), isEmpty);
+
+      await tapVisible(tester, find.widgetWithText(FilledButton, 'Add'));
+      final t = p.transactions.single;
+      expect(t.myShare, 500);
+      expect(t.people, isEmpty);
+    });
+
+    testWidgets('turning Group split off forgets the count', (tester) async {
+      final p = await loaded();
+      await openSheet(tester, p);
+      final people = find.byKey(const ValueKey('split-people'));
+      await tester.enterText(field('Amount'), '900');
+      await openSplit(tester);
+      await tapVisible(tester, find.text('Group split payment'));
+      await tester.enterText(people, '3');
+      await tester.pump();
+      await tapVisible(tester, find.text('Group split payment'));
+      await tapVisible(tester, find.text('Group split payment'));
+      expect(tester.widget<TextFormField>(people).controller!.text, isEmpty);
     });
   });
 
@@ -303,6 +421,15 @@ void main() {
       await dinner(p, alone: true);
       await openPerson(tester, p, 'Arun');
       expect(find.text('Owes you ${fmtMoney(1000)}'), findsOneWidget);
+      // A UPI repayment recorded as cash would count twice once its SMS
+      // imports.
+      expect(
+        find.text(
+          'Record repayment is for cash. Paid by UPI or bank? Use Link a '
+          'payment.',
+        ),
+        findsOneWidget,
+      );
       await tester.tap(find.text('Record repayment'));
       await tester.pumpAndSettle();
 
@@ -328,7 +455,7 @@ void main() {
         date: today,
       );
       await openPerson(tester, p, 'Priya');
-      await tester.tap(find.text('Link a payment you received'));
+      await tester.tap(find.text('Link a payment'));
       await tester.pumpAndSettle();
       await tester.tap(find.textContaining('UPI Priya'));
       await tester.pumpAndSettle();
@@ -387,6 +514,8 @@ void main() {
       final p = await loaded();
       await dinner(p, alone: true);
       await openPerson(tester, p, 'Arun');
+      await tester.tap(find.byTooltip('Person actions'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Mark all settled'));
       await tester.pumpAndSettle();
       expect(owed(p, 'arun'), 0);

@@ -119,10 +119,26 @@ void main() {
         const PickerItem(value: 'carrot', label: 'Carrot'),
         const PickerItem(value: 'potato', label: 'Potato'),
       ];
+      // Five rows hide the search unless the caller asks for it.
       await tester.pumpWidget(
-        host(items: items, value: 'banana', onChanged: (_) {}),
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showPickerSheet<String>(
+                  context: context,
+                  title: 'Pick one',
+                  items: items,
+                  selected: 'banana',
+                  searchable: true,
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
       );
-      await tester.tap(find.text('Banana'));
+      await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
       expect(find.text('FRUIT'), findsOneWidget);
       expect(find.text('VEG'), findsOneWidget);
@@ -135,20 +151,65 @@ void main() {
       expect(find.text('VEG'), findsOneWidget);
       // Fruit section survives only through the always-visible selection.
       expect(find.text('Apple'), findsNothing);
-      expect(find.text('Banana'), findsWidgets); // field + sheet row
+      expect(find.text('Banana'), findsOneWidget); // the sheet row
       expect(find.text('FRUIT'), findsOneWidget);
     },
   );
 
-  testWidgets('search field is always shown, even for a 3-item list', (
-    tester,
-  ) async {
+  testWidgets('search matches a row by its subtitle too', (tester) async {
+    // Invented senders: the name lives only in the subtitle, as in Link a
+    // payment.
+    final items = <PickerItem<String>>[
+      for (final (id, who) in [
+        ('a', 'Asha'),
+        ('b', 'Ravi'),
+        ('c', 'Meena'),
+        ('d', 'Kiran'),
+        ('e', 'Ravi'),
+        ('f', 'Dev'),
+        ('g', 'Lata'),
+        ('h', 'Om'),
+      ])
+        PickerItem(
+          value: id,
+          label: '₹500 · Food $id',
+          subtitle: '3 Oct · $who',
+        ),
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showPickerSheet<String>(
+                context: context,
+                title: 'Link a payment',
+                items: items,
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), 'ravi');
+    await tester.pumpAndSettle();
+    expect(find.text('₹500 · Food b'), findsOneWidget);
+    expect(find.text('₹500 · Food e'), findsOneWidget);
+    expect(find.text('₹500 · Food a'), findsNothing);
+  });
+
+  testWidgets('a picker under 8 rows hides its search', (tester) async {
     await tester.pumpWidget(
       host(items: fruit, value: 'apple', onChanged: (_) {}),
     );
     await tester.tap(find.text('Apple'));
     await tester.pumpAndSettle();
-    expect(find.byType(TextField), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
   });
 
   testWidgets('header rows are not tappable', (tester) async {

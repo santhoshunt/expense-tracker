@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Expected balance (compact, 2x1). updatePeriodMillis: a 30-minute redraw
+     from the stored snapshot (Android's floor), so the lowest is worked out
+     from the days still ahead without the app running. No configure
+     step. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/home_widget_ahead_compact_description"
+    android:initialLayout="@layout/home_widget_ahead_compact"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:previewLayout="@layout/home_widget_ahead_compact_preview"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

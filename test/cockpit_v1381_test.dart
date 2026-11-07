@@ -11,6 +11,7 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 import 'package:expense_tracker/utils/format.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 
 /// Cockpit in v1.38.1 (Results rows merchant first since v1.43.0): Undo
 /// and Make rule after a recategorise, the hub's passed limit in red and
@@ -159,10 +160,14 @@ void main() {
     await tester.tap(find.text('Make rule'));
     await pumpThrough(tester);
 
-    expect(find.byType(Dialog), findsOneWidget);
-    final dialog = find.byType(Dialog);
+    expect(find.byType(EditorSheetBody), findsOneWidget);
+    final dialog = find.byType(EditorSheetBody);
+    // The note lands as the rule's one condition chip.
     expect(
-      find.descendant(of: dialog, matching: find.text('Chai stall')),
+      find.descendant(
+        of: find.widgetWithText(InputChip, 'Chai stall'),
+        matching: find.text('Chai stall'),
+      ),
       findsOneWidget,
     );
     expect(
@@ -171,6 +176,47 @@ void main() {
     );
     // The offer goes once taken.
     expect(find.text('Make rule'), findsNothing);
+  });
+
+  testWidgets("a long-press rule starts on the row's category and never "
+      'opens empty', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'transport',
+      amount: 90,
+      note: 'Metro card top up',
+      date: DateTime(2026, 10, 12, 9, 15),
+    );
+    // Nothing to match: no SMS and no note.
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'shopping',
+      amount: 1200,
+      note: '',
+      date: DateTime(2026, 10, 11, 10, 30),
+    );
+    await pumpCockpit(tester, p, tab: kCockpitTabTransactions);
+
+    await tester.longPress(find.text('Metro card top up'));
+    await pumpThrough(tester);
+    final sheet = find.byType(EditorSheetBody);
+    expect(sheet, findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('rule-category')),
+        matching: find.text('Transport'),
+      ),
+      findsOneWidget,
+    );
+    Navigator.of(tester.element(sheet)).pop();
+    await pumpThrough(tester);
+    expect(sheet, findsNothing);
+
+    await tester.longPress(find.text('Shopping'));
+    await pumpThrough(tester);
+    expect(sheet, findsNothing);
   });
 
   testWidgets('the hub draws a passed limit in the error colour and the '
@@ -407,5 +453,9 @@ void main() {
     await pumpThrough(tester);
     expect(s.monthlyBudget, 150000);
     expect(shown(), '1,50,000');
+    // The helper says the blur saved it, then goes back after 2 seconds.
+    expect(find.text('Saved'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('Saved'), findsNothing);
   });
 }

@@ -74,6 +74,13 @@ void main() {
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), '1234');
     await tester.pump();
+    // Digits only: a sign never reaches the stored key.
+    await tester.enterText(find.byType(TextField), '+12');
+    await tester.pump();
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      '12',
+    );
 
     // Barrier dismiss rather than an explicit button — the same teardown path
     // the system back gesture takes.

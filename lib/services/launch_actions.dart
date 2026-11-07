@@ -55,6 +55,16 @@ enum LaunchAction {
   /// The Payments to check widget's +N more line: Transactions filtered to
   /// the rows waiting when the tap arrives.
   openChecks,
+
+  /// The Expected balance widgets: the Expected balance section on Ahead.
+  openAhead,
+
+  /// The Card cycle widget: the Cards page on Accounts, scrolled to the
+  /// card [LaunchActions.takeCardId] hands over.
+  openCard,
+
+  /// The Search bar widget: the search screen with the keyboard up.
+  openSearch,
 }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
@@ -106,6 +116,17 @@ class LaunchActions {
     return id;
   }
 
+  /// The card an [LaunchAction.openCard] is about. Set before [pending], as
+  /// [_history] is.
+  String? _cardId;
+
+  /// The account id for a pending [LaunchAction.openCard], once.
+  String? takeCardId() {
+    final id = _cardId;
+    _cardId = null;
+    return id;
+  }
+
   bool _initialised = false;
 
   /// Native action names, as MainActivity puts them in the intent extra.
@@ -124,6 +145,8 @@ class LaunchActions {
     'open_review' => LaunchAction.openReview,
     'open_accounts' => LaunchAction.openAccounts,
     'open_checks' => LaunchAction.openChecks,
+    'open_ahead' => LaunchAction.openAhead,
+    'open_search' => LaunchAction.openSearch,
     // The widget names no week: it always opens the current one.
     'open_weekly_digest' => LaunchAction.openThisWeek,
     _ => null,
@@ -131,13 +154,21 @@ class LaunchActions {
 
   /// [fromName], plus the Payments to check widget's row taps:
   /// [kOpenTxLaunchPrefix] and a row id hold the id for [takeTxId] and open
-  /// that row.
+  /// that row; and the Card cycle widget's tap: [kOpenCardLaunchPrefix] and
+  /// an account id hold the id for [takeCardId].
   LaunchAction? _fromLaunchName(String? name) {
     if (name != null && name.startsWith(kOpenTxLaunchPrefix)) {
       final id = name.substring(kOpenTxLaunchPrefix.length);
       if (id.isNotEmpty) {
         _txId = id;
         return LaunchAction.openTransaction;
+      }
+    }
+    if (name != null && name.startsWith(kOpenCardLaunchPrefix)) {
+      final id = name.substring(kOpenCardLaunchPrefix.length);
+      if (id.isNotEmpty) {
+        _cardId = id;
+        return LaunchAction.openCard;
       }
     }
     return fromName(name);
@@ -222,6 +253,7 @@ class LaunchActions {
     _history = null;
     _week = null;
     _txId = null;
+    _cardId = null;
     pending.value = null;
   }
 }
@@ -307,6 +339,10 @@ String importCheckPayload(String txId, String categoryId) =>
 /// Launch name prefix on a Payments to check widget row, followed by the
 /// row id: `open_tx:<id>` opens that row's edit sheet.
 const String kOpenTxLaunchPrefix = 'open_tx:';
+
+/// Launch name prefix on a Card cycle widget tap, followed by the card's
+/// account id: `open_card:<id>` opens that card on Accounts.
+const String kOpenCardLaunchPrefix = 'open_card:';
 
 /// The Keep button on a guessed row's payment-to-check note. It runs in the
 /// plugin's own engine without opening the app.

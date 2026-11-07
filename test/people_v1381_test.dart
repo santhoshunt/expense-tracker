@@ -10,9 +10,10 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/people_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/glossy.dart';
+import 'package:expense_tracker/widgets/grouped_surface.dart';
 
 /// People rows and the person sheet in v1.38.1: days without times, and
-/// the actions lined up with the bills.
+/// the bills lined up with the sheet's header.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -107,7 +108,7 @@ void main() {
     expect(name.didExceedMaxLines, isFalse);
   });
 
-  testWidgets('the sheet lines its actions up with its bills, and dates its '
+  testWidgets("the sheet's bills line up with its header, and dates its "
       'bills without a time', (tester) async {
     await pumpPeople(tester, await withDinner());
     await tester.tap(find.text('Arun Kumar'));
@@ -116,15 +117,25 @@ void main() {
     expect(find.textContaining('7 Oct · '), findsOneWidget);
     expect(find.textContaining('9:00 PM'), findsNothing);
 
-    final billLeft = tester.getTopLeft(find.text('Team dinner')).dx;
-    final openBillsLeft = tester.getTopLeft(find.text('Open bills')).dx;
-    for (final icon in [Icons.payments_outlined, Icons.link, Icons.task_alt]) {
+    // The bill's row card starts where the section heading does.
+    final billRow = find
+        .ancestor(
+          of: find.text('Team dinner'),
+          matching: find.byType(GroupedSurface),
+        )
+        .first;
+    expect(
+      tester.getTopLeft(find.text('Open bills')).dx,
+      tester.getTopLeft(billRow).dx,
+    );
+    // The footer's buttons sit below the list.
+    final listBottom = tester.getBottomLeft(billRow).dy;
+    for (final label in ['Record repayment', 'Link a payment']) {
       expect(
-        tester.getTopLeft(find.byIcon(icon)).dx,
-        billLeft,
-        reason: '$icon',
+        tester.getTopLeft(find.text(label)).dy,
+        greaterThan(listBottom),
+        reason: label,
       );
     }
-    expect(openBillsLeft, billLeft);
   });
 }

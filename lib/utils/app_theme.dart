@@ -379,15 +379,21 @@ ThemeData _buildAppTheme({
     ),
     chipTheme: const ChipThemeData(shape: StadiumBorder(side: BorderSide.none)),
     filledButtonTheme: FilledButtonThemeData(
-      style: FilledButton.styleFrom(
-        backgroundColor: accent,
-        foregroundColor: onAccent,
-        elevation: 6,
-        shadowColor: accentGlow,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppRadius.control),
-        ),
-      ),
+      style:
+          FilledButton.styleFrom(
+            backgroundColor: accent,
+            foregroundColor: onAccent,
+            shadowColor: accentGlow,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadius.control),
+            ),
+          ).copyWith(
+            // The accent glow only under a button that can be pressed: a
+            // disabled grey one sits flat.
+            elevation: WidgetStateProperty.resolveWith(
+              (states) => states.contains(WidgetState.disabled) ? 0 : 6,
+            ),
+          ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(

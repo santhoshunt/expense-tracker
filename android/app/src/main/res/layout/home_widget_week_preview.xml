@@ -54,7 +54,7 @@
                 android:layout_height="wrap_content"
                 android:maxLines="1"
                 android:text="₹2,850"
-                android:textColor="#FF7CA3"
+                android:textColor="#FFFFFF"
                 android:textSize="18sp"
                 android:textStyle="bold" />
 

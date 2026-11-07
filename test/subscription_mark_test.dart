@@ -64,6 +64,22 @@ void main() {
   Tx row(FinanceProvider p, String note) =>
       p.transactions.singleWhere((t) => t.note == note);
 
+  /// The add sheet's Subscription switch: a ListTile with its own Switch.
+  Finder subscriptionSwitch() => find.descendant(
+    of: find.widgetWithText(ListTile, 'Subscription'),
+    matching: find.byType(Switch),
+  );
+
+  /// Opens the add sheet's Tags, subscription, count in group.
+  Future<void> openExtras(WidgetTester tester) async {
+    await tester.pumpAndSettle();
+    final fold = find.byKey(const ValueKey('fold-extras'));
+    await tester.ensureVisible(fold);
+    await tester.pumpAndSettle();
+    await tester.tap(fold);
+    await tester.pumpAndSettle();
+  }
+
   testWidgets('the edit sheet switch marks the merchant on Save', (
     tester,
   ) async {
@@ -86,12 +102,16 @@ void main() {
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
 
-    final toggle = find.widgetWithText(SwitchListTile, 'Subscription');
+    await openExtras(tester);
+    final toggle = subscriptionSwitch();
     await tester.ensureVisible(toggle);
     await tester.pumpAndSettle();
     expect(find.text('Every payment to Prime counts'), findsOneWidget);
     expect(find.text('Yearly'), findsNothing, reason: 'cycle hidden while off');
     await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    // The cycles open under the switch, toward the pinned footer.
+    await tester.ensureVisible(find.text('Yearly'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Yearly'));
     await tester.pumpAndSettle();
@@ -132,14 +152,45 @@ void main() {
     );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    // A new entry keeps the switch under More details.
-    final more = find.text('More details');
-    await tester.ensureVisible(more);
-    await tester.pumpAndSettle();
-    await tester.tap(more);
-    await tester.pumpAndSettle();
-    final toggle = find.widgetWithText(SwitchListTile, 'Subscription');
+    // A new entry keeps the switch folded.
+    await openExtras(tester);
+    final toggle = subscriptionSwitch();
     expect(toggle, findsNothing, reason: 'no merchant yet');
+    expect(
+      find.text('Add Paid to or a note to mark a subscription'),
+      findsOneWidget,
+    );
+    // Income can never be a subscription: no line telling the user to try.
+    final income = find.text('Income');
+    await tester.ensureVisible(income);
+    await tester.pumpAndSettle();
+    await tester.tap(income);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Add Paid to or a note to mark a subscription'),
+      findsNothing,
+    );
+    // Money out to savings hides Paid to: only the note is offered.
+    final transfer = find.text('Transfer');
+    await tester.ensureVisible(transfer);
+    await tester.pumpAndSettle();
+    await tester.tap(transfer);
+    await tester.pumpAndSettle();
+    expect(find.text('Add a note to mark a subscription'), findsOneWidget);
+    expect(
+      find.text('Add Paid to or a note to mark a subscription'),
+      findsNothing,
+    );
+    final expense = find.text('Expense');
+    await tester.ensureVisible(expense);
+    await tester.pumpAndSettle();
+    await tester.tap(expense);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Add Paid to or a note to mark a subscription'),
+      findsOneWidget,
+    );
+    expect(find.text('Add a note to mark a subscription'), findsNothing);
     await tester.enterText(
       find.widgetWithText(TextFormField, 'Note (optional)'),
       'Spotify',
@@ -188,7 +239,8 @@ void main() {
     );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(SwitchListTile, 'Subscription'), findsOneWidget);
+    await openExtras(tester);
+    expect(subscriptionSwitch(), findsOneWidget);
   });
 
   testWidgets('the selection bar marks each merchant once, skips the '
@@ -208,10 +260,15 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('bulk-more-subscription')));
     await tester.pumpAndSettle();
-    expect(find.text('Mark 2 merchants as subscriptions'), findsOneWidget);
+    // The title, and the footer button that reads the same.
+    expect(find.text('Mark as subscriptions'), findsNWidgets(2));
     expect(find.textContaining('1 row skipped'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(FilledButton, 'Quarterly'));
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Quarterly'));
+    await tester.pump();
+    await tester.tap(
+      find.widgetWithText(FilledButton, 'Mark as subscriptions'),
+    );
     await tester.pumpAndSettle();
     expect(p.subscriptionPins, {
       'expense|prime': SubscriptionCycle.quarterly,
@@ -221,5 +278,62 @@ void main() {
     await tester.tap(find.text('Undo'));
     await tester.pumpAndSettle();
     expect(p.subscriptionPins, isEmpty);
+  });
+
+  testWidgets('the bulk subscription sheet fits 2x text with many '
+      'merchants', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final p = FinanceProvider();
+    await p.load();
+    final now = DateTime.now();
+    for (var i = 0; i < 12; i++) {
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'entertainment',
+        amount: 100.0 + i,
+        note: 'Demo Service $i',
+        date: DateTime(now.year, now.month, 1),
+      );
+    }
+    final s = SettingsProvider();
+    await s.load();
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: p),
+          ChangeNotifierProvider.value(value: s),
+        ],
+        child: MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: const Scaffold(body: TransactionsScreen()),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 700));
+
+    await tester.longPress(find.textContaining('Demo Service').first);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byTooltip('Select all or none'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('bulk-count-all')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('More actions'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('bulk-more-subscription')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining('and 9 more'), findsOneWidget);
+    final save = find.byKey(const ValueKey('editor-save'));
+    expect(save.hitTestable(), findsOneWidget);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(p.subscriptionPins, hasLength(12));
   });
 }

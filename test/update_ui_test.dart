@@ -46,6 +46,7 @@ class FakeInstaller implements UpdateInstaller {
 class FakeDownloader extends UpdateDownloader {
   int downloads = 0;
   int cleanups = 0;
+  String? failure;
 
   @override
   Future<File> download(
@@ -54,6 +55,8 @@ class FakeDownloader extends UpdateDownloader {
     DownloadCancel? cancel,
   }) async {
     downloads++;
+    final f = failure;
+    if (f != null) throw UpdateDownloadException(f);
     return File('${option.tag}.apk');
   }
 
@@ -195,6 +198,30 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Release page'), findsOneWidget);
+  });
+
+  testWidgets('a failed download stays on the sheet and Retry starts '
+      'again', (tester) async {
+    final (installer, downloader) = await openSheet(tester);
+    downloader.failure = 'The connection dropped. Try again.';
+    await tester.ensureVisible(find.text('Download & install'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Download & install'));
+    await tester.pumpAndSettle();
+    expect(find.text('The connection dropped. Try again.'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
+    expect(find.text('Release page'), findsAtLeastNWidgets(1));
+    expect(find.byType(UpdateSheet), findsOneWidget);
+    expect(installer.installs, 0);
+    expect(find.byType(SnackBar), findsNothing);
+
+    downloader.failure = null;
+    await tester.ensureVisible(find.text('Retry'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(downloader.downloads, 2);
+    expect(installer.installs, 1);
   });
 
   testWidgets('the first launch on the new version says so and points at '

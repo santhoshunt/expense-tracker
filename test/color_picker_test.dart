@@ -85,10 +85,13 @@ void main() {
     expect(HSVColor.fromColor(result!).value, lessThan(0.2));
   });
 
-  testWidgets('Add keeps a colour for next time', (tester) async {
+  testWidgets('Save colour keeps a colour for next time', (tester) async {
     await open(tester, initial: const Color(0xFF7F56D9));
-    expect(find.textContaining('Add keeps this colour'), findsOneWidget);
-    await tester.tap(find.text('Add'));
+    expect(
+      find.text('Save colour keeps this colour here for next time.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Save colour'));
     await tester.pumpAndSettle();
     expect(find.bySemanticsLabel('Saved colour #7F56D9'), findsOneWidget);
     await tester.tap(find.text('Cancel'));

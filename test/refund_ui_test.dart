@@ -324,7 +324,20 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(link);
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Gadget Hub · '));
+    // Two lines: the merchant, then the amount, date and what is left.
+    final picker = find.byType(BottomSheet).last;
+    expect(
+      find.descendant(
+        of: picker,
+        matching: find.textContaining(
+          '${fmtMoney(900)} · ${fmtDateCompact(p.transactions.firstWhere((t) => t.id == 'buy').date)} · ${fmtMoney(900)} left to refund',
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.descendant(of: picker, matching: find.text('Gadget Hub')),
+    );
     await tester.pumpAndSettle();
 
     expect(
@@ -369,6 +382,12 @@ void main() {
     await pump(tester, p, opener(p, 'rev'));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
+    // The alert sits in the Bank SMS group, folded until tapped.
+    final fold = find.byKey(const ValueKey('fold-sms'));
+    await tester.ensureVisible(fold);
+    await tester.pumpAndSettle();
+    await tester.tap(fold);
+    await tester.pumpAndSettle();
 
     final field = find.descendant(
       of: find.widgetWithText(TextFormField, 'Original SMS'),
@@ -412,5 +431,70 @@ void main() {
     expect(find.text('New rule'), findsOneWidget);
     expect(find.text('TASTY CORNER'), findsOneWidget);
     expect(find.text('Edit transaction'), findsOneWidget);
+  });
+
+  testWidgets('a rule made from the sheet moves its category field, and '
+      'Save keeps the rule\'s category without locking a guessed row', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    final row = inReview().copyWith(pending: false, categoryGuessed: true);
+    await p.restoreTransactions([row]);
+    await pump(tester, p, opener(p, 'rev'));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    final fold = find.byKey(const ValueKey('fold-sms'));
+    await tester.ensureVisible(fold);
+    await tester.pumpAndSettle();
+    await tester.tap(fold);
+    await tester.pumpAndSettle();
+    final field = find.descendant(
+      of: find.widgetWithText(TextFormField, 'Original SMS'),
+      matching: find.byType(EditableText),
+    );
+    await tester.ensureVisible(field);
+    await tester.pumpAndSettle();
+    await tester.tap(field);
+    await tester.pumpAndSettle();
+    final state = tester.state<EditableTextState>(field);
+    final start = row.smsBody.indexOf('TASTY CORNER');
+    state.userUpdateTextEditingValue(
+      TextEditingValue(
+        text: row.smsBody,
+        selection: TextSelection(
+          baseOffset: start,
+          extentOffset: start + 'TASTY CORNER'.length,
+        ),
+      ),
+      SelectionChangedCause.longPress,
+    );
+    await tester.pump();
+    state.showToolbar();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Make rule'));
+    await tester.pumpAndSettle();
+
+    // Classify as Shopping, then Create: the rule re-sorts the open row.
+    await tester.ensureVisible(find.text('Classify as'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Classify as'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Shopping').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Create'));
+    await tester.pumpAndSettle();
+    expect(p.transactions.single.categoryId, 'shopping');
+    expect(find.text('Edit transaction'), findsOneWidget);
+
+    final save = find.widgetWithText(FilledButton, 'Save changes');
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final saved = p.transactions.single;
+    expect(saved.categoryId, 'shopping');
+    expect(saved.categoryGuessed, isFalse);
+    expect(saved.userCategorized, isFalse);
   });
 }

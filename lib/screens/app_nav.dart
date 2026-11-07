@@ -154,6 +154,11 @@ class AppNav {
 
   Object? _accountsOwner;
   void Function(AccountType? type)? _showAccountType;
+  void Function(String accountId)? _showAccountCard;
+
+  /// A card asked for before Accounts registered (a cold start), for its
+  /// first frame to take.
+  String? _pendingAccountCard;
 
   Object? _dashboardOwner;
   VoidCallback? _showRecap;
@@ -190,15 +195,18 @@ class AppNav {
   void attachAccounts(
     Object owner, {
     required void Function(AccountType? type) showType,
+    void Function(String accountId)? showCard,
   }) {
     _accountsOwner = owner;
     _showAccountType = showType;
+    _showAccountCard = showCard;
   }
 
   void detachAccounts(Object owner) {
     if (_accountsOwner != owner) return;
     _accountsOwner = null;
     _showAccountType = null;
+    _showAccountCard = null;
   }
 
   void attachDashboard(
@@ -254,6 +262,26 @@ class AppNav {
   /// widgets land). Leaves open routes alone: callers switch the home tab
   /// themselves.
   void showBigBills() => _showBigBills?.call();
+
+  /// [accountId]'s tile on its Accounts page, scrolled into view (where the
+  /// Card cycle widget lands). Leaves open routes alone: callers switch the
+  /// home tab themselves. Before Accounts has registered, the id waits for
+  /// its first frame ([takePendingAccountCard]).
+  void showAccountCard(String accountId) {
+    final show = _showAccountCard;
+    if (show == null) {
+      _pendingAccountCard = accountId;
+      return;
+    }
+    show(accountId);
+  }
+
+  /// The card [showAccountCard] kept before Accounts registered, once.
+  String? takePendingAccountCard() {
+    final id = _pendingAccountCard;
+    _pendingAccountCard = null;
+    return id;
+  }
 
   void _toRoot(BuildContext context) =>
       Navigator.of(context).popUntil((r) => r.isFirst);

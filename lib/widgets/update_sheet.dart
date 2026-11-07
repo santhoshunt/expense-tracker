@@ -85,6 +85,9 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
   /// the line back.
   bool _linkFailed = false;
 
+  /// The last download's failure, said on the sheet; Retry starts again.
+  String? _failed;
+
   void _onLinkFail() {
     if (mounted) setState(() => _linkFailed = true);
   }
@@ -144,6 +147,7 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
       setState(() {
         _step = _Step.downloading;
         _received = 0;
+        _failed = null;
       });
     } finally {
       _starting = false;
@@ -157,6 +161,8 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
     final messenger = ScaffoldMessenger.of(context);
     final settings = context.read<SettingsProvider>();
     String? problem;
+    String? failed;
+    var keep = false;
     try {
       final apk = await widget.downloader.download(
         option,
@@ -176,13 +182,26 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
       if (problem != null) await settings.setUpdateInstallingTag(null);
     } on UpdateDownloadException catch (e) {
       if (cancel.cancelled) return;
-      problem = e.message;
+      failed = e.message;
+      keep = e.resumable;
     } finally {
-      // The install session holds its own copy once committed.
-      await widget.downloader.cleanup();
+      // The install session holds its own copy once committed. A dropped
+      // download keeps its partial file, so Retry resumes it; the next
+      // launch sweeps it otherwise.
+      if (!keep) await widget.downloader.cleanup();
     }
-    // Null: the install is under way (success closes the app) or the
-    // system stopped reporting; either way the sheet has nothing left.
+    if (failed != null) {
+      if (mounted) {
+        setState(() {
+          _step = _Step.choose;
+          _failed = failed;
+        });
+      }
+      return;
+    }
+    // A failed download stays on the sheet with Retry. Past it, null: the
+    // install is under way (success closes the app) or the system stopped
+    // reporting; either way the sheet has nothing left.
     if (mounted) Navigator.of(context).pop();
     if (problem == null) return;
     showAppToastOn(
@@ -239,11 +258,10 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
             groupValue: _picked.tag,
             onChanged: (tag) {
               if (busy || tag == null) return;
-              setState(
-                () => _picked = widget.updates.newer.firstWhere(
-                  (o) => o.tag == tag,
-                ),
-              );
+              setState(() {
+                _picked = widget.updates.newer.firstWhere((o) => o.tag == tag);
+                _failed = null;
+              });
             },
             child: Column(
               children: [
@@ -373,6 +391,22 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
     switch (_step) {
       case _Step.choose:
         return [
+          if (_failed != null) ...[
+            Row(
+              children: [
+                Icon(
+                  Icons.error_outline,
+                  size: 18,
+                  color: theme.colorScheme.error,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(_failed!, style: theme.textTheme.bodyMedium),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
           // Stacks the buttons, right-aligned, when one row cannot hold
           // them (320dp at 2x text).
           OverflowBar(
@@ -387,8 +421,10 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
               ),
               FilledButton.icon(
                 onPressed: _start,
-                icon: const Icon(Icons.system_update_alt),
-                label: const Text('Download & install'),
+                icon: Icon(
+                  _failed == null ? Icons.system_update_alt : Icons.refresh,
+                ),
+                label: Text(_failed == null ? 'Download & install' : 'Retry'),
               ),
             ],
           ),

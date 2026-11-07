@@ -599,7 +599,7 @@ void main() {
       );
       await p.linkDebitCard(card, bank);
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 32);
+      expect(data['version'], 33);
 
       SharedPreferences.setMockInitialValues({});
       final q = await loaded();
@@ -792,22 +792,49 @@ void main() {
       expect(after.linkedAccountId, bank);
     });
 
+    testWidgets('an unlinked debit card ticks Not linked yet', (tester) async {
+      final p = await loaded();
+      await p.addAccount(name: 'Zeta Card', type: AccountType.debitCard);
+      await tester.pumpWidget(accountsApp(p));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Link'));
+      await tester.pumpAndSettle();
+      expect(find.text('Which account does it draw from?'), findsOneWidget);
+      // No bank to offer: the sheet says so above the one row.
+      expect(
+        find.text('No bank accounts yet. Add one to link this card.'),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.ancestor(
+            of: find.text('Not linked yet'),
+            matching: find.byType(Row),
+          ),
+          matching: find.byIcon(Icons.check_circle),
+        ),
+        findsWidgets,
+      );
+      expect(find.byIcon(Icons.check_circle), findsOneWidget);
+    });
+
     testWidgets('New account offers five types, no Debit card', (tester) async {
       final p = await loaded();
       await tester.pumpWidget(accountsApp(p));
       await tester.pumpAndSettle();
       showAddAccountDialog(tester.element(find.byType(AccountsScreen)));
       await tester.pumpAndSettle();
-      final seg = tester.widget<SegmentedButton<AccountType>>(
-        find.byType(SegmentedButton<AccountType>),
-      );
-      expect(seg.segments.map((s) => s.value), [
-        AccountType.bank,
-        AccountType.creditCard,
-        AccountType.savings,
-        AccountType.wallet,
-        AccountType.cash,
-      ]);
+      const names = [
+        'Bank account',
+        'Credit card',
+        'Savings',
+        'Wallet',
+        'Cash',
+      ];
+      final tops = [for (final n in names) tester.getTopLeft(find.text(n)).dy];
+      expect(tops, [...tops]..sort());
+      expect(find.text('Debit card'), findsNothing);
     });
   });
 }

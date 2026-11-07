@@ -1,8 +1,11 @@
+import '../models/dashboard_layout.dart' show kAheadDays;
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import 'month_forecast.dart';
 import 'recurring_detector.dart';
 import 'reminder_schedule.dart';
 import 'safe_to_spend.dart';
+import 'subscriptions.dart';
 import 'upcoming_items.dart' show hitMarkedPaid, reminderCoversHit;
 
 /// The days ahead, one by one: the bills safe to spend and the Month-end
@@ -306,4 +309,44 @@ ForwardSeries buildForwardSeries(
     );
   }
   return ForwardSeries(start, perDay, days);
+}
+
+/// The Ahead tab's series: [kAheadDays] days from [now], starting at the
+/// headline net balance less the spend waiting for review that is dated
+/// today or earlier, with the savings subscriptions and the month's
+/// forecast per day. [headline] and [waiting] are the two parts of that
+/// start. The Ahead view and the Expected balance widgets both read it.
+({ForwardSeries series, double headline, double waiting}) aheadSeries(
+  FinanceProvider finance, {
+  required List<RecurringHit> patterns,
+  required Set<String> hidden,
+  required DateTime now,
+}) {
+  final forecast = computeMonthForecast(
+    finance,
+    patterns: patterns,
+    hidden: hidden,
+    now: now,
+    wholeMonth: true,
+  );
+  final savingsHits = [
+    for (final i in cachedSubscriptions(finance, hidden).active)
+      if (i.isSavings) i.hit,
+  ];
+  final headline = finance.hasNetAccounts ? finance.netWorth : finance.balance;
+  final tomorrow = DateTime(now.year, now.month, now.day + 1);
+  final waiting = finance.pendingTransactions
+      .where((t) => pendingIsSpend(finance, t) && t.date.isBefore(tomorrow))
+      .fold(0.0, (s, t) => s + t.amount);
+  final series = buildForwardSeries(
+    finance,
+    patterns: patterns,
+    savings: savingsHits,
+    hidden: hidden,
+    now: now,
+    to: DateTime(now.year, now.month, now.day + kAheadDays - 1),
+    perDay: forecast?.perDay ?? 0,
+    start: headline - waiting,
+  );
+  return (series: series, headline: headline, waiting: waiting);
 }

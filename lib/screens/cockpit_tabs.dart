@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart' show NumberFormat;
 import 'package:provider/provider.dart';
@@ -20,6 +22,7 @@ import '../widgets/budget_dialog.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/fold_section.dart';
 import '../widgets/info_tip.dart';
+import '../widgets/picker_sheet.dart';
 import '../widgets/rename_merchant_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/row_chevron.dart';
@@ -63,11 +66,10 @@ class BudgetsTab extends StatelessWidget {
         const SizedBox(height: 4),
         const _MonthlyCapSection(),
         const SizedBox(height: 24),
-        Text('Custom budgets', style: Theme.of(context).textTheme.titleMedium),
+        Text('Monthly budgets', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 4),
         Text(
-          'Extra monthly limits beside the overall cap, e.g. "Personal '
-          'spending" that leaves out family categories. Progress shows '
+          'Monthly limits beside the overall cap, and trips. Progress shows '
           'on the dashboard.',
           style: Theme.of(context).textTheme.bodySmall,
         ),
@@ -134,10 +136,10 @@ class RemindersTab extends StatelessWidget {
   }
 }
 
-/// Every tag with its all-time spend, transaction count and date span. Tags
-/// are added from a transaction's sheet or the bulk Tag action, so there is
-/// no add button here; a tap opens the tag editor: rename, merge into an
-/// existing tag, colour, delete, or see its transactions.
+/// Every tag with its all-time spend, transaction count and date span, and
+/// tags made with New tag that no payment carries yet. A tap opens the tag
+/// editor: rename, merge into an existing tag, colour, delete, or see its
+/// transactions.
 class TagsTab extends StatelessWidget {
   const TagsTab({super.key});
 
@@ -145,22 +147,35 @@ class TagsTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
     final summaries = finance.tagSummaries;
+    final empty = finance.emptyTags;
     final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
       children: [
-        _TabHeading(
-          label: Text('Tags', style: text.titleMedium),
-          tip: const InfoTip(
-            title: 'Tags',
-            message:
-                'Labels that cut across categories, like a trip or '
-                '"Reimbursable". A transaction can carry up to 5. Spent '
-                'counts money out as the dashboard does: your share of a '
-                'split bill, and no transfers. Tap a tag to rename it, give '
-                'it a colour, delete it or see its transactions. Renaming to '
-                'an existing tag merges the two.',
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: _TabHeading(
+                label: Text('Tags', style: text.titleMedium),
+                tip: const InfoTip(
+                  title: 'Tags',
+                  message:
+                      'Labels that cut across categories, like a trip or '
+                      '"Reimbursable". A transaction can carry up to 5. Spent '
+                      'counts money out as the dashboard does: your share of a '
+                      'split bill, and no transfers. Tap a tag to rename it, '
+                      'give it a colour, delete it or see its transactions. '
+                      'Renaming to an existing tag merges the two.',
+                ),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: () => showNewTagDialog(context),
+              icon: const Icon(Icons.add),
+              label: const Text('New tag'),
+            ),
+          ],
         ),
         const SizedBox(height: 4),
         Text(
@@ -177,11 +192,26 @@ class TagsTab extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (summaries.isEmpty)
+                if (summaries.isEmpty && empty.isEmpty)
                   const EmptyState(
                     compact: true,
                     icon: Icons.label_outline,
-                    message: 'Add tags when you add or edit a transaction.',
+                    message:
+                        'Add tags when you add or edit a transaction, or '
+                        'with New tag.',
+                  ),
+                for (final tag in empty)
+                  ListTile(
+                    dense: true,
+                    leading: Icon(
+                      Icons.sell,
+                      size: 20,
+                      color: finance.tagColor(tag) ?? scheme.tertiary,
+                    ),
+                    title: Text(tag),
+                    subtitle: Text('No payments yet', style: text.bodySmall),
+                    trailing: rowChevron(context),
+                    onTap: () => showTagEditor(context, tag),
                   ),
                 for (final s in summaries)
                   ListTile(
@@ -189,9 +219,7 @@ class TagsTab extends StatelessWidget {
                     leading: Icon(
                       Icons.sell,
                       size: 20,
-                      color:
-                          finance.tagColor(s.tag) ??
-                          Theme.of(context).colorScheme.tertiary,
+                      color: finance.tagColor(s.tag) ?? scheme.tertiary,
                     ),
                     title: Text(s.tag),
                     trailing: rowChevron(context),
@@ -471,6 +499,10 @@ class _SubscriptionTile extends StatelessWidget {
     // Marked paid by hand from Upcoming or the heatmap: the lasting way
     // back once that toast is gone.
     final paidByHand = hitMarkedPaid(context.read<FinanceProvider>(), hit);
+    // The cycle the row shows.
+    final shownCycle =
+        context.read<FinanceProvider>().subscriptionPinOf(hit.key) ??
+        SubscriptionCycle.monthly;
     final choice = await showModalBottomSheet<String>(
       context: context,
       useSafeArea: true,
@@ -482,6 +514,14 @@ class _SubscriptionTile extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // What the actions are for, as the reminder actions sheet
+              // heads its own. One string, so the name is not found twice.
+              ListTile(
+                title: Text(
+                  '${hit.label} · ${shownCycle.label}',
+                  style: Theme.of(ctx).textTheme.titleMedium,
+                ),
+              ),
               ListTile(
                 leading: const Icon(Icons.list_alt),
                 title: const Text('See transactions'),
@@ -594,26 +634,28 @@ class _SubscriptionTile extends StatelessWidget {
       case 'cycle':
         final finance = context.read<FinanceProvider>();
         final current = finance.subscriptionPinOf(hit.key);
-        final next = await showModalBottomSheet<SubscriptionCycle>(
+        // Four rows: the picker leaves its search out.
+        final picked = await showPickerSheet<SubscriptionCycle>(
           context: context,
-          useSafeArea: true,
-          showDragHandle: true,
-          builder: (ctx) => SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final c in SubscriptionCycle.values)
-                  ListTile(
-                    title: Text(c.label),
-                    trailing: c == current ? const Icon(Icons.check) : null,
-                    onTap: () => Navigator.pop(ctx, c),
-                  ),
-              ],
-            ),
-          ),
+          title: 'Billing cycle',
+          subtitle: hit.label,
+          items: [
+            for (final c in SubscriptionCycle.values)
+              PickerItem(value: c, label: c.label),
+          ],
+          selected: current,
         );
-        if (next == null || next == current) return;
+        final next = picked?.value;
+        if (next == null || next == current || !context.mounted) return;
+        final before = finance.subscriptionPinsBefore([hit.key]);
         await finance.setSubscriptionPins({hit.key: next});
+        if (!context.mounted) return;
+        showUndoSnackBar(
+          context,
+          '"${hit.label}" is now ${next.label.toLowerCase()}',
+          () => finance.setSubscriptionPins(before),
+          icon: Icons.autorenew,
+        );
       case 'unmark':
         final finance = context.read<FinanceProvider>();
         final settings = context.read<SettingsProvider>();
@@ -687,6 +729,11 @@ class _MonthlyCapSectionState extends State<_MonthlyCapSection> {
   /// field kept showing whatever was typed.
   String? _capError;
 
+  /// True for 2 seconds after a commit that changed the cap: the helper
+  /// reads 'Saved', the cue that a blur saved it.
+  bool _saved = false;
+  Timer? _savedTimer;
+
   @override
   void deactivate() {
     // Commit here rather than in dispose(): committing notifies
@@ -704,6 +751,7 @@ class _MonthlyCapSectionState extends State<_MonthlyCapSection> {
     // Detach first: disposing a FocusNode fires a final focus-change, which
     // would otherwise re-enter _commitCap during teardown.
     _capFocus.removeListener(_onCapFocusChange);
+    _savedTimer?.cancel();
     _capFocus.dispose();
     _capCtrl.dispose();
     super.dispose();
@@ -733,6 +781,13 @@ class _MonthlyCapSectionState extends State<_MonthlyCapSection> {
     if (interactive && mounted) {
       final shown = _capText(v);
       if (_capCtrl.text != shown) _capCtrl.text = shown;
+      if (v != _settings.monthlyBudget) {
+        _savedTimer?.cancel();
+        setState(() => _saved = true);
+        _savedTimer = Timer(const Duration(seconds: 2), () {
+          if (mounted) setState(() => _saved = false);
+        });
+      }
     }
     _settings.setMonthlyBudget(v);
   }
@@ -799,7 +854,9 @@ class _MonthlyCapSectionState extends State<_MonthlyCapSection> {
                   ),
                 ),
                 prefixText: '₹ ',
-                helperText: 'Leave blank to turn the budget off',
+                helperText: _saved
+                    ? 'Saved'
+                    : 'Leave blank to turn the budget off',
                 errorText: _capError,
                 suffixIcon: InfoTip(
                   title: 'Monthly cap',
@@ -871,7 +928,7 @@ class _CustomBudgetsSection extends StatelessWidget {
               const EmptyState(
                 compact: true,
                 icon: Icons.track_changes,
-                message: 'No custom budgets yet.',
+                message: 'No budgets yet.',
               ),
             for (final b in finance.budgets)
               ListTile(
@@ -882,7 +939,7 @@ class _CustomBudgetsSection extends StatelessWidget {
                   radius: 16,
                   backgroundColor: scheme.primary.withValues(alpha: 0.15),
                   child: Icon(
-                    Icons.track_changes,
+                    budgetIcon(b),
                     color: categoryGlyphColor(context, scheme.primary),
                     size: 18,
                   ),

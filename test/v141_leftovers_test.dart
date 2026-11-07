@@ -6,10 +6,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/subscription_cycle.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/category_management.dart';
 import 'package:expense_tracker/services/update_downloader.dart';
 import 'package:expense_tracker/services/update_installer.dart';
@@ -17,6 +19,7 @@ import 'package:expense_tracker/services/update_service.dart';
 import 'package:expense_tracker/services/weekly_digest.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/delta_note.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 import 'package:expense_tracker/widgets/update_sheet.dart';
 import 'package:expense_tracker/widgets/weekly_digest_sheet.dart';
 
@@ -123,7 +126,7 @@ void main() {
 
     final error = find.text("Couldn't save the category. Try again.");
     expect(
-      find.descendant(of: find.byType(AlertDialog), matching: error),
+      find.descendant(of: find.byType(EditorSheetBody), matching: error),
       findsOneWidget,
     );
     expect(find.byType(SnackBar), findsNothing);
@@ -136,6 +139,56 @@ void main() {
           .onPressed,
       isNotNull,
     );
+  });
+
+  testWidgets('a failed New account create pins its error above Create, '
+      'with the keyboard down', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final p = _FailingAccountFinance();
+    await p.load();
+    final s = SettingsProvider();
+    await s.load();
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<FinanceProvider>.value(value: p),
+          ChangeNotifierProvider.value(value: s),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showAddAccountDialog(
+                  context,
+                  initialType: AccountType.savings,
+                ),
+                child: const Text('new'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('new'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'Demo RD');
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+    await tester.tap(find.widgetWithText(FilledButton, 'Create'));
+    await tester.pumpAndSettle();
+
+    final error = find.text("Couldn't create the account. Try again.");
+    expect(error.hitTestable(), findsOneWidget);
+    expect(
+      tester.getBottomLeft(error).dy,
+      lessThan(tester.getTopLeft(find.byKey(const ValueKey('editor-save'))).dy),
+    );
+    // The keyboard went down, so the pinned line shows on a phone too.
+    expect(tester.testTextInput.isVisible, isFalse);
   });
 
   group('digest Undo', () {
@@ -199,9 +252,9 @@ void main() {
       // payment is the lower one.
       await tester.tap(inSheet(find.text(categoryById('food').label)).last);
       await tester.pumpAndSettle();
-      expect(find.text('Delete transaction'), findsOneWidget);
-      await tester.ensureVisible(find.text('Delete transaction'));
+      await tester.tap(find.byTooltip('Transaction actions'));
       await tester.pumpAndSettle();
+      expect(find.text('Delete transaction'), findsOneWidget);
       await tester.tap(find.text('Delete transaction'));
       await tester.pumpAndSettle();
     }
@@ -305,6 +358,20 @@ class _FailingFinance extends FinanceProvider {
     required IconData icon,
     required Color color,
     bool isTransfer = false,
+  }) async => throw StateError('disk full');
+}
+
+class _FailingAccountFinance extends FinanceProvider {
+  @override
+  Future<String> addAccount({
+    required String name,
+    required AccountType type,
+    double? creditLimit,
+    String? kind,
+    String? kindIcon,
+    String? service,
+    bool holdsPoints = false,
+    double? pointValue,
   }) async => throw StateError('disk full');
 }
 

@@ -12,6 +12,7 @@ import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 import 'package:expense_tracker/utils/format.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 import 'package:expense_tracker/widgets/reminder_editor_dialog.dart';
 
 import 'dashboard_test_utils.dart';
@@ -140,7 +141,8 @@ void main() {
       // A reminder row closes the sheet and opens its editor.
       await tester.tap(inSheet(find.text('Insurance')));
       await tester.pumpAndSettle();
-      expect(find.byType(BottomSheet), findsNothing);
+      // The editor is a sheet of its own now, in place of the list.
+      expect(find.byType(EditorSheetBody), findsOneWidget);
       expect(find.text('Edit reminder'), findsOneWidget);
     });
 

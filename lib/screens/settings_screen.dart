@@ -23,8 +23,9 @@ import '../services/sms_source.dart';
 import '../utils/app_palettes.dart';
 import '../utils/app_theme.dart';
 import '../utils/text_scale.dart';
+import '../widgets/editor_sheet.dart';
+import '../widgets/export_sheet.dart';
 import '../widgets/pdf_export_flow.dart';
-import '../widgets/picker_sheet.dart';
 import '../widgets/undo_snackbar.dart';
 import '../widgets/hue_color_picker.dart';
 import '../widgets/glossy.dart';
@@ -537,10 +538,13 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
             // Its own row: beside the email it left the address about
             // eleven characters.
             ListTile(
-              leading: const Icon(Icons.link_off),
-              title: const InfoLabel(
+              leading: Icon(Icons.link_off, color: scheme.error),
+              title: InfoLabel(
                 icon: true,
-                label: Text('Disconnect'),
+                label: Text(
+                  'Disconnect',
+                  style: TextStyle(color: scheme.error),
+                ),
                 tip: InfoTip(
                   title: 'Disconnect',
                   message:
@@ -567,33 +571,32 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                       '28 days. An empty ledger is never uploaded on schedule.',
                 ),
               ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(DriveBackupService.freqLabel(_freq)),
-                  const Icon(Icons.arrow_drop_down),
-                ],
-              ),
-              onTap: () async {
-                final result = await showPickerSheet<String>(
-                  context: context,
-                  title: 'Frequency',
-                  items: [
+              // The three choices under the row, one tap each.
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: SegmentedButton<String>(
+                  key: const ValueKey('drive-frequency'),
+                  showSelectedIcon: false,
+                  segments: [
                     for (final f in const ['daily', 'weekly', 'monthly'])
-                      PickerItem(
+                      ButtonSegment(
                         value: f,
-                        label: DriveBackupService.freqLabel(f),
+                        label: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(DriveBackupService.freqLabel(f)),
+                        ),
                       ),
                   ],
-                  selected: _freq,
-                );
-                final v = result?.value;
-                if (v == null || !context.mounted) return;
-                // Optimistic like every other setting: the visible value
-                // must not snap back while the prefs write completes.
-                setState(() => _freq = v);
-                await context.read<DriveBackupService>().setFrequency(v);
-              },
+                  selected: {_freq},
+                  onSelectionChanged: (s) async {
+                    final v = s.first;
+                    // Optimistic like every other setting: the visible value
+                    // must not snap back while the prefs write completes.
+                    setState(() => _freq = v);
+                    await context.read<DriveBackupService>().setFrequency(v);
+                  },
+                ),
+              ),
             ),
             ListTile(
               leading: _uploading
@@ -1068,19 +1071,6 @@ class _DataSection extends StatefulWidget {
 class _DataSectionState extends State<_DataSection> {
   final _smsImport = SmsImportService();
 
-  Future<void> _pickAndRun({
-    required String title,
-    required List<PickerItem<String>> items,
-  }) async {
-    final result = await showPickerSheet<String>(
-      context: context,
-      title: title,
-      items: items,
-    );
-    final action = result?.value;
-    if (action != null && mounted) await _handleBackupAction(action);
-  }
-
   /// Runs [work] behind a modal spinner so a full-ledger export/import isn't
   /// a frozen, feedback-free screen. The barrier also blocks a second tap
   /// while the first operation is still writing.
@@ -1119,38 +1109,13 @@ class _DataSectionState extends State<_DataSection> {
     }
   }
 
-  /// Which dates a CSV/PDF export should cover. `cancelled` aborts the
-  /// export; a null range with cancelled=false means everything.
-  Future<({bool cancelled, DateTimeRange? range})> _askExportRange() async {
-    final choice = await showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('Export which dates?'),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, 'all'),
-            child: const Text('All transactions'),
-          ),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, 'range'),
-            child: const Text('Choose dates…'),
-          ),
-        ],
-      ),
-    );
-    if (choice == null || !mounted) return (cancelled: true, range: null);
-    if (choice == 'all') return (cancelled: false, range: null);
-    final now = DateTime.now();
-    final picked = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(now.year, now.month, now.day),
-    );
-    if (picked == null) return (cancelled: true, range: null);
-    return (cancelled: false, range: picked);
-  }
-
-  Future<void> _handleBackupAction(String action) async {
+  /// [range] is the export sheet's dates for a CSV or PDF (null for all);
+  /// [replace] is the import sheet's Merge or Replace.
+  Future<void> _handleBackupAction(
+    String action, {
+    bool replace = false,
+    DateTimeRange? range,
+  }) async {
     final messenger = ScaffoldMessenger.of(context);
     final finance = context.read<FinanceProvider>();
     try {
@@ -1172,8 +1137,14 @@ class _DataSectionState extends State<_DataSection> {
             );
           }
         case 'export_pdf':
-          // The shared flow: dates, spinner, report and its own toasts.
-          await exportPdfWithRange(context, finance);
+          // The shared flow: spinner, report and its own toasts. The export
+          // sheet already asked which dates.
+          await exportPdfWithRange(
+            context,
+            finance,
+            range: range,
+            rangeChosen: true,
+          );
         case 'delete_all':
           final includeConfig = await _confirmDeleteAll();
           if (includeConfig == null) return;
@@ -1193,11 +1164,9 @@ class _DataSectionState extends State<_DataSection> {
             icon: Icons.delete_forever_outlined,
           );
         case 'export_csv':
-          final sel = await _askExportRange();
-          if (sel.cancelled) return;
           final path = await _withBusy(
             'Building CSV…',
-            () => BackupService.exportCsv(finance, range: sel.range),
+            () => BackupService.exportCsv(finance, range: range),
           );
           if (path != null && path.isNotEmpty) {
             showAppToastOn(
@@ -1208,8 +1177,6 @@ class _DataSectionState extends State<_DataSection> {
             );
           }
         case 'import_json':
-          final replace = await _askImportMode();
-          if (replace == null) return;
           final txAdded = await _withBusy(
             'Importing backup…',
             () => BackupService.importJson(
@@ -1228,8 +1195,6 @@ class _DataSectionState extends State<_DataSection> {
             icon: Icons.file_download_done,
           );
         case 'import_csv':
-          final replace = await _askImportMode();
-          if (replace == null) return;
           final added = await _withBusy(
             'Importing CSV…',
             () => BackupService.importCsv(finance, replace: replace),
@@ -1252,26 +1217,24 @@ class _DataSectionState extends State<_DataSection> {
             await driveService.connect();
           }
           if (!mounted) return;
-          final replaceFromDrive = await _askImportMode();
-          if (replaceFromDrive == null || !mounted) return;
           final settingsProvider = context.read<SettingsProvider>();
           final restored = await _withBusy('Restoring cloud backup…', () async {
             final backup = await driveService.downloadLatest(interactive: true);
             final added = await finance.importData(
               backup.data,
-              replace: replaceFromDrive,
+              replace: replace,
             );
             // Same rule as the file import: the preference block only
             // applies on replace — merge keeps the device's own settings.
             final block = backup.data['settings'];
-            if (replaceFromDrive && block is Map<String, dynamic>) {
+            if (replace && block is Map<String, dynamic>) {
               await settingsProvider.applyBackupMap(block);
             }
             return (backup: backup, added: added);
           });
           showAppToastOn(
             messenger,
-            replaceFromDrive
+            replace
                 ? 'Restored ${restored.added} transactions from the '
                       'cloud backup '
                       '(${DriveBackupService.formatLastBackup(restored.backup.createdAt)}).'
@@ -1324,18 +1287,35 @@ class _DataSectionState extends State<_DataSection> {
               Text(
                 'This permanently deletes $count transaction${count == 1 ? '' : 's'} '
                 'and all accounts. '
-                'This cannot be undone. Export a JSON backup first if you may '
-                'need it.',
+                'This cannot be undone.',
               ),
-              const SizedBox(height: 8),
+              // Closes this dialog first: the export runs on the page.
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: TextButton(
+                  key: const ValueKey('delete-all-export'),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _showExport();
+                  },
+                  child: const Text('Export a backup first'),
+                ),
+              ),
               CheckboxListTile(
                 contentPadding: EdgeInsets.zero,
                 controlAffinity: ListTileControlAffinity.leading,
+                // Everything clearAll(includeConfig: true) removes.
                 title: const Text(
-                  'Also delete rules, categories, groups '
-                  '& budgets',
+                  'Also delete rules, categories, groups, budgets, '
+                  'reminders, tags, tag colours, subscription marks, bills '
+                  'marked paid and merchant names',
                 ),
-                subtitle: const Text('Resets them to the built-in defaults'),
+                // clearAll reseeds only rules, import rules and groups, and
+                // resets built-in category edits; the rest goes.
+                subtitle: const Text(
+                  'Built-in rules, categories and groups come back. '
+                  'Everything else listed is deleted.',
+                ),
                 value: includeConfig,
                 onChanged: (v) => setState(() => includeConfig = v ?? false),
               ),
@@ -1346,13 +1326,18 @@ class _DataSectionState extends State<_DataSection> {
               onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
+            // Names what goes: the button follows the box.
             FilledButton(
               style: FilledButton.styleFrom(
                 backgroundColor: Theme.of(ctx).colorScheme.error,
                 foregroundColor: Theme.of(ctx).colorScheme.onError,
               ),
               onPressed: () => Navigator.pop(ctx, includeConfig),
-              child: const Text('Delete everything'),
+              child: Text(
+                includeConfig
+                    ? 'Delete everything'
+                    : 'Delete transactions and accounts',
+              ),
             ),
           ],
         ),
@@ -1360,69 +1345,30 @@ class _DataSectionState extends State<_DataSection> {
     );
   }
 
-  /// true = replace everything, false = merge, null = cancelled.
-  /// States the blast radius in numbers — the sibling delete-all dialog
-  /// counts what it destroys, and Replace destroys exactly as much.
-  Future<bool?> _askImportMode() {
+  /// The import sheet: what to import and Merge or Replace, then the
+  /// chosen import runs.
+  Future<void> _showImport() async {
     final finance = context.read<FinanceProvider>();
-    // Confirmed + pending: Replace clears the whole ledger, and
-    // `transactions` alone leaves out rows still awaiting review.
-    final txCount = finance.transactionCount;
-    final acctCount = finance.accounts.length;
-    return showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        // Two paragraphs + three actions overflow a landscape viewport.
-        scrollable: true,
-        title: const Text('Import backup'),
-        content: Text(
-          'Merge keeps your current data and adds entries from the backup '
-          'that are not already present.\n\n'
-          'Replace deletes your current $txCount transaction'
-          '${txCount == 1 ? '' : 's'} and $acctCount account'
-          '${acctCount == 1 ? '' : 's'} (including manually created ones), '
-          'then restores only the backup.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Replace'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Merge'),
-          ),
-        ],
+    final picked = await showEditorSheet<({String format, bool replace})>(
+      context,
+      builder: (_) => _ImportSheet(
+        // Confirmed + pending: Replace clears the whole ledger, and
+        // `transactions` alone leaves out rows still awaiting review.
+        txCount: finance.transactionCount,
+        acctCount: finance.accounts.length,
       ),
     );
+    if (picked == null || !mounted) return;
+    await _handleBackupAction(picked.format, replace: picked.replace);
   }
 
-  /// The export picker, shared by the Export tile and the Delete all tip's
-  /// "Export a backup" link.
-  void _showExport() => _pickAndRun(
-    title: 'Export',
-    items: const [
-      PickerItem(
-        value: 'export_json',
-        label: 'Backup (JSON)',
-        leading: Icon(Icons.data_object, size: 20),
-      ),
-      PickerItem(
-        value: 'export_csv',
-        label: 'Transactions (CSV)',
-        leading: Icon(Icons.table_chart_outlined, size: 20),
-      ),
-      PickerItem(
-        value: 'export_pdf',
-        label: 'Report (PDF)',
-        leading: Icon(Icons.picture_as_pdf_outlined, size: 20),
-      ),
-    ],
-  );
+  /// The export sheet, shared by the Export tile, the Delete all tip's
+  /// "Export a backup" link and the delete dialog's Export a backup first.
+  Future<void> _showExport() async {
+    final picked = await showExportSheet(context);
+    if (picked == null || !mounted) return;
+    await _handleBackupAction(picked.format, range: picked.range);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1475,26 +1421,7 @@ class _DataSectionState extends State<_DataSection> {
               style: Theme.of(context).textTheme.bodySmall,
             ),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => _pickAndRun(
-              title: 'Import',
-              items: const [
-                PickerItem(
-                  value: 'import_json',
-                  label: 'Backup (JSON)',
-                  leading: Icon(Icons.data_object, size: 20),
-                ),
-                PickerItem(
-                  value: 'import_csv',
-                  label: 'Transactions (CSV)',
-                  leading: Icon(Icons.table_chart_outlined, size: 20),
-                ),
-                PickerItem(
-                  value: 'import_drive',
-                  label: 'From Google Drive',
-                  leading: Icon(Icons.cloud_download_outlined, size: 20),
-                ),
-              ],
-            ),
+            onTap: _showImport,
           ),
           ListTile(
             leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
@@ -1524,6 +1451,98 @@ class _DataSectionState extends State<_DataSection> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The import sheet: what to import, then Merge or Replace, with what
+/// Replace deletes counted. Pops the backup action key ('import_json',
+/// 'import_csv', 'import_drive') and the mode.
+class _ImportSheet extends StatefulWidget {
+  final int txCount;
+  final int acctCount;
+
+  const _ImportSheet({required this.txCount, required this.acctCount});
+
+  @override
+  State<_ImportSheet> createState() => _ImportSheetState();
+}
+
+class _ImportSheetState extends State<_ImportSheet> {
+  var _format = 'import_json';
+  var _replace = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final text = theme.textTheme;
+    final scheme = theme.colorScheme;
+    final tx = widget.txCount;
+    final acct = widget.acctCount;
+    final sheet = EditorSheetBody(
+      title: _format == 'import_csv' ? 'Import transactions' : 'Import backup',
+      footerLabel: _replace ? 'Replace and import' : 'Import',
+      onSave: () =>
+          Navigator.pop(context, (format: _format, replace: _replace)),
+      children: [
+        Wrap(
+          key: const ValueKey('import-format'),
+          spacing: 8,
+          runSpacing: 4,
+          children: [
+            for (final (value, label) in const [
+              ('import_json', 'Backup (JSON)'),
+              ('import_csv', 'Transactions (CSV)'),
+              ('import_drive', 'From Google Drive'),
+            ])
+              ChoiceChip(
+                label: Text(label),
+                selected: _format == value,
+                onSelected: (_) => setState(() => _format = value),
+              ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        SegmentedButton<bool>(
+          key: const ValueKey('import-mode'),
+          showSelectedIcon: false,
+          segments: const [
+            ButtonSegment(value: false, label: Text('Merge')),
+            ButtonSegment(value: true, label: Text('Replace')),
+          ],
+          selected: {_replace},
+          onSelectionChanged: (s) => setState(() => _replace = s.first),
+        ),
+        const SizedBox(height: 8),
+        // States the blast radius in numbers, as the delete-all dialog
+        // counts what it destroys.
+        Text(
+          _replace
+              ? 'Replace deletes your current $tx transaction'
+                    '${tx == 1 ? '' : 's'} and $acct account'
+                    '${acct == 1 ? '' : 's'} (including manually created '
+                    'ones), then restores only the backup.'
+              : 'Merge keeps your current data and adds entries from the '
+                    'backup that are not already present.',
+          style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+      ],
+    );
+    // Replace deletes before it restores, and nothing asks again after the
+    // file picker: the button says so, in the error style. A Theme either
+    // way, so switching keeps the sheet's state.
+    return Theme(
+      data: _replace
+          ? theme.copyWith(
+              filledButtonTheme: FilledButtonThemeData(
+                style: FilledButton.styleFrom(
+                  backgroundColor: scheme.error,
+                  foregroundColor: scheme.onError,
+                ),
+              ),
+            )
+          : theme,
+      child: sheet,
     );
   }
 }

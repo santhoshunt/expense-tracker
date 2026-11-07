@@ -18,6 +18,7 @@ import '../services/budget_widget_service.dart';
 import '../services/drive_backup_service.dart';
 import '../services/home_widgets_service.dart';
 import '../services/import_checks.dart';
+import '../services/import_health.dart';
 import '../services/launch_actions.dart';
 import '../services/monthly_recap.dart';
 import '../services/notification_service.dart';
@@ -32,6 +33,7 @@ import '../services/update_installer.dart';
 import '../services/update_service.dart';
 import '../utils/format.dart';
 import '../utils/haptics.dart';
+import '../widgets/editor_sheet.dart';
 import '../widgets/glossy.dart';
 import '../widgets/lock_gate.dart';
 import '../widgets/motion.dart';
@@ -42,6 +44,7 @@ import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
 import 'dashboard_screen.dart';
 import 'home_app_bar.dart';
+import 'search_screen.dart';
 import 'transactions_screen.dart';
 
 /// An import's figures for its toast: "8 added, 2 to review" when some rows
@@ -55,6 +58,103 @@ String importCountsText(int imported, int counted) {
   if (added > 0 && toReview > 0) return '$added added, $toReview to review';
   if (added > 0) return '$added added';
   return '$toReview to review';
+}
+
+/// Import from SMS: how far back to scan. Null when closed; otherwise the
+/// days to look back, or the picked dates, or neither for "since last
+/// scan". [lastScan] names when that was.
+Future<({Duration? lookback, DateTimeRange? range})?> askImportRange(
+  BuildContext context, {
+  DateTime? lastScan,
+}) {
+  Duration? lookback;
+  DateTimeRange? range;
+  return showEditorSheet<({Duration? lookback, DateTimeRange? range})>(
+    context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setState) {
+        final theme = Theme.of(ctx);
+        final now = DateTime.now();
+        Widget chip(String key, String label, bool on, VoidCallback onTap) =>
+            ChoiceChip(
+              key: ValueKey('import-$key'),
+              label: Text(label),
+              selected: on,
+              onSelected: (_) => onTap(),
+            );
+        return EditorSheetBody(
+          title: 'Import from SMS',
+          footerLabel: 'Scan messages',
+          onSave: () => Navigator.pop(ctx, (lookback: lookback, range: range)),
+          children: [
+            const Text(
+              'Bank and UPI alert messages are scanned on-device only. '
+              'Nothing is uploaded.',
+            ),
+            const SizedBox(height: 16),
+            Text('How far back', style: theme.textTheme.titleSmall),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                chip(
+                  'since',
+                  lastScan == null
+                      ? 'Since last scan'
+                      : 'Since last scan (${fmtDateMaybeTime(lastScan)})',
+                  lookback == null && range == null,
+                  () => setState(() {
+                    lookback = null;
+                    range = null;
+                  }),
+                ),
+                for (final (days, label) in const [
+                  (7, '7 days'),
+                  (30, '30 days'),
+                  (90, '90 days'),
+                  (365, '1 year'),
+                ])
+                  chip(
+                    '$days',
+                    label,
+                    lookback?.inDays == days,
+                    () => setState(() {
+                      lookback = Duration(days: days);
+                      range = null;
+                    }),
+                  ),
+                // The picker opens at once; the chip then names its dates.
+                chip(
+                  'custom',
+                  range == null ? 'Custom…' : fmtDayRange(range!, now),
+                  range != null,
+                  () async {
+                    final picked = await showDateRangePicker(
+                      context: ctx,
+                      firstDate: DateTime(2000),
+                      lastDate: now,
+                      initialDateRange:
+                          range ??
+                          DateTimeRange(
+                            start: now.subtract(const Duration(days: 30)),
+                            end: now,
+                          ),
+                    );
+                    if (picked == null || !ctx.mounted) return;
+                    setState(() {
+                      lookback = null;
+                      range = picked;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }
 
 class HomeScreen extends StatefulWidget {
@@ -524,6 +624,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
             range: DateTimeRange(start: today, end: today),
           ),
         );
+      case LaunchAction.openAhead:
+        _showSection(DashboardSection.projection);
+      // The Card cycle widget: the card on Accounts. Not openAccounts, which
+      // pops routes and would skip the add sheet's unsaved-changes guard.
+      case LaunchAction.openCard:
+        final id = LaunchActions.instance.takeCardId();
+        setState(() => _showTab(kHomeTabAccounts));
+        if (id == null) break;
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => AppNav.instance.showAccountCard(id),
+        );
+      case LaunchAction.openSearch:
+        // Already open: a second one would need a second Back.
+        if (SearchScreen.isOpen) break;
+        Navigator.push(
+          context,
+          MaterialPageRoute<void>(builder: (_) => const SearchScreen()),
+        );
     }
   }
 
@@ -928,94 +1046,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   static const _titles = ['Dashboard', 'Transactions', 'Accounts'];
 
-  // Sentinels for the scan-window radio group.
-  static const Duration _sinceLastScan = Duration.zero;
-  static const Duration _customRange = Duration(days: -1);
-
   Future<void> _importFromSms() async {
     final messenger = ScaffoldMessenger.of(context);
     final finance = context.read<FinanceProvider>();
 
-    var range = _sinceLastScan;
-    final proceed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: const Text('Import from SMS'),
-          // Six radio rows + intro text overflow a landscape screen.
-          scrollable: true,
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Bank and UPI alert messages are scanned on-device only. '
-                'Nothing is uploaded. Choose how far back to scan:',
-              ),
-              const SizedBox(height: 8),
-              RadioGroup<Duration>(
-                groupValue: range,
-                onChanged: (v) => setDialogState(() => range = v!),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (final (label, d) in [
-                      ('New messages since last scan', _sinceLastScan),
-                      ('Last 7 days', Duration(days: 7)),
-                      ('Last 30 days', Duration(days: 30)),
-                      ('Last 90 days', Duration(days: 90)),
-                      ('Last year', Duration(days: 365)),
-                      ('Custom date range…', _customRange),
-                    ])
-                      RadioListTile<Duration>(
-                        dense: true,
-                        contentPadding: EdgeInsets.zero,
-                        title: Text(label),
-                        value: d,
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Scan messages'),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (proceed != true) return;
-
-    DateTimeRange? customRange;
-    if (range == _customRange) {
-      if (!mounted) return;
-      customRange = await showDateRangePicker(
-        context: context,
-        firstDate: DateTime(2000),
-        lastDate: DateTime.now(),
-        initialDateRange: DateTimeRange(
-          start: DateTime.now().subtract(const Duration(days: 30)),
-          end: DateTime.now(),
-        ),
-      );
-      if (customRange == null) return; // picker cancelled
-    }
+    final lastScan = await ImportHealth.lastScan();
+    if (!mounted) return;
+    final scan = await askImportRange(context, lastScan: lastScan);
+    if (scan == null) return;
 
     setState(() => _importing = true);
     try {
       final result = await _smsImport.run(
         finance,
-        lookback: range == _sinceLastScan || range == _customRange
-            ? null
-            : range,
-        range: customRange,
+        lookback: scan.lookback,
+        range: scan.range,
       );
       if (result == null) {
         if (_smsImport.lastPermission == SmsPermission.blocked) {
@@ -1088,7 +1133,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           '2. Tap the ⋮ menu (top right) → "Allow restricted settings" '
           '(Android 13+; skip if not shown)\n'
           '3. Open Permissions → SMS → Allow\n'
-          '4. Return here and tap the SMS icon again',
+          '4. Return here and run Import from SMS again',
         ),
         actions: [
           TextButton(

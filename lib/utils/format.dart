@@ -111,6 +111,16 @@ String joinFacts(Iterable<String> facts) => facts
     )
     .join(' · ');
 
+/// An icon key as a screen reader and a tooltip say it: split at capitals,
+/// first letter upper-cased ("groceries" reads "Groceries", "cardOk" reads
+/// "Card ok").
+String iconLabelOf(String key) {
+  final words = key
+      .replaceAllMapped(RegExp('[A-Z]'), (m) => ' ${m[0]!.toLowerCase()}')
+      .trim();
+  return words.isEmpty ? words : words[0].toUpperCase() + words.substring(1);
+}
+
 /// Date alone at midnight, date + time otherwise.
 ///
 /// Midnight is the app's "no time known" value — every transaction recorded

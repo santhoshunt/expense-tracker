@@ -39,7 +39,6 @@ class TagInput extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    final scheme = Theme.of(context).colorScheme;
     final full = tags.length >= kMaxTagsPerTx;
     final chosen = {for (final t in tags) tagKey(t)};
 
@@ -108,9 +107,7 @@ class TagInput extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 typed.isEmpty ? 'Recent' : 'Matching',
-                style: text.labelSmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+                style: text.titleSmall,
               ),
               const SizedBox(height: 4),
               Wrap(

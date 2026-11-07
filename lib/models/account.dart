@@ -345,7 +345,10 @@ class Account {
       linkedAccountId: json['linkedAccountId'] is String
           ? json['linkedAccountId'] as String
           : null,
-      rewards: CardRewards.tryFromJson(json['rewards']),
+      rewards: CardRewards.tryFromJson(
+        json['rewards'],
+        idPrefix: '${json['id']}-',
+      ),
       cashDefault: json['cashDefault'] == true,
     );
   }

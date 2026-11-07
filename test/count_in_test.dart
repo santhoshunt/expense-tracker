@@ -13,6 +13,7 @@ import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/services/backup_service.dart';
 import 'package:expense_tracker/services/sms_parser.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
+import 'package:expense_tracker/utils/format.dart';
 
 /// Count in ([Tx.countIn]): a row keeps its real date for balances while
 /// every period figure counts it in another moment. The typical case is a
@@ -302,7 +303,7 @@ void main() {
         countIn: oct1,
       );
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 32);
+      expect(data['version'], 33);
       final q = await loaded();
       await q.importData(data as Map<String, dynamic>, replace: true);
       expect(q.transactions.single.countIn, oct1);
@@ -395,8 +396,14 @@ void main() {
         ),
       ),
     );
+    // Count in sits in the Tags, subscription, count in group.
     Future<void> open() async {
       await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      final fold = find.byKey(const ValueKey('fold-extras'));
+      await tester.ensureVisible(fold);
+      await tester.pumpAndSettle();
+      await tester.tap(fold);
       await tester.pumpAndSettle();
     }
 
@@ -409,7 +416,7 @@ void main() {
     }
 
     await open();
-    final link = find.text('Count in another date ›');
+    final link = find.text('Count in another date');
     await tester.ensureVisible(link);
     await tester.pumpAndSettle();
     await tester.tap(link);
@@ -419,7 +426,10 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
-    expect(find.text('Counts in Thu 1 Oct'), findsOneWidget);
+    expect(
+      find.text('Counts in Thu 1 Oct. The row keeps its own date.'),
+      findsOneWidget,
+    );
     await save();
     final moved = p.transactions.single;
     expect(moved.countIn, oct1);
@@ -436,20 +446,106 @@ void main() {
     await tester.tap(find.text('15'));
     await tester.tap(find.text('OK'));
     await tester.pumpAndSettle();
-    expect(find.text('Count in another date ›'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Pick'), findsOneWidget);
     await save();
     expect(p.transactions.single.countIn, isNull);
     expect(p.transactions.single.date, DateTime(2026, 9, 15, 18, 12));
 
     await p.setCountInForMany({id}, oct1);
     await open();
-    final chip = find.widgetWithText(InputChip, 'Counts in Thu 1 Oct');
+    final chip = find.text('Counts in Thu 1 Oct. The row keeps its own date.');
     await tester.ensureVisible(chip);
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Count on its own date'));
     await tester.pumpAndSettle();
-    expect(find.text('Count in another date ›'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Pick'), findsOneWidget);
     await save();
     expect(p.transactions.single.countIn, isNull);
+  });
+
+  testWidgets('Yesterday moves the date and keeps the time', (tester) async {
+    final p = await loaded();
+    tester.view.physicalSize = const Size(400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: p,
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showAddTransactionSheet(context),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    String timeText() => tester
+        .widget<Text>(
+          find.descendant(
+            of: find.byKey(const ValueKey('when-time')),
+            matching: find.byType(Text),
+          ),
+        )
+        .data!;
+    final time = timeText();
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Yesterday'));
+    await tester.pumpAndSettle();
+    final now = DateTime.now();
+    expect(
+      find.text(fmtDate(DateTime(now.year, now.month, now.day - 1))),
+      findsOneWidget,
+    );
+    expect(timeText(), time);
+  });
+
+  testWidgets('the When targets are 48dp buttons that say what they set, and '
+      'the amount centres on the plain sheet', (tester) async {
+    final p = await loaded();
+    tester.view.physicalSize = const Size(400, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: p,
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showAddTransactionSheet(context),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    for (final (key, label) in [
+      ('when-date', RegExp(r'^Date, ')),
+      ('when-time', RegExp(r'^Time, ')),
+    ]) {
+      expect(
+        tester.getSize(find.byKey(ValueKey(key))).height,
+        greaterThanOrEqualTo(48),
+      );
+      expect(find.bySemanticsLabel(label), findsOneWidget);
+    }
+
+    // One figure: the field is as wide as what it holds, centred, unfilled.
+    final amount = find.widgetWithText(TextField, 'Amount');
+    expect(tester.widget<TextField>(amount).decoration!.filled, isFalse);
+    expect(tester.getSize(amount).width, lessThan(300));
+    expect(tester.getCenter(amount).dx, closeTo(200, 1));
+    semantics.dispose();
   });
 }

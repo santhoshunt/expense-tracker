@@ -18,6 +18,7 @@ import 'package:expense_tracker/utils/fiscal_year.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/animated_fold.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 
 import 'dashboard_test_utils.dart';
 
@@ -115,6 +116,27 @@ void main() {
     await pumpThrough(tester);
 
     expect(find.text('Delete all data?'), findsOneWidget);
+    // Unticked, the button names what goes; ticked, everything.
+    expect(find.text('Delete transactions and accounts'), findsOneWidget);
+    // The box names everything the factory reset removes.
+    expect(
+      find.text(
+        'Also delete rules, categories, groups, budgets, reminders, tags, '
+        'tag colours, subscription marks, bills marked paid and merchant '
+        'names',
+      ),
+      findsOneWidget,
+    );
+    // Only rules, categories and groups come back as built in.
+    expect(
+      find.text(
+        'Built-in rules, categories and groups come back. Everything else '
+        'listed is deleted.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.byType(CheckboxListTile));
+    await tester.pump();
     await tester.tap(find.text('Delete everything'));
     // Dialog closes, the busy barrier shows while the wipe persists, then
     // pops — three bounded pumps carry it through.
@@ -142,9 +164,9 @@ void main() {
     await tester.tap(find.text('Lunch'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Delete transaction'), findsOneWidget);
-    await tester.ensureVisible(find.text('Delete transaction'));
+    await tester.tap(find.byTooltip('Transaction actions'));
     await tester.pumpAndSettle();
+    expect(find.text('Delete transaction'), findsOneWidget);
     await tester.tap(find.text('Delete transaction'));
     await tester.pumpAndSettle();
 
@@ -173,16 +195,35 @@ void main() {
     await tester.pump();
     await tester.tap(find.text('Import…'));
     await pumpThrough(tester);
-    await tester.tap(find.text('Backup (JSON)'));
-    await pumpThrough(tester);
-    await pumpThrough(tester);
 
+    // One sheet: the format chips and Merge or Replace together.
     expect(find.text('Import backup'), findsOneWidget);
     expect(find.text('Merge'), findsOneWidget);
     expect(find.text('Replace'), findsOneWidget);
+    expect(find.text('Cancel'), findsNothing);
+    final footer = find.byKey(const ValueKey('editor-save'));
+    expect(
+      find.descendant(of: footer, matching: find.text('Import')),
+      findsOneWidget,
+    );
 
-    // Cancel closes without touching the file picker.
-    await tester.tap(find.text('Cancel'));
+    // Replace names itself on the button, in the error style.
+    await tester.tap(find.text('Replace'));
+    await pumpThrough(tester);
+    expect(
+      find.descendant(of: footer, matching: find.text('Replace and import')),
+      findsOneWidget,
+    );
+    final scheme = Theme.of(tester.element(footer)).colorScheme;
+    final fill = tester
+        .widget<Material>(
+          find.descendant(of: footer, matching: find.byType(Material)).first,
+        )
+        .color;
+    expect(fill, scheme.error);
+
+    // Back closes it without touching the file picker.
+    await tester.binding.handlePopRoute();
     await pumpThrough(tester);
     expect(find.text('Merge'), findsNothing);
   });
@@ -624,6 +665,8 @@ void main() {
     await tester.pumpAndSettle();
 
     // Select Transport, then search for something it doesn't match.
+    await tester.tap(find.byKey(const ValueKey('filters-section-categories')));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.widgetWithText(FilterChip, 'Transport'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilterChip, 'Transport'));
@@ -925,15 +968,15 @@ void main() {
     await tester.tap(find.text('Set budget'));
     await tester.pumpAndSettle();
 
-    expect(find.text('New budget'), findsOneWidget);
+    expect(find.text('New monthly budget'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Food & Dining'), findsOneWidget);
     final fields = find.descendant(
-      of: find.byType(AlertDialog),
+      of: find.byType(EditorSheetBody),
       matching: find.byType(TextField),
     );
     await tester.enterText(fields.at(1), '5000');
     await tester.pump();
-    await tester.tap(find.text('Create'));
+    await tester.tap(find.text('Create budget'));
     await tester.pumpAndSettle();
 
     final b = p.budgets.single;
@@ -1113,9 +1156,8 @@ void main() {
     expect(find.text('Recurring deposit'), findsOneWidget);
   });
 
-  testWidgets('Rename in a Top merchant\'s ⋮ renames it everywhere', (
-    tester,
-  ) async {
+  /// Breakdown's Top merchants with one FD row, its ⋮ Rename open.
+  Future<FinanceProvider> openRenameMerchant(WidgetTester tester) async {
     final now = DateTime.now();
     SharedPreferences.setMockInitialValues({
       'transactions_v1': jsonEncode([
@@ -1163,18 +1205,49 @@ void main() {
     expect(find.text('See history'), findsOneWidget);
     await tester.tap(find.text('Rename'));
     await tester.pumpAndSettle();
+    return p;
+  }
 
+  testWidgets('Rename in a Top merchant\'s ⋮ renames it everywhere', (
+    tester,
+  ) async {
+    final p = await openRenameMerchant(tester);
     expect(find.text('Rename merchant'), findsOneWidget);
     await tester.enterText(
       find.widgetWithText(TextField, 'Fd No 12345'),
       'HDFC FD',
     );
+    // Save enables on the rebuild that follows the typed name.
+    await tester.pump();
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();
 
     expect(p.merchantAlias('fd no 12345'), 'HDFC FD');
     expect(find.text('HDFC FD'), findsOneWidget);
     expect(find.text('Fd No 12345'), findsNothing);
+  });
+
+  testWidgets('an empty merchant name cannot be saved, and a rename offers '
+      'Undo', (tester) async {
+    final p = await openRenameMerchant(tester);
+    final field = find.descendant(
+      of: find.byType(AlertDialog),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(field, '');
+    await tester.pump();
+    final save = find.widgetWithText(FilledButton, 'Save');
+    expect(tester.widget<FilledButton>(save).onPressed, isNull);
+
+    await tester.enterText(field, 'HDFC FD');
+    await tester.pump();
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(p.merchantAlias('fd no 12345'), 'HDFC FD');
+
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(p.merchantAlias('fd no 12345'), isNull);
   });
 
   testWidgets('Top merchants explains itself when nothing is identifiable', (

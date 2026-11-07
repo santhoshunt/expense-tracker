@@ -10,6 +10,7 @@ import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 import 'package:expense_tracker/utils/format.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 
 /// The Cockpit's info tips: each opens with its explanation, and the
 /// monthly cap's tip works this month's figures into an example line.
@@ -184,6 +185,194 @@ void main() {
     );
   });
 
+  testWidgets('Test a message clears its verdict on an edit', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await pumpCockpit(tester, p, tab: kCockpitTabImport);
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test'));
+    await pumpThrough(tester);
+    expect(
+      find.descendant(
+        of: find.byType(EditorSheetBody),
+        matching: find.text('Test a message'),
+      ),
+      findsOneWidget,
+    );
+    const body = 'Rs.500 debited from a/c XX1234 at TASTY CORNER.';
+    await tester.enterText(
+      find.byKey(const ValueKey('test-sender')),
+      'VM-HDFCBK',
+    );
+    await tester.enterText(find.byKey(const ValueKey('test-message')), body);
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('editor-save')));
+    await tester.pump();
+    final verdict = find.byKey(const ValueKey('test-verdict'));
+    expect(tester.widget<Text>(verdict).data, startsWith('Imports as'));
+
+    await tester.enterText(
+      find.byKey(const ValueKey('test-message')),
+      '${body}x',
+    );
+    await tester.pump();
+    expect(verdict, findsNothing);
+  });
+
+  testWidgets('Test with the keyboard up on a small phone closes the '
+      'keyboard and scrolls the verdict into view', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await pumpCockpit(tester, p, tab: kCockpitTabImport);
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('test-sender')),
+      'VM-HDFCBK',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('test-message')),
+      'Rs.500 debited from a/c XX1234 at TASTY CORNER. Ref No 482915736104.',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('editor-save')));
+    await tester.pumpAndSettle();
+
+    expect(tester.testTextInput.isVisible, isFalse);
+    final verdict = tester.getRect(find.byKey(const ValueKey('test-verdict')));
+    // Above the keyboard and under the sheet's title.
+    expect(verdict.bottom, lessThanOrEqualTo(640 - 280));
+    expect(verdict.top, greaterThan(0));
+  });
+
+  /// Opens Test a message, tests [body] from [sender] (a bank by default)
+  /// and returns the verdict's headline. [setup] adds rules first.
+  Future<String?> testMessage(
+    WidgetTester tester,
+    String body, {
+    String sender = 'VM-HDFCBK',
+    Future<void> Function(FinanceProvider p)? setup,
+  }) async {
+    final p = FinanceProvider();
+    await p.load();
+    await setup?.call(p);
+    await pumpCockpit(tester, p, tab: kCockpitTabImport);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test'));
+    await pumpThrough(tester);
+    await tester.enterText(find.byKey(const ValueKey('test-sender')), sender);
+    await tester.enterText(find.byKey(const ValueKey('test-message')), body);
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('editor-save')));
+    await tester.pump();
+    return tester.widget<Text>(find.byKey(const ValueKey('test-verdict'))).data;
+  }
+
+  testWidgets('Test a message says a suspected spam message is held', (
+    tester,
+  ) async {
+    final headline = await testMessage(
+      tester,
+      'Rs.500 debited from a/c XX1234 at TASTY CORNER. Congratulations, '
+      'a treat awaits you.',
+    );
+    expect(headline, 'Held for review: looks like spam');
+    // The rows below it stay.
+    expect(find.text('Amount'), findsOneWidget);
+    // With the signal that caused the hold.
+    expect(find.text('Signal'), findsOneWidget);
+    expect(find.text('congratulations'), findsOneWidget);
+  });
+
+  testWidgets('Test a message: a rule of your own lifts the spam hold', (
+    tester,
+  ) async {
+    final headline = await testMessage(
+      tester,
+      'Rs.500 debited from a/c XX1234 at TASTY CORNER. Congratulations, '
+      'a treat awaits you.',
+      setup: (p) => p.addRule('tasty corner', 'food'),
+    );
+    expect(headline, 'Imports as an expense');
+    expect(find.text('Signal'), findsNothing);
+    expect(find.textContaining('applies'), findsOneWidget);
+  });
+
+  testWidgets('Test a message with no sender tests the body alone', (
+    tester,
+  ) async {
+    final headline = await testMessage(
+      tester,
+      'Rs.500 debited from a/c XX1234 at TASTY CORNER.',
+      sender: '',
+    );
+    expect(headline, 'Imports as an expense');
+    expect(find.text('Sender'), findsOneWidget);
+    expect(find.text('Not checked'), findsOneWidget);
+    // No bank named for a message whose sender was not given.
+    expect(find.text('••1234'), findsOneWidget);
+    // An alert with no date or time is dated on arrival.
+    expect(find.textContaining('(time of arrival)'), findsOneWidget);
+  });
+
+  testWidgets('Test a message notes a brand-name sender imports from '
+      'notifications only', (tester) async {
+    final headline = await testMessage(
+      tester,
+      'Rs.500 debited from a/c XX1234 at TASTY CORNER.',
+      sender: 'Yes Bank',
+    );
+    expect(headline, 'Imports as an expense');
+    expect(find.text('Note'), findsOneWidget);
+    expect(find.textContaining('notification capture'), findsOneWidget);
+  });
+
+  testWidgets('Test a message says a spam rule keeps a message out', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addRule('lucky draw', kSpamCategoryId);
+    await pumpCockpit(tester, p, tab: kCockpitTabImport);
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Test'));
+    await pumpThrough(tester);
+    await tester.enterText(
+      find.byKey(const ValueKey('test-sender')),
+      'VM-HDFCBK',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('test-message')),
+      'Rs.250 debited from a/c XX4321 at QUILL MART. Lucky draw entry '
+      'confirmed.',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('editor-save')));
+    await tester.pump();
+
+    final verdict = find.byKey(const ValueKey('test-verdict'));
+    expect(
+      tester.widget<Text>(verdict).data,
+      'Not imported: a spam rule matched',
+    );
+    // Plain text: the red sits on the icon only.
+    final scheme = Theme.of(tester.element(verdict)).colorScheme;
+    expect(tester.widget<Text>(verdict).style?.color, isNot(scheme.error));
+    expect(find.byIcon(Icons.cancel_outlined), findsOneWidget);
+    expect(find.text('Rule'), findsOneWidget);
+    expect(find.textContaining('Never imported.'), findsOneWidget);
+  });
+
+  testWidgets('Test a message shows the reference it found', (tester) async {
+    await testMessage(
+      tester,
+      'Rs.500 debited from a/c XX1234 at TASTY CORNER. Ref No 482915736104.',
+    );
+    expect(find.text('Reference'), findsOneWidget);
+    expect(find.text('482915736104'), findsOneWidget);
+  });
+
   testWidgets('monthly cap tip shows this month against the cap', (
     tester,
   ) async {
@@ -225,6 +414,11 @@ void main() {
 
     await tester.tap(find.text('New budget'));
     await pumpThrough(tester);
+    await tester.tap(find.text('Monthly budget'));
+    await pumpThrough(tester);
+    // The tip sits inside the folded What counts.
+    await tester.tap(find.text('What counts'));
+    await pumpThrough(tester);
     await expectTip(
       tester,
       'Only these or All except',
@@ -260,10 +454,8 @@ void main() {
     await tester.tap(find.text('New category'));
     await pumpThrough(tester);
     await expectTip(tester, 'Direction', 'Changing direction re-types');
-    // The switch and its tip wait behind the Transfer options expander.
-    expect(tipFinder('Transfer'), findsNothing);
-    await tester.tap(find.text('Transfer options'));
-    await pumpThrough(tester);
+    // The Transfer row and its tip sit in plain sight.
+    expect(tipFinder('Transfer'), findsOneWidget);
     await expectTip(tester, 'Transfer', 'Transfers are left out of income');
   });
 
@@ -281,17 +473,14 @@ void main() {
     await pumpThrough(tester);
     await expectTip(tester, 'Due day', 'Days 29 to 31 fall');
     await expectTip(tester, 'Category', 'Sets the icon and colour');
-    expect(
-      find.textContaining(
-        'notifies from 2 days before. Alerts are checked when the app opens '
-        'and about every 6 hours while it is closed.',
-      ),
-      findsOneWidget,
+    // The footnote moved into the Repeats tip; one summary line stays.
+    await expectTip(
+      tester,
+      'Repeats',
+      'Shows on the Next 7 days card a week ahead, and notifies from 2 days '
+          'before.',
     );
-    expect(
-      find.textContaining('mark it paid from the Next 7 days card.'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Notifies from 2 days before'), findsOneWidget);
   });
 
   testWidgets('Notifications page: one timing sentence, in its intro and '

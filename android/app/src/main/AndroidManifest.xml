@@ -215,7 +215,8 @@
              Budgets list, Recent, Quick actions, Big bills and This week
              widgets, the last two in two sizes each (HomeWidgets.kt):
              no configure step; Budgets list reads the budget snapshot, the
-             rest one shared snapshot. -->
+             rest one shared snapshot. Expected balance (two sizes) follows
+             Payments to check below, in the same shape. -->
         <receiver
             android:name=".MonthPaceWidgetProvider"
             android:exported="true"
@@ -369,6 +370,61 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/home_widget_checks_info"/>
+        </receiver>
+        <receiver
+            android:name=".ExpectedBalanceWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_ahead_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_ahead_info"/>
+        </receiver>
+        <receiver
+            android:name=".ExpectedBalanceCompactWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_ahead_compact_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_ahead_compact_info"/>
+        </receiver>
+        <!-- Card cycle widget (HomeWidgets.kt): draws from the shared
+             snapshot, the card picked for each instance in
+             CardWidgetConfigActivity, as the Accounts widget does. -->
+        <receiver
+            android:name=".CardCycleWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_card_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_card_info"/>
+        </receiver>
+        <activity
+            android:name=".CardWidgetConfigActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE"/>
+            </intent-filter>
+        </activity>
+        <receiver
+            android:name=".SearchBarWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_search_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_search_info"/>
         </receiver>
         <!-- Keep on a Payments to check widget row, queued for
              ImportChecks.applyKept; not exported, so no other app can

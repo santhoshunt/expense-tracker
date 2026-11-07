@@ -364,6 +364,11 @@ class OutlinedPill extends StatelessWidget {
   /// When set, the pill is one button node with this name and [onTap].
   final String? semanticLabel;
 
+  /// What a screen reader says for a removable pill's [label], and its
+  /// close button's tooltip, Remove and then this: "Tag Goa trip" for "# Goa
+  /// trip", whose "#" TalkBack would read as "number".
+  final String? spokenLabel;
+
   const OutlinedPill({
     super.key,
     required this.label,
@@ -373,6 +378,7 @@ class OutlinedPill extends StatelessWidget {
     this.onTap,
     this.onRemove,
     this.semanticLabel,
+    this.spokenLabel,
   });
 
   @override
@@ -439,13 +445,14 @@ class OutlinedPill extends StatelessWidget {
                 Flexible(
                   child: Text(
                     label,
+                    semanticsLabel: spokenLabel,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.labelLarge,
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Remove $label',
+                  tooltip: 'Remove ${spokenLabel ?? label}',
                   icon: const Icon(Icons.close, size: 16),
                   style: IconButton.styleFrom(
                     fixedSize: const Size(44, 48),

@@ -8,9 +8,7 @@ import '../models/dashboard_layout.dart' show kAheadDays;
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/forward_series.dart';
-import '../services/month_forecast.dart';
 import '../services/recurring_detector.dart';
-import '../services/safe_to_spend.dart' show pendingIsSpend;
 import '../services/subscriptions.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
@@ -64,38 +62,16 @@ class _AheadProjectionState extends State<AheadProjection> {
         k.day == day) {
       return cached;
     }
-    final hidden = context.read<SettingsProvider>().hiddenUpcoming;
-    final forecast = computeMonthForecast(
+    final ahead = aheadSeries(
       finance,
       patterns: widget.patterns,
-      hidden: hidden,
+      hidden: context.read<SettingsProvider>().hiddenUpcoming,
       now: now,
-      wholeMonth: true,
     );
-    final savingsHits = [
-      for (final i in cachedSubscriptions(finance, hidden).active)
-        if (i.isSavings) i.hit,
-    ];
-    final headline = finance.hasNetAccounts
-        ? finance.netWorth
-        : finance.balance;
-    final tomorrow = DateTime(now.year, now.month, now.day + 1);
-    final waiting = finance.pendingTransactions
-        .where((t) => pendingIsSpend(finance, t) && t.date.isBefore(tomorrow))
-        .fold(0.0, (s, t) => s + t.amount);
-    final series = buildForwardSeries(
-      finance,
-      patterns: widget.patterns,
-      savings: savingsHits,
-      hidden: hidden,
-      now: now,
-      to: DateTime(now.year, now.month, now.day + kAheadDays - 1),
-      perDay: forecast?.perDay ?? 0,
-      start: headline - waiting,
-    );
+    final series = ahead.series;
     _series = series;
-    _headline = headline;
-    _waiting = waiting;
+    _headline = ahead.headline;
+    _waiting = ahead.waiting;
     _seriesKey = (rev: finance.revision, hidden: hiddenKey, day: day);
     while (_rowKeys.length < series.days.length) {
       _rowKeys.add(GlobalKey());

@@ -160,10 +160,9 @@ void main() {
       // toast, whose strip takes taps while it shows.
       await tester.pump(const Duration(seconds: 6));
       await tester.pumpAndSettle();
-      final delete = find.text('Delete transaction');
-      await tester.ensureVisible(delete);
+      await tester.tap(find.byTooltip('Transaction actions'));
       await tester.pumpAndSettle();
-      await tester.tap(delete);
+      await tester.tap(find.text('Delete transaction'));
       await tester.pumpAndSettle();
       expect(hosted, hasLength(1));
       expect(hosted.single.$1, startsWith('Deleted '));
@@ -237,10 +236,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Demo Kiosk'));
       await tester.pumpAndSettle();
-      final delete = find.text('Delete transaction');
-      await tester.ensureVisible(delete);
+      await tester.tap(find.byTooltip('Transaction actions'));
       await tester.pumpAndSettle();
-      await tester.tap(delete);
+      await tester.tap(find.text('Delete transaction'));
       await tester.pumpAndSettle();
 
       // One row left: the review sheet stays and shows the toast itself.
@@ -261,9 +259,8 @@ void main() {
     });
   });
 
-  testWidgets('More details reads as a button with its fold state', (
-    tester,
-  ) async {
+  testWidgets('the Tags, subscription, count in fold reads as a button with '
+      'its fold state', (tester) async {
     tester.view.physicalSize = const Size(800, 1800);
     tester.view.devicePixelRatio = 2;
     addTearDown(tester.view.reset);
@@ -284,7 +281,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final semantics = tester.ensureSemantics();
-    final fold = find.text('More details');
+    final fold = find.text('Tags, subscription, count in');
     await tester.ensureVisible(fold);
     await tester.pumpAndSettle();
     expect(
@@ -491,7 +488,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Tag · Demo trip'), findsOneWidget);
+      // The filter pill: "# Demo trip", spoken "Tag Demo trip".
+      expect(find.byTooltip('Remove Tag Demo trip'), findsOneWidget);
       expect(find.text('Sample Cab'), findsNothing);
 
       await p.deleteTag('Demo trip');

@@ -9,6 +9,7 @@ import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/screens/card_rewards_page.dart';
 import 'package:expense_tracker/services/backup_service.dart';
 import 'package:expense_tracker/services/import_health.dart';
 import 'package:expense_tracker/services/notification_source.dart';
@@ -199,7 +200,7 @@ void main() {
         expect(json, isNot(contains('QUILLFERN')));
         expect(json, isNot(contains('XX3141')));
         final data = jsonDecode(json) as Map<String, dynamic>;
-        expect(data['version'], 32);
+        expect(data['version'], 33);
         expect(data['discardedImports'], hasLength(1));
 
         SharedPreferences.setMockInitialValues({});
@@ -418,6 +419,128 @@ void main() {
       await tester.tap(find.text('See alerts'));
       await tester.pumpAndSettle();
       expect(find.textContaining('An alert on '), findsOneWidget);
+    });
+  });
+
+  group('a version 32 backup restores into v2.1.0', () {
+    Map<String, dynamic> row(String id, int day, {String? rewardGroup}) => {
+      'id': id,
+      'type': 'expense',
+      'categoryId': 'food',
+      'amount': 400.0 + day,
+      'note': '',
+      'date': daysAgo(day).toIso8601String(),
+      'source': 'sms',
+      'acctKey': 'TESTBK:1111',
+      'externalRef': 'REF$id',
+      'rewardGroup': ?rewardGroup,
+    };
+
+    Map<String, dynamic> card(List<Map<String, dynamic>> groups) => {
+      'id': 'card1',
+      'name': 'Test card',
+      'type': 'creditCard',
+      'keys': ['TESTBK:1111'],
+      'rewards': {'unit': 'cashback', 'groups': groups, 'baseRate': 1.0},
+    };
+
+    // Two unnamed groups with no ids, as v2.0.1 saved them; no
+    // 'rewardGroup' on any row and no 'tagNames'.
+    Map<String, dynamic> v32({List<Map<String, dynamic>>? rows}) => {
+      'app': 'expense_tracker',
+      'version': 32,
+      'transactions': rows ?? [row('tx1', 3), row('tx2', 4), row('tx3', 5)],
+      'accounts': [
+        card([
+          {
+            'categoryIds': ['food', 'shopping'],
+            'rate': 5.0,
+          },
+          {
+            'categoryIds': ['transport'],
+            'rate': 2.0,
+          },
+        ]),
+      ],
+    };
+
+    List<String> groupIds(FinanceProvider p) => [
+      for (final g in p.accountById('card1')!.rewards!.groups) g.id,
+    ];
+
+    test('replace', () async {
+      final p = await fresh();
+      expect(await p.addSavedTag('Diwali', null), isTrue);
+      await p.importData(v32(), replace: true);
+      expect(groupIds(p), ['card1-g0', 'card1-g1']);
+      expect(
+        rewardGroupName(p.accountById('card1')!.rewards!.groups.first),
+        'Food & Dining, Shopping',
+      );
+      expect(
+        [for (final t in p.transactions) t.rewardGroup],
+        [null, null, null],
+      );
+      // Absent 'tagNames' keeps the device's saved tags.
+      expect(p.savedTags, ['Diwali']);
+      expect(p.loadWarnings, isEmpty);
+
+      final again =
+          jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
+      await p.importData(again, replace: true);
+      expect(groupIds(p), ['card1-g0', 'card1-g1']);
+    });
+
+    test('merge', () async {
+      final p = await fresh();
+      final device = v32(rows: [row('tx1', 3, rewardGroup: 'card1-g1')])
+        ..['version'] = 33;
+      await p.importData(device, replace: true);
+      expect(p.transactions.single.rewardGroup, 'card1-g1');
+
+      await p.importData(v32(), replace: false);
+      final byId = {for (final t in p.transactions) t.id: t};
+      expect(byId.keys.toSet(), {'tx1', 'tx2', 'tx3'});
+      // The device's row wins on merge, pick included.
+      expect(byId['tx1']!.rewardGroup, 'card1-g1');
+      expect(byId['tx2']!.rewardGroup, isNull);
+      expect(byId['tx3']!.rewardGroup, isNull);
+    });
+
+    test('a version 33 export round-trips every new key', () async {
+      final p = await fresh();
+      final named = v32(rows: [row('tx1', 3, rewardGroup: 'gdine')])
+        ..['version'] = 33
+        ..['accounts'] = [
+          card([
+            {
+              'id': 'gdine',
+              'name': 'Dining',
+              'categoryIds': ['food'],
+              'merchantWords': ['quillfern teas'],
+              'rate': 10.0,
+              'cap': 500.0,
+              'minimum': 250.0,
+            },
+          ]),
+        ];
+      await p.importData(named, replace: true);
+      expect(await p.addSavedTag('Diwali', null), isTrue);
+      final data =
+          jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
+      expect(data['version'], 33);
+
+      SharedPreferences.setMockInitialValues({});
+      final phone = await fresh();
+      await phone.importData(data, replace: true);
+      final g = phone.accountById('card1')!.rewards!.groups.single;
+      expect(g.id, 'gdine');
+      expect(g.name, 'Dining');
+      expect(g.merchantWords, {'quillfern teas'});
+      expect(g.minimum, 250);
+      expect(g.cap, 500);
+      expect(phone.transactions.single.rewardGroup, 'gdine');
+      expect(phone.savedTags, ['Diwali']);
     });
   });
 }

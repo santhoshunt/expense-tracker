@@ -5,6 +5,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
+import 'editor_sheet.dart';
 import 'picker_sheet.dart';
 import 'undo_snackbar.dart';
 
@@ -23,27 +24,21 @@ Future<bool> showCategorySplitSheet(
   SplitUndoOffer? offerUndo,
 }) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
-  final changed = await showModalBottomSheet<bool>(
-    context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
-    showDragHandle: true,
-    builder: (ctx) => Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-      child: _CategorySplitForm(
-        row: row,
-        offerUndo:
-            offerUndo ??
-            (message, undo) {
-              if (messenger == null || !messenger.mounted) return;
-              showUndoSnackBarOn(
-                messenger,
-                message,
-                undo,
-                icon: Icons.call_split,
-              );
-            },
-      ),
+  final changed = await showEditorSheet<bool>(
+    context,
+    builder: (ctx) => _CategorySplitForm(
+      row: row,
+      offerUndo:
+          offerUndo ??
+          (message, undo) {
+            if (messenger == null || !messenger.mounted) return;
+            showUndoSnackBarOn(
+              messenger,
+              message,
+              undo,
+              icon: Icons.call_split,
+            );
+          },
     ),
   );
   return changed ?? false;
@@ -73,11 +68,25 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
   late final double _total;
   final List<_Part> _parts = [];
 
-  /// Shown under the parts after a Save that could not go through.
+  /// Why the last Save could not go through, above the button, when no
+  /// part's own field says it.
   String? _error;
+
+  /// A Save was refused: from then on each part shows its own problem on
+  /// its Amount, live.
+  bool _showRowErrors = false;
+
+  /// On the [_error] line, which a refused Save scrolls to.
+  final _errorKey = GlobalKey();
 
   /// Re-entrancy latch for Save and Merge back.
   bool _busy = false;
+
+  /// The parts as they opened, for the Discard changes? guard.
+  late final String _opened;
+
+  String _fingerprint() =>
+      [for (final p in _parts) '${p.categoryId}:${p.amount.text}'].join('|');
 
   bool get _isSplit => _anchor.splitId != null;
 
@@ -101,6 +110,7 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
         ..add(_Part(own, fmtFieldNumber(_total)))
         ..add(_Part(null, ''));
     }
+    _opened = _fingerprint();
   }
 
   @override
@@ -128,22 +138,30 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
     WidgetsBinding.instance.addPostFrameCallback((_) => p.amount.dispose());
   }
 
+  /// What keeps [p] from saving, for its Amount's error line; null for a
+  /// good part or a wholly empty one, which the save skips.
+  String? _rowError(_Part p) {
+    final typed = p.amount.text.trim();
+    if (p.categoryId == null && typed.isEmpty) return null;
+    if (p.categoryId == null) return 'Pick a category';
+    final amount = parseAmount(typed);
+    return amount == null || amount <= 0 ? 'Enter an amount' : null;
+  }
+
   /// The parts as [FinanceProvider.splitTransaction] takes them, or the
-  /// reason they can't be saved yet. Rows left wholly empty are skipped.
+  /// reason they can't be saved yet (null when a part's own error line
+  /// says it). Rows left wholly empty are skipped.
   ({List<({String categoryId, double amount})> parts, String? error})
   _validated() {
     final parts = <({String categoryId, double amount})>[];
     for (final p in _parts) {
+      if (_rowError(p) != null) return (parts: parts, error: null);
       final typed = p.amount.text.trim();
       if (p.categoryId == null && typed.isEmpty) continue;
-      final amount = parseAmount(typed);
-      if (p.categoryId == null) {
-        return (parts: parts, error: 'Pick a category for each part');
-      }
-      if (amount == null || amount <= 0) {
-        return (parts: parts, error: 'Enter an amount for each part');
-      }
-      parts.add((categoryId: p.categoryId!, amount: _paise(amount)));
+      parts.add((
+        categoryId: p.categoryId!,
+        amount: _paise(parseAmount(typed)!),
+      ));
     }
     if (parts.length < 2) {
       return (parts: parts, error: 'Add at least two parts');
@@ -160,15 +178,36 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
     return (parts: parts, error: null);
   }
 
+  /// The refused Save's line sits under the parts: with the keyboard up it
+  /// lands out of sight, so the keyboard goes and the line scrolls in.
+  void _revealError() {
+    FocusScope.of(context).unfocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final at = _errorKey.currentContext;
+      if (at != null && at.mounted) {
+        Scrollable.ensureVisible(
+          at,
+          duration: const Duration(milliseconds: 200),
+          alignment: 1,
+        );
+      }
+    });
+  }
+
   Future<void> _save() async {
     if (_busy) return;
     final check = _validated();
-    if (check.error != null) {
-      setState(() => _error = check.error);
+    if (check.error != null || _parts.any((p) => _rowError(p) != null)) {
+      setState(() {
+        _error = check.error;
+        _showRowErrors = true;
+      });
+      _revealError();
       return;
     }
     final finance = context.read<FinanceProvider>();
     final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
     setState(() => _busy = true);
     final SplitChange change;
     try {
@@ -179,10 +218,13 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
           _busy = false;
           _error = e.message?.toString() ?? 'These parts cannot be saved';
         });
+        _revealError();
       }
       return;
     }
-    if (navigator.mounted) navigator.pop(true);
+    // A back or scrim tap during the write already closed this sheet; a
+    // pop now would close the add sheet under it.
+    if (route?.isCurrent == true) navigator.pop(true);
     widget.offerUndo(
       'Split into ${check.parts.length} parts',
       () => finance.undoSplitChange(change),
@@ -193,9 +235,10 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
     if (_busy) return;
     final finance = context.read<FinanceProvider>();
     final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
     setState(() => _busy = true);
     final change = await finance.mergeSplit(_anchor.splitId!);
-    if (navigator.mounted) navigator.pop(true);
+    if (route?.isCurrent == true) navigator.pop(true);
     widget.offerUndo(
       'Merged back into one payment',
       () => finance.undoSplitChange(change),
@@ -300,47 +343,101 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
     );
   }
 
-  Widget _partRow(_Part p, List<PickerItem<String>> items) => Padding(
-    // Keyed by the part: removing a row mid-list must not hand its
-    // neighbour's field state to the wrong part.
-    key: ObjectKey(p),
-    padding: const EdgeInsets.only(top: 12),
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          flex: 3,
-          child: AppDropdownField<String>(
-            label: 'Category',
-            value: p.categoryId,
-            items: items,
-            onChanged: (v) => setState(() {
-              p.categoryId = v;
-              _error = null;
-            }),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          flex: 2,
-          child: TextField(
-            controller: p.amount,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Amount',
-              prefixText: '₹ ',
+  /// [left] is what no part holds yet; a positive one offers itself on the
+  /// first empty part's Amount.
+  Widget _partRow(_Part p, List<PickerItem<String>> items, double left) {
+    final offerLeft =
+        left > 0.005 &&
+        p.amount.text.trim().isEmpty &&
+        identical(p, _parts.firstWhere((o) => o.amount.text.trim().isEmpty));
+    return Padding(
+      // Keyed by the part: removing a row mid-list must not hand its
+      // neighbour's field state to the wrong part.
+      key: ObjectKey(p),
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _partFields(p, items),
+          if (offerLeft)
+            Align(
+              alignment: AlignmentDirectional.centerEnd,
+              child: ActionChip(
+                key: const ValueKey('split-use-left'),
+                label: Text('Use ${fmtMoney(left)} left'),
+                onPressed: () => setState(() {
+                  p.amount.text = fmtFieldNumber(left);
+                  _error = null;
+                }),
+              ),
             ),
-            onChanged: (_) => setState(() => _error = null),
-          ),
-        ),
-        IconButton(
-          tooltip: 'Remove part',
-          onPressed: _parts.length > 1 ? () => _removePart(p) : null,
-          icon: const Icon(Icons.close),
-        ),
-      ],
-    ),
-  );
+        ],
+      ),
+    );
+  }
+
+  Widget _partFields(_Part p, List<PickerItem<String>> items) {
+    final category = AppDropdownField<String>(
+      label: 'Category',
+      value: p.categoryId,
+      items: items,
+      onChanged: (v) => setState(() {
+        p.categoryId = v;
+        _error = null;
+      }),
+    );
+    final amount = TextFormField(
+      controller: p.amount,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: InputDecoration(
+        labelText: 'Amount',
+        prefixText: '₹ ',
+        // This part's own problem, under its own field.
+        errorText: _showRowErrors ? _rowError(p) : null,
+        errorMaxLines: 2,
+      ),
+      onChanged: (_) => setState(() => _error = null),
+    );
+    final remove = IconButton(
+      tooltip: 'Remove part',
+      onPressed: _parts.length > 1 ? () => _removePart(p) : null,
+      icon: const Icon(Icons.close),
+    );
+    return LayoutBuilder(
+      builder: (context, box) {
+        // Side by side only on a row of 360dp or more at about normal
+        // text: in less, Category got "Food & …" (a 360dp phone at 1x)
+        // or a letter or two. Otherwise Category takes its own line, with
+        // Amount and the remove button under it.
+        if (box.maxWidth >= 360 &&
+            MediaQuery.textScalerOf(context).scale(1) <= 1.15) {
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(flex: 3, child: category),
+              const SizedBox(width: 8),
+              Expanded(flex: 2, child: amount),
+              remove,
+            ],
+          );
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            category,
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: amount),
+                remove,
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -360,74 +457,71 @@ class _CategorySplitFormState extends State<_CategorySplitForm> {
         : balanced
         ? AppColors.of(context).green
         : scheme.onSurfaceVariant;
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              _isSplit ? 'Edit split' : 'Split by category',
-              style: text.titleLarge,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 4),
-            if (_anchor.type == TxType.income)
-              _creditHeader(context, merchant)
-            else
-              Text(
-                '$merchant · ${fmtMoney(_total)} · '
-                '${fmtDateCompact(_anchor.date)}',
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: text.bodyMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
+    return EditorSheetBody(
+      title: _isSplit ? 'Edit split' : 'Split by category',
+      menu: _isSplit
+          ? const [
+              PopupMenuItem(
+                value: 'merge',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.call_merge),
+                  title: Text('Merge back'),
                 ),
               ),
-            for (final p in _parts) _partRow(p, items),
-            Align(
-              alignment: AlignmentDirectional.centerStart,
-              child: TextButton.icon(
-                onPressed: _addPart,
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('Add a category'),
-              ),
-            ),
-            Text(
-              leftLine,
-              style: text.bodyMedium?.copyWith(
-                color: leftColor,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                _error!,
-                style: text.bodyMedium?.copyWith(color: scheme.error),
-              ),
-            ],
-            const SizedBox(height: 20),
-            FilledButton(
-              onPressed: _busy ? null : _save,
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-              child: Text(_isSplit ? 'Save split' : 'Split payment'),
-            ),
-            if (_isSplit) ...[
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: _busy ? null : _merge,
-                icon: const Icon(Icons.call_merge),
-                label: const Text('Merge back'),
-              ),
-            ],
-          ],
+            ]
+          : null,
+      menuTooltip: 'Split actions',
+      onMenu: (_) => _merge(),
+      footerLabel: _isSplit ? 'Save split' : 'Split payment',
+      onSave: _busy ? null : _save,
+      // Not while writing: a Discard changes? asked then would stay over
+      // a sheet the write is about to close.
+      dirty: _fingerprint() != _opened && !_busy,
+      children: [
+        if (_anchor.type == TxType.income)
+          _creditHeader(context, merchant)
+        else
+          Text(
+            '$merchant · ${fmtMoney(_total)} · '
+            '${fmtDateCompact(_anchor.date)}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        for (final p in _parts) _partRow(p, items, left),
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: TextButton.icon(
+            onPressed: _addPart,
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('Add a part'),
+          ),
         ),
-      ),
+        // In the body, not the footer: the footer's extra line hides while
+        // the keyboard is up, which is when the amounts are typed.
+        Text(
+          leftLine,
+          key: const ValueKey('split-left'),
+          style: text.bodyMedium?.copyWith(
+            color: leftColor,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        // Wrapping and in the error colour: the footer's one grey line cut
+        // "Parts add up to ...; the payment is ..." at 320dp.
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          KeyedSubtree(
+            key: _errorKey,
+            child: Text(
+              _error!,
+              key: const ValueKey('split-error'),
+              style: text.bodyMedium?.copyWith(color: scheme.error),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

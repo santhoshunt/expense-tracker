@@ -7,10 +7,11 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 
-/// The rule dialog with its category and Add box on top and the conditions
-/// as chips below, so a rule with many conditions needs no scrolling to add
-/// one, check the category or save.
+/// The rule sheet (pick B): the conditions as chips, the Add box under
+/// them, then Classify as, with Create or Save pinned at the bottom so a
+/// rule with many conditions saves without scrolling.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -44,9 +45,11 @@ void main() {
     Future<void> Function(BuildContext) show, {
     Size size = const Size(360, 640),
     double textScale = 1,
+    double keyboard = 0,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
+    tester.view.viewInsets = FakeViewPadding(bottom: keyboard);
     addTearDown(tester.view.reset);
     tester.platformDispatcher.textScaleFactorTestValue = textScale;
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
@@ -73,7 +76,7 @@ void main() {
   }
 
   Finder inRuleDialog(Finder f) =>
-      find.descendant(of: find.byType(AlertDialog).first, matching: f);
+      find.descendant(of: find.byType(EditorSheetBody).first, matching: f);
   final addBox = find.widgetWithText(TextField, 'Add a word…');
   Finder chips() => inRuleDialog(find.byType(InputChip));
   Finder button(String label) => find.widgetWithText(FilledButton, label);
@@ -89,8 +92,29 @@ void main() {
     return p.rules.firstWhere((r) => !r.isBuiltIn);
   }
 
-  testWidgets('a rule of 15 conditions shows the category and the Add box '
-      'in the first view, with Save on', (tester) async {
+  /// Picks [label] in Classify as.
+  Future<void> classifyAs(WidgetTester tester, String label) async {
+    await tester.ensureVisible(find.text('Classify as'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Classify as'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(label).last);
+    await tester.pumpAndSettle();
+  }
+
+  /// Closes the sheet from its handle, discarding what was typed.
+  Future<void> discard(WidgetTester tester) async {
+    await tester.drag(
+      find.byKey(const ValueKey('editor-sheet-handle')),
+      const Offset(0, 300),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Discard'));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('a rule of 15 conditions reads chips, the Add box, then '
+      'Classify as, with Save pinned and on', (tester) async {
     final p = FinanceProvider();
     await p.load();
     final rule = await fifteenRule(p);
@@ -106,22 +130,17 @@ void main() {
     final viewport = inRuleDialog(find.byType(Scrollable)).first;
     final state = tester.state<ScrollableState>(viewport);
     expect(state.position.pixels, 0);
-    final bottom = tester.getRect(viewport).bottom;
-    final top = tester.getRect(viewport).top;
-    for (final f in [find.text('Classify as'), addBox]) {
-      final r = tester.getRect(f);
-      expect(r.top, greaterThanOrEqualTo(top));
-      expect(r.bottom, lessThanOrEqualTo(bottom));
-    }
-    // The category reads before the Add box, and the chips after both.
+    // The chips lead, the Add box under them, Classify as after both.
     expect(
-      tester.getTopLeft(find.text('Classify as')).dy,
+      tester.getTopLeft(chips().first).dy,
       lessThan(tester.getTopLeft(addBox).dy),
     );
     expect(
-      tester.getTopLeft(chips().first).dy,
-      greaterThan(tester.getTopLeft(addBox).dy),
+      tester.getTopLeft(addBox).dy,
+      lessThan(tester.getTopLeft(find.text('Classify as')).dy),
     );
+    // Save is pinned under the scroll view, in view without scrolling.
+    expect(button('Save').hitTestable(), findsOneWidget);
     expect(enabled(tester, button('Save')), isTrue);
 
     // Compact chips share lines. The test font draws every glyph a full em
@@ -158,6 +177,9 @@ void main() {
     expect(find.text('New rule'), findsOneWidget);
     expect(chips(), findsNothing);
     expect(boxFocused(tester), isTrue);
+    // A new rule from Cockpit names no category until one is picked.
+    expect(enabled(tester, button('Create')), isFalse);
+    await classifyAs(tester, 'Food & Dining');
     // Blank: nothing to add, nothing to save.
     expect(enabled(tester, button('Add')), isFalse);
     expect(enabled(tester, button('Create')), isFalse);
@@ -194,7 +216,11 @@ void main() {
     // '|' is the stored separator: an error, and neither Add nor Save.
     await tester.enterText(addBox, 'akka|anna');
     await tester.pump();
-    expect(find.text('Remove "|". Add each word on its own.'), findsOneWidget);
+    // Under the field and as the footer's reason.
+    expect(
+      find.text('Remove "|". Add each word on its own.'),
+      findsNWidgets(2),
+    );
     expect(enabled(tester, button('Add')), isFalse);
     expect(enabled(tester, button('Create')), isFalse);
     await tester.testTextInput.receiveAction(TextInputAction.done);
@@ -249,7 +275,7 @@ void main() {
     expect(enabled(tester, button('Save')), isTrue);
   });
 
-  testWidgets('tapping a chip edits it in place', (tester) async {
+  testWidgets('tapping a chip moves it into the Add box', (tester) async {
     final p = FinanceProvider();
     await p.load();
     await p.addRule('amma | appa', 'food');
@@ -258,65 +284,54 @@ void main() {
 
     await tester.tap(inRuleDialog(find.text('amma')));
     await tester.pumpAndSettle();
-    expect(find.text('Edit condition'), findsOneWidget);
-    final editDialog = find.byType(AlertDialog).last;
-    final field = find.descendant(
-      of: editDialog,
-      matching: find.byType(TextField),
-    );
-    final save = find.descendant(
-      of: editDialog,
-      matching: find.widgetWithText(FilledButton, 'Save'),
-    );
-    expect(tester.widget<TextField>(field).controller!.text, 'amma');
+    // No dialog over the sheet: the chip's text waits in the box, focused.
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(chips(), findsOneWidget);
+    expect(boxText(tester), 'amma');
+    expect(boxFocused(tester), isTrue);
+    expect(find.text('If the SMS contains any of (1)'), findsOneWidget);
 
-    // Same checks as the Add box.
-    await tester.enterText(field, 'am|ma');
+    await tester.enterText(addBox, 'amma ji');
     await tester.pump();
-    expect(
-      find.descendant(
-        of: editDialog,
-        matching: find.text('Remove "|". Add each word on its own.'),
-      ),
-      findsOneWidget,
-    );
-    expect(enabled(tester, save), isFalse);
-    await tester.enterText(field, 'APPA');
-    await tester.pump();
-    expect(find.text('Already a condition.'), findsOneWidget);
-    expect(enabled(tester, save), isFalse);
-    await tester.enterText(field, '');
-    await tester.pump();
-    expect(enabled(tester, save), isFalse);
-
-    await tester.enterText(field, '  amma\nji ');
-    await tester.pump();
-    await tester.tap(save);
+    await tester.tap(button('Add'));
     await tester.pumpAndSettle();
-    expect(find.text('Edit condition'), findsNothing);
     expect(inRuleDialog(find.text('amma ji')), findsOneWidget);
     expect(chips(), findsNWidgets(2));
 
-    // Cancel leaves the chip alone.
-    await tester.tap(inRuleDialog(find.text('appa')));
-    await tester.pumpAndSettle();
-    await tester.enterText(
-      find.descendant(
-        of: find.byType(AlertDialog).last,
-        matching: find.byType(TextField),
-      ),
-      'other',
-    );
-    await tester.tap(find.text('Cancel').last);
-    await tester.pumpAndSettle();
-    expect(inRuleDialog(find.text('appa')), findsOneWidget);
-
+    // Back at the end, in the order the list now holds.
     await tester.tap(button('Save'));
     await tester.pumpAndSettle();
-    expect(p.rules.where((r) => !r.isBuiltIn).single.pattern, 'amma ji | appa');
+    expect(p.rules.where((r) => !r.isBuiltIn).single.pattern, 'appa | amma ji');
   });
 
-  testWidgets('a Make rule suggestion waits in the Add box, and Save takes '
+  testWidgets('tapping a chip keeps the text already in the Add box', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addRule('amma | appa', 'food');
+    final rule = p.rules.firstWhere((r) => !r.isBuiltIn);
+    await open(tester, p, (c) => showRuleDialog(c, existing: rule));
+
+    await tester.enterText(addBox, '  akka  ');
+    await tester.pump();
+    await tester.tap(inRuleDialog(find.text('amma')));
+    await tester.pumpAndSettle();
+    // The typed word became a chip; the tapped one waits in the box.
+    expect(boxText(tester), 'amma');
+    expect(inRuleDialog(find.text('akka')), findsOneWidget);
+    expect(chips(), findsNWidgets(2));
+
+    // With a "|" in the box a tap changes nothing.
+    await tester.enterText(addBox, 'a|b');
+    await tester.pump();
+    await tester.tap(inRuleDialog(find.text('appa')));
+    await tester.pumpAndSettle();
+    expect(boxText(tester), 'a|b');
+    expect(chips(), findsNWidgets(2));
+  });
+
+  testWidgets('a Make rule suggestion lands as one chip, and Create takes '
       'it as it is', (tester) async {
     final p = FinanceProvider();
     await p.load();
@@ -335,9 +350,10 @@ void main() {
     );
 
     expect(find.text('New rule'), findsOneWidget);
-    expect(boxText(tester), sms);
-    expect(chips(), findsNothing);
-    expect(find.text('If the SMS contains any of (0)'), findsOneWidget);
+    expect(chips(), findsOneWidget);
+    expect(inRuleDialog(find.text(sms.replaceAll('\n', ' '))), findsOneWidget);
+    expect(boxText(tester), isEmpty);
+    expect(find.text('If the SMS contains any of (1)'), findsOneWidget);
     expect(enabled(tester, button('Create')), isTrue);
 
     await tester.tap(button('Create'));
@@ -357,6 +373,9 @@ void main() {
       p,
       (c) => showRuleDialog(c, patternSuggestion: 'TASTY CORNER ref 1234'),
     );
+    // The suggestion is a chip; tapping it brings it back for trimming.
+    await tester.tap(inRuleDialog(find.text('TASTY CORNER ref 1234')));
+    await tester.pumpAndSettle();
     await tester.enterText(addBox, 'TASTY CORNER');
     await tester.tap(button('Add'));
     await tester.pumpAndSettle();
@@ -364,6 +383,7 @@ void main() {
     // Text left over that repeats a chip is not stored twice.
     await tester.enterText(addBox, 'tasty corner');
     await tester.pump();
+    await classifyAs(tester, 'Food & Dining');
     await tester.tap(button('Create'));
     await tester.pumpAndSettle();
     expect(p.rules.where((r) => !r.isBuiltIn).single.pattern, 'TASTY CORNER');
@@ -394,7 +414,7 @@ void main() {
     expect(mine.map((r) => r.categoryId).toSet(), {'food', 'salary'});
   });
 
-  testWidgets('at 320dp with 2x text the dialog fits, long chips included', (
+  testWidgets('at 320dp with 2x text the sheet fits, long chips included', (
     tester,
   ) async {
     final p = FinanceProvider();
@@ -416,8 +436,8 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     expect(chips(), findsNWidgets(16));
-    // The long condition stays on one line inside the dialog.
-    final dialogRect = tester.getRect(find.byType(AlertDialog));
+    // The long condition stays on one line inside the sheet.
+    final dialogRect = tester.getRect(find.byType(EditorSheetBody));
     final longChip = find.ancestor(
       of: find.text(long),
       matching: find.byType(InputChip),
@@ -434,10 +454,9 @@ void main() {
     await tester.enterText(addBox, 'a|b');
     await tester.pump();
     expect(tester.takeException(), isNull);
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
+    await discard(tester);
 
-    // A new rule with a long suggestion in the box fits too.
+    // A new rule with a long suggestion fits too, as one chip.
     await open(
       tester,
       p,
@@ -446,6 +465,345 @@ void main() {
       textScale: 2,
     );
     expect(tester.takeException(), isNull);
-    expect(boxText(tester), '$long\n$long');
+    expect(chips(), findsOneWidget);
+    expect(inRuleDialog(find.text('$long $long')), findsOneWidget);
+  });
+
+  testWidgets('the rule sheet fits a small phone with the keyboard up', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    final rule = await fifteenRule(p);
+    await open(
+      tester,
+      p,
+      (c) => showRuleDialog(c, existing: rule),
+      size: const Size(320, 568),
+      textScale: 2,
+      keyboard: 280,
+    );
+    expect(tester.takeException(), isNull);
+    expect(find.byKey(const ValueKey('editor-save')).hitTestable(), findsOne);
+  });
+
+  testWidgets('a new rule from Cockpit waits for a category, and Spam leads '
+      'the list', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await open(tester, p, (c) => showRuleDialog(c));
+
+    expect(find.text('Pick what to classify as'), findsOneWidget);
+    expect(enabled(tester, button('Create')), isFalse);
+    await tester.tap(find.text('Classify as'));
+    await tester.pumpAndSettle();
+    expect(find.text('Spam: never import'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('Spam: never import')).dy,
+      lessThan(tester.getTopLeft(find.text('EXPENSES')).dy),
+    );
+  });
+
+  group('Make rule merge', () {
+    List<ClassifierRule> mine(FinanceProvider p) =>
+        p.rules.where((r) => !r.isBuiltIn).toList();
+
+    testWidgets('a selection on a row in Food adds to the Food rule', (
+      tester,
+    ) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule('swiggy', 'food');
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'zomato',
+          categorySuggestion: 'food',
+        ),
+      );
+
+      expect(find.text('Add to Food & Dining rule'), findsOneWidget);
+      expect(find.widgetWithText(Chip, 'swiggy'), findsOneWidget);
+      final fresh = find.widgetWithText(InputChip, 'zomato · new');
+      expect(fresh, findsOneWidget);
+      expect(tester.widget<InputChip>(fresh).selected, isTrue);
+      expect(find.text('If the SMS contains any of (2)'), findsOneWidget);
+      await tester.tap(button('Add to rule'));
+      await tester.pumpAndSettle();
+
+      expect(mine(p), hasLength(1));
+      expect(mine(p).single.pattern, 'swiggy | zomato');
+      expect(mine(p).single.categoryId, 'food');
+      expect(
+        find.text('Added "zomato" to your Food & Dining rule'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(mine(p).single.pattern, 'swiggy');
+    });
+
+    Tx smsRow(String id, String body) => Tx(
+      id: id,
+      type: TxType.expense,
+      categoryId: 'other_expense',
+      amount: 250,
+      note: '',
+      date: DateTime(2026, 9, 12, 13),
+      source: TxSource.sms,
+      smsBody: body,
+      sender: 'AD-DEMOBK',
+    );
+
+    testWidgets('a newer rule that claims the message makes it a new rule '
+        'at the top, saying which rule comes first', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.restoreTransactions([
+        smsRow('z1', 'Rs 250 paid by UPI to SAMPLE ZOMATO'),
+      ]);
+      await p.addRule('swiggy', 'food');
+      // Newer, so it sits above the food rule and claims the row.
+      await p.addRule('upi', 'transport');
+      String category() =>
+          p.transactions.singleWhere((t) => t.id == 'z1').categoryId;
+      expect(category(), 'transport');
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'zomato',
+          categorySuggestion: 'food',
+        ),
+      );
+
+      expect(find.text('New rule'), findsOneWidget);
+      expect(find.text('Add to Food & Dining rule'), findsNothing);
+      expect(
+        find.text(
+          'Your "upi" rule comes first for a message with these words, so '
+          'this is saved as a new rule above it.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(button('Create'));
+      await tester.pumpAndSettle();
+
+      expect(mine(p).map((r) => r.pattern), ['zomato', 'upi', 'swiggy']);
+      expect(mine(p).first.categoryId, 'food');
+      expect(category(), 'food');
+      expect(find.text('1 transaction reclassified'), findsOneWidget);
+    });
+
+    testWidgets('Add to rule keeps the rule where it is, so a rule above it '
+        'keeps its rows', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.restoreTransactions([
+        smsRow('i1', 'Rs 250 paid to SAMPLE SWIGGY INSTAMART'),
+      ]);
+      await p.addRule('swiggy', 'food');
+      // Newer, so it sits above the food rule and claims the row.
+      await p.addRule('instamart', 'shopping');
+      String category() =>
+          p.transactions.singleWhere((t) => t.id == 'i1').categoryId;
+      expect(category(), 'shopping');
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'zomato',
+          categorySuggestion: 'food',
+        ),
+      );
+
+      // No message holds "zomato", so nothing above shadows the merge.
+      expect(find.text('Add to Food & Dining rule'), findsOneWidget);
+      expect(find.byKey(const ValueKey('rule-shadow-line')), findsNothing);
+      await tester.tap(button('Add to rule'));
+      await tester.pumpAndSettle();
+
+      expect(mine(p).map((r) => r.pattern), ['instamart', 'swiggy | zomato']);
+      expect(category(), 'shopping');
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(mine(p).map((r) => r.pattern), ['instamart', 'swiggy']);
+    });
+
+    testWidgets('Undo after Add to rule puts the moved rows back in their '
+        'own categories', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      // Older, so it sits below the food rule.
+      await p.addRule('demopay', 'transport');
+      await p.addRule('swiggy', 'food');
+      // Loaded after the rules, so no rule has sorted them: one no rule
+      // matches, one the lower rule would claim on a re-sort.
+      await p.restoreTransactions([
+        smsRow('q1', 'Rs 250 paid to SAMPLE QWERTYMART'),
+        smsRow(
+          'q2',
+          'Rs 250 paid to SAMPLE QWERTYMART via DEMOPAY',
+        ).copyWith(categoryId: 'shopping'),
+      ]);
+      String category(String id) =>
+          p.transactions.singleWhere((t) => t.id == id).categoryId;
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'qwertymart',
+          categorySuggestion: 'food',
+        ),
+      );
+
+      expect(find.text('Add to Food & Dining rule'), findsOneWidget);
+      await tester.tap(button('Add to rule'));
+      await tester.pumpAndSettle();
+      expect(category('q1'), 'food');
+      expect(category('q2'), 'food');
+      expect(
+        find.textContaining('2 transactions reclassified'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(mine(p).map((r) => r.pattern), ['swiggy', 'demopay']);
+      expect(category('q1'), 'other_expense');
+      expect(category('q2'), 'shopping');
+    });
+
+    test('a spam rule above the target shadows the merge; a rule for the '
+        'other direction does not', () async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.restoreTransactions([
+        smsRow('z1', 'Rs 250 paid by UPI to SAMPLE ZOMATO'),
+      ]);
+      await p.addRule('swiggy', 'food');
+      // Income only: it never claims an expense row.
+      await p.addRule('upi', 'salary');
+      ClassifierRule rule(String pattern) =>
+          p.rules.firstWhere((r) => r.pattern == pattern);
+      expect(p.ruleShadowingMerge(rule('swiggy'), null, ['zomato']), isNull);
+
+      // A spam rule claims every direction; the row is confirmed, so the
+      // rule leaves it in place.
+      await p.restoreRules([
+        ClassifierRule(
+          id: 'spam_upi',
+          pattern: 'upi',
+          categoryId: kSpamCategoryId,
+        ),
+        ...p.rules,
+      ]);
+      expect(p.transactions.any((t) => t.id == 'z1'), isTrue);
+      expect(
+        p.ruleShadowingMerge(rule('swiggy'), null, ['zomato'])?.id,
+        'spam_upi',
+      );
+      // Words no message holds shadow nothing.
+      expect(p.ruleShadowingMerge(rule('swiggy'), null, ['dominos']), isNull);
+    });
+
+    testWidgets('changing Classify as to another category makes it a new '
+        'rule', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule('swiggy', 'food');
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'zomato',
+          categorySuggestion: 'food',
+        ),
+      );
+      await classifyAs(tester, 'Transport');
+
+      expect(find.text('New rule'), findsOneWidget);
+      expect(find.text('Add to Food & Dining rule'), findsNothing);
+      await tester.tap(button('Create'));
+      await tester.pumpAndSettle();
+      expect(mine(p), hasLength(2));
+      expect(
+        mine(p).firstWhere((r) => r.categoryId == 'transport').pattern,
+        'zomato',
+      );
+    });
+
+    testWidgets('a word the rule already has disables Add to rule', (
+      tester,
+    ) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule('swiggy', 'food');
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'SWIGGY',
+          categorySuggestion: 'food',
+        ),
+      );
+
+      expect(
+        find.text('These words are already in your Food & Dining rule'),
+        findsOneWidget,
+      );
+      expect(enabled(tester, button('Add to rule')), isFalse);
+    });
+
+    testWidgets('a built-in rule and a pair leg are never merge targets', (
+      tester,
+    ) async {
+      final p = FinanceProvider();
+      await p.load();
+      // A built-in food rule, and no food rule of the user's.
+      await p.restoreRules([
+        ...p.rules,
+        ClassifierRule(
+          id: 'builtin_test_food',
+          pattern: 'zomato',
+          categoryId: 'food',
+        ),
+      ]);
+      expect(mine(p), isEmpty);
+      expect(p.rules.where((r) => r.categoryId == 'food'), isNotEmpty);
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'tasty corner',
+          categorySuggestion: 'food',
+        ),
+      );
+      expect(find.text('New rule'), findsOneWidget);
+      Navigator.of(tester.element(find.byType(EditorSheetBody))).pop();
+      await tester.pumpAndSettle();
+
+      // A food leg of a food and salary pair.
+      await p.addRule('amma', 'food');
+      await p.addRule('amma', 'salary');
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'tasty corner',
+          categorySuggestion: 'food',
+        ),
+      );
+      expect(find.text('New rule'), findsOneWidget);
+    });
   });
 }

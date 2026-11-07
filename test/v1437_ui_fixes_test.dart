@@ -335,8 +335,6 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(food);
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(FilledButton, 'Apply'));
-      await tester.pumpAndSettle();
       expect(row(p, 'leg-out').categoryId, 'food');
       expect(row(p, 'leg-in').pairId, isNull);
 
@@ -418,7 +416,15 @@ void main() {
         (ctx) => showAddTransactionSheet(ctx, existing: row(p, 'tea')),
       );
       final nav = rootNav(tester);
-      button(tester, 'Delete transaction').onPressed!();
+      // Delete sits in the ⋮ menu: its item runs what onSelected does.
+      tester
+          .widget<PopupMenuButton<String>>(
+            find.ancestor(
+              of: find.byTooltip('Transaction actions'),
+              matching: find.byType(PopupMenuButton<String>),
+            ),
+          )
+          .onSelected!('delete');
       // The sheet goes before the delete finishes.
       nav.pop();
       await tester.pumpAndSettle();
@@ -429,6 +435,123 @@ void main() {
       await tester.tap(find.text('Undo'));
       await tester.pumpAndSettle();
       expect(p.transactions.single.id, 'tea');
+    });
+
+    testWidgets('Save changes offers Undo', (tester) async {
+      tall(tester);
+      final p = await withRows([plain()]);
+      await pumpMiddle(
+        tester,
+        p,
+        await settings(),
+        (ctx) => showAddTransactionSheet(ctx, existing: row(p, 'tea')),
+      );
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Note (optional)'),
+        'Tea and toast',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, 'Save changes'));
+      await tester.pumpAndSettle();
+      expect(row(p, 'tea').note, 'Tea and toast');
+      expect(find.text('Changes saved'), findsOneWidget);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(row(p, 'tea').note, 'Tea corner');
+    });
+
+    testWidgets('Undo of a save that changed the account puts the row back '
+        'on its first account', (tester) async {
+      tall(tester);
+      final p = await withRows([plain()]);
+      final first = await p.addAccount(name: 'First', type: AccountType.bank);
+      final second = await p.addAccount(name: 'Second', type: AccountType.bank);
+      await p.assignAccount('tea', first);
+      await pumpMiddle(
+        tester,
+        p,
+        await settings(),
+        (ctx) => showAddTransactionSheet(ctx, existing: row(p, 'tea')),
+      );
+      final account = find.text('Account (optional)');
+      await tester.ensureVisible(account);
+      await tester.pumpAndSettle();
+      await tester.tap(account);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Second').last);
+      await tester.pumpAndSettle();
+      final save = find.widgetWithText(FilledButton, 'Save changes');
+      await tester.ensureVisible(save);
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(p.accountForKey(row(p, 'tea').acctKey)?.id, second);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(p.accountForKey(row(p, 'tea').acctKey)?.id, first);
+      expect(p.accountById(second)!.keys, isNot(contains('manual:tea')));
+      expect(p.accountById(first)!.keys, contains('manual:tea'));
+    });
+
+    testWidgets('Undo of a save that gave an unassigned row an account leaves '
+        'it unassigned', (tester) async {
+      tall(tester);
+      final p = await withRows([plain()]);
+      final second = await p.addAccount(name: 'Second', type: AccountType.bank);
+      await pumpMiddle(
+        tester,
+        p,
+        await settings(),
+        (ctx) => showAddTransactionSheet(ctx, existing: row(p, 'tea')),
+      );
+      final account = find.text('Account (optional)');
+      await tester.ensureVisible(account);
+      await tester.pumpAndSettle();
+      await tester.tap(account);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Second').last);
+      await tester.pumpAndSettle();
+      final save = find.widgetWithText(FilledButton, 'Save changes');
+      await tester.ensureVisible(save);
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(p.accountForKey(row(p, 'tea').acctKey)?.id, second);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(p.accountForKey(row(p, 'tea').acctKey), isNull);
+      expect(p.accountById(second)!.keys, isNot(contains('manual:tea')));
+    });
+
+    testWidgets('Undo of a save that took a leg out of its pair brings the '
+        'pair back', (tester) async {
+      tall(tester);
+      final p = await withRows([outLeg(), inLeg()]);
+      await pumpMiddle(
+        tester,
+        p,
+        await settings(),
+        (ctx) => showAddTransactionSheet(ctx, existing: row(p, 'leg-out')),
+      );
+      final expense = find.text('Expense');
+      await tester.ensureVisible(expense);
+      await tester.pumpAndSettle();
+      await tester.tap(expense);
+      await tester.pumpAndSettle();
+      final save = find.widgetWithText(FilledButton, 'Save changes');
+      await tester.ensureVisible(save);
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(row(p, 'leg-out').pairId, isNull);
+      expect(row(p, 'leg-in').pairId, isNull);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(row(p, 'leg-out').pairId, 'pair_t');
+      expect(row(p, 'leg-in').pairId, 'pair_t');
     });
 
     testWidgets('a second Unpair tap does nothing', (tester) async {
@@ -479,6 +602,8 @@ void main() {
         await settings(),
         (ctx) => showAddAccountDialog(ctx),
       );
+      await tester.tap(find.text('Bank account'));
+      await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).first, 'Demo Bank');
       await tester.pump();
       final nav = rootNav(tester);
@@ -614,7 +739,15 @@ void main() {
     );
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
-    final toggle = find.widgetWithText(SwitchListTile, 'Subscription');
+    final fold = find.byKey(const ValueKey('fold-extras'));
+    await tester.ensureVisible(fold);
+    await tester.pumpAndSettle();
+    await tester.tap(fold);
+    await tester.pumpAndSettle();
+    final toggle = find.descendant(
+      of: find.widgetWithText(ListTile, 'Subscription'),
+      matching: find.byType(Switch),
+    );
     await tester.ensureVisible(toggle);
     await tester.pumpAndSettle();
     await tester.tap(toggle);
@@ -687,6 +820,13 @@ void main() {
       }
       await tester.pumpAndSettle();
       expect(p.groups.where((g) => g.label == 'Garden'), hasLength(1));
+    });
+
+    testWidgets('the group colour sheet says Group colour', (tester) async {
+      await openGroupDialog(tester);
+      await tester.tap(find.bySemanticsLabel('Custom colour'));
+      await tester.pumpAndSettle();
+      expect(find.text('Group colour'), findsOneWidget);
     });
   });
 

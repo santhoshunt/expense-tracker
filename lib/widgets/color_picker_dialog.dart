@@ -167,136 +167,155 @@ class _ColorPickerSheetState extends State<_ColorPickerSheet> {
         20,
         16 + MediaQuery.viewInsetsOf(context).bottom,
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(widget.title, style: theme.textTheme.titleLarge),
-            const SizedBox(height: 16),
-            _ShadeSquare(hsv: _hsv, onChanged: _drag),
-            const SizedBox(height: 16),
-            _HueSlider(hue: _hsv.hue, onChanged: (h) => _drag(_hsv.withHue(h))),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: color,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: scheme.outlineVariant, width: 2),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextField(
-                    controller: _hex,
-                    focusNode: _hexFocus,
-                    decoration: const InputDecoration(
-                      labelText: 'Hex',
-                      prefixText: '#',
-                      counterText: '',
-                    ),
-                    maxLength: 7,
-                    textCapitalization: TextCapitalization.characters,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp('[0-9a-fA-F#]')),
-                    ],
-                    onChanged: _onHexChanged,
-                    onSubmitted: (_) => _hex.text = _hexOf(_hsv.toColor()),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Copy hex',
-                  icon: const Icon(Icons.copy_outlined, size: 20),
-                  onPressed: () => Clipboard.setData(
-                    ClipboardData(text: '#${_hexOf(color)}'),
-                  ),
-                ),
-              ],
-            ),
-            if (warning != null) ...[
-              const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Flexible(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(
-                    Icons.warning_amber_rounded,
-                    size: 16,
-                    color: scheme.onSurfaceVariant,
+                  Text(widget.title, style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 16),
+                  _ShadeSquare(hsv: _hsv, onChanged: _drag),
+                  const SizedBox(height: 16),
+                  _HueSlider(
+                    hue: _hsv.hue,
+                    onChanged: (h) => _drag(_hsv.withHue(h)),
                   ),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(
-                      warning,
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: scheme.outlineVariant,
+                            width: 2,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: _hex,
+                          focusNode: _hexFocus,
+                          decoration: const InputDecoration(
+                            labelText: 'Hex',
+                            prefixText: '#',
+                            counterText: '',
+                          ),
+                          maxLength: 7,
+                          textCapitalization: TextCapitalization.characters,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp('[0-9a-fA-F#]'),
+                            ),
+                          ],
+                          onChanged: _onHexChanged,
+                          onSubmitted: (_) =>
+                              _hex.text = _hexOf(_hsv.toColor()),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Copy hex',
+                        icon: const Icon(Icons.copy_outlined, size: 20),
+                        onPressed: () => Clipboard.setData(
+                          ClipboardData(text: '#${_hexOf(color)}'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (warning != null) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          size: 16,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            warning,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Text('Saved', style: theme.textTheme.titleSmall),
+                      const Spacer(),
+                      TextButton.icon(
+                        onPressed: _save,
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('Save colour'),
+                      ),
+                    ],
+                  ),
+                  if (_saved.isEmpty)
+                    Text(
+                      'Save colour keeps this colour here for next time.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    )
+                  else ...[
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        for (final c in _saved)
+                          _SavedSwatch(
+                            color: c,
+                            selected: c.toARGB32() == current,
+                            onTap: () => _pick(c),
+                            onRemove: () => _unsave(c),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Long-press a saved colour to remove it.',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: scheme.onSurfaceVariant,
                       ),
                     ),
-                  ),
+                  ],
                 ],
               ),
-            ],
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Text('Saved', style: theme.textTheme.titleSmall),
-                const Spacer(),
-                TextButton.icon(
-                  onPressed: _save,
-                  icon: const Icon(Icons.add, size: 18),
-                  label: const Text('Add'),
-                ),
-              ],
             ),
-            if (_saved.isEmpty)
-              Text(
-                'Add keeps this colour here for next time.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              )
-            else ...[
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (final c in _saved)
-                    _SavedSwatch(
-                      color: c,
-                      selected: c.toARGB32() == current,
-                      onTap: () => _pick(c),
-                      onRemove: () => _unsave(c),
-                    ),
-                ],
+          ),
+          // Pinned under the scroll, so Select stays in reach on a short
+          // screen and with the keyboard up for the hex field.
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
               ),
-              const SizedBox(height: 6),
-              Text(
-                'Long-press a saved colour to remove it.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, color),
+                child: const Text('Select'),
               ),
             ],
-            const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, color),
-                  child: const Text('Select'),
-                ),
-              ],
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

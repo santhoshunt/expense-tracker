@@ -4,43 +4,26 @@ import 'package:flutter/material.dart';
 
 import '../providers/finance_provider.dart';
 import '../services/backup_service.dart';
+import 'export_sheet.dart';
 import 'undo_snackbar.dart';
 
-/// The PDF report export, shared by Settings, Backup and the Accounts ⋮
-/// menu: asks which dates (all, or a picked range), shows a spinner while
-/// the report builds, then a toast with where it was saved, or why it
-/// failed. Cancelling at either question exports nothing.
+/// The PDF report export, shared by Settings and the Accounts ⋮ menu: asks
+/// which dates on the export sheet, shows a spinner while the report
+/// builds, then a toast with where it was saved, or why it failed.
+/// Dismissing the sheet exports nothing. With [rangeChosen] the caller's
+/// own sheet already asked (Settings' Export), so [range] is used as given
+/// (null for all).
 Future<void> exportPdfWithRange(
   BuildContext context,
-  FinanceProvider finance,
-) async {
+  FinanceProvider finance, {
+  DateTimeRange? range,
+  bool rangeChosen = false,
+}) async {
   final messenger = ScaffoldMessenger.of(context);
-  final choice = await showDialog<String>(
-    context: context,
-    builder: (ctx) => SimpleDialog(
-      title: const Text('Export which dates?'),
-      children: [
-        SimpleDialogOption(
-          onPressed: () => Navigator.pop(ctx, 'all'),
-          child: const Text('All transactions'),
-        ),
-        SimpleDialogOption(
-          onPressed: () => Navigator.pop(ctx, 'range'),
-          child: const Text('Choose dates…'),
-        ),
-      ],
-    ),
-  );
-  if (choice == null || !context.mounted) return;
-  DateTimeRange? range;
-  if (choice == 'range') {
-    final now = DateTime.now();
-    range = await showDateRangePicker(
-      context: context,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(now.year, now.month, now.day),
-    );
-    if (range == null || !context.mounted) return;
+  if (!rangeChosen) {
+    final picked = await showExportSheet(context, pdfOnly: true);
+    if (picked == null || !context.mounted) return;
+    range = picked.range;
   }
   // A barrier: a full-ledger report takes a moment, and no second tap may
   // start another.

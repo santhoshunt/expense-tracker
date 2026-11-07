@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Search bar (4x1): a search field (opens the search screen with the
+     keyboard up) and an Add button at its end (opens the Add expense
+     sheet). The card is rounder than the others (28dp corners), as a search
+     field is. The hint keeps to one line, so large text cuts it short
+     instead of wrapping. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/hw_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <ImageView
+        android:id="@+id/hw_bg"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_search_bg"
+        android:tint="#262A3A" />
+
+    <ImageView
+        android:id="@+id/hw_border"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:importantForAccessibility="no"
+        android:scaleType="fitXY"
+        android:src="@drawable/widget_search_border"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingEnd="4dp"
+        android:paddingVertical="4dp">
+
+        <LinearLayout
+            android:id="@+id/hw_open"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:contentDescription="@string/home_widget_search_label"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <ImageView
+                android:id="@+id/hw_search_icon"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/widget_ic_search" />
+
+            <TextView
+                android:id="@+id/hw_hint"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:importantForAccessibility="no"
+                android:maxLines="1"
+                android:text="@string/home_widget_search_hint"
+                android:textColor="#B4C0C8"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <!-- 48dp wide and the row's full height: a touch target of at
+             least 48dp. -->
+        <FrameLayout
+            android:id="@+id/hw_add"
+            android:layout_width="48dp"
+            android:layout_height="match_parent"
+            android:layout_marginStart="4dp"
+            android:contentDescription="@string/shortcut_add_expense">
+
+            <ImageView
+                android:id="@+id/hw_add_icon"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_gravity="center"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_tile_add" />
+        </FrameLayout>
+    </LinearLayout>
+</FrameLayout>

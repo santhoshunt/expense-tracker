@@ -256,8 +256,9 @@ class SpendingHeatmap extends StatelessWidget {
   }
 
   /// One day's money-out rows, then the bills due that day; a row tap
-  /// opens the normal edit sheet. A day still [ahead] lists its bills, or
-  /// says none are due, and offers a one-time reminder on it.
+  /// opens the normal edit sheet, a reminder's bill its actions. A day
+  /// still [ahead] lists its bills, or says none are due, and offers a
+  /// one-time reminder on it; a day gone by offers an expense on it.
   void _showDaySheet(
     BuildContext context,
     DateTime day,
@@ -291,7 +292,7 @@ class SpendingHeatmap extends StatelessWidget {
                     total > 0
                         ? '${fmtDate(day)} · ${fmtMoneyWhole(total)} spent'
                         : fmtDate(day),
-                    style: Theme.of(ctx).textTheme.titleSmall,
+                    style: Theme.of(ctx).textTheme.titleLarge,
                   ),
                 ),
                 for (final (t, name) in rows.map(
@@ -348,9 +349,24 @@ class SpendingHeatmap extends StatelessWidget {
                       style: Theme.of(ctx).textTheme.titleSmall,
                     ),
                   ),
-                  for (final b in dayBills)
+                  for (final (b, reminder) in dayBills.map(
+                    (b) => (
+                      b,
+                      finance.reminders
+                          .where((r) => r.id == b.reminderId)
+                          .firstOrNull,
+                    ),
+                  ))
                     ListTile(
                       dense: true,
+                      // A reminder's row opens its actions; a detected
+                      // payment's stays plain.
+                      onTap: reminder == null
+                          ? null
+                          : () {
+                              Navigator.pop(ctx);
+                              showReminderActions(context, reminder, b.due);
+                            },
                       leading: const Icon(Icons.event_outlined, size: 20),
                       title: Text(
                         b.label,
@@ -391,6 +407,28 @@ class SpendingHeatmap extends StatelessWidget {
                         onPressed: () {
                           Navigator.pop(ctx);
                           showReminderEditor(context, onDate: day);
+                        },
+                      ),
+                    ),
+                  )
+                else
+                  // Gone by: a payment missed on the day is added there.
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 20, 0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add an expense on this day'),
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          showAddTransactionSheet(
+                            context,
+                            prefill: TxPrefill(
+                              categoryId: 'other_expense',
+                              date: day,
+                            ),
+                          );
                         },
                       ),
                     ),

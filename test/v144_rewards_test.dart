@@ -14,6 +14,8 @@ import 'package:expense_tracker/screens/card_rewards_page.dart';
 import 'package:expense_tracker/screens/settings_screen.dart';
 import 'package:expense_tracker/services/card_rewards.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
+import 'package:expense_tracker/services/recurring_detector.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 
 import 'accounts_test_utils.dart';
 
@@ -118,10 +120,10 @@ void main() {
     );
 
     test('groups, the base rate and a cap', () {
-      final e = estimateRewards(rules, const [
-        (categoryId: 'food', amount: 3000),
-        (categoryId: 'transport', amount: 1000),
-        (categoryId: 'bills', amount: 2000),
+      final e = estimateRewards(rules, [
+        (group: rules.groupFor('food'), amount: 3000),
+        (group: rules.groupFor('transport'), amount: 1000),
+        (group: rules.groupFor('bills'), amount: 2000),
       ]);
       // 300 + 50 + 20.
       expect(e.earned, 370);
@@ -130,27 +132,27 @@ void main() {
     });
 
     test('the first group holding a category wins', () {
-      final e = estimateRewards(rules, const [
-        (categoryId: 'shopping', amount: 1000),
+      final e = estimateRewards(rules, [
+        (group: rules.groupFor('shopping'), amount: 1000),
       ]);
       expect(e.earned, 100);
     });
 
     test('a group stops at its cap and says so', () {
-      final e = estimateRewards(rules, const [
-        (categoryId: 'food', amount: 3000),
-        (categoryId: 'shopping', amount: 4000),
-        (categoryId: 'bills', amount: 1000),
+      final e = estimateRewards(rules, [
+        (group: rules.groupFor('food'), amount: 3000),
+        (group: rules.groupFor('shopping'), amount: 4000),
+        (group: rules.groupFor('bills'), amount: 1000),
       ]);
       expect(e.earned, 510);
       expect(e.capped, isTrue);
     });
 
     test('rounds down, and skips amounts at or below 0', () {
-      final e = estimateRewards(rules, const [
-        (categoryId: 'bills', amount: 199),
-        (categoryId: 'bills', amount: 0),
-        (categoryId: 'bills', amount: -500),
+      final e = estimateRewards(rules, [
+        (group: rules.groupFor('bills'), amount: 199),
+        (group: rules.groupFor('bills'), amount: 0),
+        (group: rules.groupFor('bills'), amount: -500),
       ]);
       expect(e.earned, 1);
     });
@@ -158,24 +160,27 @@ void main() {
     test('earnings that add up to a whole figure are not lost to float '
         'error', () {
       // Ten 0.1s sum to 0.9999999999999999 in doubles.
-      final e = estimateRewards(const CardRewards(baseRate: 1), [
-        for (var i = 0; i < 10; i++) (categoryId: 'bills', amount: 10.0),
+      const flat = CardRewards(baseRate: 1);
+      final e = estimateRewards(flat, [
+        for (var i = 0; i < 10; i++)
+          (group: flat.groupFor('bills'), amount: 10.0),
       ]);
       expect(e.earned, 1);
       // The same inside a group, against its cap.
-      final capped = estimateRewards(
-        const CardRewards(
-          groups: [
-            RewardGroup(categoryIds: {'bills'}, rate: 1, cap: 1),
-          ],
-        ),
-        [for (var i = 0; i < 10; i++) (categoryId: 'bills', amount: 10.0)],
+      const bills = CardRewards(
+        groups: [
+          RewardGroup(categoryIds: {'bills'}, rate: 1, cap: 1),
+        ],
       );
+      final capped = estimateRewards(bills, [
+        for (var i = 0; i < 10; i++)
+          (group: bills.groupFor('bills'), amount: 10.0),
+      ]);
       expect(capped.earned, 1);
       expect(capped.capped, isTrue);
       // A real shortfall still rounds down.
-      final short = estimateRewards(const CardRewards(baseRate: 1), const [
-        (categoryId: 'bills', amount: 99.6),
+      final short = estimateRewards(flat, [
+        (group: flat.groupFor('bills'), amount: 99.6),
       ]);
       expect(short.earned, 0);
     });
@@ -186,16 +191,134 @@ void main() {
         baseRate: 4,
         pointValue: 0.25,
       );
-      final e = estimateRewards(points, const [
-        (categoryId: 'bills', amount: 10000),
+      final e = estimateRewards(points, [
+        (group: points.groupFor('bills'), amount: 10000),
       ]);
       expect(e.earned, 400);
       expect(e.rupees, 100);
-      final noValue = estimateRewards(
-        const CardRewards(unit: RewardUnit.points, baseRate: 4),
-        const [(categoryId: 'bills', amount: 10000)],
-      );
+      const unvalued = CardRewards(unit: RewardUnit.points, baseRate: 4);
+      final noValue = estimateRewards(unvalued, [
+        (group: unvalued.groupFor('bills'), amount: 10000),
+      ]);
       expect(noValue.rupees, isNull);
+    });
+
+    test('a charge under its group minimum earns nothing, not the base '
+        'rate', () {
+      const r = CardRewards(
+        groups: [
+          RewardGroup(id: 'gm', categoryIds: {'food'}, rate: 10, minimum: 100),
+        ],
+        baseRate: 1,
+      );
+      final g = r.groupFor('food');
+      expect(estimateRewards(r, [(group: g, amount: 99)]).earned, 0);
+      expect(estimateRewards(r, [(group: g, amount: 100)]).earned, 10);
+    });
+  });
+
+  group('resolveRewardGroup', () {
+    const a = RewardGroup(
+      id: 'gA',
+      name: 'Amazon',
+      categoryIds: {},
+      merchantWords: {'amazon'},
+      rate: 5,
+    );
+    const b = RewardGroup(
+      id: 'gB',
+      name: 'Shopping',
+      categoryIds: {'shopping'},
+      rate: 2,
+    );
+    const r = CardRewards(groups: [a, b], baseRate: 1);
+
+    test('a pick beats a remembered pick, which beats a merchant name, '
+        'which beats a category', () {
+      final picked = resolveRewardGroup(
+        r,
+        pick: 'gB',
+        remembered: 'base',
+        merchant: 'amazon',
+        categoryIds: ['shopping'],
+      );
+      expect(picked.group, same(b));
+      expect(picked.reason, RewardReason.picked);
+      final remembered = resolveRewardGroup(
+        r,
+        remembered: 'gB',
+        merchant: 'amazon',
+        categoryIds: ['food'],
+      );
+      expect(remembered.group, same(b));
+      expect(remembered.reason, RewardReason.remembered);
+      final merchant = resolveRewardGroup(
+        r,
+        merchant: 'amazon',
+        categoryIds: ['shopping'],
+      );
+      expect(merchant.group, same(a));
+      expect(merchant.reason, RewardReason.merchant);
+      final category = resolveRewardGroup(
+        r,
+        merchant: 'demo mart',
+        categoryIds: ['shopping'],
+      );
+      expect(category.group, same(b));
+      expect(category.reason, RewardReason.category);
+      final rest = resolveRewardGroup(r, categoryIds: ['food']);
+      expect(rest.group, isNull);
+      expect(rest.reason, RewardReason.everythingElse);
+    });
+
+    test("a pick 'base' gives Everything else even for amazon", () {
+      final m = resolveRewardGroup(
+        r,
+        pick: kEverythingElseRewardGroupId,
+        merchant: 'amazon',
+        categoryIds: ['shopping'],
+      );
+      expect(m.group, isNull);
+      expect(m.reason, RewardReason.picked);
+    });
+
+    test('a pick naming no group falls through to the next rule', () {
+      final m = resolveRewardGroup(
+        r,
+        pick: 'gone',
+        merchant: 'amazon',
+        categoryIds: ['shopping'],
+      );
+      expect(m.group, same(a));
+      expect(m.reason, RewardReason.merchant);
+    });
+
+    test('merchant words match whole words only', () {
+      const ola = CardRewards(
+        groups: [
+          RewardGroup(
+            id: 'gO',
+            categoryIds: {},
+            merchantWords: {'ola'},
+            rate: 5,
+          ),
+        ],
+      );
+      final m = resolveRewardGroup(
+        ola,
+        merchant: 'coca cola',
+        categoryIds: ['food'],
+      );
+      expect(m.reason, RewardReason.everythingElse);
+    });
+
+    test('categories are tried in order', () {
+      final m = resolveRewardGroup(
+        r,
+        categoryIds: ['transfer_out', 'shopping'],
+      );
+      expect(m.group, same(b));
+      expect(m.categoryId, 'shopping');
     });
   });
 
@@ -204,16 +327,28 @@ void main() {
       const r = CardRewards(
         unit: RewardUnit.points,
         groups: [
-          RewardGroup(categoryIds: {'food'}, rate: 10, cap: 500),
+          RewardGroup(
+            id: 'g1',
+            name: 'Dining',
+            categoryIds: {'food'},
+            merchantWords: {'swiggy', 'zomato'},
+            rate: 10,
+            cap: 500,
+            minimum: 200,
+          ),
         ],
         baseRate: 1.5,
         pointValue: 0.25,
       );
       final back = CardRewards.tryFromJson(jsonDecode(jsonEncode(r.toJson())))!;
       expect(back.unit, RewardUnit.points);
+      expect(back.groups.single.id, 'g1');
+      expect(back.groups.single.name, 'Dining');
       expect(back.groups.single.categoryIds, {'food'});
+      expect(back.groups.single.merchantWords, {'swiggy', 'zomato'});
       expect(back.groups.single.rate, 10);
       expect(back.groups.single.cap, 500);
+      expect(back.groups.single.minimum, 200);
       expect(back.baseRate, 1.5);
       expect(back.pointValue, 0.25);
     });
@@ -231,6 +366,8 @@ void main() {
             'categoryIds': ['shopping', 7],
             'rate': 5,
             'cap': 0,
+            'merchantWords': ['Amazon.in', 7, '  '],
+            'minimum': 0,
           },
         ],
         'baseRate': 'x',
@@ -239,9 +376,61 @@ void main() {
       expect(r.unit, RewardUnit.cashback);
       expect(r.groups.single.categoryIds, {'shopping'});
       expect(r.groups.single.cap, isNull);
+      expect(r.groups.single.id, 'g2');
+      expect(r.groups.single.name, '');
+      expect(r.groups.single.merchantWords, {'amazon in'});
+      expect(r.groups.single.minimum, isNull);
       expect(r.baseRate, 0);
       expect(r.pointValue, isNull);
       expect(CardRewards.tryFromJson('nope'), isNull);
+    });
+
+    test("a legacy group's id names its card and is the same on every "
+        'read', () {
+      final json = {
+        'id': 'card1',
+        'name': 'Test card',
+        'type': AccountType.creditCard.name,
+        'keys': ['BANKA:1111'],
+        'rewards': {
+          'groups': [
+            {
+              'categoryIds': ['food'],
+              'rate': 10,
+            },
+            {
+              'categoryIds': ['shopping'],
+              'rate': 5,
+            },
+          ],
+          'baseRate': 1,
+        },
+      };
+      List<String> ids(Account a) => [for (final g in a.rewards!.groups) g.id];
+      final first = Account.fromJson(json);
+      expect(ids(first), ['card1-g0', 'card1-g1']);
+      expect(ids(Account.fromJson(json)), ['card1-g0', 'card1-g1']);
+      final back = Account.fromJson(jsonDecode(jsonEncode(first.toJson())));
+      expect(ids(back), ['card1-g0', 'card1-g1']);
+    });
+  });
+
+  group('rewardMerchantOf', () {
+    Tx paid({String payee = 'Amazon Pay', bool spam = false}) => Tx(
+      id: 'm1',
+      type: TxType.expense,
+      categoryId: kPaidForOthersCategoryId,
+      amount: 500,
+      note: '',
+      date: DateTime(2026, 7, 1),
+      payee: payee,
+      suspectedSpam: spam,
+    );
+
+    test('a transfer has a merchant; spam and a short payee do not', () {
+      expect(rewardMerchantOf(paid()), 'amazon pay');
+      expect(rewardMerchantOf(paid(spam: true)), isNull);
+      expect(rewardMerchantOf(paid(payee: 'AB')), isNull);
     });
   });
 
@@ -361,6 +550,7 @@ void main() {
           row('t6', 'transport', 800, day, cashbackOff: true),
           row('t7', 'salary', 9000, day, type: TxType.income),
           row('t8', 'food', 1000, lastCycle),
+          row('t9', kCardBillCategoryId, 3000, day),
         ])
           t.toJson(),
       ]),
@@ -370,13 +560,14 @@ void main() {
     return finance;
   }
 
-  test('cardRewardsFor: spends and Paid for Others earn; transfers, untick'
-      'ed rows and income do not', () async {
+  test('cardRewardsFor: spends, Paid for Others and unpaired transfers earn; '
+      'card bills, unticked rows and income do not', () async {
     final finance = await seeded();
     final a = finance.accountById('card1')!;
     final e = finance.cardRewardsFor(a)!;
-    // Group 300 + 400 capped at 500, transport 10, Paid for Others 20.
-    expect(e.earned, 530);
+    // Group 300 + 400 capped at 500, transport 10, Paid for Others 20,
+    // Transfer out 50.
+    expect(e.earned, 580);
     expect(e.capped, isTrue);
     expect(finance.cardRewardsFor(a, back: 1)!.earned, 100);
     await finance.setCardRewards('card1', null);
@@ -393,14 +584,18 @@ void main() {
     await tester.pumpWidget(accountsApp(finance));
     await tester.pumpAndSettle();
 
-    expect(find.text('Cashback this cycle ≈ ₹530 · capped'), findsOneWidget);
+    expect(find.text('Cashback this cycle ≈ ₹580 · capped'), findsOneWidget);
 
     await tester.tap(find.text('More'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Rewards…'));
     await tester.pumpAndSettle();
     expect(find.text('Test card rewards'), findsOneWidget);
-    expect(find.text('10%'), findsOneWidget);
+    // The unnamed v2.0.x group goes by its categories.
+    expect(
+      find.text('Food & Dining, Shopping · 10% · cap ₹500'),
+      findsOneWidget,
+    );
 
     // Without rewards the tile has no estimate.
     await tester.pageBack();
@@ -429,56 +624,78 @@ void main() {
     await tester.tap(find.text('Points'));
     await tester.pumpAndSettle();
     expect(saved(), isNull);
+    // Nothing saved, nothing to undo.
+    expect(find.text('Undo'), findsNothing);
     expect(find.text('₹ per point (optional)'), findsOneWidget);
     await tester.tap(find.text('Cashback'));
     await tester.pumpAndSettle();
     expect(find.text('₹ per point (optional)'), findsNothing);
 
+    // The pinned Save says what is missing, one thing at a time.
+    final save = find.byKey(const ValueKey('editor-save'));
+    final rateField = find.byKey(const ValueKey('reward-group-rate'));
+    final minField = find.byKey(const ValueKey('reward-group-minimum'));
+    final capField = find.byKey(const ValueKey('reward-group-cap'));
     await tester.tap(find.text('Add a group'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Save'));
-    await tester.pumpAndSettle();
-    expect(find.text('Enter a rate'), findsOneWidget);
-    expect(find.text('Pick at least one category'), findsOneWidget);
-    expect(find.text('To sort'), findsNothing);
-    expect(find.text('Transfer out'), findsNothing);
+    expect(find.text('Enter a name'), findsOneWidget);
+    expect(tester.widget<FilledButton>(save).onPressed, isNull);
 
-    final fields = find.descendant(
-      of: find.byType(AlertDialog),
-      matching: find.byType(TextField),
+    await tester.enterText(
+      find.byKey(const ValueKey('reward-group-name')),
+      'Dining',
     );
-    await tester.enterText(fields.first, '-2');
+    await tester.enterText(rateField, '-2');
     await tester.pumpAndSettle();
     expect(find.text("A rate can't be below 0"), findsOneWidget);
-    await tester.enterText(fields.first, '10');
-    await tester.enterText(fields.last, '0');
+    await tester.enterText(rateField, '10');
+    await tester.enterText(minField, '0');
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Enter a minimum above ₹0, or leave it blank'),
+      findsOneWidget,
+    );
+    await tester.enterText(minField, '100');
+    await tester.enterText(capField, '0');
     await tester.pumpAndSettle();
     expect(find.text('Enter a cap above 0, or leave it blank'), findsOneWidget);
-    await tester.enterText(fields.last, '1,000');
+    await tester.enterText(capField, '1,000');
+    await tester.pumpAndSettle();
+    expect(find.text('Pick a category or add a merchant word'), findsOneWidget);
+    await tester.tap(find.text('Categories'));
+    await tester.pumpAndSettle();
+    expect(find.text('To sort'), findsNothing);
+    expect(find.text('Transfer out'), findsNothing);
     await tester.tap(find.text('Food & Dining'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Save'));
+    await tester.tap(save);
     await tester.pumpAndSettle();
 
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(EditorSheetBody), findsNothing);
     final g = saved()!.groups.single;
+    expect(g.name, 'Dining');
     expect(g.categoryIds, {'food'});
     expect(g.rate, 10);
+    expect(g.minimum, 100);
     expect(g.cap, 1000);
-    expect(find.text('10%'), findsOneWidget);
-    expect(find.text('Food & Dining\nUp to ₹1,000 a cycle'), findsOneWidget);
+    expect(g.id, startsWith('g'));
+    // "min" and "cap" hold their amounts with a no-break space.
+    expect(find.text('Dining · 10% · min ₹100 · cap ₹1,000'), findsOneWidget);
+    expect(find.text('Food & Dining'), findsOneWidget);
 
     // A second group cannot take Food & Dining again.
     await tester.tap(find.text('Add a group'));
     await tester.pumpAndSettle();
+    await tester.tap(find.text('Categories'));
+    await tester.pumpAndSettle();
     expect(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(EditorSheetBody),
         matching: find.text('Food & Dining'),
       ),
       findsNothing,
     );
-    await tester.tap(find.text('Cancel'));
+    await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
 
     // Everything else: a bad entry errors and keeps the saved rate.
@@ -497,7 +714,19 @@ void main() {
     await tester.tap(find.text('Points'));
     await tester.pumpAndSettle();
     expect(saved()!.unit, RewardUnit.points);
-    expect(find.text('10 points per ₹100'), findsOneWidget);
+    // Every rate now reads in points: Undo puts cashback back.
+    expect(find.text('Rates now read as points per ₹100'), findsOneWidget);
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(saved()!.unit, RewardUnit.cashback);
+    expect(find.text('Rates are a percent of each spend.'), findsOneWidget);
+    await tester.tap(find.text('Points'));
+    await tester.pumpAndSettle();
+    expect(saved()!.unit, RewardUnit.points);
+    // A points card's cap is in points.
+    const pointsRow =
+        'Dining · 10 points per ₹100 · min ₹100 · cap 1,000 points';
+    expect(find.text(pointsRow), findsOneWidget);
     await tester.enterText(
       find.widgetWithText(TextField, '₹ per point (optional)'),
       '0.25',
@@ -506,7 +735,9 @@ void main() {
     expect(saved()!.pointValue, 0.25);
 
     // Delete group, then Undo puts it back.
-    await tester.tap(find.text('10 points per ₹100'));
+    await tester.tap(find.text(pointsRow));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Group actions'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete group'));
     await tester.pumpAndSettle();
@@ -522,7 +753,9 @@ void main() {
     await tester.enterText(base, '');
     await tester.pumpAndSettle();
     expect(saved()!.baseRate, 0);
-    await tester.tap(find.text('10 points per ₹100'));
+    await tester.tap(find.text(pointsRow));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Group actions'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Delete group'));
     await tester.pumpAndSettle();
@@ -532,6 +765,73 @@ void main() {
     expect(saved()!.unit, RewardUnit.points);
     expect(saved()!.groups.single.rate, 10);
     expect(saved()!.pointValue, 0.25);
+
+    // A group of merchant words alone; a typed word counts without Add.
+    await tester.tap(find.text('Add a group'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('reward-group-name')),
+      'Demo Shop',
+    );
+    await tester.enterText(rateField, '5');
+    await tester.tap(find.text('Merchant words'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('reward-group-word')),
+      'Demo Shop',
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    final groups = saved()!.groups;
+    expect(groups, hasLength(2));
+    expect(groups.last.name, 'Demo Shop');
+    expect(groups.last.merchantWords, {'demo shop'});
+    expect(groups.last.categoryIds, isEmpty);
+  });
+
+  testWidgets('the reward group sheet fits 320dp at 2x text', (tester) async {
+    tester.view.physicalSize = const Size(320, 568) * 3;
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    final finance = await seeded();
+    await tester.pumpWidget(
+      ChangeNotifierProvider.value(
+        value: finance,
+        child: MaterialApp(
+          // Above the routes, so the sheet gets the text scale too.
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: const CardRewardsPage(accountId: 'card1'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Below the fold of the page at this size.
+    final row = find.text('Food & Dining, Shopping · 10% · cap ₹500');
+    await tester.scrollUntilVisible(row, 100);
+    await tester.ensureVisible(row);
+    await tester.pumpAndSettle();
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.byType(EditorSheetBody), findsOneWidget);
+    for (final fold in ['Categories', 'Merchant words']) {
+      await tester.ensureVisible(find.text(fold));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(fold));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(const ValueKey('editor-save')).hitTestable(),
+        findsOneWidget,
+      );
+    }
   });
 
   testWidgets('Settings lists the cards under Card rewards', (tester) async {

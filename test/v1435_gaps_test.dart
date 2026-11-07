@@ -252,7 +252,9 @@ void main() {
       final now = DateTime.now();
       final due = DateTime(now.year, now.month, now.day);
       await p.markReminderPaid(id, due);
-      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.tap(find.byTooltip('Reminder actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete reminder'));
       await tester.pumpAndSettle();
       expect([for (final r in p.reminders) r.id], [ids[0], ids[2]]);
 

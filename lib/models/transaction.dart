@@ -553,6 +553,17 @@ class Tx {
   /// card's reward estimate leaves it out. Inert on every other account.
   final bool cashbackOff;
 
+  /// On a credit card row: the reward group picked on it under Earns at, by
+  /// the group's `id`, or `'base'` for Everything else
+  /// (`kEverythingElseRewardGroupId`). Null when nothing was picked; a
+  /// split's anchor holds it.
+  final String? rewardGroup;
+
+  /// When [rewardGroup] was picked, so the last pick made is the one a
+  /// merchant keeps on that card. Null on a pick made before this was
+  /// kept, and with no pick; it clears with [rewardGroup].
+  final DateTime? rewardPickedAt;
+
   const Tx({
     required this.id,
     required this.type,
@@ -584,6 +595,8 @@ class Tx {
     this.splitId,
     this.categoryGuessed = false,
     this.cashbackOff = false,
+    this.rewardGroup,
+    this.rewardPickedAt,
   });
 
   /// The date period figures use: [countIn] when set, else [date].
@@ -664,6 +677,8 @@ class Tx {
       splitId: splitId,
       categoryGuessed: categoryGuessed,
       cashbackOff: cashbackOff,
+      rewardGroup: rewardGroup,
+      rewardPickedAt: rewardPickedAt,
     );
   }
 
@@ -705,6 +720,10 @@ class Tx {
     bool clearSplitId = false,
     bool? categoryGuessed,
     bool? cashbackOff,
+    String? rewardGroup,
+    DateTime? rewardPickedAt,
+    // Clears the pick time too.
+    bool clearRewardGroup = false,
   }) => Tx(
     id: id,
     type: type ?? this.type,
@@ -744,6 +763,10 @@ class Tx {
     splitId: clearSplitId ? null : (splitId ?? this.splitId),
     categoryGuessed: categoryGuessed ?? this.categoryGuessed,
     cashbackOff: cashbackOff ?? this.cashbackOff,
+    rewardGroup: clearRewardGroup ? null : (rewardGroup ?? this.rewardGroup),
+    rewardPickedAt: clearRewardGroup
+        ? null
+        : (rewardPickedAt ?? this.rewardPickedAt),
   );
 
   Map<String, dynamic> toJson() => {
@@ -777,6 +800,9 @@ class Tx {
     if (splitId != null) 'splitId': splitId,
     if (categoryGuessed) 'guessed': true,
     if (cashbackOff) 'noCashback': true,
+    if (rewardGroup != null) 'rewardGroup': rewardGroup,
+    if (rewardGroup != null && rewardPickedAt != null)
+      'rewardPickedAt': rewardPickedAt!.toIso8601String(),
   };
 
   factory Tx.fromJson(Map<String, dynamic> json) {
@@ -832,6 +858,15 @@ class Tx {
       splitId: json['splitId'] is String ? json['splitId'] as String : null,
       categoryGuessed: json['guessed'] == true,
       cashbackOff: json['noCashback'] == true,
+      rewardGroup:
+          json['rewardGroup'] is String &&
+              (json['rewardGroup'] as String).isNotEmpty
+          ? json['rewardGroup'] as String
+          : null,
+      rewardPickedAt: switch (json['rewardPickedAt']) {
+        final String s => DateTime.tryParse(s),
+        _ => null,
+      },
     );
   }
 }

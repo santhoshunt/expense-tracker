@@ -49,11 +49,17 @@ void main() {
   ) => UpdateDownloader(
     clientFactory: () => MockClient.streaming((r, _) => handler(r)),
     dir: () async => updates,
+    retryPause: Duration.zero,
   );
 
   Future<List<File>> files() async => await updates.exists()
       ? updates.listSync().whereType<File>().toList()
       : <File>[];
+
+  Stream<List<int>> dropAfter(List<int> head, Uri url) async* {
+    yield head;
+    throw http.ClientException('Connection closed while receiving data', url);
+  }
 
   test(
     'follows GitHub to its file storage and saves the exact bytes',
@@ -165,7 +171,7 @@ void main() {
         ),
       );
       // Not awaited: its done future waits for a listener that may be gone.
-    unawaited(chunks.close());
+      unawaited(chunks.close());
       expect(await files(), isEmpty);
     },
   );
@@ -177,10 +183,20 @@ void main() {
   });
 
   test('rejects a body shorter or longer than the release says', () async {
-    await expectRefused(
-      downloader((r) async => bytes([1, 2, 3])),
-      message: 'stopped early',
+    // A short body is retried like a drop, and its partial file is kept
+    // for the next download to resume from.
+    await expectLater(
+      downloader((r) async => bytes([1, 2, 3])).download(option()),
+      throwsA(
+        isA<UpdateDownloadException>()
+            .having((e) => e.message, 'message', contains('stopped early'))
+            .having((e) => e.resumable, 'resumable', isTrue),
+      ),
     );
+    final kept = await files();
+    expect(kept.map((f) => f.uri.pathSegments.last), ['$tag.apk']);
+    expect(await kept.single.length(), 3);
+    await updates.delete(recursive: true);
     await expectRefused(
       downloader((r) async => bytes([1, 2, 3, 4, 5, 6, 7])),
       message: 'larger than the release',
@@ -203,6 +219,133 @@ void main() {
       throwsA(isA<UpdateDownloadException>()),
     );
     expect(await files(), isEmpty);
+  });
+
+  test(
+    'a dropped connection resumes where it stopped and follows GitHub again',
+    () async {
+      var github = 0;
+      var stored = 0;
+      var progress = 0;
+      final file = await downloader((r) async {
+        if (r.url.host == 'github.com') {
+          github++;
+          return redirect(storage.toString());
+        }
+        stored++;
+        if (stored == 1) {
+          return http.StreamedResponse(dropAfter([1, 2, 3], r.url), 200);
+        }
+        expect(r.headers['range'], 'bytes=3-');
+        return http.StreamedResponse(
+          Stream.value([4, 5, 6]),
+          206,
+          contentLength: 3,
+          headers: {'content-range': 'bytes 3-5/6'},
+        );
+      }).download(option(), onProgress: (received, _) => progress = received);
+      expect(await file.readAsBytes(), [1, 2, 3, 4, 5, 6]);
+      expect(github, 2, reason: 'the signed link is fetched again');
+      expect(progress, 6);
+    },
+  );
+
+  test('after three resumes it says the connection dropped, with no link or '
+      'error text', () async {
+    var stored = 0;
+    Future<http.StreamedResponse> handler(http.BaseRequest r) async {
+      if (r.url.host == 'github.com') return redirect(storage.toString());
+      stored++;
+      return http.StreamedResponse(dropAfter([1], r.url), 200);
+    }
+
+    await expectLater(
+      downloader(handler).download(option()),
+      throwsA(
+        isA<UpdateDownloadException>()
+            .having(
+              (e) => e.message,
+              'message',
+              allOf(
+                equals('The connection dropped. Try again.'),
+                isNot(contains('http')),
+                isNot(contains('uri=')),
+                isNot(contains('ClientException')),
+              ),
+            )
+            .having((e) => e.resumable, 'resumable', isTrue),
+      ),
+    );
+    expect(stored, 4);
+    // Each 200 restarts the file, so the kept partial holds one byte.
+    final kept = await files();
+    expect(kept.map((f) => f.uri.pathSegments.last), ['$tag.apk']);
+    expect(await kept.single.length(), 1);
+  });
+
+  test('a second download resumes from the kept file', () async {
+    // What the exhausted drops above leave behind.
+    await updates.create(recursive: true);
+    await File('${updates.path}/$tag.apk').writeAsBytes([1]);
+    final file = await downloader((r) async {
+      if (r.url.host == 'github.com') return redirect(storage.toString());
+      expect(r.headers['range'], 'bytes=1-');
+      return http.StreamedResponse(
+        Stream.value([2, 3, 4, 5, 6]),
+        206,
+        contentLength: 5,
+        headers: {'content-range': 'bytes 1-5/6'},
+      );
+    }).download(option());
+    expect(await file.readAsBytes(), [1, 2, 3, 4, 5, 6]);
+  });
+
+  test('a 200 to a Range request starts the file again', () async {
+    var stored = 0;
+    final file = await downloader((r) async {
+      if (r.url.host == 'github.com') return redirect(storage.toString());
+      stored++;
+      return stored == 1
+          ? http.StreamedResponse(dropAfter([1, 2, 3], r.url), 200)
+          : bytes([1, 2, 3, 4, 5, 6]);
+    }).download(option());
+    expect(await file.readAsBytes(), [1, 2, 3, 4, 5, 6]);
+  });
+
+  test('a 416 to a Range request starts again from 0', () async {
+    await updates.create(recursive: true);
+    await File('${updates.path}/$tag.apk').writeAsBytes([9, 9, 9]);
+    var stored = 0;
+    final file = await downloader((r) async {
+      if (r.url.host == 'github.com') return redirect(storage.toString());
+      stored++;
+      if (stored == 1) {
+        expect(r.headers['range'], 'bytes=3-');
+        return bytes([], status: 416);
+      }
+      expect(r.headers.containsKey('range'), isFalse);
+      return bytes([1, 2, 3, 4, 5, 6]);
+    }).download(option());
+    expect(await file.readAsBytes(), [1, 2, 3, 4, 5, 6]);
+  });
+
+  test('an unexpected error says the download failed, briefly', () async {
+    await expectRefused(
+      downloader((r) async => throw StateError('secret detail')),
+      message: 'The download failed. Try again.',
+    );
+    await expectLater(
+      downloader(
+        (r) async => throw StateError('secret detail'),
+      ).download(option()),
+      throwsA(
+        isA<UpdateDownloadException>().having(
+          (e) => e.message,
+          'message',
+          isNot(contains('secret')),
+        ),
+      ),
+    );
   });
 
   test('cleanup removes every downloaded update', () async {

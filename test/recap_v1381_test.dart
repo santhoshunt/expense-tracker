@@ -420,6 +420,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Rename merchant'), findsOneWidget);
       await tester.enterText(find.byType(TextField), 'Corner Cafe');
+      // Save enables on the rebuild that follows the typed name.
+      await tester.pump();
       await tester.tap(find.widgetWithText(FilledButton, 'Save'));
       await tester.pumpAndSettle();
       expect(p.merchantAlias('test cafe'), 'Corner Cafe');

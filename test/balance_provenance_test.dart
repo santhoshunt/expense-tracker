@@ -254,6 +254,64 @@ void main() {
       expect(find.text('Current outstanding'), findsOneWidget);
     });
 
+    testWidgets('Set balance shows where the figure came from and Undo puts '
+        'the old one back', (tester) async {
+      final at = DateTime(2026, 7, 3, 9, 30);
+      final p = await load(
+        txs: const [],
+        accounts: [
+          Account(
+            id: 'b1',
+            name: 'Demo Bank',
+            type: AccountType.bank,
+            keys: const {},
+            manualBalance: 4200,
+            manualBalanceAt: at,
+          ),
+        ],
+      );
+      await tester.pumpWidget(app(p));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      await tester.tap(find.text('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Set balance…'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Now ${fmtMoney(4200)} · set by you on ${fmtDateCompact(at)}',
+        ),
+        findsOneWidget,
+      );
+      final save = find.widgetWithText(FilledButton, 'Save');
+      // The same figure saves again, stamped now, so it wins over a newer
+      // alert again.
+      expect(tester.widget<FilledButton>(save).onPressed, isNotNull);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(p.accountById('b1')!.manualBalance, 4200);
+      expect(p.accountById('b1')!.manualBalanceAt!.isAfter(at), isTrue);
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(p.accountById('b1')!.manualBalanceAt, at);
+
+      await tester.tap(find.text('More'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Set balance…'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), '9000');
+      await tester.pump();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(p.accountById('b1')!.manualBalance, 9000);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      final a = p.accountById('b1')!;
+      expect(a.manualBalance, 4200);
+      expect(a.manualBalanceAt, at);
+    });
+
     testWidgets('an open card counts its transactions in words', (
       tester,
     ) async {

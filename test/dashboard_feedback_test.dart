@@ -16,6 +16,7 @@ import 'package:expense_tracker/utils/dates.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/comparison_chart_sheet.dart';
 import 'package:expense_tracker/widgets/dashboard_fold.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 import 'package:expense_tracker/widgets/grouped_surface.dart';
 import 'package:expense_tracker/widgets/monthly_recap_card.dart';
 import 'package:expense_tracker/widgets/spending_heatmap.dart';
@@ -584,7 +585,7 @@ void main() {
       await tester.tap(set);
       await tester.pumpAndSettle();
       expect(find.text('Nothing due on this day'), findsNothing);
-      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.byType(EditorSheetBody), findsOneWidget);
     });
 
     testWidgets('a reminder with no amount gets its dot and sheet line', (

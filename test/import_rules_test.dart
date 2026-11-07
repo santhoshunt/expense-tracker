@@ -527,6 +527,22 @@ void main() {
       await p2.setAccountKind(id, null);
       expect(p2.accountById(id)!.typeLabel, 'Savings');
     });
+
+    test('a blank Kind keeps the picked icon', () async {
+      SharedPreferences.setMockInitialValues({});
+      final p = FinanceProvider();
+      await p.load();
+      final id = await p.addAccount(
+        name: 'Demo Locker',
+        type: AccountType.savings,
+        kind: 'RD',
+      );
+
+      await p.setAccountKind(id, '', kindIcon: 'gold');
+      final acct = p.accountById(id)!;
+      expect(acct.kind, isNull);
+      expect(acct.kindIcon, 'gold');
+    });
   });
 
   group('custom categories', () {

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -8,8 +9,11 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../services/card_rewards.dart';
 import '../utils/format.dart';
+import '../utils/text_scale.dart';
 import '../widgets/category_chip_label.dart';
+import '../widgets/dialog_expander.dart';
 import '../widgets/dispose_scope.dart';
+import '../widgets/editor_sheet.dart';
 import '../widgets/glossy.dart';
 import '../widgets/grouped_surface.dart';
 import '../widgets/undo_snackbar.dart';
@@ -28,6 +32,36 @@ String rewardRateLabel(RewardUnit unit, double rate) =>
     unit == RewardUnit.cashback
     ? '${fmtFieldNumber(rate)}%'
     : '${fmtFieldNumber(rate)} ${rate == 1 ? 'point' : 'points'} per ₹100';
+
+/// What a reward group is called: its name ("Dining"), or for a group
+/// saved before names existed, its categories then merchant words
+/// ("Food & Dining, Shopping").
+String rewardGroupName(RewardGroup g) => g.name.isNotEmpty
+    ? g.name
+    : [
+        for (final id in g.categoryIds) categoryById(id).label,
+        ...g.merchantWords,
+      ].join(', ');
+
+/// A group's chip: "10% Dining".
+String rewardGroupLabel(RewardUnit unit, RewardGroup g) =>
+    '${rewardRateLabel(unit, g.rate)} ${rewardGroupName(g)}'.trim();
+
+/// The Everything else chip: "1% Everything else".
+String everythingElseLabel(CardRewards r) =>
+    '${rewardRateLabel(r.unit, r.baseRate)} Everything else';
+
+/// A group's row on the rewards page: "Dining · 10% · min ₹500 · cap
+/// ₹1,000". A points card's cap is in points ("cap 1,000 points"). A
+/// no-break space after "min" and "cap" keeps each with its amount when the
+/// row wraps.
+String rewardGroupRowTitle(RewardUnit unit, RewardGroup g) => [
+  rewardGroupName(g),
+  rewardRateLabel(unit, g.rate),
+  if (g.minimum != null) 'min ${fmtMoneyTidy(g.minimum!)}',
+  if (g.cap case final cap?)
+    'cap ${unit == RewardUnit.points ? fmtPoints(cap) : fmtMoneyTidy(cap)}',
+].join(' · ');
 
 /// The Settings list's line for a card: "2 groups · 1% on everything else".
 String cardRewardsSummary(CardRewards r) {
@@ -217,6 +251,53 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
     );
   }
 
+  /// A group's row subtitle: its categories, then its merchant words; null
+  /// when it has neither.
+  Widget? _groupSubtitle(RewardGroup g) {
+    final lines = [
+      if (g.categoryIds.isNotEmpty)
+        [for (final id in g.categoryIds) categoryById(id).label].join(', '),
+      if (g.merchantWords.isNotEmpty)
+        'Merchant words: ${g.merchantWords.join(', ')}',
+    ];
+    return lines.isEmpty ? null : Text(lines.join('\n'));
+  }
+
+  /// Cashback or Points saves at once, and every rate then reads in the
+  /// other unit (5% becomes 5 points per ₹100), so saved rules get an Undo.
+  void _switchUnit(RewardUnit unit) {
+    final finance = context.read<FinanceProvider>();
+    final id = widget.accountId;
+    final before = finance.accountById(id)?.rewards;
+    setState(() => _unit = unit);
+    _save(unit: unit);
+    if (before == null) return;
+    showUndoSnackBar(
+      context,
+      unit == RewardUnit.points
+          ? 'Rates now read as points per ₹100'
+          : 'Rates now read as a percent',
+      () {
+        // The unit and point value back, onto the rules as they are now.
+        final now = finance.accountById(id)?.rewards;
+        finance.setCardRewards(
+          id,
+          now == null
+              ? before
+              : CardRewards(
+                  unit: before.unit,
+                  groups: now.groups,
+                  baseRate: now.baseRate,
+                  pointValue: before.pointValue,
+                ),
+        );
+        if (mounted) setState(() => _unit = before.unit);
+      },
+      icon: Icons.swap_horiz,
+      tone: AppToastTone.change,
+    );
+  }
+
   void _remove(CardRewards previous) {
     final finance = context.read<FinanceProvider>();
     final messenger = ScaffoldMessenger.of(context);
@@ -250,6 +331,23 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
                 ? 'Card rewards'
                 : '${account.displayName} rewards',
           ),
+          actions: [
+            if (account != null && account.isCard && rewards != null)
+              PopupMenuButton<String>(
+                tooltip: 'Rewards actions',
+                icon: const Icon(Icons.more_vert),
+                onSelected: (_) => _remove(rewards),
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: 'remove',
+                    child: Text(
+                      'Remove rewards',
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
+                  ),
+                ],
+              ),
+          ],
         ),
         body: account == null || !account.isCard
             ? const Center(child: Text('This card no longer exists.'))
@@ -274,10 +372,7 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
                       ),
                     ],
                     selected: {_unit},
-                    onSelectionChanged: (s) {
-                      setState(() => _unit = s.first);
-                      _save(unit: s.first);
-                    },
+                    onSelectionChanged: (s) => _switchUnit(s.first),
                   ),
                   const SizedBox(height: 8),
                   Text(
@@ -290,8 +385,9 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
                   Text('Reward groups', style: theme.textTheme.titleMedium),
                   const SizedBox(height: 4),
                   Text(
-                    'Categories that earn one rate, with an optional cap per '
-                    'statement cycle.',
+                    'Groups of categories or merchant words that earn one '
+                    'rate, with an optional minimum per payment and cap per '
+                    'cycle.',
                     style: theme.textTheme.bodySmall,
                   ),
                   const SizedBox(height: 12),
@@ -300,21 +396,8 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
                       first: i == 0,
                       last: i == groups.length - 1,
                       child: ListTile(
-                        title: Text(rewardRateLabel(_unit, g.rate)),
-                        subtitle: Text(
-                          [
-                            [
-                              for (final id in g.categoryIds)
-                                categoryById(id).label,
-                            ].join(', '),
-                            switch (g.cap) {
-                              null => 'No cap',
-                              final cap when points =>
-                                'Up to ${fmtPoints(cap)} a cycle',
-                              final cap => 'Up to ${fmtMoneyTidy(cap)} a cycle',
-                            },
-                          ].join('\n'),
-                        ),
+                        title: Text(rewardGroupRowTitle(_unit, g)),
+                        subtitle: _groupSubtitle(g),
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () => _editGroup(groups, i),
                       ),
@@ -336,7 +419,7 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
                     decoration: InputDecoration(
                       labelText: 'Everything else',
                       suffixText: points ? 'points per ₹100' : '%',
-                      helperText: 'The rate for categories in no group',
+                      helperText: 'The rate for payments no group takes',
                       errorText: _baseError,
                     ),
                     onChanged: (_) {
@@ -365,17 +448,6 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
                       },
                     ),
                   ],
-                  if (rewards != null) ...[
-                    const SizedBox(height: 24),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: () => _remove(rewards),
-                        icon: const Icon(Icons.delete_outline),
-                        label: const Text('Remove rewards'),
-                      ),
-                    ),
-                  ],
                 ],
               ),
       ),
@@ -383,160 +455,309 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
   }
 }
 
-/// The reward group editor. Null when dismissed; a null group when Delete
-/// group was tapped. [taken] holds the categories other groups name: they
-/// are left out of the chips, so a category earns in one group at most.
+/// The reward group editor sheet. Null when dismissed; a null group when
+/// Delete group was tapped. [taken] holds the categories other groups name:
+/// they are left out of the chips, so a category earns in one group at
+/// most. A group needs a name and a category or a merchant word.
 Future<({RewardGroup? group})?> showRewardGroupDialog(
   BuildContext context, {
   required RewardUnit unit,
   RewardGroup? existing,
   Set<String> taken = const {},
 }) async {
+  final nameCtrl = TextEditingController(text: existing?.name ?? '');
   final rateCtrl = TextEditingController(
     text: existing == null ? '' : fmtFieldNumber(existing.rate),
+  );
+  final minCtrl = TextEditingController(
+    text: existing?.minimum == null ? '' : fmtFieldNumber(existing!.minimum!),
   );
   final capCtrl = TextEditingController(
     text: existing?.cap == null ? '' : fmtFieldNumber(existing!.cap!),
   );
+  final wordCtrl = TextEditingController();
+  final controllers = [nameCtrl, rateCtrl, minCtrl, capCtrl, wordCtrl];
   final selected = {...?existing?.categoryIds};
+  final words = {...?existing?.merchantWords};
+  // The open fold: 'categories', 'words' or none.
+  String? open;
   final categories = [
     for (final c in allCategories)
       if (isRewardCategory(c) && !taken.contains(c.id)) c,
   ];
   final points = unit == RewardUnit.points;
-  // Errors show once Save has been tried, then follow each edit.
-  var tried = false;
-  return showDialog<({RewardGroup? group})>(
-    context: context,
+  // What the sheet opened with: back with nothing changed closes it
+  // without asking.
+  final initialTexts = [for (final c in controllers) c.text];
+  final initialSelected = {...selected};
+  final initialWords = {...words};
+  return showEditorSheet<({RewardGroup? group})>(
+    context,
     builder: (ctx) => DisposeScope(
-      disposables: [rateCtrl, capCtrl],
+      disposables: controllers,
       child: StatefulBuilder(
         builder: (ctx, setState) {
+          final name = nameCtrl.text.trim().replaceAll(RegExp(r'\s+'), ' ');
           final rateText = rateCtrl.text.trim();
           final rate = parseAmount(rateText);
+          final minText = minCtrl.text.trim();
+          final min = parseAmount(minText);
           final capText = capCtrl.text.trim();
           final cap = parseAmount(capText);
-          final rateError = rateText.isEmpty
+          final pendingWord = rewardWordText(wordCtrl.text);
+          final reason = name.isEmpty
+              ? 'Enter a name'
+              : rateText.isEmpty
               ? 'Enter a rate'
               : rate == null
               ? 'Enter a number'
               : rate < 0
               ? "A rate can't be below 0"
-              : null;
-          final capError = capText.isNotEmpty && (cap == null || cap <= 0)
+              : minText.isNotEmpty && (min == null || min <= 0)
+              ? 'Enter a minimum above ₹0, or leave it blank'
+              : capText.isNotEmpty && (cap == null || cap <= 0)
               ? 'Enter a cap above 0, or leave it blank'
+              : selected.isEmpty && words.isEmpty && pendingWord.isEmpty
+              ? 'Pick a category or add a merchant word'
               : null;
-          final categoryError = selected.isEmpty
-              ? 'Pick at least one category'
-              : null;
+          final dirty =
+              !listEquals([
+                for (final c in controllers) c.text,
+              ], initialTexts) ||
+              !setEquals(selected, initialSelected) ||
+              !setEquals(words, initialWords);
+          void addWord() {
+            if (pendingWord.isEmpty) return;
+            setState(() {
+              words.add(pendingWord);
+              wordCtrl.clear();
+            });
+          }
+
+          void toggle(String fold) => setState(() {
+            FocusScope.of(ctx).unfocus();
+            open = open == fold ? null : fold;
+          });
           final theme = Theme.of(ctx);
-          return AlertDialog(
-            title: Text(existing == null ? 'New reward group' : 'Reward group'),
-            content: SingleChildScrollView(
-              // Keeps the floating label of the first field from clipping.
-              padding: const EdgeInsets.only(top: 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  TextField(
-                    controller: rateCtrl,
-                    autofocus: existing == null,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: InputDecoration(
-                      labelText: points ? 'Points per ₹100' : 'Cashback',
-                      suffixText: points ? 'points' : '%',
-                      errorText: tried ? rateError : null,
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: capCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: InputDecoration(
-                      labelText: 'Cap per cycle (optional)',
-                      prefixText: points ? null : '₹ ',
-                      suffixText: points ? 'points' : null,
-                      helperText: 'Most this group earns in one cycle',
-                      errorText: tried ? capError : null,
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                  const SizedBox(height: 16),
-                  Text('Categories', style: theme.textTheme.labelMedium),
-                  if (taken.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      'Categories in another group are not listed.',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ],
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final c in categories)
-                        FilterChip(
-                          label: categoryChipLabel(c),
-                          selected: selected.contains(c.id),
-                          onSelected: (v) => setState(() {
-                            if (v) {
-                              selected.add(c.id);
-                            } else {
-                              selected.remove(c.id);
-                            }
-                          }),
-                        ),
-                    ],
-                  ),
-                  if (tried && categoryError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      categoryError,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.error,
+          final addButton = TextButton(
+            onPressed: pendingWord.isEmpty ? null : addWord,
+            child: const Text('Add'),
+          );
+          final wordField = TextField(
+            key: const ValueKey('reward-group-word'),
+            controller: wordCtrl,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              labelText: 'Add a merchant word',
+              helperText:
+                  'A word from the bank alert or Paid to, such as amazon',
+              helperMaxLines: 2,
+            ),
+            onChanged: (_) => setState(() {}),
+            onSubmitted: (_) => addWord(),
+          );
+          return EditorSheetBody(
+            title: existing == null ? 'New reward group' : 'Edit reward group',
+            menu: existing == null
+                ? null
+                : [
+                    PopupMenuItem(
+                      value: 'delete',
+                      child: Text(
+                        'Delete group',
+                        style: TextStyle(color: theme.colorScheme.error),
                       ),
                     ),
                   ],
-                ],
-              ),
-            ),
-            actions: [
-              if (existing != null)
-                TextButton(
-                  style: TextButton.styleFrom(
-                    foregroundColor: theme.colorScheme.error,
-                  ),
-                  onPressed: () => Navigator.pop(ctx, (group: null)),
-                  child: const Text('Delete group'),
-                ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  if (rateError != null ||
-                      capError != null ||
-                      categoryError != null) {
-                    setState(() => tried = true);
-                    return;
-                  }
-                  Navigator.pop(ctx, (
+            menuTooltip: 'Group actions',
+            onMenu: (_) => Navigator.pop(ctx, (group: null)),
+            footerLabel: 'Save',
+            footerReason: reason,
+            dirty: dirty,
+            onSave: reason != null
+                ? null
+                : () => Navigator.pop(ctx, (
                     group: RewardGroup(
+                      id: existing == null || existing.id.isEmpty
+                          ? newRewardGroupId()
+                          : existing.id,
+                      name: name,
                       categoryIds: {...selected},
+                      merchantWords: {
+                        ...words,
+                        if (pendingWord.isNotEmpty) pendingWord,
+                      },
                       rate: rate!,
                       cap: capText.isEmpty ? null : cap,
+                      minimum: minText.isEmpty ? null : min,
                     ),
-                  ));
-                },
-                child: const Text('Save'),
+                  )),
+            children: [
+              TextField(
+                key: const ValueKey('reward-group-name'),
+                controller: nameCtrl,
+                autofocus: existing == null,
+                textCapitalization: TextCapitalization.words,
+                textInputAction: TextInputAction.next,
+                maxLength: 30,
+                decoration: const InputDecoration(labelText: 'Name'),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const ValueKey('reward-group-rate'),
+                controller: rateCtrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                textInputAction: TextInputAction.next,
+                decoration: InputDecoration(
+                  labelText: points ? 'Points per ₹100' : 'Cashback',
+                  suffixText: points ? 'points' : '%',
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                key: const ValueKey('reward-group-minimum'),
+                controller: minCtrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(
+                  labelText: 'Minimum per payment (optional)',
+                  prefixText: '₹ ',
+                  helperText:
+                      'A payment under it earns nothing from this group',
+                  helperMaxLines: 2,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                key: const ValueKey('reward-group-cap'),
+                controller: capCtrl,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  labelText: 'Cap per cycle (optional)',
+                  prefixText: points ? null : '₹ ',
+                  suffixText: points ? 'points' : null,
+                  helperText: 'Most this group earns in one cycle',
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              const SizedBox(height: 16),
+              GroupedSurface(
+                first: true,
+                last: false,
+                child: DialogExpander(
+                  key: const ValueKey('reward-group-categories'),
+                  title: 'Categories',
+                  value: selected.isEmpty
+                      ? 'None'
+                      : [
+                          for (final id in selected) categoryById(id).label,
+                        ].join(', '),
+                  keepClosed: false,
+                  open: open == 'categories',
+                  onToggle: () => toggle('categories'),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (taken.isNotEmpty) ...[
+                          Text(
+                            'Categories in another group are not listed.',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final c in categories)
+                              FilterChip(
+                                label: categoryChipLabel(c),
+                                selected: selected.contains(c.id),
+                                onSelected: (v) => setState(() {
+                                  if (v) {
+                                    selected.add(c.id);
+                                  } else {
+                                    selected.remove(c.id);
+                                  }
+                                }),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              GroupedSurface(
+                first: false,
+                last: true,
+                child: DialogExpander(
+                  key: const ValueKey('reward-group-words'),
+                  title: 'Merchant words',
+                  value: words.isEmpty ? 'None' : words.join(', '),
+                  keepClosed: false,
+                  open: open == 'words',
+                  onToggle: () => toggle('words'),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (words.isNotEmpty) ...[
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              for (final w in words)
+                                InputChip(
+                                  label: Text(w),
+                                  deleteButtonTooltipMessage: 'Remove $w',
+                                  onDeleted: () =>
+                                      setState(() => words.remove(w)),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        // The rule editor's Add box: past the large text
+                        // scale the button drops under the field.
+                        if (isLargeTextScale(ctx)) ...[
+                          wordField,
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: addButton,
+                          ),
+                        ] else
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(child: wordField),
+                              const SizedBox(width: 8),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: addButton,
+                              ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ],
           );

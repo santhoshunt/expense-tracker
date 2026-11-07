@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/account.dart';
+import '../models/card_rewards.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
@@ -15,6 +16,8 @@ import '../utils/format.dart';
 import 'big_bills.dart';
 import 'budget_widget_service.dart';
 import 'card_bill.dart';
+import 'card_rewards.dart';
+import 'forward_series.dart';
 import 'import_checks.dart';
 import 'launch_actions.dart';
 import 'notification_ids.dart';
@@ -35,8 +38,8 @@ int epochDay(DateTime d) =>
     Duration.millisecondsPerDay;
 
 /// Feeds the Month pace, Upcoming, Today and Add, Spending split, Recent,
-/// Big bills, This week, Accounts and Payments to check widgets
-/// (HomeWidgets.kt). Like [BudgetWidgetService], Dart
+/// Big bills, This week, Accounts, Payments to check, Expected balance and
+/// Card cycle widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart
 /// computes and native draws; the snapshot carries dates and a usual-by-day
 /// curve so the widgets stay right across midnight without the app running.
 class HomeWidgetsService {
@@ -211,6 +214,25 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
     if (!bigBills.isEmpty) 'bigBills': _bigBills(bigBills, month),
     'week': _week(finance, now, toReview, reviewAmountLabel),
     'accounts': _accounts(finance),
+    // The Expected balance widgets: whole-rupee balances day by day from
+    // today. Kotlin drops the days gone by and dates the rest, so a
+    // snapshot from yesterday never shows yesterday's dates.
+    'ahead': {
+      'startDay': epochDay(now),
+      'balances': [
+        for (final d in aheadSeries(
+          finance,
+          patterns: allPatterns,
+          hidden: settings.hiddenUpcoming,
+          now: now,
+        ).series.days)
+          d.balance.round(),
+      ],
+    },
+    'cards': [
+      for (final a in finance.openAccounts)
+        if (a.isCard) _cardRow(finance, a, now),
+    ],
     // Left out while the ledger failed to load: no row could be confirmed.
     // Shown whatever the payment-to-check notes switch says.
     if (finance.loadWarnings.isEmpty)
@@ -306,6 +328,42 @@ Map<String, dynamic> _accountRow(FinanceProvider finance, Account a) {
     },
     'spentLabel': fmtMoneyWhole(spent),
     'leftLabel': left == null ? '' : fmtMoneyWhole(left),
+  };
+}
+
+/// One Card cycle widget card: this cycle's spend, the limit, the rewards
+/// estimate, and the statement and due days as epoch days, which Kotlin
+/// turns into "Statement in 6 days" and "Due 22 Nov" on the day it draws.
+/// No statement day without one set: the cycle is then the calendar month,
+/// and `cycleEnd` (every card) is that cycle's last day.
+/// Labels are empty and figures null where the card has none.
+Map<String, dynamic> _cardRow(
+  FinanceProvider finance,
+  Account a,
+  DateTime now,
+) {
+  final spent = finance.cardCycleSpend(a);
+  final limit = finance.accountCreditLimit(a);
+  final due = cardBillStatus(a, now)?.due;
+  final rewards = finance.cardRewardsFor(a);
+  final cycle = cardCycleOf(a, now);
+  return {
+    'id': a.id,
+    'name': a.displayName,
+    'spent': spent,
+    'spentLabel': fmtMoneyWhole(spent),
+    'limit': limit,
+    'limitLabel': limit == null ? '' : fmtMoneyWhole(limit),
+    if (a.statementDay != null) 'statementDay': epochDay(cycle.end),
+    // Every card, calendar month included: a widget drawn after this day
+    // shows ₹0 for the new cycle, as This week does for a new week.
+    'cycleEnd': epochDay(cycle.end),
+    'dueDay': due == null ? null : epochDay(due),
+    'rewardsLabel': rewards == null
+        ? null
+        : a.rewards?.unit == RewardUnit.points
+        ? '≈ ${fmtPoints(rewards.earned)}'
+        : '≈ ${fmtMoneyWhole(rewards.earned)}',
   };
 }
 

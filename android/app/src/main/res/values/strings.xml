@@ -32,8 +32,17 @@
     <string name="home_widget_accounts_description">What you spent and what is left on the bank accounts, cards and wallets you pick.</string>
     <string name="home_widget_checks_label">Payments to check</string>
     <string name="home_widget_checks_description">Payments an import counted with a guessed category or as To sort, with Keep to confirm a guess.</string>
+    <string name="home_widget_ahead_label">Expected balance</string>
+    <string name="home_widget_ahead_description">The balance the Ahead tab expects over the next 31 days.</string>
+    <string name="home_widget_ahead_compact_label">Lowest balance</string>
+    <string name="home_widget_ahead_compact_description">The lowest balance expected in the next 31 days.</string>
+    <string name="home_widget_card_label">Card cycle</string>
+    <string name="home_widget_card_description">One card\'s spend, rewards and next dates this cycle.</string>
+    <string name="home_widget_search_label">Search</string>
+    <string name="home_widget_search_description">Search payments, merchants and people, or add an expense.</string>
     <string name="home_widget_empty">Open Expense Tracker to set up this widget.</string>
     <string name="home_widget_accounts_empty">Pick accounts: hold the widget, then Reconfigure</string>
+    <string name="home_widget_card_empty">Tap to pick a card</string>
     <!-- Text inside the widgets. -->
     <string name="home_widget_upcoming_title">Upcoming</string>
     <string name="home_widget_today_title">Today</string>
@@ -49,6 +58,7 @@
     <string name="home_widget_checks_keep">Keep</string>
     <string name="home_widget_usual_marker">│ usual by today</string>
     <string name="home_widget_add">+ Add</string>
+    <string name="home_widget_search_hint">Search payments, merchants, people</string>
     <string name="home_widget_action_expense">− Expense</string>
     <string name="home_widget_action_income">+ Income</string>
     <!-- Launcher long-press shortcuts, the Quick Settings tile and the

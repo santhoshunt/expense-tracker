@@ -14,6 +14,7 @@ import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/services/subscriptions.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/animated_fold.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 
 import 'dashboard_test_utils.dart';
 
@@ -171,6 +172,33 @@ void main() {
     expect(find.text('Mark unpaid'), findsNothing, reason: 'not marked paid');
   });
 
+  testWidgets('Change cycle offers Undo', (tester) async {
+    final p = await seeded();
+    await p.setSubscriptionPins({'expense|netflix': SubscriptionCycle.monthly});
+    await tester.pumpWidget(
+      app(
+        p,
+        await settings(),
+        const ClassifiersScreen(initialTab: kCockpitTabSubscriptions),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Netflix'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Change cycle'));
+    await tester.pumpAndSettle();
+    expect(find.text('Billing cycle'), findsOneWidget);
+    expect(find.text('Search…'), findsNothing, reason: 'four rows');
+    await tester.tap(find.text('Quarterly'));
+    await tester.pumpAndSettle();
+    expect(p.subscriptionPinOf('expense|netflix'), SubscriptionCycle.quarterly);
+
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(p.subscriptionPinOf('expense|netflix'), SubscriptionCycle.monthly);
+  });
+
   testWidgets('a payment marked paid by hand offers Mark unpaid; Undo puts '
       'the mark back', (tester) async {
     final p = await seeded();
@@ -299,7 +327,7 @@ void main() {
     final name = tester.widget<TextField>(
       find
           .descendant(
-            of: find.byType(AlertDialog),
+            of: find.byType(EditorSheetBody),
             matching: find.byType(TextField),
           )
           .first,

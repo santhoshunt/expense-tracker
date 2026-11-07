@@ -33,8 +33,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
             android:maxLines="1"
-            android:text="−₹24,800"
-            android:textColor="#FF7CA3"
+            android:text="₹24,800"
+            android:textColor="#FFFFFF"
             android:textSize="22sp"
             android:textStyle="bold" />
 

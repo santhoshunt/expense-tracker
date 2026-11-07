@@ -5,15 +5,18 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/dashboard_layout.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
+import 'package:expense_tracker/screens/search_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/services/launch_actions.dart';
 import 'package:expense_tracker/services/monthly_recap.dart';
 import 'package:expense_tracker/utils/format.dart';
+import 'package:expense_tracker/widgets/ahead_projection.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
 import 'package:expense_tracker/widgets/lock_gate.dart';
 import 'package:expense_tracker/widgets/monthly_recap_card.dart';
@@ -265,6 +268,107 @@ void main() {
       await settle(tester);
       expect(find.text('lunch today'), findsOneWidget);
     });
+
+    testWidgets('Expected balance opens Ahead', (tester) async {
+      await pumpHome(tester, seed: seed);
+      await tester.tap(find.text('Transactions').last);
+      await settle(tester);
+      expect(find.text('Next 31 days'), findsNothing);
+      LaunchActions.instance.pending.value = LaunchAction.openAhead;
+      await settle(tester);
+      await settle(tester);
+      expect(find.text('Next 31 days'), findsOneWidget);
+    });
+
+    testWidgets('Expected balance scrolls back into view on a scrolled Ahead', (
+      tester,
+    ) async {
+      await pumpHome(tester, seed: seed);
+      await tester.tap(find.text('Ahead'));
+      await settle(tester);
+      // The card is taller than the test screen's list, so the page scrolls.
+      final projection = find.byType(AheadProjection);
+      final position = Scrollable.of(tester.element(projection)).position;
+      final end = position.maxScrollExtent;
+      expect(end, greaterThan(200));
+      position.jumpTo(end);
+      await settle(tester);
+      expect(position.pixels, end);
+
+      LaunchActions.instance.pending.value = LaunchAction.openAhead;
+      await settle(tester);
+      await settle(tester);
+      // Back up to the card's top, which ensureVisible puts near the top
+      // of the list.
+      expect(position.pixels, lessThan(end - 100));
+    });
+
+    testWidgets('Card cycle opens that card on Accounts', (tester) async {
+      late String second;
+      await pumpHome(
+        tester,
+        seed: (p) async {
+          await seed(p);
+          await p.addAccount(name: 'Test bank', type: AccountType.bank);
+          await p.addAccount(
+            name: 'First test card',
+            type: AccountType.creditCard,
+          );
+          second = await p.addAccount(
+            name: 'Second test card',
+            type: AccountType.creditCard,
+          );
+        },
+      );
+      messenger.setMockMethodCallHandler(
+        LaunchActions.channel,
+        (call) async => null,
+      );
+      await LaunchActions.instance.init();
+      await messenger.handlePlatformMessage(
+        LaunchActions.channel.name,
+        const StandardMethodCodec().encodeMethodCall(
+          MethodCall('launchAction', 'open_card:$second'),
+        ),
+        (_) {},
+      );
+      await settle(tester);
+      await settle(tester);
+      expect(find.text('Second test card').hitTestable(), findsOneWidget);
+      // The Cards page, not All: the bank is on another page.
+      expect(find.text('Test bank').hitTestable(), findsNothing);
+      expect(LaunchActions.instance.takeCardId(), isNull);
+    });
+
+    testWidgets('Search bar opens search with the keyboard up', (tester) async {
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.openSearch;
+      await settle(tester);
+      expect(find.byType(SearchScreen), findsOneWidget);
+      final field = tester.widget<EditableText>(
+        find.descendant(
+          of: find.byType(SearchScreen),
+          matching: find.byType(EditableText),
+        ),
+      );
+      expect(field.focusNode.hasFocus, isTrue);
+    });
+
+    testWidgets('a second Search bar tap does not stack another search', (
+      tester,
+    ) async {
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.openSearch;
+      await settle(tester);
+      LaunchActions.instance.pending.value = LaunchAction.openSearch;
+      await settle(tester);
+      // Offstage too: a search under another one is offstage.
+      expect(find.byType(SearchScreen, skipOffstage: false), findsOneWidget);
+      // One Back is home again.
+      await tester.pageBack();
+      await settle(tester);
+      expect(find.byType(SearchScreen, skipOffstage: false), findsNothing);
+    });
   });
 
   testWidgets('the Upcoming widget opens a folded Next 7 days for the visit', (
@@ -371,6 +475,10 @@ void main() {
       LaunchActions.fromName('open_breakdown'),
       LaunchAction.openBreakdown,
     );
+    expect(LaunchActions.fromName('open_ahead'), LaunchAction.openAhead);
+    expect(LaunchActions.fromName('open_search'), LaunchAction.openSearch);
+    // The card's id rides after a prefix, which only the channel reads.
+    expect(LaunchActions.fromName('open_card:c1'), isNull);
   });
 
   test('bill and budget alerts map to their widget taps', () {

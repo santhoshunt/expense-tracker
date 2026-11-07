@@ -7,7 +7,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
-import 'package:expense_tracker/widgets/animated_fold.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 
 Widget app(FinanceProvider p) => MultiProvider(
   providers: [
@@ -28,6 +28,27 @@ void main() {
     setBuiltinOverrides(const {});
   });
 
+  /// Picks [label] in Classify as.
+  Future<void> classifyAs(WidgetTester tester, String label) async {
+    await tester.tap(find.text('Classify as'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(label).last);
+    await tester.pumpAndSettle();
+  }
+
+  /// Closes the rule sheet from its handle, discarding anything typed.
+  Future<void> closeSheet(WidgetTester tester) async {
+    await tester.drag(
+      find.byKey(const ValueKey('editor-sheet-handle')),
+      const Offset(0, 300),
+    );
+    await tester.pumpAndSettle();
+    if (find.text('Discard').evaluate().isNotEmpty) {
+      await tester.tap(find.text('Discard'));
+      await tester.pumpAndSettle();
+    }
+  }
+
   testWidgets(
     'editor creates a rule pair; tile shows both; delete undoes both',
     (tester) async {
@@ -39,12 +60,12 @@ void main() {
 
       await tester.tap(find.text('New rule'));
       await tester.pumpAndSettle();
-      // The Rules tab's search box sits behind the dialog: target the
-      // dialog's own condition field.
+      // The Rules tab's search box sits behind the sheet: target the
+      // sheet's own condition field.
       await tester.enterText(
         find
             .descendant(
-              of: find.byType(AlertDialog),
+              of: find.byType(EditorSheetBody),
               matching: find.byType(TextField),
             )
             .first,
@@ -52,8 +73,9 @@ void main() {
       );
       await tester.pump();
 
-      // Default target is Food & Dining (expense), so the second slot offers
-      // income categories, behind its closed expander.
+      // Food & Dining (expense) first, so the second slot offers income
+      // categories, behind its closed expander.
+      await classifyAs(tester, 'Food & Dining');
       await tester.tap(find.text('Money in goes to another category'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Other direction'));
@@ -98,14 +120,22 @@ void main() {
       await tester.tap(find.text('contains "amma"'));
       await tester.pumpAndSettle();
       expect(find.text('Edit rule pair'), findsOneWidget);
-      expect(find.text('Salary'), findsOneWidget);
-      await tester.tap(find.text('Cancel'));
-      await tester.pumpAndSettle();
+      // In a field and, on the open expander's line, as its value.
+      expect(
+        find.descendant(
+          of: find.byType(EditorSheetBody),
+          matching: find.text('Salary'),
+        ),
+        findsWidgets,
+      );
+      await closeSheet(tester);
 
       // Delete in the pair's editor removes both rules; Undo restores both.
       await tester.tap(find.text('contains "amma"'));
       await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.tap(find.byTooltip('Rule actions'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete rule pair'));
       await tester.pumpAndSettle();
       expect(find.text('Deleted rule pair "amma"'), findsOneWidget);
       expect(p.rules.where((r) => !r.isBuiltIn), isEmpty);
@@ -117,10 +147,12 @@ void main() {
   );
 
   Finder inDialog(Finder f) =>
-      find.descendant(of: find.byType(AlertDialog), matching: f);
+      find.descendant(of: find.byType(EditorSheetBody), matching: f);
 
-  testWidgets('New rule reads category, then the Add box, then a closed '
-      'expander for the other direction, then the conditions', (tester) async {
+  testWidgets('New rule reads the conditions, then the Add box, then the '
+      'category, then a closed expander for the other direction', (
+    tester,
+  ) async {
     final p = FinanceProvider();
     await p.load();
     await tester.pumpWidget(app(p));
@@ -128,14 +160,20 @@ void main() {
     await tester.tap(find.text('New rule'));
     await tester.pumpAndSettle();
 
+    // Nothing to classify as yet: the footer says so, and the other
+    // direction waits for a category to oppose.
+    expect(find.text('Pick what to classify as'), findsOneWidget);
+    expect(find.text('Money in goes to another category'), findsNothing);
+    await classifyAs(tester, 'Food & Dining');
+
     double top(Finder f) => tester.getTopLeft(f).dy;
     final condition = inDialog(find.byType(TextField)).first;
-    final classifyAs = find.text('Classify as');
+    final classifyAsField = find.text('Classify as');
     final expander = find.text('Money in goes to another category');
     final conditions = find.text('If the SMS contains any of (0)');
-    expect(top(classifyAs), lessThan(top(condition)));
-    expect(top(condition), lessThan(top(expander)));
-    expect(top(expander), lessThan(top(conditions)));
+    expect(top(conditions), lessThan(top(condition)));
+    expect(top(condition), lessThan(top(classifyAsField)));
+    expect(top(classifyAsField), lessThan(top(expander)));
     // The old always-on paragraph and doubled helper are gone.
     expect(find.textContaining('Add another condition'), findsNothing);
     expect(find.textContaining('Rules only fire'), findsNothing);
@@ -145,23 +183,18 @@ void main() {
       findsOneWidget,
     );
 
-    AnimatedFold fold() => tester.widget<AnimatedFold>(
-      find.ancestor(
-        of: find.text('Other direction'),
-        matching: find.byType(AnimatedFold),
-      ),
-    );
-    expect(fold().collapsed, isTrue);
+    // A closed fold builds nothing.
+    expect(find.text('Other direction'), findsNothing);
+    expect(find.text('Not set'), findsOneWidget);
     await tester.tap(expander);
     await tester.pumpAndSettle();
-    expect(fold().collapsed, isFalse);
+    expect(find.text('Other direction'), findsOneWidget);
 
     // '|' would split the condition; the error names the button instead.
     await tester.enterText(condition, 'amma|appa');
     await tester.pump();
-    expect(find.text('Remove "|". Add each word on its own.'), findsOneWidget);
-    await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
+    expect(find.text('Remove "|". Add each word on its own.'), findsWidgets);
+    await closeSheet(tester);
 
     // An income rule flips the expander to money out. Opened from its row:
     // the category picker lists income below the fold of a lazy list.
@@ -197,6 +230,7 @@ void main() {
     expect(find.text('If the SMS contains any of (1)'), findsOneWidget);
 
     await tester.enterText(box, 'appa');
+    await classifyAs(tester, 'Food & Dining');
     await tester.tap(find.text('Create'));
     await tester.pumpAndSettle();
     expect(p.rules.where((r) => !r.isBuiltIn).single.pattern, 'amma | appa');

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Search bar widget's card: budget_widget_bg with 28dp corners, as a
+     search field is rounded. White so the provider's colour filter paints
+     it the app's card fill. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#FFFFFF" />
+    <corners android:radius="28dp" />
+</shape>

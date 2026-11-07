@@ -12,6 +12,7 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
 import 'package:expense_tracker/services/budget.dart';
 import 'package:expense_tracker/services/notification_service.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 
 /// Cockpit deletes act at once and offer Undo (no confirm dialog), and the
 /// undo puts the item back where it was: same id, same list position, and
@@ -55,11 +56,23 @@ void main() {
     await pumpThrough(tester);
   }
 
-  /// Opens the row showing [rowText] in its editor and taps Delete there.
-  Future<void> deleteInEditor(WidgetTester tester, String rowText) async {
+  /// Opens the row showing [rowText] in its editor and taps Delete there:
+  /// the [item] of its header ⋮ named [menu], or a Delete button.
+  Future<void> deleteInEditor(
+    WidgetTester tester,
+    String rowText, {
+    String? menu,
+    String item = 'Delete',
+  }) async {
     await tester.tap(find.text(rowText));
     await pumpThrough(tester);
-    await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+    if (menu != null) {
+      await tester.tap(find.byTooltip(menu));
+      await pumpThrough(tester);
+      await tester.tap(find.text(item));
+    } else {
+      await tester.tap(find.widgetWithText(TextButton, item));
+    }
     await pumpThrough(tester);
   }
 
@@ -99,9 +112,14 @@ void main() {
     expect(prefs.getInt(alertKey), 90);
 
     await pumpCockpit(tester, p, kCockpitTabBudgets);
-    await deleteInEditor(tester, 'Travel');
+    await deleteInEditor(
+      tester,
+      'Travel',
+      menu: 'Budget actions',
+      item: 'Delete budget',
+    );
 
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(EditorSheetBody), findsNothing);
     expect(find.text('Deleted budget "Travel"'), findsOneWidget);
     expect([for (final b in p.budgets) b.id], [ids[0], ids[2]]);
     expect(prefs.getInt(alertKey), isNull);
@@ -126,9 +144,14 @@ void main() {
     final id = p.budgets.single.id;
 
     await pumpCockpit(tester, p, kCockpitTabBudgets);
-    await deleteInEditor(tester, 'Food');
+    await deleteInEditor(
+      tester,
+      'Food',
+      menu: 'Budget actions',
+      item: 'Delete budget',
+    );
     expect(p.budgets, isEmpty);
-    expect(find.text('No custom budgets yet.'), findsOneWidget);
+    expect(find.text('No budgets yet.'), findsOneWidget);
 
     await tester.tap(find.text('Undo'));
     await pumpThrough(tester);
@@ -154,9 +177,14 @@ void main() {
     final ids = [for (final r in p.reminders) r.id];
 
     await pumpCockpit(tester, p, kCockpitTabReminders);
-    await deleteInEditor(tester, 'Internet');
+    await deleteInEditor(
+      tester,
+      'Internet',
+      menu: 'Reminder actions',
+      item: 'Delete reminder',
+    );
 
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(EditorSheetBody), findsNothing);
     expect(find.text('Deleted reminder "Internet"'), findsOneWidget);
     expect([for (final r in p.reminders) r.id], [ids[0], ids[2]]);
 
@@ -181,7 +209,10 @@ void main() {
     await tester.tap(find.text('New budget'));
     await pumpThrough(tester);
     expect(find.text('New budget'), findsWidgets);
+    expect(find.text('Monthly budget'), findsOneWidget);
+    expect(find.text('Trip or event'), findsOneWidget);
     expect(find.text('Delete'), findsNothing);
+    expect(find.text('Delete budget'), findsNothing);
   });
 
   testWidgets('category Delete asks where rows go, then Undo puts back the '
@@ -215,7 +246,9 @@ void main() {
     await pumpCockpit(tester, p, kCockpitTabCategories);
     await tester.tap(find.text('Pets'));
     await pumpThrough(tester);
-    await tester.tap(find.text('Delete'));
+    await tester.tap(find.byTooltip('Category actions'));
+    await pumpThrough(tester);
+    await tester.tap(find.text('Delete category'));
     await pumpThrough(tester);
     // The move-to dialog stays, with a red Delete.
     expect(find.text('Delete "Pets"?'), findsOneWidget);
@@ -273,7 +306,12 @@ void main() {
     final rulesBefore = [for (final r in p.rules) r.id];
 
     await pumpCockpit(tester, p, kCockpitTabRules);
-    await deleteInEditor(tester, 'contains "amma"');
+    await deleteInEditor(
+      tester,
+      'contains "amma"',
+      menu: 'Rule actions',
+      item: 'Delete rule',
+    );
     expect(find.text('Deleted rule "amma"'), findsOneWidget);
     expect(p.rules.any((r) => r.pattern == 'amma'), isFalse);
     await tester.tap(find.text('Undo'));

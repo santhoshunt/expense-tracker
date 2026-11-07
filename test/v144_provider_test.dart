@@ -11,6 +11,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/budget_monitor.dart';
+import 'package:expense_tracker/services/card_rewards.dart';
 import 'package:expense_tracker/services/category_guess.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 import 'package:expense_tracker/services/recurring_detector.dart';
@@ -923,6 +924,43 @@ void main() {
       expect(byId(p, id).cashbackOff, isTrue);
     });
 
+    test('addTransaction writes rewardGroup and JSON keeps it', () async {
+      final p = await loaded();
+      final id = await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 100,
+        note: 'test',
+        date: DateTime(2026, 7, 1),
+        rewardGroup: 'gX',
+      );
+      final t = byId(p, id);
+      expect(t.rewardGroup, 'gX');
+      expect(Tx.fromJson(jsonDecode(jsonEncode(t.toJson()))).rewardGroup, 'gX');
+      expect(t.copyWith(clearRewardGroup: true).rewardGroup, isNull);
+    });
+
+    test('a bulk move to another account drops its reward pick, a single '
+        'assign keeps it', () async {
+      final p = await loaded();
+      final a = await p.addAccount(name: 'First', type: AccountType.creditCard);
+      final b = await p.addAccount(name: 'Second', type: AccountType.bank);
+      final c = await p.addAccount(name: 'Third', type: AccountType.bank);
+      final id = await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 100,
+        note: 'test',
+        date: DateTime(2026, 7, 1),
+        rewardGroup: 'gX',
+      );
+      await p.assignAccount(id, a);
+      await p.assignAccount(id, c);
+      expect(byId(p, id).rewardGroup, 'gX');
+      await p.assignAccountToMany({id}, b);
+      expect(byId(p, id).rewardGroup, isNull);
+    });
+
     test(
       'the anchor is the alert row whatever order rows are stored in',
       () async {
@@ -1014,7 +1052,8 @@ void main() {
       expect(() => p.mergeSplit(byId(p, row.id).splitId!), throwsArgumentError);
     });
 
-    test('a split earns once at its first earning part\'s rate', () async {
+    test('a split earns once, on its total, at the first part a group '
+        'holds', () async {
       FinanceProvider.figuresClock = () => DateTime(2026, 7, 20, 12);
       addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
       final (p, row) = await payment();
@@ -1037,8 +1076,10 @@ void main() {
         (categoryId: 'food', amount: 4000),
       ]);
       final account = p.accountById(card)!;
-      expect(p.rewardCategoryOf(byId(p, row.id)), 'food');
-      // ₹5,000 at 10%: the transfer part sets no rate, the food part does.
+      expect(p.rewardMatchFor(account, byId(p, row.id)).group?.categoryIds, {
+        'food',
+      });
+      // ₹5,000 at 10%: the food part's group.
       expect(p.cardRewardsFor(account)!.earned, 500);
 
       final sid = byId(p, row.id).splitId!;
@@ -1046,8 +1087,184 @@ void main() {
         (t) => t.splitId == sid && t.id != row.id,
       );
       await p.updateTransaction(again.copyWith(categoryId: 'savings_out'));
-      expect(p.rewardCategoryOf(byId(p, row.id)), isNull);
-      expect(p.cardRewardsFor(account)!.earned, 0);
+      expect(
+        p.rewardMatchFor(account, byId(p, row.id)).reason,
+        RewardReason.everythingElse,
+      );
+      expect(p.cardRewardsFor(account)!.earned, 50);
+    });
+
+    test('a transfer paired to another account earns nothing on the '
+        'card', () async {
+      FinanceProvider.figuresClock = () => DateTime(2026, 7, 20, 12);
+      addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
+      final p = await loaded();
+      final card = await p.addAccount(
+        name: 'Card',
+        type: AccountType.creditCard,
+      );
+      final bank = await p.addAccount(name: 'Bank', type: AccountType.bank);
+      await p.setCardRewards(card, const CardRewards(baseRate: 1));
+      final out = await p.addTransaction(
+        type: TxType.expense,
+        categoryId: kTransferOutCategoryId,
+        amount: 1000,
+        note: 'test move',
+        date: DateTime(2026, 7, 10),
+      );
+      await p.assignAccount(out, card);
+      final inn = await p.addTransaction(
+        type: TxType.income,
+        categoryId: kTransferInCategoryId,
+        amount: 1000,
+        note: 'test move',
+        date: DateTime(2026, 7, 10),
+      );
+      await p.assignAccount(inn, bank);
+      final pairId = await p.pairTransactions(out, inn);
+      expect(pairId, isNotNull);
+      expect(p.cardRewardsFor(p.accountById(card)!)!.earned, 0);
+      await p.unpair(pairId!);
+      expect(p.cardRewardsFor(p.accountById(card)!)!.earned, 10);
+    });
+
+    const amazon = RewardGroup(
+      id: 'gA',
+      name: 'Amazon',
+      categoryIds: {},
+      merchantWords: {'amazon'},
+      rate: 5,
+    );
+    const shopping = RewardGroup(
+      id: 'gB',
+      name: 'Shopping',
+      categoryIds: {'shopping'},
+      rate: 2,
+    );
+
+    /// A card with [rules] and a Shopping row on it for each payee and
+    /// pick, a day apart from 10 July.
+    Future<(FinanceProvider, String, List<String>)> cardWith(
+      CardRewards rules,
+      List<(String payee, double amount, String? pick)> rows,
+    ) async {
+      FinanceProvider.figuresClock = () => DateTime(2026, 7, 20, 12);
+      addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
+      final p = await loaded();
+      final card = await p.addAccount(
+        name: 'Card',
+        type: AccountType.creditCard,
+      );
+      await p.setCardRewards(card, rules);
+      final ids = <String>[];
+      for (final (i, (payee, amount, pick)) in rows.indexed) {
+        final id = await p.addTransaction(
+          type: TxType.expense,
+          categoryId: 'shopping',
+          amount: amount,
+          note: '',
+          date: DateTime(2026, 7, 10 + i),
+          payee: payee,
+          rewardGroup: pick,
+        );
+        await p.assignAccount(id, card);
+        ids.add(id);
+      }
+      return (p, card, ids);
+    }
+
+    test('a pick is remembered for the merchant on that card', () async {
+      final (p, card, _) = await cardWith(
+        const CardRewards(groups: [amazon, shopping], baseRate: 1),
+        [
+          ('Amazon', 1000, null),
+          ('Demo Mart', 1000, kEverythingElseRewardGroupId),
+          ('Demo Mart', 2000, null),
+        ],
+      );
+      // Amazon 5%, Demo Mart picked at Everything else, then remembered.
+      expect(p.cardRewardsFor(p.accountById(card)!)!.earned, 80);
+    });
+
+    test('a pick on a deleted group gives way to an older one', () async {
+      final (p, card, ids) = await cardWith(
+        const CardRewards(groups: [amazon, shopping], baseRate: 1),
+        [
+          ('Demo Mart', 1000, 'gA'),
+          ('Demo Mart', 1000, 'gB'),
+          ('Demo Mart', 1000, null),
+        ],
+      );
+      expect(p.rememberedRewardPick(p.accountById(card)!, 'demo mart'), 'gB');
+      await p.setCardRewards(
+        card,
+        const CardRewards(groups: [amazon], baseRate: 1),
+      );
+      final account = p.accountById(card)!;
+      expect(p.rememberedRewardPick(account, 'demo mart'), 'gA');
+      final third = p.rewardMatchFor(account, byId(p, ids[2]));
+      expect(third.group?.id, 'gA');
+      expect(third.reason, RewardReason.remembered);
+    });
+
+    test('the last pick made wins, whatever the row dates', () async {
+      final (p, card, ids) = await cardWith(
+        const CardRewards(groups: [amazon, shopping], baseRate: 1),
+        [
+          ('Demo Mart', 1000, 'gA'),
+          ('Demo Mart', 1000, 'gB'),
+          ('Demo Mart', 1000, kEverythingElseRewardGroupId),
+        ],
+      );
+      final account = p.accountById(card)!;
+      // No pick times (picks from before they were kept): the latest row.
+      expect(
+        p.rememberedRewardPick(account, 'demo mart'),
+        kEverythingElseRewardGroupId,
+      );
+
+      // A timed pick on the oldest row beats untimed picks on newer rows.
+      Tx timed(String id, DateTime at) =>
+          byId(p, id).copyWith(rewardPickedAt: at);
+      await p.restoreEditedTransactions([
+        timed(ids[0], DateTime(2026, 7, 15, 9)),
+      ]);
+      expect(p.rememberedRewardPick(account, 'demo mart'), 'gA');
+      expect(
+        p.rememberedRewardPick(account, 'demo mart', excludeId: ids[2]),
+        'gA',
+      );
+
+      // Between timed picks the newer time wins, on an older row too.
+      await p.restoreEditedTransactions([
+        timed(ids[1], DateTime(2026, 7, 18, 9)),
+        timed(ids[2], DateTime(2026, 7, 16, 9)),
+      ]);
+      expect(p.rememberedRewardPick(account, 'demo mart'), 'gB');
+      expect(
+        p.rememberedRewardPick(account, 'demo mart', excludeId: ids[1]),
+        kEverythingElseRewardGroupId,
+      );
+    });
+
+    test('a pick time is saved with its pick and cleared with it', () {
+      final t = Tx(
+        id: 't',
+        type: TxType.expense,
+        categoryId: 'shopping',
+        amount: 100,
+        note: '',
+        date: DateTime(2026, 7, 10),
+      );
+      expect(t.toJson().containsKey('rewardPickedAt'), isFalse);
+      final at = DateTime(2026, 7, 11, 8, 30);
+      final picked = t.copyWith(rewardGroup: 'gA', rewardPickedAt: at);
+      final back = Tx.fromJson(picked.toJson());
+      expect(back.rewardGroup, 'gA');
+      expect(back.rewardPickedAt, at);
+      final cleared = back.copyWith(clearRewardGroup: true);
+      expect(cleared.rewardPickedAt, isNull);
+      expect(cleared.toJson().containsKey('rewardPickedAt'), isFalse);
     });
 
     test('Undo of a deleted transfer leg brings the pair back', () async {

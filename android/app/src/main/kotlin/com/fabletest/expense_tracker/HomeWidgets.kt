@@ -11,6 +11,7 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.net.Uri
@@ -21,13 +22,15 @@ import android.widget.RemoteViews
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.abs
 
 /**
  * The Month pace, Upcoming, Today and Add, Spending split, Budgets
  * list, Recent, Quick actions, Big bills and This week widgets (the last
- * two in a 4x2 and a compact 4x1 size), Accounts and Payments to check.
+ * two in a 4x2 and a compact 4x1 size), Accounts, Payments to check,
+ * Expected balance (4x2 and a compact 2x1), Card cycle and Search bar.
  * Pure display, like [BudgetWidgetProvider]: the Dart side writes the
  * snapshots (`flutter.home_widget_data_v1`, home_widgets_service.dart, and
  * the budget one for Budgets list) and this draws them. The snapshot
@@ -67,6 +70,10 @@ object HomeWidgets {
 
     /** A Payments to check row's Keep, plus the row's slot (0 to 2). */
     const val PURPOSE_CHECK_KEEP = 11
+
+    /** The Card cycle widget with no card: the tap opens its card picker.
+     * After the Keep slots (11 to 13). */
+    const val PURPOSE_PICK_CARD = 14
 
     /** Keep taps from the Payments to check widget not yet applied: a JSON
      * array of the rows' Keep payloads, written as a plain string so the
@@ -115,6 +122,10 @@ object HomeWidgets {
         ThisWeekCompactWidgetProvider::class.java,
         AccountsWidgetProvider::class.java,
         PaymentsToCheckWidgetProvider::class.java,
+        ExpectedBalanceWidgetProvider::class.java,
+        ExpectedBalanceCompactWidgetProvider::class.java,
+        CardCycleWidgetProvider::class.java,
+        SearchBarWidgetProvider::class.java,
     )
 
     private fun today(): Long = LocalDate.now().toEpochDay()
@@ -168,15 +179,28 @@ object HomeWidgets {
                     ({ w, h, _ -> accounts(context, w, h, id, data, theme) })
                 PaymentsToCheckWidgetProvider::class.java.name ->
                     ({ w, h, _ -> checks(context, w, h, id, data, theme) })
+                ExpectedBalanceWidgetProvider::class.java.name ->
+                    ({ w, h, b -> ahead(context, w, h, b, id, data, theme) })
+                ExpectedBalanceCompactWidgetProvider::class.java.name ->
+                    ({ w, h, _ -> aheadCompact(context, w, h, id, data, theme) })
+                CardCycleWidgetProvider::class.java.name ->
+                    ({ w, h, b -> card(context, w, h, b, id, data, theme) })
+                SearchBarWidgetProvider::class.java.name ->
+                    ({ _, _, _ -> search(context, id, theme) })
                 else -> return
             }
             // The fallbacks are the smallest a launcher gives: 4 columns of
-            // about 62dp, and one row of 48dp or two of 110dp.
+            // about 62dp (2 for the compact Expected balance), and one row
+            // of 48dp or two of 110dp.
             val oneRow = provider == TodayAddWidgetProvider::class.java.name ||
                 provider == QuickActionsWidgetProvider::class.java.name ||
                 provider == BigBillsCompactWidgetProvider::class.java.name ||
-                provider == ThisWeekCompactWidgetProvider::class.java.name
-            WidgetKit.update(context, manager, id, 250, if (oneRow) 48 else 110, build)
+                provider == ThisWeekCompactWidgetProvider::class.java.name ||
+                provider == ExpectedBalanceCompactWidgetProvider::class.java.name ||
+                provider == SearchBarWidgetProvider::class.java.name
+            val fallbackW =
+                if (provider == ExpectedBalanceCompactWidgetProvider::class.java.name) 110 else 250
+            WidgetKit.update(context, manager, id, fallbackW, if (oneRow) 48 else 110, build)
         } catch (_: Exception) {
             // Drawn again on the next data change or 30-minute redraw.
         }
@@ -270,15 +294,14 @@ object HomeWidgets {
             R.id.hw_title,
             if (withTitle <= heightDp - 2 * PAD_V) View.VISIBLE else View.GONE
         )
-        // Money out, as the app prints it: a minus and the expense red.
-        // Nothing spent is a plain ₹0.
-        if (spent >= 0.5) {
-            views.setTextViewText(R.id.hw_amount, "−${pace.optString("spentLabel")}")
-            views.setTextColor(R.id.hw_amount, theme.over)
-        } else {
-            views.setTextViewText(R.id.hw_amount, "₹0")
-            views.setTextColor(R.id.hw_amount, theme.text)
-        }
+        // A running total, not one payment: no minus sign, and red only
+        // once a set monthly cap is passed.
+        val over = cap > 0 && spent > cap
+        views.setTextViewText(
+            R.id.hw_amount,
+            if (spent >= 0.5) pace.optString("spentLabel") else "₹0"
+        )
+        views.setTextColor(R.id.hw_amount, if (over) theme.over else theme.text)
         val sub = when {
             cap > 0 -> "${(spent / cap * 100).toInt()}% of ${pace.optString("capLabel")} cap"
             usualToday == null -> "Spent this month"
@@ -287,7 +310,7 @@ object HomeWidgets {
             else -> "${WidgetKit.rupees(spent - usualToday)} over usual by today"
         }
         views.setTextViewText(R.id.hw_sub, sub)
-        views.setTextColor(R.id.hw_sub, if (cap > 0 && spent > cap) theme.over else theme.text)
+        views.setTextColor(R.id.hw_sub, if (over) theme.over else theme.text)
 
         // The bar's scale: the cap when there is one, else a usual month.
         val scale = if (cap > 0) cap else usualFull ?: 0.0
@@ -299,7 +322,7 @@ object HomeWidgets {
         val marker = if (usualToday != null && scale > 0) {
             (usualToday / scale).coerceIn(0.0, 1.0)
         } else null
-        val barColor = if (cap > 0 && spent > cap) theme.over else theme.accent
+        val barColor = if (over) theme.over else theme.accent
         // One bar per width: both orientations share it where the widths
         // match. Without bitmaps (the fallback update) the bar stays empty.
         bitmaps.get("bar:$widthDp") {
@@ -494,17 +517,14 @@ object HomeWidgets {
         val showTitle = twoLines <= heightDp - 8
         views.setViewVisibility(R.id.hw_title, if (showTitle) View.VISIBLE else View.GONE)
 
-        // Line two: the day's spend as money out, then safe to spend.
+        // Line two: the day's spend, then safe to spend.
         val line = WidgetKit.Line()
         if (t == null) {
             line.add("Open the app once to start", theme.textSecondary)
         } else {
             val spent = if (fresh) t.optDouble("spent", 0.0) else 0.0
-            if (spent >= 0.5) {
-                line.add("−${t.optString("spentLabel")}", theme.over, bold = true)
-            } else {
-                line.add("₹0", theme.text, bold = true)
-            }
+            // Today's running total, not one payment: plain, in the text colour.
+            line.add(if (spent >= 0.5) t.optString("spentLabel") else "₹0", theme.text, bold = true)
             // With the first line hidden, the review count moves here,
             // ahead of safe to spend, so an ellipsis cuts that first.
             if (!showTitle && pending > 0) {
@@ -1240,13 +1260,9 @@ object HomeWidgets {
         views.setViewVisibility(R.id.hw_to_sort, if (showToSort) View.VISIBLE else View.GONE)
         views.setTextViewText(R.id.hw_to_sort, "incl. ${w.toSort} to sort")
         views.setTextColor(R.id.hw_to_sort, theme.textSecondary)
-        // Money out in the expense red; nothing spent is a plain ₹0.
+        // A running total, not one payment out: plain text, never red.
         val amount = WidgetKit.Line()
-        if (w.spent >= 0.5) {
-            amount.add(w.spentLabel, theme.over, bold = true)
-        } else {
-            amount.add("₹0", theme.text, bold = true)
-        }
+        amount.add(if (w.spent >= 0.5) w.spentLabel else "₹0", theme.text, bold = true)
         amount.add(if (showTitle) " spent so far" else " spent this week", theme.textSecondary)
         views.setTextViewText(R.id.hw_amount, amount.build())
         bitmaps.get("week:$widthDp") {
@@ -1304,12 +1320,9 @@ object HomeWidgets {
             return views
         }
         showBody(views)
+        // A running total, not one payment out: plain text, never red.
         val title = WidgetKit.Line().add("This week ", theme.textSecondary)
-        if (w.spent >= 0.5) {
-            title.add(w.spentLabel, theme.over, bold = true)
-        } else {
-            title.add("₹0", theme.text, bold = true)
-        }
+            .add(if (w.spent >= 0.5) w.spentLabel else "₹0", theme.text, bold = true)
         views.setTextViewText(R.id.hw_title, title.build())
         val usual = w.usual
         views.setViewVisibility(R.id.hw_side, if (usual != null) View.VISIBLE else View.GONE)
@@ -1625,6 +1638,397 @@ object HomeWidgets {
         return views
     }
 
+    // --- Expected balance ---------------------------------------------------
+
+    private val dayMonth = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
+    private val weekdayDayMonth = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
+
+    /** The Ahead days still to come: the snapshot's balances from today on,
+     * each with its date. Null without the block, or once every day in it
+     * has passed. */
+    private fun aheadDays(data: JSONObject?): List<Pair<LocalDate, Double>>? {
+        val ahead = data?.optJSONObject("ahead") ?: return null
+        val balances = ahead.optJSONArray("balances") ?: return null
+        if (!ahead.has("startDay")) return null
+        val start = ahead.optLong("startDay")
+        val skip = (today() - start).coerceAtLeast(0L)
+        if (skip >= balances.length()) return null
+        return (skip.toInt() until balances.length()).map {
+            LocalDate.ofEpochDay(start + it) to balances.optDouble(it, 0.0)
+        }
+    }
+
+    /** Whole rupees with a leading minus below 0. */
+    private fun signedRupees(v: Double): String =
+        if (v < 0) "−${WidgetKit.rupees(v)}" else WidgetKit.rupees(v)
+
+    /** The earliest day with the lowest balance, as the Ahead tab picks it. */
+    private fun lowestIndex(days: List<Pair<LocalDate, Double>>): Int =
+        days.indices.minByOrNull { days[it].second } ?: 0
+
+    /** "31 days", or "1 day": the days the snapshot still holds, which
+     * drop as the widget moves on without the app. */
+    private fun daysName(n: Int): String = if (n == 1) "1 day" else "$n days"
+
+    /** The first of [sizes] at which bold [text] fits [roomDp], else the
+     * last: a figure in a half-width column shrinks rather than ending in
+     * an ellipsis at large text or on a narrow widget. */
+    private fun figureSp(context: Context, text: String, roomDp: Float, sizes: List<Float>): Float =
+        sizes.firstOrNull { WidgetKit.textWidthDp(context, text, it, bold = true) <= roomDp }
+            ?: sizes.last()
+
+    /** The width each of two figure columns has: the content width less
+     * the 8dp gap, halved. */
+    private fun halfColumnDp(widthDp: Int): Float = (widthDp - 2 * PAD_H - 8) / 2f
+
+    private val LEFT_FIGURE_SP = listOf(22f, 20f, 18f, 16f)
+    private val RIGHT_FIGURE_SP = listOf(16f, 15f, 14f, 13f, 12f)
+    private val COMPACT_FIGURE_SP = listOf(18f, 16f, 14f, 12f)
+
+    /** The first of [labels] that fits [roomDp] at 12sp, else the last: a
+     * date label drops its weekday, then the date, rather than ending in
+     * an ellipsis that cuts the date. */
+    private fun fittingLabel(context: Context, roomDp: Float, vararg labels: String): String =
+        labels.firstOrNull { WidgetKit.textWidthDp(context, it, 12f) <= roomDp } ?: labels.last()
+
+    private fun ahead(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        bitmaps: WidgetKit.Bitmaps,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(context, R.layout.home_widget_ahead, theme, id, QuickActions.OPEN_AHEAD)
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setInt(R.id.hw_icon, "setColorFilter", theme.textSecondary)
+        views.setTextColor(R.id.hw_left_label, theme.textSecondary)
+        views.setTextColor(R.id.hw_right_label, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val days = aheadDays(data)
+        if (days == null) {
+            showEmpty(views, context.getString(R.string.home_widget_empty))
+            return views
+        }
+        showBody(views)
+        views.setTextViewText(R.id.hw_title, "Next ${daysName(days.size)}")
+        val last = days.last()
+        val column = halfColumnDp(widthDp)
+        val lastText = signedRupees(last.second)
+        val lastDay = last.first.format(dayMonth)
+        views.setTextViewText(
+            R.id.hw_left_label,
+            fittingLabel(context, column, "Expected on $lastDay", "On $lastDay")
+        )
+        views.setTextViewText(R.id.hw_left, lastText)
+        views.setTextViewTextSize(
+            R.id.hw_left, TypedValue.COMPLEX_UNIT_SP,
+            figureSp(context, lastText, column, LEFT_FIGURE_SP)
+        )
+        views.setTextColor(R.id.hw_left, if (last.second < 0) theme.over else theme.text)
+        val low = lowestIndex(days)
+        val lowest = days[low]
+        val lowestText = signedRupees(lowest.second)
+        views.setTextViewText(
+            R.id.hw_right_label,
+            fittingLabel(
+                context, column,
+                "Lowest · ${lowest.first.format(weekdayDayMonth)}",
+                "Lowest · ${lowest.first.format(dayMonth)}",
+                "Lowest",
+            )
+        )
+        views.setTextViewText(R.id.hw_right, lowestText)
+        views.setTextViewTextSize(
+            R.id.hw_right, TypedValue.COMPLEX_UNIT_SP,
+            figureSp(context, lowestText, column, RIGHT_FIGURE_SP)
+        )
+        views.setTextColor(R.id.hw_right, if (lowest.second < 0) theme.over else theme.warn)
+
+        // The figures always show; the line (6dp under them, 40dp tall) only
+        // when the title fits too, and the title only when it has room, so
+        // large text never clips the figures.
+        val figures = WidgetKit.lineDp(context, 12f) +
+            maxOf(WidgetKit.lineDp(context, 22f), WidgetKit.lineDp(context, 16f))
+        val withTitle = maxOf(16f, WidgetKit.lineDp(context, 12f)) + 2 + figures
+        val room = heightDp - 2 * PAD_V
+        val showChart = withTitle + 6 + 40 <= room
+        views.setViewVisibility(
+            R.id.hw_header,
+            if (withTitle <= room) View.VISIBLE else View.GONE
+        )
+        views.setViewVisibility(R.id.hw_chart, if (showChart) View.VISIBLE else View.GONE)
+        if (showChart) {
+            val values = days.map { it.second }
+            bitmaps.get("line:$widthDp") {
+                lineChart(context, widthDp, values, low, theme)
+            }?.let { views.setImageViewBitmap(R.id.hw_chart, it) }
+        }
+        return views
+    }
+
+    /** The balance line: a 2dp accent polyline over the days, scaled to
+     * their range, and a 3.5dp ring on the lowest. Drawn at the width the
+     * line has, 40dp tall, at most 2 pixels per dp and 1200 pixels wide, as
+     * [paceBar] is. */
+    private fun lineChart(
+        context: Context,
+        widgetW: Int,
+        values: List<Double>,
+        lowest: Int,
+        theme: WidgetTheme,
+    ): Bitmap {
+        val density = minOf(context.resources.displayMetrics.density, 2f)
+        val w = ((widgetW - 2 * PAD_H) * density).toInt().coerceIn(64, 1200)
+        val h = (40 * density).toInt().coerceAtLeast(16)
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 2 * density
+            strokeJoin = Paint.Join.ROUND
+            strokeCap = Paint.Cap.ROUND
+        }
+        // Room for the ring at the edges.
+        val inset = 5.5f * density
+        val min = values.min()
+        val max = values.max()
+        fun x(i: Int): Float =
+            if (values.size < 2) w / 2f
+            else inset + (w - 2 * inset) * i / (values.size - 1)
+        fun y(v: Double): Float =
+            if (max - min < 1) h / 2f
+            else (h - inset - (h - 2 * inset) * ((v - min) / (max - min))).toFloat()
+        val path = Path()
+        values.forEachIndexed { i, v ->
+            if (i == 0) path.moveTo(x(i), y(v)) else path.lineTo(x(i), y(v))
+        }
+        paint.color = theme.accent
+        canvas.drawPath(path, paint)
+        paint.color = theme.warn
+        canvas.drawCircle(x(lowest), y(values[lowest]), 3.5f * density, paint)
+        return bmp
+    }
+
+    /** The lowest balance in the days still ahead and its day. Where the
+     * height cannot hold the three lines, the date drops first, then the
+     * title; the title also drops where the width cannot hold it, and the
+     * figure shrinks rather than clip. */
+    private fun aheadCompact(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_ahead_compact, theme, id, QuickActions.OPEN_AHEAD
+        )
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_sub, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val days = aheadDays(data)
+        if (days == null) {
+            showEmpty(views, context.getString(R.string.home_widget_empty))
+            return views
+        }
+        showBody(views)
+        val lowest = days[lowestIndex(days)]
+        // The width inside the 12dp side padding.
+        val across = (widthDp - 24).toFloat()
+        val title = "Lowest in ${daysName(days.size)}"
+        views.setTextViewText(R.id.hw_title, title)
+        val amount = signedRupees(lowest.second)
+        views.setTextViewText(R.id.hw_amount, amount)
+        val amountSp = figureSp(context, amount, across, COMPACT_FIGURE_SP)
+        views.setTextViewTextSize(R.id.hw_amount, TypedValue.COMPLEX_UNIT_SP, amountSp)
+        views.setTextColor(R.id.hw_amount, if (lowest.second < 0) theme.over else theme.warn)
+        views.setTextViewText(R.id.hw_sub, lowest.first.format(weekdayDayMonth))
+        // Inside the 4dp padding: the figure always, then the title, then
+        // the date, as the height allows.
+        val room = heightDp - 8
+        val withTitle = WidgetKit.lineDp(context, 12f) + WidgetKit.lineDp(context, amountSp)
+        val withDate = withTitle + WidgetKit.lineDp(context, 11f)
+        val titleFits = withTitle <= room && WidgetKit.textWidthDp(context, title, 12f) <= across
+        views.setViewVisibility(R.id.hw_title, if (titleFits) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.hw_sub, if (withDate <= room) View.VISIBLE else View.GONE)
+        return views
+    }
+
+    // --- Card cycle ---------------------------------------------------------
+
+    /** [key]'s text, or null when the snapshot has none (missing, JSON null
+     * or empty). */
+    private fun JSONObject.text(key: String): String? =
+        if (isNull(key)) null else optString(key).ifEmpty { null }
+
+    /** [key]'s epoch day, or null when the snapshot has none. */
+    private fun JSONObject.day(key: String): Long? =
+        if (isNull(key)) null else optLong(key)
+
+    /** Opens [CardWidgetConfigActivity] for widget [id], as the launcher's
+     * Reconfigure does. A task of its own, so picking a card goes back to
+     * the home screen, not into the app. */
+    private fun pickCard(context: Context, id: Int): PendingIntent =
+        PendingIntent.getActivity(
+            context,
+            requestCode(id, PURPOSE_PICK_CARD),
+            Intent(context, CardWidgetConfigActivity::class.java)
+                .setAction(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE)
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                ),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+    /** "Statement today", "Statement tomorrow" or "Statement in 6 days"; null
+     * once the day has passed (a snapshot from before the statement). */
+    private fun statementName(day: Long): String? = when (val n = day - today()) {
+        0L -> "Statement today"
+        1L -> "Statement tomorrow"
+        else -> if (n > 1) "Statement in $n days" else null
+    }
+
+    /** The card picked for this widget: the name and when the statement
+     * comes, this cycle's spend and rewards estimate, a bar of the spend
+     * against the limit, and the limit and the due date under it. A card
+     * not in the snapshot (none picked, closed or deleted since) shows how
+     * to pick one. */
+    private fun card(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        bitmaps: WidgetKit.Bitmaps,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val picked = CardCycleWidgetProvider.selectionOf(context, id)
+        val cards = data?.optJSONArray("cards")
+        val c = if (picked == null || cards == null) null else {
+            (0 until cards.length()).mapNotNull { cards.optJSONObject(it) }
+                .firstOrNull { it.optString("id") == picked }
+        }
+        val views = base(
+            context, R.layout.home_widget_card, theme, id,
+            if (c == null) QuickActions.OPEN_ACCOUNTS
+            else QuickActions.OPEN_CARD_PREFIX + c.optString("id")
+        )
+        views.setTextColor(R.id.hw_title, theme.text)
+        views.setTextColor(R.id.hw_statement, theme.textSecondary)
+        views.setTextColor(R.id.hw_left_label, theme.textSecondary)
+        views.setTextColor(R.id.hw_left, theme.text)
+        views.setTextColor(R.id.hw_right_label, theme.textSecondary)
+        views.setTextColor(R.id.hw_right, theme.safe)
+        views.setTextColor(R.id.hw_sub, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        if (c == null) {
+            showEmpty(
+                views,
+                if (data == null) context.getString(R.string.home_widget_empty)
+                else context.getString(R.string.home_widget_card_empty)
+            )
+            // With the snapshot in, the tap opens this widget's card picker:
+            // Reconfigure on the long-press menu only exists from Android 12.
+            if (data != null) {
+                views.setOnClickPendingIntent(R.id.hw_root, pickCard(context, id))
+            }
+            return views
+        }
+        showBody(views)
+        val name = c.optString("name")
+        views.setTextViewText(R.id.hw_title, name)
+        // The countdown sits beside the name only where both fit the row
+        // (the width less the side padding and the 8dp gap); at large text
+        // it would otherwise take the whole row from the name.
+        val statement = c.day("statementDay")?.let { statementName(it) }?.takeIf {
+            WidgetKit.textWidthDp(context, name, 13f, bold = true) + 8 +
+                WidgetKit.textWidthDp(context, it, 12f) <= widthDp - 2 * PAD_H
+        }
+        views.setViewVisibility(
+            R.id.hw_statement,
+            if (statement == null) View.GONE else View.VISIBLE
+        )
+        views.setTextViewText(R.id.hw_statement, statement ?: "")
+        views.setTextViewText(R.id.hw_left_label, "Spent this cycle")
+        // A snapshot from a cycle that has ended since: the new cycle shows
+        // ₹0 with no rewards, limit or bar until the app sends its figures,
+        // as This week does for a new week.
+        val over = c.day("cycleEnd")?.let { it < today() } == true
+        val spentLabel = if (over) WidgetKit.rupees(0.0) else c.text("spentLabel") ?: "₹0"
+        val rewards = if (over) null else c.text("rewardsLabel")
+        // Alone, the spend has the whole row; beside the rewards, half.
+        val column = if (rewards == null) (widthDp - 2 * PAD_H).toFloat() else halfColumnDp(widthDp)
+        views.setTextViewText(R.id.hw_left, spentLabel)
+        views.setTextViewTextSize(
+            R.id.hw_left, TypedValue.COMPLEX_UNIT_SP,
+            figureSp(context, spentLabel, column, LEFT_FIGURE_SP)
+        )
+        views.setViewVisibility(R.id.hw_right_col, if (rewards == null) View.GONE else View.VISIBLE)
+        views.setTextViewText(R.id.hw_right_label, "Rewards so far")
+        views.setTextViewText(R.id.hw_right, rewards ?: "")
+        if (rewards != null) {
+            views.setTextViewTextSize(
+                R.id.hw_right, TypedValue.COMPLEX_UNIT_SP,
+                figureSp(context, rewards, column, RIGHT_FIGURE_SP)
+            )
+        }
+
+        val limitLabel = if (over) null else c.text("limitLabel")
+        val limit = c.optDouble("limit", 0.0).takeIf { !over && !it.isNaN() && it > 0 }
+        val due = c.day("dueDay")?.takeIf { it >= today() }
+        val sub = listOfNotNull(
+            limitLabel?.let { "$spentLabel of $it limit" },
+            due?.let { "Due ${LocalDate.ofEpochDay(it).format(dayMonth)}" },
+        ).joinToString(" · ")
+
+        // The header and figures always fit a 4x2 cell; under it the bar
+        // (6dp above, 14dp tall) drops first, then the line under it, then
+        // the header, so large text never clips the figures.
+        val figures = WidgetKit.lineDp(context, 12f) +
+            maxOf(WidgetKit.lineDp(context, 22f), WidgetKit.lineDp(context, 16f))
+        val header = maxOf(WidgetKit.lineDp(context, 13f), WidgetKit.lineDp(context, 12f)) + 2
+        val subDp = if (sub.isEmpty()) 0f else 4 + WidgetKit.lineDp(context, 12f)
+        val room = heightDp - 2 * PAD_V
+        val showHeader = header + figures <= room
+        val showSub = sub.isNotEmpty() && header + figures + subDp <= room
+        // Only with a limit to measure against.
+        val showBar = limit != null && header + figures + subDp + 6 + 14 <= room
+        views.setViewVisibility(R.id.hw_header, if (showHeader) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.hw_sub, if (showSub) View.VISIBLE else View.GONE)
+        views.setTextViewText(R.id.hw_sub, sub)
+        views.setViewVisibility(R.id.hw_bar, if (showBar) View.VISIBLE else View.GONE)
+        if (showBar) {
+            val spent = c.optDouble("spent", 0.0)
+            val fill = (spent / limit).coerceIn(0.0, 1.0)
+            bitmaps.get("bar:$widthDp") {
+                paceBar(context, widthDp, fill, null, theme.accent, theme)
+            }?.let { views.setImageViewBitmap(R.id.hw_bar, it) }
+        }
+        return views
+    }
+
+    // --- Search bar ---------------------------------------------------------
+
+    /** A search field that opens the search screen, and an Add button at its
+     * end. It shows nothing from the snapshot, so it draws the same before
+     * the app has ever run. */
+    private fun search(context: Context, id: Int, theme: WidgetTheme): RemoteViews {
+        val views = base(context, R.layout.home_widget_search, theme, id, QuickActions.OPEN_SEARCH)
+        views.setOnClickPendingIntent(R.id.hw_open, openApp(context, id, QuickActions.OPEN_SEARCH))
+        views.setInt(R.id.hw_search_icon, "setColorFilter", theme.textSecondary)
+        views.setTextColor(R.id.hw_hint, theme.textSecondary)
+        views.setInt(R.id.hw_add_icon, "setColorFilter", theme.accent)
+        views.setOnClickPendingIntent(
+            R.id.hw_add,
+            openApp(context, id, QuickActions.ADD_EXPENSE, PURPOSE_ADD)
+        )
+        return views
+    }
+
     /** One bar per entry of [values], scaled to the largest, in the
      * money-out red; an entry with nothing (zero or null) is a 2dp stub on
      * the track. [labels] sit under the bars, the one at [bold] in bold.
@@ -1746,6 +2150,46 @@ class AccountsWidgetProvider : HomeWidgetProviderBase() {
 /** Payments to check (4x2): the rows an import counted with a guessed
  * category or as To sort, with Keep on guessed ones. */
 class PaymentsToCheckWidgetProvider : HomeWidgetProviderBase()
+
+/** Expected balance (4x2): the Ahead tab's next 31 days, the balance on
+ * the last day and the lowest, over the balance line. */
+class ExpectedBalanceWidgetProvider : HomeWidgetProviderBase()
+
+/** Expected balance (compact, 2x1): the lowest balance in the next 31 days
+ * and its day. */
+class ExpectedBalanceCompactWidgetProvider : HomeWidgetProviderBase()
+
+/** Search bar (4x1): opens the search screen, with an Add expense button. */
+class SearchBarWidgetProvider : HomeWidgetProviderBase()
+
+/** Card cycle and rewards (4x2): the credit card picked for this widget in
+ * its setup screen ([CardWidgetConfigActivity]). */
+class CardCycleWidgetProvider : HomeWidgetProviderBase() {
+    companion object {
+        /** Native-only state: which card each widget instance shows. */
+        private const val PREFS = "card_widget_prefs"
+        private const val KEY_PREFIX = "card_"
+
+        /** Stores [cardId] for [appWidgetId]. */
+        fun saveSelection(context: Context, appWidgetId: Int, cardId: String) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putString("$KEY_PREFIX$appWidgetId", cardId)
+                .apply()
+        }
+
+        /** The card id picked for [appWidgetId]; null when none is. */
+        fun selectionOf(context: Context, appWidgetId: Int): String? =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString("$KEY_PREFIX$appWidgetId", null)
+                ?.ifEmpty { null }
+    }
+
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        for (id in appWidgetIds) prefs.remove("$KEY_PREFIX$id")
+        prefs.apply()
+    }
+}
 
 /** Keep on a Payments to check widget row. Queues the row's payload under
  * [HomeWidgets.KEPT_KEY], cancels its payment-to-check note and redraws the

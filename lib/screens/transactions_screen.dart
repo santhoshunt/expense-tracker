@@ -21,9 +21,8 @@ import '../utils/haptics.dart';
 import '../utils/money_colors.dart';
 import '../utils/search_text.dart';
 import '../widgets/category_chip_label.dart';
-import '../widgets/cycle_label.dart';
-import '../widgets/date_time_picker.dart';
 import '../widgets/dispose_scope.dart';
+import '../widgets/editor_sheet.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
 import '../widgets/month_picker_sheet.dart';
@@ -36,6 +35,22 @@ import '../widgets/undo_snackbar.dart';
 import 'app_nav.dart';
 
 enum _Filter { all, income, expense, transfers }
+
+/// The filter values one list pass reads: the screen's own, or the filters
+/// sheet's draft while it counts "Show N". Search, ids and the tab are not
+/// in it; the sheet does not edit them.
+typedef _Filters = ({
+  Set<String> categories,
+  Set<String> groups,
+  Set<String> budgets,
+  Set<String> tags,
+  String? accountId,
+  DateTime? month,
+  DateTimeRange? range,
+  bool rangeCounted,
+  double? min,
+  double? max,
+});
 
 /// Sentinel in the group filter for "Other" — groupable categories that
 /// belong to no group.
@@ -343,11 +358,19 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   ) {
     (String, Widget) chip({
       required String id,
-      required Widget avatar,
+      required Widget? avatar,
       required String label,
+      String? spokenLabel,
       required VoidCallback onDeleted,
-    }) =>
-        (id, OutlinedPill(leading: avatar, label: label, onRemove: onDeleted));
+    }) => (
+      id,
+      OutlinedPill(
+        leading: avatar,
+        label: label,
+        spokenLabel: spokenLabel,
+        onRemove: onDeleted,
+      ),
+    );
 
     return [
       if (_idFilter != null)
@@ -415,10 +438,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ),
       for (final u in finance.allTags)
         if (_tagFilter.contains(tagKey(u.tag)))
+          // "# Name" with its colour dot, as a tag reads everywhere.
           chip(
             id: 'tag:${tagKey(u.tag)}',
-            avatar: const Icon(Icons.label_outline, size: 16),
-            label: 'Tag · ${u.tag}',
+            avatar: switch (finance.tagColor(u.tag)) {
+              null => null,
+              final c => CircleAvatar(radius: 5, backgroundColor: c),
+            },
+            label: '# ${u.tag}',
+            spokenLabel: 'Tag ${u.tag}',
             onDeleted: () => setState(() => _tagFilter.remove(tagKey(u.tag))),
           ),
       // One chip for both bounds: its ✕ clears the range.
@@ -583,31 +611,55 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     super.dispose();
   }
 
-  List<Tx> _applyFilters(List<Tx> all, FinanceProvider finance, _Filter f) {
+  _Filters get _currentFilters => (
+    categories: _categoryFilter,
+    groups: _groupFilter,
+    budgets: _budgetFilter,
+    tags: _tagFilter,
+    accountId: _accountId,
+    month: _monthFilter,
+    range: _rangeFilter,
+    rangeCounted: _rangeCounted,
+    min: _minAmount,
+    max: _maxAmount,
+  );
+
+  /// [filters] is the filters sheet's draft when it counts "Show N"; the
+  /// list itself passes none and reads the screen's.
+  List<Tx> _applyFilters(
+    List<Tx> all,
+    FinanceProvider finance,
+    _Filter f, [
+    _Filters? filters,
+  ]) {
+    final v = filters ?? _currentFilters;
     final q = normalizeSearchText(_search);
-    final budgetFilterList = _budgetFilter.isEmpty
+    final budgetFilterList = v.budgets.isEmpty
         ? const <SpendBudget>[]
-        : finance.budgets.where((b) => _budgetFilter.contains(b.id)).toList();
-    final r = _rangeFilter;
+        : finance.budgets.where((b) => v.budgets.contains(b.id)).toList();
+    final r = v.range;
+    final accountId = v.accountId;
+    final min = v.min;
+    final max = v.max;
     return all.where((t) {
       if (_idFilter != null && !_idFilter!.contains(t.id)) return false;
       // A bank lists its linked debit cards' rows too, the rows its balance
       // runs over; a card lists its own.
-      if (_accountId != null) {
+      if (accountId != null) {
         final owner = finance.accountForKey(t.acctKey);
-        if (owner?.id != _accountId &&
-            finance.linkedAccountOf(owner)?.id != _accountId) {
+        if (owner?.id != accountId &&
+            finance.linkedAccountOf(owner)?.id != accountId) {
           return false;
         }
       }
       // The month a row counts in: a dashboard tap-through lists what its
       // total counted.
-      final m = _monthFilter;
+      final m = v.month;
       final counts = t.effectiveDate;
       if (m != null && (counts.year != m.year || counts.month != m.month)) {
         return false;
       }
-      if (r != null && !txInRange(t, r, counted: _rangeCounted)) {
+      if (r != null && !txInRange(t, r, counted: v.rangeCounted)) {
         return false;
       }
       // The Income, Expense and Transfers tabs list what the totals count,
@@ -632,18 +684,17 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         case _Filter.all:
           break;
       }
-      if (_categoryFilter.isNotEmpty &&
-          !_categoryFilter.contains(t.categoryId)) {
+      if (v.categories.isNotEmpty && !v.categories.contains(t.categoryId)) {
         return false;
       }
-      if (_groupFilter.isNotEmpty) {
+      if (v.groups.isNotEmpty) {
         final gid = finance.groupIdOf(t.categoryId);
         // "Other" matches unassigned *groupable* categories only, so plain
         // income rows don't flood an Other-group filter — and not ungrouped
         // transfers, which the dashboard's Other total leaves out.
         final matches = gid != null
-            ? _groupFilter.contains(gid)
-            : _groupFilter.contains(kUngroupedFilterKey) &&
+            ? v.groups.contains(gid)
+            : v.groups.contains(kUngroupedFilterKey) &&
                   finance.isGroupable(t.category) &&
                   !t.category.isTransfer;
         // Group totals leave uncounted wallet rows out; so does the list.
@@ -653,12 +704,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           !budgetFilterList.any((b) => finance.countsTowardBudget(t, b))) {
         return false;
       }
-      if (_tagFilter.isNotEmpty &&
-          !t.tags.any((tag) => _tagFilter.contains(tagKey(tag)))) {
+      if (v.tags.isNotEmpty &&
+          !t.tags.any((tag) => v.tags.contains(tagKey(tag)))) {
         return false;
       }
-      if (_minAmount != null && t.amount < _minAmount!) return false;
-      if (_maxAmount != null && t.amount > _maxAmount!) return false;
+      if (min != null && t.amount < min) return false;
+      if (max != null && t.amount > max) return false;
       if (q.isNotEmpty) {
         final hay = _haystacks[t.id] ??= searchHaystack(
           t,
@@ -1503,31 +1554,61 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       for (final c in allCategories)
         if (types.contains(c.type) && !isToSortCategory(c.id)) c,
     ];
-    // The keyboard inset keeps the search field in view.
-    final picked = await showModalBottomSheet<TxCategory>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      showDragHandle: true,
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-        child: _BulkCategorySheet(options: options, mixed: types.length > 1),
-      ),
-    );
-    if (picked == null || !mounted) return;
-    final n = _selected.length;
-    if (!await _confirmBulk(
-      'Set category on $n transaction${n == 1 ? '' : 's'}?',
-      'Rows of the matching type get the category '
-          '"${picked.label}". Their current categories are replaced.',
-    )) {
-      return;
+    final optionIds = {for (final c in options) c.id};
+    // The first five categories met walking the ledger newest first.
+    final recent = <String>[];
+    for (final t in finance.transactions) {
+      if (recent.length == 5) break;
+      if (optionIds.contains(t.categoryId) && !recent.contains(t.categoryId)) {
+        recent.add(t.categoryId);
+      }
     }
-    final snapshot = _selectedSnapshotWithPartners(finance);
-    final changed = await finance.setCategoryForMany(
-      Set.of(_selected),
-      picked.id,
+    PickerItem<String> item(TxCategory c) => PickerItem(
+      value: c.id,
+      label: c.label,
+      leading: Icon(c.icon, color: c.color, size: 20),
     );
+    final shared = {for (final t in selectedTxs) t.categoryId};
+    final n = _selected.length;
+    final result = await showPickerSheet<String>(
+      context: context,
+      title: 'Set category',
+      subtitle: [
+        'On $n transaction${n == 1 ? '' : 's'}.',
+        if (types.length > 1)
+          'Mixed selection: the category applies only to rows of its own '
+              'type, income or expense.',
+      ].join(' '),
+      items: [
+        if (recent.isNotEmpty) ...[
+          const PickerItem.header('Recent'),
+          for (final id in recent) item(categoryById(id)),
+        ],
+        // A recent category is listed once, under Recent: the picker ticks
+        // and scrolls to one row per value.
+        if (options.any(
+          (c) => c.type == TxType.expense && !recent.contains(c.id),
+        )) ...[
+          const PickerItem.header('Expenses'),
+          for (final c in options)
+            if (c.type == TxType.expense && !recent.contains(c.id)) item(c),
+        ],
+        if (options.any(
+          (c) => c.type == TxType.income && !recent.contains(c.id),
+        )) ...[
+          const PickerItem.header('Income'),
+          for (final c in options)
+            if (c.type == TxType.income && !recent.contains(c.id)) item(c),
+        ],
+      ],
+      // Ticked only when every selected row already has it.
+      selected: shared.length == 1 ? shared.single : null,
+    );
+    final picked = result?.value;
+    if (picked == null || !mounted) return;
+    // No confirm: the toast's Undo puts every row back.
+    final snapshot = _selectedSnapshotWithPartners(finance);
+    final changed = await finance.setCategoryForMany(Set.of(_selected), picked);
     _afterBulk(
       changed,
       'Category',
@@ -1551,9 +1632,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       showAppToast(context, 'No accounts yet.');
       return;
     }
+    final count = _selected.length;
     final result = await showPickerSheet<String>(
       context: context,
       title: 'Assign to account',
+      subtitle:
+          'Moves $count transaction${count == 1 ? '' : 's'}. '
+          'This cannot be undone.',
       items: [
         for (final a in accounts)
           PickerItem(
@@ -1585,29 +1670,16 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   Future<void> _bulkDateTime() async {
     if (_selected.isEmpty) return;
-    final now = DateTime.now();
-    final stamp = await pickDateThenTime(
+    final finance = context.read<FinanceProvider>();
+    final moved = _selectedSnapshot(finance).any((t) => t.countIn != null);
+    final stamp = await showEditorSheet<DateTime>(
       context,
-      initial: now,
-      firstDate: DateTime(2000),
-      lastDate: now.add(const Duration(days: 1)),
+      builder: (ctx) =>
+          _BulkDateTimeSheet(count: _selected.length, moved: moved),
     );
     if (stamp == null || !mounted) return;
-    final n = _selected.length;
-    final finance = context.read<FinanceProvider>();
-    // The one bulk edit whose old values cannot be re-derived from the rows
-    // themselves — confirm with the count, and keep an Undo snapshot.
-    final moved = _selectedSnapshot(finance).any((t) => t.countIn != null);
-    if (!await _confirmBulk(
-      'Set date & time on $n transaction${n == 1 ? '' : 's'}?',
-      'Every selected transaction is stamped '
-          '${MaterialLocalizations.of(context).formatMediumDate(stamp)}, '
-          '${TimeOfDay.fromDateTime(stamp).format(context)}. '
-          'Their original dates are replaced'
-          '${moved ? ', and any Count in date is removed' : ''}.',
-    )) {
-      return;
-    }
+    // No confirm: the old values cannot be re-derived from the rows, so the
+    // toast's Undo puts back a snapshot.
     // A split part's siblings move with it, so Undo restores them too.
     final snapshot = finance.withSplitSiblings(_selected);
     final changed = await finance.setDateTimeForMany(Set.of(_selected), stamp);
@@ -1626,76 +1698,47 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final finance = context.read<FinanceProvider>();
     final selectedTxs = _selectedSnapshot(finance);
     if (selectedTxs.isEmpty) return;
-    // Rows already moved can go back to their own dates in one step.
+    // Rows already moved can go back to their own dates from the sheet.
     final movedCount = selectedTxs.where((t) => t.countIn != null).length;
-    if (movedCount > 0) {
-      final choice = await showPickerSheet<bool>(
-        context: context,
-        title: 'Count in',
-        items: [
-          const PickerItem(
-            value: true,
-            label: 'Pick a date…',
-            leading: Icon(Icons.event_repeat_outlined, size: 18),
-          ),
-          PickerItem(
-            value: false,
-            label: movedCount == 1
-                ? 'Count on its own date'
-                : 'Count on their own dates',
-            leading: const Icon(Icons.undo, size: 18),
-          ),
-        ],
-      );
-      if (choice == null || !mounted) return;
-      if (choice.value == false) {
-        await _applyCountIn(finance, null);
-        return;
-      }
-    }
-    if (!mounted) return;
-    // Opens on a Count in already chosen, else the 1st of the month after
-    // the newest selected row: the salary-on-the-30th case.
+    // Opens on a Count in already chosen, else the month after the newest
+    // selected row: the salary-on-the-30th case.
     final newest = selectedTxs
         .map((t) => t.date)
         .reduce((a, b) => a.isAfter(b) ? a : b);
     final existing = [for (final t in selectedTxs) ?t.countIn];
-    final now = DateTime.now();
-    final later = newest.isAfter(now) ? newest : now;
-    final stamp = await pickDateThenTime(
+    // The month every selected row already counts in, if they share one:
+    // applying it unchanged would only move them to its 1st.
+    final months = {
+      for (final t in selectedTxs)
+        if (t.countIn case final c?) DateTime(c.year, c.month) else null,
+    };
+    final shared = months.length == 1 ? months.single : null;
+    final result = await showEditorSheet<({DateTime? month})>(
       context,
-      initial: existing.isNotEmpty
-          ? existing.first
-          : DateTime(newest.year, newest.month + 1),
-      firstDate: DateTime(2000),
-      // The end of the next month.
-      lastDate: DateTime(later.year, later.month + 2, 0, 23, 59),
+      builder: (ctx) => _BulkCountInSheet(
+        // The 12 months before the newest row's month to 2 after it,
+        // newest first, as the month picker lists them.
+        months: [
+          for (var i = 2; i >= -12; i--)
+            DateTime(newest.year, newest.month + i),
+        ],
+        initial:
+            shared ??
+            (existing.isNotEmpty
+                ? DateTime(existing.first.year, existing.first.month)
+                : DateTime(newest.year, newest.month + 1)),
+        shared: shared != null,
+        moved: movedCount,
+      ),
     );
-    if (stamp == null || !mounted) return;
-    await _applyCountIn(finance, stamp);
+    if (result == null || !mounted) return;
+    await _applyCountIn(finance, result.month);
   }
 
+  /// [stamp] null puts the moved rows back on their own dates. No confirm:
+  /// the toast's Undo puts every row back.
   Future<void> _applyCountIn(FinanceProvider finance, DateTime? stamp) async {
     String rows(int n) => '$n transaction${n == 1 ? '' : 's'}';
-    // Clearing touches only the rows that were moved; say that many.
-    final moved = _selectedSnapshot(
-      finance,
-    ).where((t) => t.countIn != null).length;
-    final ok = stamp == null
-        ? await _confirmBulk(
-            'Put ${rows(moved)} back on ${moved == 1 ? 'its' : 'their'} own '
-                'date${moved == 1 ? '' : 's'}?',
-            'Monthly totals, budgets, the recap, Trends and Breakdown go back '
-                'to counting ${moved == 1 ? 'it on the date it' : 'them on '
-                          'the dates they'} happened.',
-          )
-        : await _confirmBulk(
-            'Count ${rows(_selected.length)} on ${fmtCountIn(stamp)}?',
-            "Their own dates stay, so account balances don't change. Monthly "
-                'totals, budgets, the recap, Trends and Breakdown count them '
-                'in ${fmtMonth(stamp)}.',
-          );
-    if (!ok) return;
     // A split part's siblings move with it, so Undo restores them too.
     final snapshot = finance.withSplitSiblings(_selected);
     final changed = await finance.setCountInForMany(Set.of(_selected), stamp);
@@ -1726,34 +1769,17 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           if (seen.add(tagKey(tag))) tag,
     ];
     final result =
-        await showModalBottomSheet<({Set<String> add, Set<String> remove})>(
-          context: context,
-          isScrollControlled: true,
-          useSafeArea: true,
-          showDragHandle: true,
-          builder: (ctx) => Padding(
-            padding: EdgeInsets.only(
-              bottom: MediaQuery.of(ctx).viewInsets.bottom,
-            ),
-            child: _BulkTagSheet(
-              present: present,
-              suggestions: [for (final u in finance.allTags) u.tag],
-            ),
+        await showEditorSheet<({Set<String> add, Set<String> remove})>(
+          context,
+          builder: (ctx) => _BulkTagSheet(
+            present: present,
+            suggestions: finance.tagSuggestions,
+            count: _selected.length,
           ),
         );
     if (result == null || !mounted) return;
     if (result.add.isEmpty && result.remove.isEmpty) return;
-    final n = _selected.length;
-    final parts = [
-      if (result.add.isNotEmpty) 'adds ${result.add.join(', ')}',
-      if (result.remove.isNotEmpty) 'removes ${result.remove.join(', ')}',
-    ];
-    if (!await _confirmBulk(
-      'Tag $n transaction${n == 1 ? '' : 's'}?',
-      'This ${parts.join(' and ')} on the selected transactions.',
-    )) {
-      return;
-    }
+    // No confirm: the toast's Undo puts the rows' tags back.
     final before = await finance.setTagsForMany(
       Set.of(_selected),
       add: result.add,
@@ -1795,10 +1821,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       );
       return;
     }
-    final cycle = await showModalBottomSheet<SubscriptionCycle>(
-      context: context,
-      useSafeArea: true,
-      showDragHandle: true,
+    // Scroll-controlled through the editor sheet: many merchants or 2x
+    // text no longer push the cycles off the screen.
+    final cycle = await showEditorSheet<SubscriptionCycle>(
+      context,
       builder: (ctx) => _BulkSubscriptionSheet(
         labels: labels.values.toList(),
         skipped: skipped,
@@ -2039,7 +2065,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         finance.restoreEditedTransactions(snapshot);
         if (wasInReview) finance.restoreRefundReviewId(refund.id);
       },
-      icon: Icons.undo,
+      icon: Icons.add_link,
     );
   }
 
@@ -2079,13 +2105,33 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final groups = finance.groups;
     final budgets = finance.budgets;
     final tags = finance.allTags;
+    // fmtFieldNumber, not whole rupees: a stored 99.5 reopens as 99.5 and
+    // Show keeps it.
     final minCtrl = TextEditingController(
-      text: _minAmount == null ? '' : _minAmount!.toStringAsFixed(0),
+      text: _minAmount == null ? '' : fmtFieldNumber(_minAmount!),
     );
     final maxCtrl = TextEditingController(
-      text: _maxAmount == null ? '' : _maxAmount!.toStringAsFixed(0),
+      text: _maxAmount == null ? '' : fmtFieldNumber(_maxAmount!),
     );
     final filterSearchCtrl = TextEditingController();
+    // The rail's chosen section; the sheet opens on Date.
+    var section = 'date';
+
+    // The sheet's choices as the list would read them once applied. The
+    // range keeps its year flavour only while it is the one the sheet
+    // opened with, as apply() does.
+    _Filters draft() => (
+      categories: selected,
+      groups: selectedGroups,
+      budgets: selectedBudgets,
+      tags: selectedTags,
+      accountId: accountId,
+      month: month,
+      range: range,
+      rangeCounted: identical(range, _rangeFilter) && _rangeCounted,
+      min: parseAmount(minCtrl.text),
+      max: parseAmount(maxCtrl.text),
+    );
 
     // Apply commits the sheet's choices.
     void apply() {
@@ -2114,457 +2160,661 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       });
     }
 
+    // The rail's sections in the pick's order. Each shows when the sheet
+    // has something for it; a search that empties one keeps its row.
+    final sections = <(String, String)>[
+      ('date', 'Date'),
+      ('amount', 'Amount'),
+      ('categories', 'Categories'),
+      // Always: the "Other" (ungrouped) chip stays reachable, even after
+      // the last group is deleted.
+      ('groups', 'Groups'),
+      if (accounts.isNotEmpty) ('accounts', 'Accounts'),
+      if (tags.isNotEmpty) ('tags', 'Tags'),
+      if (budgets.isNotEmpty) ('budgets', 'Budgets'),
+    ];
+
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       // Keeps the sheet (and its drag handle) below the status bar / notch.
       useSafeArea: true,
       showDragHandle: true,
+      // One height for every section, so the rail does not move under the
+      // finger when a short section replaces a long one.
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+      ),
       // Disposal is tied to unmount, not to this future: the sheet keeps
       // rebuilding (and re-reading the controllers) through its exit
       // transition, which completes after the future does.
       builder: (ctx) => DisposeScope(
         disposables: [minCtrl, maxCtrl, filterSearchCtrl],
         child: StatefulBuilder(
-          builder: (ctx, setSheetState) => Padding(
-            padding: EdgeInsets.only(
-              left: 20,
-              right: 20,
-              bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Pinned header: the actions stay reachable however long the
-                // filter content grows or when the keyboard is open — only the
-                // content below scrolls. Wraps rather than overflowing: at
-                // 320dp and 2x text the title and both buttons outgrew the
-                // line, so the buttons drop under the title, and under each
-                // other when even that is too narrow. Full width, or the
-                // Column centres the Wrap and the title leaves the margin.
-                SizedBox(
-                  width: double.infinity,
-                  child: Wrap(
-                    alignment: WrapAlignment.spaceBetween,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    runSpacing: 4,
-                    children: [
-                      Text(
-                        'Filters',
-                        key: const ValueKey('filters-title'),
-                        style: Theme.of(ctx).textTheme.titleLarge,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        children: [
-                          TextButton(
-                            // Resets the draft in place — everything else in the
-                            // sheet waits for Apply, so Clear-all applying and
-                            // closing immediately was the one inconsistent control.
-                            onPressed: () {
-                              minCtrl.clear();
-                              maxCtrl.clear();
-                              // Clearing the query too: mid-search, deselected
-                              // chips would just vanish (only visible via the
-                              // selected-chip escape hatch) and Clear-all read
-                              // as a no-op.
-                              filterSearchCtrl.clear();
-                              setSheetState(() {
-                                filterQuery = '';
-                                selected.clear();
-                                selectedGroups.clear();
-                                selectedBudgets.clear();
-                                selectedTags.clear();
-                                accountId = null;
-                                month = null;
-                                range = null;
-                              });
-                            },
-                            child: const Text('Clear all'),
-                          ),
-                          FilledButton(
-                            onPressed: () {
-                              apply();
-                              Navigator.pop(ctx);
-                            },
-                            child: const Text('Apply'),
-                          ),
-                        ],
-                      ),
-                    ],
+          builder: (ctx, setSheetState) {
+            final theme = Theme.of(ctx);
+            final scheme = theme.colorScheme;
+            final d = draft();
+            final shown = _applyFilters(
+              finance.transactions,
+              finance,
+              _filter,
+              d,
+            ).length;
+            // How many picks each section holds, for its rail row.
+            int picks(String s) => switch (s) {
+              'date' => d.month != null || d.range != null ? 1 : 0,
+              'amount' => (d.min != null ? 1 : 0) + (d.max != null ? 1 : 0),
+              'categories' => selected.length,
+              'groups' => selectedGroups.length,
+              'accounts' => accountId != null ? 1 : 0,
+              'tags' => selectedTags.length,
+              'budgets' => selectedBudgets.length,
+              _ => 0,
+            };
+            final chipSection = section != 'date' && section != 'amount';
+            // The rail is as wide as its longest word ("Categories"), so
+            // no label breaks inside a word: from 104dp up to half the
+            // row. Past half, its labels shrink until that word fits.
+            final scaler = MediaQuery.textScalerOf(ctx);
+            var longestWord = 0.0;
+            for (final (_, name) in sections) {
+              for (final word in name.split(' ')) {
+                final painter = TextPainter(
+                  text: TextSpan(text: word, style: theme.textTheme.labelLarge),
+                  textScaler: scaler,
+                  textDirection: Directionality.of(ctx),
+                  maxLines: 1,
+                )..layout();
+                longestWord = math.max(longestWord, painter.width);
+                painter.dispose();
+              }
+            }
+            // The row's 3dp bar, 12dp before the label, 8dp after, and
+            // 1dp to spare.
+            const railInset = 24.0;
+            final half =
+                (math.min(MediaQuery.sizeOf(ctx).width, 640.0) - 40) / 2;
+            final railWidth = (longestWord + railInset)
+                .clamp(104.0, math.max(104.0, half))
+                .toDouble();
+            final railScaler = longestWord + railInset > railWidth
+                ? TextScaler.linear(
+                    scaler.scale(1) * (railWidth - railInset) / longestWord,
+                  )
+                : scaler;
+            // While the keyboard is up the Show footer and the 16dp bottom
+            // gap go (the keyboard's edge takes its place): at 320x568 a
+            // 280dp keyboard leaves about 139dp for the pinned parts.
+            final keyboard = MediaQuery.viewInsetsOf(ctx).bottom;
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                bottom: keyboard > 0 ? keyboard : 16,
+              ),
+              child: Column(
+                children: [
+                  // Pinned header: Clear all stays reachable however long the
+                  // section grows or when the keyboard is open. Wraps rather
+                  // than overflowing, so at 320dp and 2x text Clear all drops
+                  // under the title. Full width, or the Column centres the
+                  // Wrap and the title leaves the margin.
+                  SizedBox(
+                    width: double.infinity,
+                    child: Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      runSpacing: 4,
+                      children: [
+                        Text(
+                          'Filters',
+                          key: const ValueKey('filters-title'),
+                          style: theme.textTheme.titleLarge,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        TextButton(
+                          // Resets the draft in place — everything else in the
+                          // sheet waits for Show, so Clear-all applying and
+                          // closing immediately was the one inconsistent control.
+                          onPressed: () {
+                            minCtrl.clear();
+                            maxCtrl.clear();
+                            // Clearing the query too: mid-search, deselected
+                            // chips would just vanish (only visible via the
+                            // selected-chip escape hatch) and Clear-all read
+                            // as a no-op.
+                            filterSearchCtrl.clear();
+                            setSheetState(() {
+                              filterQuery = '';
+                              selected.clear();
+                              selectedGroups.clear();
+                              selectedBudgets.clear();
+                              selectedTags.clear();
+                              accountId = null;
+                              month = null;
+                              range = null;
+                            });
+                          },
+                          child: const Text('Clear all'),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                // Pinned like the header: narrows every chip section below.
-                // Selected chips always stay visible so an active selection
-                // can't become invisible/un-removable behind the query.
-                TextField(
-                  controller: filterSearchCtrl,
-                  decoration: InputDecoration(
-                    hintText: 'Search filters…',
-                    prefixIcon: const Icon(Icons.search, size: 20),
-                    isDense: true,
-                    suffixIcon: filterQuery.isEmpty
-                        ? null
-                        : IconButton(
-                            tooltip: 'Clear search',
-                            icon: const Icon(Icons.close, size: 18),
-                            onPressed: () {
-                              filterSearchCtrl.clear();
-                              setSheetState(() => filterQuery = '');
-                            },
+                  // Pinned like the header: narrows the chosen chip section.
+                  // Selected chips always stay visible so an active selection
+                  // can't become invisible/un-removable behind the query.
+                  if (chipSection) ...[
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: filterSearchCtrl,
+                      decoration: InputDecoration(
+                        hintText: 'Search filters…',
+                        prefixIcon: const Icon(Icons.search, size: 20),
+                        isDense: true,
+                        suffixIcon: filterQuery.isEmpty
+                            ? null
+                            : IconButton(
+                                tooltip: 'Clear search',
+                                icon: const Icon(Icons.close, size: 18),
+                                onPressed: () {
+                                  filterSearchCtrl.clear();
+                                  setSheetState(() => filterQuery = '');
+                                },
+                              ),
+                      ),
+                      onChanged: (v) => setSheetState(
+                        () => filterQuery = v.trim().toLowerCase(),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          key: const ValueKey('filters-rail'),
+                          width: railWidth,
+                          child: ListView(
+                            children: [
+                              for (final (id, name) in sections)
+                                _railRow(
+                                  ctx,
+                                  id: id,
+                                  label: picks(id) > 0
+                                      ? '$name · ${picks(id)}'
+                                      : name,
+                                  selected: section == id,
+                                  scheme: scheme,
+                                  textScaler: railScaler,
+                                  onTap: () =>
+                                      setSheetState(() => section = id),
+                                ),
+                            ],
                           ),
-                  ),
-                  onChanged: (v) =>
-                      setSheetState(() => filterQuery = v.trim().toLowerCase()),
-                ),
-                Flexible(
-                  child: Builder(
-                    builder: (ctx) {
-                      bool has(String label) =>
-                          filterQuery.isEmpty ||
-                          label.toLowerCase().contains(filterQuery);
-                      final visAccounts = [
-                        for (final a in accounts)
-                          if (has(a.displayName) || accountId == a.id) a,
-                      ];
-                      final visBudgets = [
-                        for (final b in budgets)
-                          if (has(b.name) || selectedBudgets.contains(b.id)) b,
-                      ];
-                      final visGroups = [
-                        for (final g in groups)
-                          if (has(g.label) || selectedGroups.contains(g.id)) g,
-                      ];
-                      final showOther =
-                          has('Other') ||
-                          selectedGroups.contains(kUngroupedFilterKey);
-                      final visTags = [
-                        for (final u in tags)
-                          if (has(u.tag) ||
-                              selectedTags.contains(tagKey(u.tag)))
-                            u.tag,
-                      ];
-                      final visCategories = [
-                        for (final c in allCategories)
-                          if (has(c.label) || selected.contains(c.id)) c,
-                      ];
-                      return SingleChildScrollView(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Not narrowed by the filter query: three fixed
-                            // choices, and the one that is active must stay
-                            // reachable.
-                            const SizedBox(height: 12),
-                            Text(
-                              'Date',
-                              style: Theme.of(ctx).textTheme.titleSmall,
-                            ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 4,
-                              children: [
-                                ChoiceChip(
-                                  label: const Text('All time'),
-                                  selected: month == null && range == null,
-                                  onSelected: (_) => setSheetState(() {
-                                    month = null;
-                                    range = null;
-                                  }),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Builder(
+                            builder: (ctx) {
+                              bool has(String label) =>
+                                  filterQuery.isEmpty ||
+                                  label.toLowerCase().contains(filterQuery);
+                              final visAccounts = [
+                                for (final a in accounts)
+                                  if (has(a.displayName) || accountId == a.id)
+                                    a,
+                              ];
+                              final visBudgets = [
+                                for (final b in budgets)
+                                  if (has(b.name) ||
+                                      selectedBudgets.contains(b.id))
+                                    b,
+                              ];
+                              final visGroups = [
+                                for (final g in groups)
+                                  if (has(g.label) ||
+                                      selectedGroups.contains(g.id))
+                                    g,
+                              ];
+                              final showOther =
+                                  has('Other') ||
+                                  selectedGroups.contains(kUngroupedFilterKey);
+                              final visTags = [
+                                for (final u in tags)
+                                  if (has(u.tag) ||
+                                      selectedTags.contains(tagKey(u.tag)))
+                                    u.tag,
+                              ];
+                              final visCategories = [
+                                for (final c in allCategories)
+                                  if (has(c.label) || selected.contains(c.id))
+                                    c,
+                              ];
+                              final noMatches = switch (section) {
+                                'categories' => visCategories.isEmpty,
+                                'groups' => visGroups.isEmpty && !showOther,
+                                'accounts' => visAccounts.isEmpty,
+                                'tags' => visTags.isEmpty,
+                                'budgets' => visBudgets.isEmpty,
+                                _ => false,
+                              };
+                              return SingleChildScrollView(
+                                // The top inset keeps Min's floating label inside
+                                // the scroll view.
+                                padding: const EdgeInsets.only(
+                                  top: 8,
+                                  bottom: 8,
                                 ),
-                                ChoiceChip(
-                                  label: Text(
-                                    month == null ? 'Month…' : fmtMonth(month!),
-                                  ),
-                                  avatar: const Icon(
-                                    Icons.calendar_month,
-                                    size: 16,
-                                  ),
-                                  selected: month != null,
-                                  onSelected: (_) async {
-                                    final picked = await showMonthPickerSheet(
-                                      ctx,
-                                      title: 'Month',
-                                      months: monthsWithData,
-                                      selected: month,
-                                    );
-                                    if (picked == null) return;
-                                    setSheetState(() {
-                                      month = picked;
-                                      range = null;
-                                    });
-                                  },
-                                ),
-                                ChoiceChip(
-                                  // The range the sheet opened with keeps
-                                  // its year name, as on the filter chip.
-                                  label: Text(
-                                    range == null
-                                        ? 'Custom range…'
-                                        : identical(range, _rangeFilter) &&
-                                              _rangeLabel != null
-                                        ? _rangeLabel!
-                                        : fmtDateRange(range!),
-                                  ),
-                                  avatar: const Icon(
-                                    Icons.date_range,
-                                    size: 16,
-                                  ),
-                                  selected: range != null,
-                                  onSelected: (_) async {
-                                    final now = DateTime.now();
-                                    final today = DateTime(
-                                      now.year,
-                                      now.month,
-                                      now.day,
-                                    );
-                                    // A dashboard year still running ends
-                                    // after today, which the picker rejects:
-                                    // start it at the part up to today.
-                                    final r = range;
-                                    final initial =
-                                        r == null || r.start.isAfter(today)
-                                        ? null
-                                        : r.end.isAfter(today)
-                                        ? DateTimeRange(
-                                            start: r.start,
-                                            end: today,
-                                          )
-                                        : r;
-                                    final picked = await showDateRangePicker(
-                                      context: ctx,
-                                      firstDate: DateTime(2000),
-                                      lastDate: today,
-                                      initialDateRange: initial,
-                                    );
-                                    if (picked == null) return;
-                                    setSheetState(() {
-                                      range = picked;
-                                      month = null;
-                                    });
-                                  },
-                                ),
-                              ],
-                            ),
-                            if (visAccounts.isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                'Account',
-                                style: Theme.of(ctx).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 4,
-                                children: [
-                                  ChoiceChip(
-                                    label: const Text('All'),
-                                    selected: accountId == null,
-                                    onSelected: (_) =>
-                                        setSheetState(() => accountId = null),
-                                  ),
-                                  for (final a in visAccounts)
-                                    ChoiceChip(
-                                      label: Text(a.displayName),
-                                      avatar: Icon(a.icon, size: 16),
-                                      selected: accountId == a.id,
-                                      onSelected: (_) =>
-                                          setSheetState(() => accountId = a.id),
-                                    ),
-                                ],
-                              ),
-                            ],
-                            if (visBudgets.isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                'Budgets',
-                                style: Theme.of(ctx).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 4,
-                                children: [
-                                  for (final b in visBudgets)
-                                    FilterChip(
-                                      label: Text(b.name),
-                                      avatar: const Icon(
-                                        Icons.track_changes,
-                                        size: 16,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (noMatches)
+                                      Text(
+                                        'No matches.',
+                                        style: Theme.of(
+                                          ctx,
+                                        ).textTheme.bodySmall,
                                       ),
-                                      selected: selectedBudgets.contains(b.id),
-                                      onSelected: (on) => setSheetState(
-                                        () => on
-                                            ? selectedBudgets.add(b.id)
-                                            : selectedBudgets.remove(b.id),
+                                    // Not narrowed by the filter query: three fixed
+                                    // choices, and the one that is active must stay
+                                    // reachable.
+                                    if (section == 'date')
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 4,
+                                        children: [
+                                          ChoiceChip(
+                                            label: const Text('All time'),
+                                            selected:
+                                                month == null && range == null,
+                                            onSelected: (_) =>
+                                                setSheetState(() {
+                                                  month = null;
+                                                  range = null;
+                                                }),
+                                          ),
+                                          ChoiceChip(
+                                            label: Text(
+                                              month == null
+                                                  ? 'Month…'
+                                                  : fmtMonth(month!),
+                                            ),
+                                            avatar: const Icon(
+                                              Icons.calendar_month,
+                                              size: 16,
+                                            ),
+                                            selected: month != null,
+                                            onSelected: (_) async {
+                                              final picked =
+                                                  await showMonthPickerSheet(
+                                                    ctx,
+                                                    title: 'Month',
+                                                    months: monthsWithData,
+                                                    selected: month,
+                                                  );
+                                              if (picked == null) return;
+                                              setSheetState(() {
+                                                month = picked;
+                                                range = null;
+                                              });
+                                            },
+                                          ),
+                                          ChoiceChip(
+                                            // The range the sheet opened with keeps
+                                            // its year name, as on the filter chip.
+                                            label: Text(
+                                              range == null
+                                                  ? 'Custom range…'
+                                                  : identical(
+                                                          range,
+                                                          _rangeFilter,
+                                                        ) &&
+                                                        _rangeLabel != null
+                                                  ? _rangeLabel!
+                                                  : fmtDateRange(range!),
+                                            ),
+                                            avatar: const Icon(
+                                              Icons.date_range,
+                                              size: 16,
+                                            ),
+                                            selected: range != null,
+                                            onSelected: (_) async {
+                                              final now = DateTime.now();
+                                              final today = DateTime(
+                                                now.year,
+                                                now.month,
+                                                now.day,
+                                              );
+                                              // A dashboard year still running ends
+                                              // after today, which the picker rejects:
+                                              // start it at the part up to today.
+                                              final r = range;
+                                              final initial =
+                                                  r == null ||
+                                                      r.start.isAfter(today)
+                                                  ? null
+                                                  : r.end.isAfter(today)
+                                                  ? DateTimeRange(
+                                                      start: r.start,
+                                                      end: today,
+                                                    )
+                                                  : r;
+                                              final picked =
+                                                  await showDateRangePicker(
+                                                    context: ctx,
+                                                    firstDate: DateTime(2000),
+                                                    lastDate: today,
+                                                    initialDateRange: initial,
+                                                  );
+                                              if (picked == null) return;
+                                              setSheetState(() {
+                                                range = picked;
+                                                month = null;
+                                              });
+                                            },
+                                          ),
+                                        ],
                                       ),
-                                    ),
-                                ],
-                              ),
-                            ],
-                            // No groups.isNotEmpty gate: an active "Other"
-                            // (ungrouped) filter must keep its chip — and
-                            // its only ✕ — even after the last group is
-                            // deleted.
-                            if (visGroups.isNotEmpty || showOther) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                'Groups',
-                                style: Theme.of(ctx).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 4,
-                                children: [
-                                  for (final g in visGroups)
-                                    FilterChip(
-                                      label: Text(g.label),
-                                      avatar: Icon(
-                                        Icons.workspaces_outlined,
-                                        size: 16,
-                                        color: g.color,
+                                    if (section == 'accounts' &&
+                                        visAccounts.isNotEmpty) ...[
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 4,
+                                        children: [
+                                          ChoiceChip(
+                                            label: const Text('All'),
+                                            selected: accountId == null,
+                                            onSelected: (_) => setSheetState(
+                                              () => accountId = null,
+                                            ),
+                                          ),
+                                          for (final a in visAccounts)
+                                            ChoiceChip(
+                                              label: Text(
+                                                a.displayName,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              avatar: Icon(a.icon, size: 16),
+                                              selected: accountId == a.id,
+                                              onSelected: (_) => setSheetState(
+                                                () => accountId = a.id,
+                                              ),
+                                            ),
+                                        ],
                                       ),
-                                      selected: selectedGroups.contains(g.id),
-                                      onSelected: (on) => setSheetState(
-                                        () => on
-                                            ? selectedGroups.add(g.id)
-                                            : selectedGroups.remove(g.id),
+                                    ],
+                                    if (section == 'budgets' &&
+                                        visBudgets.isNotEmpty) ...[
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 4,
+                                        children: [
+                                          for (final b in visBudgets)
+                                            FilterChip(
+                                              label: Text(
+                                                b.name,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              avatar: const Icon(
+                                                Icons.track_changes,
+                                                size: 16,
+                                              ),
+                                              selected: selectedBudgets
+                                                  .contains(b.id),
+                                              onSelected: (on) => setSheetState(
+                                                () => on
+                                                    ? selectedBudgets.add(b.id)
+                                                    : selectedBudgets.remove(
+                                                        b.id,
+                                                      ),
+                                              ),
+                                            ),
+                                        ],
                                       ),
-                                    ),
-                                  if (showOther)
-                                    FilterChip(
-                                      label: const Text('Other'),
-                                      avatar: const Icon(
-                                        Icons.category,
-                                        size: 16,
-                                      ),
-                                      selected: selectedGroups.contains(
-                                        kUngroupedFilterKey,
-                                      ),
-                                      onSelected: (on) => setSheetState(
-                                        () => on
-                                            ? selectedGroups.add(
-                                                kUngroupedFilterKey,
-                                              )
-                                            : selectedGroups.remove(
+                                    ],
+                                    // No groups.isNotEmpty gate: an active "Other"
+                                    // (ungrouped) filter must keep its chip — and
+                                    // its only ✕ — even after the last group is
+                                    // deleted.
+                                    if (section == 'groups' &&
+                                        (visGroups.isNotEmpty ||
+                                            showOther)) ...[
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 4,
+                                        children: [
+                                          for (final g in visGroups)
+                                            FilterChip(
+                                              label: Text(
+                                                g.label,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              avatar: Icon(
+                                                Icons.workspaces_outlined,
+                                                size: 16,
+                                                color: g.color,
+                                              ),
+                                              selected: selectedGroups.contains(
+                                                g.id,
+                                              ),
+                                              onSelected: (on) => setSheetState(
+                                                () => on
+                                                    ? selectedGroups.add(g.id)
+                                                    : selectedGroups.remove(
+                                                        g.id,
+                                                      ),
+                                              ),
+                                            ),
+                                          if (showOther)
+                                            FilterChip(
+                                              label: const Text('Other'),
+                                              avatar: const Icon(
+                                                Icons.category,
+                                                size: 16,
+                                              ),
+                                              selected: selectedGroups.contains(
                                                 kUngroupedFilterKey,
                                               ),
+                                              onSelected: (on) => setSheetState(
+                                                () => on
+                                                    ? selectedGroups.add(
+                                                        kUngroupedFilterKey,
+                                                      )
+                                                    : selectedGroups.remove(
+                                                        kUngroupedFilterKey,
+                                                      ),
+                                              ),
+                                            ),
+                                        ],
                                       ),
-                                    ),
-                                ],
-                              ),
-                            ],
-                            if (visTags.isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                'Tags',
-                                style: Theme.of(ctx).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 4,
-                                children: [
-                                  for (final tag in visTags)
-                                    FilterChip(
-                                      label: Text(tag),
-                                      avatar: const Icon(
-                                        Icons.label_outline,
-                                        size: 16,
+                                    ],
+                                    if (section == 'tags' &&
+                                        visTags.isNotEmpty) ...[
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 4,
+                                        children: [
+                                          for (final tag in visTags)
+                                            // "# Name" with its colour dot,
+                                            // as the add sheet shows a tag.
+                                            FilterChip(
+                                              // TalkBack would read the "#"
+                                              // as "number".
+                                              label: Text(
+                                                '# $tag',
+                                                semanticsLabel: 'Tag $tag',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              avatar: switch (finance.tagColor(
+                                                tag,
+                                              )) {
+                                                null => null,
+                                                final c => CircleAvatar(
+                                                  radius: 5,
+                                                  backgroundColor: c,
+                                                ),
+                                              },
+                                              selected: selectedTags.contains(
+                                                tagKey(tag),
+                                              ),
+                                              onSelected: (on) => setSheetState(
+                                                () => on
+                                                    ? selectedTags.add(
+                                                        tagKey(tag),
+                                                      )
+                                                    : selectedTags.remove(
+                                                        tagKey(tag),
+                                                      ),
+                                              ),
+                                            ),
+                                        ],
                                       ),
-                                      selected: selectedTags.contains(
-                                        tagKey(tag),
+                                    ],
+                                    if (section == 'categories' &&
+                                        visCategories.isNotEmpty) ...[
+                                      Wrap(
+                                        spacing: 8,
+                                        runSpacing: 4,
+                                        children: [
+                                          for (final c in visCategories)
+                                            FilterChip(
+                                              label: categoryChipLabel(c),
+                                              avatar: Icon(
+                                                c.icon,
+                                                size: 16,
+                                                color: c.color,
+                                              ),
+                                              selected: selected.contains(c.id),
+                                              onSelected: (on) => setSheetState(
+                                                () => on
+                                                    ? selected.add(c.id)
+                                                    : selected.remove(c.id),
+                                              ),
+                                            ),
+                                        ],
                                       ),
-                                      onSelected: (on) => setSheetState(
-                                        () => on
-                                            ? selectedTags.add(tagKey(tag))
-                                            : selectedTags.remove(tagKey(tag)),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ],
-                            if (visCategories.isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                'Categories',
-                                style: Theme.of(ctx).textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 8),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 4,
-                                children: [
-                                  for (final c in visCategories)
-                                    FilterChip(
-                                      label: categoryChipLabel(c),
-                                      avatar: Icon(
-                                        c.icon,
-                                        size: 16,
-                                        color: c.color,
-                                      ),
-                                      selected: selected.contains(c.id),
-                                      onSelected: (on) => setSheetState(
-                                        () => on
-                                            ? selected.add(c.id)
-                                            : selected.remove(c.id),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ],
-                            const SizedBox(height: 16),
-                            Text(
-                              'Amount range',
-                              style: Theme.of(ctx).textTheme.titleSmall,
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: minCtrl,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                          decimal: true,
+                                    ],
+                                    // Stacked: half of the panel beside the rail
+                                    // holds a few digits.
+                                    if (section == 'amount') ...[
+                                      TextField(
+                                        key: const ValueKey('filters-min'),
+                                        controller: minCtrl,
+                                        keyboardType:
+                                            const TextInputType.numberWithOptions(
+                                              decimal: true,
+                                            ),
+                                        textInputAction: TextInputAction.next,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Min',
+                                          prefixText: '₹ ',
                                         ),
-                                    decoration: const InputDecoration(
-                                      labelText: 'Min',
-                                      prefixText: '₹ ',
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: TextField(
-                                    controller: maxCtrl,
-                                    keyboardType:
-                                        const TextInputType.numberWithOptions(
-                                          decimal: true,
+                                        onChanged: (_) => setSheetState(() {}),
+                                      ),
+                                      const SizedBox(height: 12),
+                                      TextField(
+                                        key: const ValueKey('filters-max'),
+                                        controller: maxCtrl,
+                                        keyboardType:
+                                            const TextInputType.numberWithOptions(
+                                              decimal: true,
+                                            ),
+                                        textInputAction: TextInputAction.done,
+                                        decoration: InputDecoration(
+                                          labelText: 'Max',
+                                          prefixText: '₹ ',
+                                          errorText:
+                                              d.min != null &&
+                                                  d.max != null &&
+                                                  d.max! < d.min!
+                                              ? 'Max is below Min'
+                                              : null,
                                         ),
-                                    decoration: const InputDecoration(
-                                      labelText: 'Max',
-                                      prefixText: '₹ ',
-                                    ),
-                                  ),
+                                        onChanged: (_) => setSheetState(() {}),
+                                      ),
+                                    ],
+                                  ],
                                 ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                          ],
+                              );
+                            },
+                          ),
                         ),
-                      );
-                    },
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                  // Pinned under the sections: how many rows the draft
+                  // keeps. Enabled at 0, as Apply was: the list then says
+                  // so with its own empty state. Hidden while the keyboard
+                  // is up; the keyboard's Done brings it back.
+                  if (keyboard == 0) ...[
+                    const SizedBox(height: 8),
+                    FilledButton(
+                      key: const ValueKey('filters-show'),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                      ),
+                      onPressed: () {
+                        apply();
+                        Navigator.pop(ctx);
+                      },
+                      child: Text('Show $shown'),
+                    ),
+                  ],
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  /// One section row of the filters rail: at least 48dp, growing with its
+  /// two-line label; the chosen one in primary text with a 3dp bar at its
+  /// left edge, on the sheet's own surface.
+  Widget _railRow(
+    BuildContext context, {
+    required String id,
+    required String label,
+    required bool selected,
+    required ColorScheme scheme,
+    required TextScaler textScaler,
+    required VoidCallback onTap,
+  }) {
+    final style = Theme.of(context).textTheme.labelLarge;
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: InkWell(
+        key: ValueKey('filters-section-$id'),
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+          alignment: Alignment.centerLeft,
+          decoration: BoxDecoration(
+            border: Border(
+              left: BorderSide(
+                width: 3,
+                color: selected ? scheme.primary : Colors.transparent,
+              ),
             ),
+          ),
+          child: Text(
+            label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textScaler: textScaler,
+            style: selected
+                ? style?.copyWith(color: scheme.primary)
+                : style?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ),
       ),
@@ -2573,66 +2823,63 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 }
 
 /// The bulk Subscription sheet: which merchants the selection marks, and
-/// the cycle for all of them. Pops the chosen cycle.
-class _BulkSubscriptionSheet extends StatelessWidget {
+/// the cycle for all of them, Monthly to start. Pops the chosen cycle.
+class _BulkSubscriptionSheet extends StatefulWidget {
   final List<String> labels;
   final int skipped;
 
   const _BulkSubscriptionSheet({required this.labels, required this.skipped});
 
   @override
+  State<_BulkSubscriptionSheet> createState() => _BulkSubscriptionSheetState();
+}
+
+class _BulkSubscriptionSheetState extends State<_BulkSubscriptionSheet> {
+  var _cycle = SubscriptionCycle.monthly;
+
+  @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
+    final labels = widget.labels;
+    final skipped = widget.skipped;
     final n = labels.length;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    // Up to three names, then how many more: a long selection would push
+    // the cycles off a small phone.
+    final names = n <= 3
+        ? labels.join(', ')
+        : '${labels.take(3).join(', ')} and ${n - 3} more';
+    return EditorSheetBody(
+      title: 'Mark as subscriptions',
+      footerLabel: 'Mark as subscriptions',
+      onSave: () => Navigator.pop(context, _cycle),
+      children: [
+        Text(names, style: text.bodyMedium),
+        const SizedBox(height: 4),
+        Text(
+          [
+            if (skipped > 0)
+              '$skipped row${skipped == 1 ? '' : 's'} skipped '
+                  '(income, transfers, or no merchant).',
+            'Every payment to ${n == 1 ? 'it' : 'them'} counts.',
+          ].join(' · '),
+          style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 16),
+        Wrap(
+          key: const ValueKey('bulk-subscription-cycle'),
+          spacing: 8,
+          runSpacing: 4,
           children: [
-            Text(
-              'Mark $n merchant${n == 1 ? '' : 's'} as '
-              'subscription${n == 1 ? '' : 's'}',
-              style: text.titleMedium,
-            ),
-            const SizedBox(height: 6),
-            Text(
-              [
-                labels.join(', '),
-                if (skipped > 0)
-                  '$skipped row${skipped == 1 ? '' : 's'} skipped '
-                      '(income, transfers, or no merchant).',
-                'Every payment to ${n == 1 ? 'it' : 'them'} counts.',
-              ].join(' · '),
-              style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 16),
-            // Two rows of two: four across shrank each name to its own size
-            // at 320dp.
-            for (final (r, row) in [
-              SubscriptionCycle.values.take(2).toList(),
-              SubscriptionCycle.values.skip(2).toList(),
-            ].indexed) ...[
-              if (r > 0) const SizedBox(height: 8),
-              Row(
-                children: [
-                  for (final (i, c) in row.indexed) ...[
-                    if (i > 0) const SizedBox(width: 8),
-                    Expanded(
-                      child: FilledButton.tonal(
-                        onPressed: () => Navigator.pop(context, c),
-                        child: cycleLabel(c.label),
-                      ),
-                    ),
-                  ],
-                ],
+            for (final c in SubscriptionCycle.values)
+              ChoiceChip(
+                label: Text(c.label),
+                selected: c == _cycle,
+                onSelected: (_) => setState(() => _cycle = c),
               ),
-            ],
           ],
         ),
-      ),
+      ],
     );
   }
 }
@@ -2644,7 +2891,14 @@ class _BulkTagSheet extends StatefulWidget {
   final List<String> present;
   final List<String> suggestions;
 
-  const _BulkTagSheet({required this.present, required this.suggestions});
+  /// How many rows the sheet edits, for its button.
+  final int count;
+
+  const _BulkTagSheet({
+    required this.present,
+    required this.suggestions,
+    required this.count,
+  });
 
   @override
   State<_BulkTagSheet> createState() => _BulkTagSheetState();
@@ -2656,7 +2910,17 @@ class _BulkTagSheetState extends State<_BulkTagSheet> {
   final _ctrl = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    // A tag still being typed counts as a change: Apply adds it.
+    _ctrl.addListener(_typed);
+  }
+
+  void _typed() => setState(() {});
+
+  @override
   void dispose() {
+    _ctrl.removeListener(_typed);
     _ctrl.dispose();
     super.dispose();
   }
@@ -2665,163 +2929,290 @@ class _BulkTagSheetState extends State<_BulkTagSheet> {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Tags', style: text.titleLarge),
-            const SizedBox(height: 12),
-            TagInput(
-              tags: _add,
-              controller: _ctrl,
-              suggestions: widget.suggestions,
-              onChanged: (t) => setState(() => _add = t),
-            ),
-            if (widget.present.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              Text(
-                'On these rows · tap one to take it off all of them',
-                style: text.labelSmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (final t in widget.present)
-                    FilterChip(
-                      label: Text('# $t', semanticsLabel: 'Tag $t'),
-                      selected: !_remove.contains(t),
-                      tooltip: _remove.contains(t) ? 'Keep $t' : 'Remove $t',
-                      onSelected: (keep) => setState(
-                        () => keep ? _remove.remove(t) : _remove.add(t),
-                      ),
-                    ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancel'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, (
-                    add: pendingTagsOf(_add, _ctrl).toSet(),
-                    remove: Set.of(_remove),
-                  )),
-                  child: const Text('Apply'),
-                ),
-              ],
-            ),
-          ],
+    final add = pendingTagsOf(_add, _ctrl).toSet();
+    final changed = add.isNotEmpty || _remove.isNotEmpty;
+    final n = widget.count;
+    return EditorSheetBody(
+      title: 'Tags',
+      footerLabel: 'Apply to $n transaction${n == 1 ? '' : 's'}',
+      onSave: changed
+          ? () => Navigator.pop(context, (add: add, remove: Set.of(_remove)))
+          : null,
+      footerReason: changed ? null : 'Add or remove a tag',
+      dirty: changed,
+      children: [
+        Text('Add tags', style: text.titleSmall),
+        const SizedBox(height: 8),
+        TagInput(
+          key: const ValueKey('bulk-tags-add'),
+          tags: _add,
+          controller: _ctrl,
+          suggestions: widget.suggestions,
+          onChanged: (t) => setState(() => _add = t),
         ),
-      ),
+        if (widget.present.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Text('On these rows', style: text.titleSmall),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final t in widget.present)
+                FilterChip(
+                  label: _remove.contains(t)
+                      ? Text.rich(
+                          TextSpan(
+                            children: [
+                              TextSpan(
+                                text: '# $t',
+                                style: const TextStyle(
+                                  decoration: TextDecoration.lineThrough,
+                                ),
+                              ),
+                              TextSpan(
+                                text: ' Removing',
+                                style: TextStyle(
+                                  color: scheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                          semanticsLabel: 'Tag $t, removing',
+                        )
+                      : Text('# $t', semanticsLabel: 'Tag $t'),
+                  selected: !_remove.contains(t),
+                  tooltip: _remove.contains(t) ? 'Keep $t' : 'Remove $t',
+                  onSelected: (keep) =>
+                      setState(() => keep ? _remove.remove(t) : _remove.add(t)),
+                ),
+            ],
+          ),
+        ],
+      ],
     );
   }
 }
 
-/// The bulk Set category sheet: a search over the categories, then the
-/// chips it leaves. Pops the picked category.
-class _BulkCategorySheet extends StatefulWidget {
-  final List<TxCategory> options;
-
-  /// Income and expense rows together: the category applies to its own
-  /// type only, and the sheet says so.
-  final bool mixed;
-
-  const _BulkCategorySheet({required this.options, required this.mixed});
-
-  @override
-  State<_BulkCategorySheet> createState() => _BulkCategorySheetState();
+/// A filled field that opens a picker: the label floats over the value, and
+/// a screen reader hears one button.
+Widget _pickerField(
+  BuildContext context, {
+  required Key key,
+  required String label,
+  required String? value,
+  required VoidCallback onTap,
+  required IconData icon,
+}) {
+  return Semantics(
+    button: true,
+    label: value == null ? label : '$label, $value',
+    excludeSemantics: true,
+    onTap: onTap,
+    child: InkWell(
+      key: key,
+      borderRadius: BorderRadius.circular(AppRadius.control),
+      onTap: onTap,
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          suffixIcon: Icon(icon, size: 18),
+        ),
+        isEmpty: value == null,
+        child: value == null ? null : Text(value, maxLines: 1),
+      ),
+    ),
+  );
 }
 
-class _BulkCategorySheetState extends State<_BulkCategorySheet> {
-  final _ctrl = TextEditingController();
-  String _query = '';
+/// The bulk Date and time sheet: one date, and an optional time, for every
+/// selected row. No time stamps midnight, the app's "no time known". Pops
+/// the moment.
+class _BulkDateTimeSheet extends StatefulWidget {
+  final int count;
+
+  /// Some selected rows count in another month; the new date drops that.
+  final bool moved;
+
+  const _BulkDateTimeSheet({required this.count, required this.moved});
 
   @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
+  State<_BulkDateTimeSheet> createState() => _BulkDateTimeSheetState();
+}
+
+class _BulkDateTimeSheetState extends State<_BulkDateTimeSheet> {
+  late DateTime _date = () {
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day);
+  }();
+  TimeOfDay? _time;
+
+  DateTime get _stamp => DateTime(
+    _date.year,
+    _date.month,
+    _date.day,
+    _time?.hour ?? 0,
+    _time?.minute ?? 0,
+  );
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2000),
+      lastDate: now.add(const Duration(days: 1)),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _date = DateTime(picked.year, picked.month, picked.day));
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _time ?? TimeOfDay.now(),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _time = picked);
   }
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    final shown = [
-      for (final c in widget.options)
-        if (c.label.toLowerCase().contains(_query)) c,
-    ];
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    final theme = Theme.of(context);
+    final n = widget.count;
+    return EditorSheetBody(
+      title: 'Set date & time on $n transaction${n == 1 ? '' : 's'}',
+      footerLabel: 'Apply',
+      onSave: () => Navigator.pop(context, _stamp),
+      children: [
+        _pickerField(
+          context,
+          key: const ValueKey('bulk-date'),
+          label: 'Date',
+          value: fmtDate(_date),
+          icon: Icons.calendar_today,
+          onTap: _pickDate,
+        ),
+        const SizedBox(height: 16),
+        Row(
           children: [
-            Text('Set category', style: textTheme.titleLarge),
-            if (widget.mixed)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'Mixed selection: the category applies only to rows of '
-                  'its own type, income or expense.',
-                  style: textTheme.bodySmall,
-                ),
+            Expanded(
+              child: _pickerField(
+                context,
+                key: const ValueKey('bulk-time'),
+                label: 'Time',
+                value: _time == null ? null : fmtTime(_stamp),
+                icon: Icons.schedule,
+                onTap: _pickTime,
               ),
-            const SizedBox(height: 12),
-            // The picker sheet's search field, so search looks the same
-            // everywhere.
-            TextField(
-              controller: _ctrl,
-              decoration: InputDecoration(
-                hintText: 'Search…',
-                prefixIcon: const Icon(Icons.search, size: 18),
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 10,
-                ),
-                suffixIcon: _query.isEmpty
-                    ? null
-                    : IconButton(
-                        tooltip: 'Clear search',
-                        icon: const Icon(Icons.close, size: 16),
-                        onPressed: () {
-                          _ctrl.clear();
-                          setState(() => _query = '');
-                        },
-                      ),
-              ),
-              onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
             ),
-            const SizedBox(height: 12),
-            if (shown.isEmpty)
-              Text('No matches.', style: textTheme.bodySmall)
-            else
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  for (final c in shown)
-                    ActionChip(
-                      avatar: Icon(c.icon, size: 16, color: c.color),
-                      label: categoryChipLabel(c),
-                      onPressed: () => Navigator.pop(context, c),
-                    ),
-                ],
+            if (_time != null)
+              IconButton(
+                tooltip: 'Clear time',
+                icon: const Icon(Icons.close),
+                onPressed: () => setState(() => _time = null),
               ),
           ],
         ),
-      ),
+        const SizedBox(height: 12),
+        Text(
+          'Their original dates are replaced'
+          '${widget.moved ? ', and any Count in date is removed' : ''}.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The bulk Count in sheet: the month the selected rows count in, from the
+/// 1st at midnight. With rows already moved, a button puts them back on
+/// their own dates. Pops `(month: <the 1st>)`, or `(month: null)` for that
+/// button.
+class _BulkCountInSheet extends StatefulWidget {
+  /// Newest first, as [showMonthPickerSheet] lists them.
+  final List<DateTime> months;
+  final DateTime initial;
+
+  /// Every selected row already counts in [initial]: Apply waits for
+  /// another month, since applying it again would only move them to its
+  /// 1st.
+  final bool shared;
+
+  /// How many selected rows already count in another month.
+  final int moved;
+
+  const _BulkCountInSheet({
+    required this.months,
+    required this.initial,
+    required this.shared,
+    required this.moved,
+  });
+
+  @override
+  State<_BulkCountInSheet> createState() => _BulkCountInSheetState();
+}
+
+class _BulkCountInSheetState extends State<_BulkCountInSheet> {
+  late DateTime _month = widget.initial;
+
+  Future<void> _pickMonth() async {
+    final picked = await showMonthPickerSheet(
+      context,
+      title: 'Month to count in',
+      months: widget.months,
+      selected: _month,
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _month = DateTime(picked.year, picked.month));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final moved = widget.moved;
+    final same = widget.shared && _month == widget.initial;
+    return EditorSheetBody(
+      title: 'Count in',
+      footerLabel: 'Apply',
+      footerReason: same ? 'Pick a different month' : null,
+      onSave: same ? null : () => Navigator.pop(context, (month: _month)),
+      children: [
+        _pickerField(
+          context,
+          key: const ValueKey('bulk-count-in-month'),
+          label: 'Month to count in',
+          value: fmtMonth(_month),
+          icon: Icons.event_repeat_outlined,
+          onTap: _pickMonth,
+        ),
+        const SizedBox(height: 12),
+        Text(
+          "Their own dates stay, so account balances don't change. Monthly "
+          'totals, budgets, the recap, Trends and Breakdown count them in '
+          '${fmtMonth(_month)}.',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        if (moved > 0) ...[
+          const SizedBox(height: 8),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton(
+              key: const ValueKey('bulk-count-in-clear'),
+              onPressed: () => Navigator.pop(context, (month: null)),
+              child: Text(
+                moved == 1
+                    ? 'Count on its own date'
+                    : 'Count on their own dates',
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -3009,7 +3400,7 @@ class _SelectionBar extends StatelessWidget {
                     _item(
                       _MoreAction.linkRefund,
                       'link-refund',
-                      Icons.undo,
+                      Icons.add_link,
                       'Link as refund',
                     ),
                   if (onPair != null)

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +10,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/services/budget_widget_service.dart';
 import 'package:expense_tracker/widgets/budget_dialog.dart';
+import 'package:expense_tracker/widgets/editor_sheet.dart';
 
 /// A budget's own icon: stored under 'icon', read back only when it is one
 /// of the category icon choices, shown everywhere through one rule, and
@@ -84,7 +87,7 @@ void main() {
       );
       await p.updateBudget(p.budgets.single.copyWith(iconKey: 'cafe'));
       final data = p.exportData();
-      expect(data['version'], 32);
+      expect(data['version'], 33);
       final budgets = data['budgets'] as List;
       expect((budgets.single as Map)['icon'], 'cafe');
       expect(p.budgets.single.id, id);
@@ -159,6 +162,11 @@ void main() {
       );
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
+      // A new budget asks its kind first.
+      if (!existing) {
+        await tester.tap(find.text('Monthly budget'));
+        await tester.pumpAndSettle();
+      }
       return p;
     }
 
@@ -192,8 +200,8 @@ void main() {
     ) async {
       final p = await pumpDialog(tester, existing: true);
       await p.updateBudget(p.budgets.single.copyWith(iconKey: 'star'));
-      // Reopen on the stored icon.
-      await tester.tap(find.text('Cancel'));
+      // Reopen on the stored icon. The sheet has no Cancel: back closes it.
+      await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
@@ -219,7 +227,7 @@ void main() {
     ) async {
       final p = await pumpDialog(tester, existing: false);
       final fields = find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(EditorSheetBody),
         matching: find.byType(TextField),
       );
       await tester.enterText(fields.at(0), 'Treats');
@@ -228,10 +236,77 @@ void main() {
       await openPicker(tester);
       await tester.tap(find.byIcon(Icons.local_cafe));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Create'));
+      await tester.tap(find.text('Create budget'));
       await tester.pumpAndSettle();
       expect(p.budgets.single.name, 'Treats');
       expect(p.budgets.single.iconKey, 'cafe');
+    });
+
+    testWidgets('an undated tag budget keeps its tag unless told otherwise', (
+      tester,
+    ) async {
+      SharedPreferences.setMockInitialValues({
+        'spend_budgets_v1': jsonEncode([
+          const SpendBudget(
+            id: 'b1',
+            name: 'Goa',
+            limit: 9000,
+            mode: BudgetMode.include,
+            categoryIds: {},
+            tag: 'Goa trip',
+          ).toJson(),
+        ]),
+      });
+      final p = FinanceProvider();
+      await p.load();
+      await tester.pumpWidget(
+        ChangeNotifierProvider.value(
+          value: p,
+          child: MaterialApp(
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => Center(
+                  child: ElevatedButton(
+                    onPressed: () =>
+                        showBudgetDialog(context, existing: p.budgets.single),
+                    child: const Text('open'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      expect(find.text('Everything tagged #Goa trip'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('budget-limit')),
+        '9500',
+      );
+      await tester.pump();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(p.budgets.single.limit, 9500);
+      expect(p.budgets.single.tag, 'Goa trip');
+
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('What counts'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Count categories instead'));
+      await tester.pumpAndSettle();
+      expect(find.text('Pick at least one category'), findsOneWidget);
+      final food = find.widgetWithText(FilterChip, 'Food & Dining');
+      await tester.ensureVisible(food);
+      await tester.pumpAndSettle();
+      await tester.tap(food);
+      await tester.pump();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(p.budgets.single.tag, isNull);
+      expect(p.budgets.single.categoryIds, {'food'});
     });
   });
 }

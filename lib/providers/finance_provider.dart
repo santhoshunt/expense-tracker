@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show DateTimeRange;
@@ -223,6 +224,13 @@ class _Derived {
   /// Row id to [FinanceProvider.rowTitleFor], null included.
   final Map<String, String?> rowTitles = {};
 
+  /// Row id to [FinanceProvider.rewardMerchantFor], null included.
+  final Map<String, String?> rewardMerchants = {};
+
+  /// Card id to merchant to the newest reward pick on that card that still
+  /// resolves: [FinanceProvider.rememberedRewardPick].
+  final Map<String, Map<String, String>> rewardPicks = {};
+
   /// Per type, [FinanceProvider.recentPayees]: the Add sheet's Paid to
   /// suggestions.
   final Map<TxType, List<String>> recentPayees = {};
@@ -365,6 +373,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _budgetsKey = 'spend_budgets_v1';
   static const _merchantAliasesKey = 'merchant_aliases_v1';
   static const _tagColorsKey = 'tag_colors_v1';
+  static const _tagNamesKey = 'tag_names_v1';
   static const _subscriptionPinsKey = 'subscription_pins_v1';
   static const _patternPaidKey = 'pattern_paid_v1';
   static const _remindersKey = 'reminders_v1';
@@ -394,6 +403,10 @@ class FinanceProvider extends ChangeNotifier {
   /// Tag colours by [tagKey], as ARGB. Tags themselves stay plain strings
   /// on the rows; a tag with no entry uses the theme's default.
   final Map<String, int> _tagColors = {};
+
+  /// Tags made with New tag, in the order made: shown with no payments
+  /// until a row carries them, and kept until deleted.
+  final List<String> _savedTags = [];
 
   /// Merchants the user marked as subscriptions, by [recurringKeyOf] key.
   final Map<String, SubscriptionCycle> _subscriptionPins = {};
@@ -1429,6 +1442,14 @@ class FinanceProvider extends ChangeNotifier {
           ..addAll(_decodeTagColors(jsonDecode(tagColorsRaw)));
       }, _tagColors.clear);
     }
+    final tagNamesRaw = prefs.getString(_tagNamesKey);
+    if (tagNamesRaw != null) {
+      await _guardedLoad('tag names', () async {
+        _savedTags
+          ..clear()
+          ..addAll(_decodeTagNames(jsonDecode(tagNamesRaw)));
+      }, _savedTags.clear);
+    }
     final pinsRaw = prefs.getString(_subscriptionPinsKey);
     if (pinsRaw != null) {
       await _guardedLoad('subscription marks', () async {
@@ -1887,11 +1908,15 @@ class FinanceProvider extends ChangeNotifier {
       if (!_persistFailed) await prefs.setBool(_refundsLinkedKey, true);
     }
     // Colours of tags no row carries any more: the Undo that could bring
-    // such a tag back does not outlive the app session.
-    if (_tagColors.isNotEmpty && !_loadWarnings.contains('transactions')) {
+    // such a tag back does not outlive the app session. A saved tag keeps
+    // its colour with no payments.
+    if (_tagColors.isNotEmpty &&
+        !_loadWarnings.contains('transactions') &&
+        !_loadWarnings.contains('tag names')) {
       final live = {
         for (final t in _transactions)
           for (final tag in t.tags) tagKey(tag),
+        for (final t in _savedTags) tagKey(t),
       };
       final before = _tagColors.length;
       _tagColors.removeWhere((k, _) => !live.contains(k));
@@ -2141,10 +2166,13 @@ class FinanceProvider extends ChangeNotifier {
         jsonEncode(_reminders.map((r) => r.toJson()).toList()),
       );
     }
-    // One flag, two keys: a collection that failed to load stays as stored
-    // (it loaded empty), so a change to the other cannot overwrite it.
+    // One flag, several keys: a collection that failed to load stays as
+    // stored (it loaded empty), so a change to another cannot overwrite it.
     if (marks && !_loadWarnings.contains('tag colours')) {
       await prefs.setString(_tagColorsKey, jsonEncode(_tagColors));
+    }
+    if (marks && !_loadWarnings.contains('tag names')) {
+      await prefs.setString(_tagNamesKey, jsonEncode(_savedTags));
     }
     if (marks && !_loadWarnings.contains('subscription marks')) {
       await prefs.setString(
@@ -2185,6 +2213,20 @@ class FinanceProvider extends ChangeNotifier {
         if (e.key is String && (e.key as String).isNotEmpty && e.value is int)
           e.key as String: e.value as int,
     };
+  }
+
+  /// Tolerant decode for saved tags: strings only, each normalised as a
+  /// tag, duplicates by [tagKey] dropped (the first spelling wins).
+  static List<String> _decodeTagNames(Object? raw) {
+    if (raw is! List) return const [];
+    final out = <String>[];
+    final seen = <String>{};
+    for (final s in raw) {
+      if (s is! String) continue;
+      final tag = normalizeTags([s]).firstOrNull;
+      if (tag != null && seen.add(tagKey(tag))) out.add(tag);
+    }
+    return out;
   }
 
   /// Tolerant decode for subscription marks: unknown cycles are dropped.
@@ -2244,6 +2286,8 @@ class FinanceProvider extends ChangeNotifier {
     bool walletCounted = false,
     String payee = '',
     bool cashbackOff = false,
+    String? rewardGroup,
+    DateTime? rewardPickedAt,
   }) async {
     final id = _newId();
     _transactions.add(
@@ -2264,6 +2308,8 @@ class FinanceProvider extends ChangeNotifier {
           walletCounted: walletCounted,
           payee: normalizePayee(payee),
           cashbackOff: cashbackOff,
+          rewardGroup: rewardGroup,
+          rewardPickedAt: rewardGroup == null ? null : rewardPickedAt,
         ),
       ),
     );
@@ -3249,10 +3295,15 @@ class FinanceProvider extends ChangeNotifier {
 
   // --- Classifier rules -----------------------------------------------------
 
-  Future<({int reclassified, int droppedPending, List<Tx> dropped})> addRule(
-    String pattern,
-    String categoryId,
-  ) async {
+  Future<
+    ({
+      int reclassified,
+      int droppedPending,
+      List<Tx> dropped,
+      List<Tx> reclassifiedRows,
+    })
+  >
+  addRule(String pattern, String categoryId) async {
     final rule = ClassifierRule(
       id: _newId(),
       pattern: pattern.trim(),
@@ -3278,12 +3329,23 @@ class FinanceProvider extends ChangeNotifier {
     return _unmarkRemindersPaidBy(dropped.map((t) => t.id));
   }
 
-  Future<({int reclassified, int droppedPending, List<Tx> dropped})> updateRule(
-    ClassifierRule updated,
-  ) async {
+  Future<
+    ({
+      int reclassified,
+      int droppedPending,
+      List<Tx> dropped,
+      List<Tx> reclassifiedRows,
+    })
+  >
+  updateRule(ClassifierRule updated) async {
     final i = _rules.indexWhere((r) => r.id == updated.id);
     if (i == -1) {
-      return (reclassified: 0, droppedPending: 0, dropped: const <Tx>[]);
+      return (
+        reclassified: 0,
+        droppedPending: 0,
+        dropped: const <Tx>[],
+        reclassifiedRows: const <Tx>[],
+      );
     }
     _rules[i] = updated;
     final applied = _reapplyRulesToHistory();
@@ -3291,6 +3353,48 @@ class FinanceProvider extends ChangeNotifier {
     notifyListeners();
     await _persist(rules: true, tx: true, reminders: reminders);
     return applied;
+  }
+
+  /// The rule above [target] (or its twin [twin]) that would still claim a
+  /// past SMS row holding one of [words], the words Make rule would add to
+  /// [target]; null when none does. Merging in place keeps the target's
+  /// position, so such a row would never reach the new words: the rule
+  /// sheet then saves them as a new rule at the top instead. Same matching
+  /// as [_reapplyRulesToHistory]: the alert text only, rows categorised by
+  /// hand skipped, type-aware, spam rules counted. A row neither leg can
+  /// classify (its direction) is skipped, since no rule order helps it.
+  ClassifierRule? ruleShadowingMerge(
+    ClassifierRule target,
+    ClassifierRule? twin,
+    Iterable<String> words,
+  ) {
+    final list = [
+      for (final w in words)
+        if (w.trim().isNotEmpty) w,
+    ];
+    if (list.isEmpty) return null;
+    int indexOf(ClassifierRule r) => _rules.indexWhere((x) => x.id == r.id);
+    for (final t in _transactions) {
+      if (t.source != TxSource.sms || t.userCategorized) continue;
+      final text = t.smsBody;
+      if (text.isEmpty || !list.any((w) => patternMatchesText(w, text))) {
+        continue;
+      }
+      final leg =
+          target.isSpamRule || categoryById(target.categoryId).type == t.type
+          ? target
+          : twin != null && categoryById(twin.categoryId).type == t.type
+          ? twin
+          : null;
+      if (leg == null) continue;
+      final first = _matchRule(text, t.type);
+      if (first == null || first.id == target.id || first.id == twin?.id) {
+        continue;
+      }
+      final at = indexOf(first);
+      if (at != -1 && at < indexOf(leg)) return first;
+    }
+    return null;
   }
 
   /// Deleting a rule stops it applying to future imports; existing
@@ -3329,16 +3433,27 @@ class FinanceProvider extends ChangeNotifier {
   /// The absorbed rules' priority slots disappear, so the merged rule can
   /// genuinely match earlier than an absorbed one used to — hence the same
   /// re-apply + result record as [addRule]/[updateRule].
-  Future<({int reclassified, int droppedPending, List<Tx> dropped})> mergeRules(
-    Set<String> ids,
-  ) async {
+  Future<
+    ({
+      int reclassified,
+      int droppedPending,
+      List<Tx> dropped,
+      List<Tx> reclassifiedRows,
+    })
+  >
+  mergeRules(Set<String> ids) async {
     final selected = [
       for (final r in _rules)
         if (ids.contains(r.id)) r,
     ];
     final sameCategory = selected.map((r) => r.categoryId).toSet().length == 1;
     if (selected.length < 2 || !sameCategory) {
-      return (reclassified: 0, droppedPending: 0, dropped: const <Tx>[]);
+      return (
+        reclassified: 0,
+        droppedPending: 0,
+        dropped: const <Tx>[],
+        reclassifiedRows: const <Tx>[],
+      );
     }
     final seen = <String>{};
     final conditions = [
@@ -5428,26 +5543,22 @@ class FinanceProvider extends ChangeNotifier {
   /// or [back] cycles before it. Null unless [account] is a card with
   /// rewards set up.
   ///
-  /// A row earns on the charge the bank saw (less refunds, never the
-  /// user's group-split share). A split payment earns once, on its total,
-  /// through its anchor, at the rate of [rewardCategoryOf]: the bank pays
-  /// by merchant, not by how the user divides the bill. Paid for Others
-  /// counts; other transfers (a card payment, a move to savings) never
-  /// earn.
+  /// Every payment out earns ([earnsOnCard]) on the charge the bank saw
+  /// ([rewardAmountOf]: less refunds, never the user's group-split share),
+  /// except card bill payments, legs of a transfer pair and rows with Earns
+  /// cashback cleared. A split payment earns once, on its total, through
+  /// its anchor. Its group ([rewardMatchFor]) is the one picked on it, else
+  /// the one picked before for its merchant on this card, else the first
+  /// naming its merchant, else the first holding its category, else
+  /// Everything else; under that group's minimum it earns nothing.
   RewardEstimate? cardRewardsFor(Account account, {int back = 0}) {
     final rules = account.rewards;
     if (!account.isCard || rules == null) return null;
     final cycle = cardCycleOf(account, figuresClock(), back: back);
     final charges = <RewardCharge>[
       for (final t in _rowsInCycle(account, cycle))
-        if (t.type == TxType.expense && !t.cashbackOff && !isSplitPart(t))
-          if (rewardCategoryOf(t) case final category?)
-            (
-              categoryId: category,
-              amount: splitPartsOf(
-                t,
-              ).fold(0.0, (s, p) => s + p.amount - refundedFor(p)),
-            ),
+        if (earnsOnCard(t))
+          (group: rewardMatchFor(account, t).group, amount: rewardAmountOf(t)),
     ];
     return estimateRewards(rules, charges);
   }
@@ -5510,15 +5621,92 @@ class FinanceProvider extends ChangeNotifier {
     );
   }
 
-  /// The category that sets the card reward rate of [t]'s payment: the
-  /// first of its rows, in [splitPartsOf] order, in a category that earns
-  /// ([earnsCardRewards]); [t]'s own for an unsplit row. Null when none
-  /// earns.
-  String? rewardCategoryOf(Tx t) {
-    for (final p in splitPartsOf(t)) {
-      if (earnsCardRewards(p.categoryId)) return p.categoryId;
+  /// The merchant [t]'s card reward groups match against
+  /// ([rewardMerchantOf]), cached per row.
+  String? rewardMerchantFor(Tx t) =>
+      _d.rewardMerchants.putIfAbsent(t.id, () => rewardMerchantOf(t));
+
+  /// The reward pick last made on [card] for [merchant]: the pick that
+  /// still resolves on the card's rules (Everything else, or a group that
+  /// exists) with the newest [Tx.rewardPickedAt]; picks from before pick
+  /// times were kept rank below any timed one, by date. Null for no
+  /// merchant or a card without rewards. With [excludeId], that row's own
+  /// pick is left out (the add sheet's edited row).
+  String? rememberedRewardPick(
+    Account card,
+    String? merchant, {
+    String? excludeId,
+  }) {
+    final rules = card.rewards;
+    if (merchant == null || rules == null) return null;
+    bool resolves(String g) =>
+        g == kEverythingElseRewardGroupId || rules.groupById(g) != null;
+    final rows = _byAccount[card.id] ?? const <Tx>[];
+    if (excludeId != null) {
+      Tx? found;
+      for (final t in rows) {
+        if (t.id == excludeId || isSplitPart(t)) continue;
+        final g = t.rewardGroup;
+        if (g != null &&
+            resolves(g) &&
+            rewardMerchantFor(t) == merchant &&
+            _pickedLater(t, than: found)) {
+          found = t;
+        }
+      }
+      return found?.rewardGroup;
     }
-    return null;
+    return (_d.rewardPicks[card.id] ??= () {
+      final latest = <String, Tx>{};
+      for (final t in rows) {
+        if (t.rewardGroup case final g? when !isSplitPart(t) && resolves(g)) {
+          final m = rewardMerchantFor(t);
+          if (m != null && _pickedLater(t, than: latest[m])) latest[m] = t;
+        }
+      }
+      return {
+        for (final MapEntry(:key, :value) in latest.entries)
+          key: value.rewardGroup!,
+      };
+    }())[merchant];
+  }
+
+  /// Whether [t]'s reward pick counts as made after [than]'s, walking a
+  /// card's rows oldest first: a timed pick beats an untimed one, the newer
+  /// time wins between timed picks, and a later row wins between untimed.
+  static bool _pickedLater(Tx t, {required Tx? than}) {
+    final before = than?.rewardPickedAt;
+    if (than == null || before == null) return true;
+    final at = t.rewardPickedAt;
+    return at != null && !at.isBefore(before);
+  }
+
+  /// The charge [t]'s payment earns on: every part's amount less its
+  /// refunds, so a split earns once on its total.
+  double rewardAmountOf(Tx t) =>
+      splitPartsOf(t).fold(0.0, (s, p) => s + p.amount - refundedFor(p));
+
+  /// Whether [t] earns card rewards: money out, Earns cashback on, not a
+  /// split part (its anchor earns for it), and [earnsCardRewards].
+  bool earnsOnCard(Tx t) =>
+      t.type == TxType.expense &&
+      !t.cashbackOff &&
+      !isSplitPart(t) &&
+      earnsCardRewards([
+        for (final p in splitPartsOf(t)) p.categoryId,
+      ], pairId: t.pairId);
+
+  /// The group [t] earns in on [card] ([resolveRewardGroup]). Only for a
+  /// card with rewards.
+  RewardMatch rewardMatchFor(Account card, Tx t) {
+    final merchant = rewardMerchantFor(t);
+    return resolveRewardGroup(
+      card.rewards!,
+      pick: t.rewardGroup,
+      remembered: rememberedRewardPick(card, merchant),
+      merchant: merchant,
+      categoryIds: [for (final p in splitPartsOf(t)) p.categoryId],
+    );
   }
 
   /// Creates an account by hand (no keys yet — link numbers via
@@ -5566,7 +5754,9 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// Custom kind label + icon for a savings/asset account ("Stocks",
-  /// "Gold"…). Null [kind] clears both back to the generic Savings look.
+  /// "Gold"…). A null or blank [kind] clears the label back to plain
+  /// Savings and keeps [kindIcon], so picking only an icon sticks; with no
+  /// [kindIcon] either, the generic Savings look returns.
   Future<void> setAccountKind(
     String id,
     String? kind, {
@@ -5575,7 +5765,7 @@ class FinanceProvider extends ChangeNotifier {
     final i = _accounts.indexWhere((a) => a.id == id);
     if (i == -1) return;
     _accounts[i] = (kind == null || kind.trim().isEmpty)
-        ? _accounts[i].copyWith(clearKind: true)
+        ? _accounts[i].copyWith(clearKind: true).copyWith(kindIcon: kindIcon)
         : _accounts[i].copyWith(kind: kind.trim(), kindIcon: kindIcon);
     notifyListeners();
     await _persist(accounts: true);
@@ -6091,6 +6281,19 @@ class FinanceProvider extends ChangeNotifier {
     await _persist(accounts: true);
   }
 
+  /// Puts [before] back whole in place of the stored account with its id:
+  /// the Undo of a one-field edit, which restores a balance with the
+  /// moment it was set and wallet details with their re-anchored balance.
+  /// Does nothing once the account is gone.
+  Future<void> restoreAccount(Account before) async {
+    final i = _accounts.indexWhere((a) => a.id == before.id);
+    if (i == -1) return;
+    _accounts[i] = before;
+    _rebuildKeyIndex();
+    notifyListeners();
+    await _persist(accounts: true);
+  }
+
   /// Closes an account: it leaves [openAccounts] (lists, pickers, totals)
   /// but keeps its identity and keys, so existing transactions still resolve
   /// and a late SMS (an FD interest credit) still lands on it instead of
@@ -6315,7 +6518,8 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   /// Bulk [assignAccount] — one notification and one write for the whole
-  /// selection. Returns how many rows actually moved.
+  /// selection. Returns how many rows actually moved. A reward pick names
+  /// the old card's group, so it goes.
   Future<int> assignAccountToMany(Set<String> ids, String accountId) async {
     final ai = _accounts.indexWhere((a) => a.id == accountId);
     if (ai == -1) return 0;
@@ -6323,7 +6527,12 @@ class FinanceProvider extends ChangeNotifier {
     var changed = 0;
     for (var i = 0; i < _transactions.length; i++) {
       if (!ids.contains(_transactions[i].id)) continue;
-      if (_assignInPlace(i, ai)) changed++;
+      if (_assignInPlace(i, ai)) {
+        changed++;
+        if (_transactions[i].rewardGroup != null) {
+          _transactions[i] = _transactions[i].copyWith(clearRewardGroup: true);
+        }
+      }
     }
     if (changed > 0) {
       notifyListeners();
@@ -6484,7 +6693,8 @@ class FinanceProvider extends ChangeNotifier {
   /// two merge: its rows take [to]'s spelling too, and normalizeTags drops
   /// the duplicate on rows that had both. The colour follows the rename,
   /// unless [to] already has one of its own, and so do the budgets on
-  /// either tag ([restoreBudgets] undoes that).
+  /// either tag ([restoreBudgets] undoes that). Saved tags follow the
+  /// rename: one [to] in place of the first of them.
   Future<List<Tx>> renameTag(String from, String to) async {
     final keys = {tagKey(from), tagKey(to)};
     final fromKey = tagKey(from);
@@ -6497,6 +6707,15 @@ class FinanceProvider extends ChangeNotifier {
         colourMoved = true;
       }
     }
+    var savedChanged = false;
+    final savedAt = _savedTags.indexWhere((t) => keys.contains(tagKey(t)));
+    if (savedAt >= 0) {
+      final savedBefore = List.of(_savedTags);
+      _savedTags
+        ..removeWhere((t) => keys.contains(tagKey(t)))
+        ..insert(savedAt, to);
+      savedChanged = !listEquals(savedBefore, _savedTags);
+    }
     var budgetsMoved = false;
     for (var i = 0; i < _budgets.length; i++) {
       final b = _budgets[i];
@@ -6508,19 +6727,22 @@ class FinanceProvider extends ChangeNotifier {
       (t) => t.tags.any((tag) => keys.contains(tagKey(tag))),
       (tags) => [for (final tag in tags) keys.contains(tagKey(tag)) ? to : tag],
     );
-    if (colourMoved || budgetsMoved) {
+    if (colourMoved || budgetsMoved || savedChanged) {
       if (before.isEmpty) notifyListeners();
-      await _persist(marks: colourMoved, budgets: budgetsMoved);
+      await _persist(marks: colourMoved || savedChanged, budgets: budgetsMoved);
     }
     return before;
   }
 
-  /// Removes tag [tag] from every row that carries it, its colour and the
-  /// budgets on it ([restoreBudgets] undoes that). Their alert markers stay,
-  /// so an Undo does not re-send alerts.
+  /// Removes tag [tag] from every row that carries it, its colour, the
+  /// saved tag and the budgets on it ([restoreBudgets] undoes that). Their
+  /// alert markers stay, so an Undo does not re-send alerts.
   Future<List<Tx>> deleteTag(String tag) async {
     final k = tagKey(tag);
     final hadColour = _tagColors.remove(k) != null;
+    final savedCount = _savedTags.length;
+    _savedTags.removeWhere((t) => tagKey(t) == k);
+    final savedGone = _savedTags.length != savedCount;
     final budgetCount = _budgets.length;
     _budgets.removeWhere((b) => b.tag != null && tagKey(b.tag!) == k);
     final budgetsGone = _budgets.length != budgetCount;
@@ -6531,9 +6753,9 @@ class FinanceProvider extends ChangeNotifier {
           if (tagKey(x) != k) x,
       ],
     );
-    if (hadColour || budgetsGone) {
+    if (hadColour || budgetsGone || savedGone) {
       if (before.isEmpty) notifyListeners();
-      await _persist(marks: hadColour, budgets: budgetsGone);
+      await _persist(marks: hadColour || savedGone, budgets: budgetsGone);
     }
     return before;
   }
@@ -6575,6 +6797,64 @@ class FinanceProvider extends ChangeNotifier {
   Future<void> restoreTagColors(Map<String, int> snapshot) async {
     if (mapEquals(snapshot, _tagColors)) return;
     _tagColors
+      ..clear()
+      ..addAll(snapshot);
+    notifyListeners();
+    await _persist(marks: true);
+  }
+
+  /// Tags made with New tag, in the order made, for an Undo to put back
+  /// with [restoreSavedTags].
+  List<String> get savedTags => List.unmodifiable(_savedTags);
+
+  /// Saved tags no confirmed row carries, newest first: the Tags tab's
+  /// "No payments yet" rows.
+  List<String> get emptyTags {
+    final used = {for (final u in allTags) tagKey(u.tag)};
+    return [
+      for (final t in _savedTags.reversed)
+        if (!used.contains(tagKey(t))) t,
+    ];
+  }
+
+  /// Every tag for a tag field to suggest: used tags, most recent first,
+  /// then saved tags with no payments. Saved tags take at most 4 of the
+  /// first 8, the picks [TagInput] shows; typed text still matches all.
+  List<String> get tagSuggestions {
+    final used = [for (final u in allTags) u.tag];
+    final empty = emptyTags;
+    final n = math.min(4, empty.length);
+    return [
+      ...used.take(8 - n),
+      ...empty.take(n),
+      ...used.skip(8 - n),
+      ...empty.skip(n),
+    ];
+  }
+
+  /// Saves [name] as a tag before any payment carries it, with [colour]
+  /// when given. False for a blank name or one a tag already has,
+  /// ignoring case.
+  Future<bool> addSavedTag(String name, Color? colour) async {
+    final tag = normalizeTags([name]).firstOrNull;
+    if (tag == null) return false;
+    final k = tagKey(tag);
+    if (allTags.any((u) => tagKey(u.tag) == k) ||
+        _savedTags.any((t) => tagKey(t) == k)) {
+      return false;
+    }
+    _savedTags.add(tag);
+    if (colour != null) _tagColors[k] = colour.toARGB32();
+    notifyListeners();
+    await _persist(marks: true);
+    return true;
+  }
+
+  /// Puts the saved tags back to [snapshot] (a [savedTags] read taken
+  /// before a tag rename or delete), for that action's Undo.
+  Future<void> restoreSavedTags(List<String> snapshot) async {
+    if (listEquals(snapshot, _savedTags)) return;
+    _savedTags
       ..clear()
       ..addAll(snapshot);
     notifyListeners();
@@ -6877,10 +7157,17 @@ class FinanceProvider extends ChangeNotifier {
   /// too-broad new spam rule used to wipe the whole review queue with no
   /// feedback and no count. The dropped rows themselves come back too, so
   /// the screen can offer Undo: re-scans are incremental past the SMS
-  /// watermark, which makes the drop permanent otherwise.
-  ({int reclassified, int droppedPending, List<Tx> dropped})
+  /// watermark, which makes the drop permanent otherwise. So do the
+  /// reclassified rows as they were before ([reclassifiedRows]): a re-sort
+  /// under the old rules leaves a row no rule matches in its new category.
+  ({
+    int reclassified,
+    int droppedPending,
+    List<Tx> dropped,
+    List<Tx> reclassifiedRows,
+  })
   _reapplyRulesToHistory() {
-    var reclassified = 0;
+    final reclassifiedRows = <Tx>[];
     final dropped = <Tx>[];
     for (var i = _transactions.length - 1; i >= 0; i--) {
       final t = _transactions[i];
@@ -6907,13 +7194,14 @@ class FinanceProvider extends ChangeNotifier {
         _transactions[i] = _sanitizeSplit(
           t.copyWith(categoryId: rule.categoryId, categoryGuessed: false),
         );
-        reclassified++;
+        reclassifiedRows.add(t);
       }
     }
     return (
-      reclassified: reclassified,
+      reclassified: reclassifiedRows.length,
       droppedPending: dropped.length,
       dropped: dropped,
+      reclassifiedRows: reclassifiedRows,
     );
   }
 
@@ -7877,6 +8165,7 @@ class FinanceProvider extends ChangeNotifier {
       _merchantAliases.clear();
       _reminders.clear();
       _tagColors.clear();
+      _savedTags.clear();
       _subscriptionPins.clear();
       _patternPaid.clear();
       setCustomCategories(const []);
@@ -7950,7 +8239,10 @@ class FinanceProvider extends ChangeNotifier {
     // credit cards may carry `rewards`; rows may sit in the built-in
     // `to_sort_expense` and `to_sort_income` categories.
     // v32: budgets may carry 'tag', 'from' and 'to'; accounts may be type 'cash' and carry 'cashDefault'; 'atmAutoMove'.
-    'version': 32,
+    // v33: transactions may carry 'rewardGroup' and 'rewardPickedAt'; reward
+    // groups may carry 'id', 'name', 'merchantWords' and 'minimum';
+    // 'tagNames' (tags saved with no payments).
+    'version': 33,
     'transactions': [for (final t in _transactions) _backupJsonOf(t)],
     'discardedImports': _discardedImports.toList(),
     'accounts': _accounts.map((a) => a.toJson()).toList(),
@@ -7978,6 +8270,7 @@ class FinanceProvider extends ChangeNotifier {
     'merchantAliases': Map<String, String>.from(_merchantAliases),
     'reminders': _reminders.map((r) => r.toJson()).toList(),
     'tagColors': Map<String, int>.from(_tagColors),
+    'tagNames': List<String>.from(_savedTags),
     'subscriptionPins': {
       for (final e in _subscriptionPins.entries) e.key: e.value.name,
     },
@@ -8119,6 +8412,11 @@ class FinanceProvider extends ChangeNotifier {
     final rawTagColors = data['tagColors'];
     final importedTagColors = rawTagColors is Map
         ? _decodeTagColors(rawTagColors)
+        : null;
+    // v33, same absent-means-keep rule.
+    final rawTagNames = data['tagNames'];
+    final importedTagNames = rawTagNames is List
+        ? _decodeTagNames(rawTagNames)
         : null;
     final rawPins = data['subscriptionPins'];
     final importedPins = rawPins is Map ? _decodePins(rawPins) : null;
@@ -8264,6 +8562,11 @@ class FinanceProvider extends ChangeNotifier {
           ..clear()
           ..addAll(importedTagColors);
       }
+      if (importedTagNames != null) {
+        _savedTags
+          ..clear()
+          ..addAll(importedTagNames);
+      }
       if (importedPins != null) {
         _subscriptionPins
           ..clear()
@@ -8312,6 +8615,7 @@ class FinanceProvider extends ChangeNotifier {
           'rules' => importedRules != null,
           'import rules' => importedImportRules != null,
           'tag colours' => importedTagColors != null,
+          'tag names' => importedTagNames != null,
           'subscription marks' => importedPins != null,
           'payment marks' => importedPatternPaid != null,
           _ => false,
@@ -8337,6 +8641,7 @@ class FinanceProvider extends ChangeNotifier {
         importRules: importedImportRules != null,
         marks:
             importedTagColors != null ||
+            importedTagNames != null ||
             importedPins != null ||
             importedPatternPaid != null,
         discards: importedDiscarded != null,
@@ -8443,6 +8748,13 @@ class FinanceProvider extends ChangeNotifier {
         for (final e in importedTagColors.entries)
           if (!_tagColors.containsKey(e.key)) e.key: e.value,
     };
+    // Saved tags merge as a union by key, the device's spelling first.
+    final savedKeys = {for (final t in _savedTags) tagKey(t)};
+    final newTagNames = [
+      if (importedTagNames != null)
+        for (final t in importedTagNames)
+          if (!savedKeys.contains(tagKey(t))) t,
+    ];
     final newPins = <String, SubscriptionCycle>{
       if (importedPins != null)
         for (final e in importedPins.entries)
@@ -8534,6 +8846,7 @@ class FinanceProvider extends ChangeNotifier {
     _budgets.addAll(newBudgets);
     _merchantAliases.addAll(newAliases);
     _tagColors.addAll(newTagColors);
+    _savedTags.addAll(newTagNames);
     _subscriptionPins.addAll(newPins);
     _patternPaid.addAll(newPatternPaid);
     _reminders.addAll(newReminders);
@@ -8554,6 +8867,7 @@ class FinanceProvider extends ChangeNotifier {
         newBudgets.isNotEmpty ||
         newAliases.isNotEmpty ||
         newTagColors.isNotEmpty ||
+        newTagNames.isNotEmpty ||
         newPins.isNotEmpty ||
         newPatternPaid.isNotEmpty ||
         newReminders.isNotEmpty ||
@@ -8584,6 +8898,7 @@ class FinanceProvider extends ChangeNotifier {
         importRules: newImportRules.isNotEmpty,
         marks:
             newTagColors.isNotEmpty ||
+            newTagNames.isNotEmpty ||
             newPins.isNotEmpty ||
             newPatternPaid.isNotEmpty,
       );

@@ -309,7 +309,7 @@ void main() {
       final p = await tagged();
       await p.setTagColor('Work', pink);
       final data = p.exportData();
-      expect(data['version'], 32);
+      expect(data['version'], 33);
       final fresh = FinanceProvider();
       await fresh.load();
       await fresh.importData(data, replace: true);
@@ -329,6 +329,93 @@ void main() {
         final again = FinanceProvider();
         await again.load();
         expect(again.tagColor('Goa trip'), isNull);
+      },
+    );
+  });
+
+  group('saved tags', () {
+    const teal = Color(0xFF00897B);
+
+    test('a saved tag persists with no payments, keeps its colour through '
+        'the prune, and follows a rename and a delete', () async {
+      final p = FinanceProvider();
+      await p.load();
+      expect(await p.addSavedTag('Goa trip', teal), isTrue);
+      expect(await p.addSavedTag('goa TRIP', null), isFalse);
+      expect(await p.addSavedTag('   ', null), isFalse);
+
+      final again = FinanceProvider();
+      await again.load();
+      expect(again.emptyTags, ['Goa trip']);
+      expect(again.tagColor('Goa trip'), teal);
+
+      await again.renameTag('Goa trip', 'Goa');
+      expect(again.savedTags, ['Goa']);
+      expect(again.tagColor('Goa'), teal);
+      await again.deleteTag('Goa');
+      expect(again.savedTags, isEmpty);
+      await again.restoreSavedTags(['Goa']);
+      expect(again.savedTags, ['Goa']);
+      expect(again.emptyTags, ['Goa']);
+    });
+
+    test('the backup carries saved tags: replace takes them, merge adds the '
+        'missing ones, a factory reset clears them', () async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addSavedTag('Goa trip', null);
+      final data = p.exportData();
+      expect(data['tagNames'], ['Goa trip']);
+
+      SharedPreferences.setMockInitialValues({});
+      final other = FinanceProvider();
+      await other.load();
+      await other.addSavedTag('Diwali', null);
+      await other.importData(data, replace: true);
+      expect(other.savedTags, ['Goa trip']);
+
+      await other.addSavedTag('Diwali', null);
+      await other.importData({
+        ...data,
+        'tagNames': ['goa TRIP', 'Wedding'],
+      }, replace: false);
+      expect(other.savedTags, ['Goa trip', 'Diwali', 'Wedding']);
+
+      // A backup from before saved tags keeps the device's.
+      await other.importData({...data}..remove('tagNames'), replace: true);
+      expect(other.savedTags, ['Goa trip', 'Diwali', 'Wedding']);
+
+      await other.clearAll();
+      expect(other.savedTags, hasLength(3));
+      await other.clearAll(includeConfig: true);
+      expect(other.savedTags, isEmpty);
+    });
+
+    test(
+      'suggestions hold at most four saved tags among the first eight',
+      () async {
+        final p = FinanceProvider();
+        await p.load();
+        for (var i = 0; i < 10; i++) {
+          await p.addTransaction(
+            type: TxType.expense,
+            categoryId: 'food',
+            amount: 100,
+            note: 'Lunch',
+            date: DateTime(2026, 9, 1 + i),
+            tags: ['Used $i'],
+          );
+        }
+        final saved = [for (var i = 0; i < 6; i++) 'Saved $i'];
+        for (final t in saved) {
+          await p.addSavedTag(t, null);
+        }
+
+        final picks = p.tagSuggestions;
+        expect(picks.take(4), everyElement(startsWith('Used ')));
+        expect(picks.skip(4).take(4), everyElement(startsWith('Saved ')));
+        expect(picks, hasLength(16));
+        expect(picks.toSet(), hasLength(16));
       },
     );
   });
