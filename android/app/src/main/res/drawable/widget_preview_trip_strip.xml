@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Picker preview only: Trip budget's day bars, three days spent and
+     outlined boxes for the two days still ahead (a vector has no dashes). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="196dp"
+    android:height="20dp"
+    android:viewportWidth="196"
+    android:viewportHeight="20">
+    <path
+        android:fillColor="#4A90E2"
+        android:pathData="M0,2h36v18h-36z M40,8h36v12h-36z M80,14h36v6h-36z" />
+    <path
+        android:strokeColor="#8E9AA6"
+        android:strokeWidth="1"
+        android:pathData="M120.5,4.5h35v15h-35z M160.5,4.5h35v15h-35z" />
+</vector>

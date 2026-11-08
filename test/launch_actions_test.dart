@@ -7,10 +7,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/dashboard_layout.dart';
+import 'package:expense_tracker/models/spend_budget.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
+import 'package:expense_tracker/screens/people_screen.dart';
 import 'package:expense_tracker/screens/search_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/services/launch_actions.dart';
@@ -20,6 +23,7 @@ import 'package:expense_tracker/widgets/ahead_projection.dart';
 import 'package:expense_tracker/widgets/category_donut_chart.dart';
 import 'package:expense_tracker/widgets/lock_gate.dart';
 import 'package:expense_tracker/widgets/monthly_recap_card.dart';
+import 'package:expense_tracker/widgets/trip_budget_card.dart';
 
 /// Shortcut, tile and notification actions: they wait for the app lock,
 /// run once, and land on top of whatever is open.
@@ -369,6 +373,113 @@ void main() {
       await settle(tester);
       expect(find.byType(SearchScreen, skipOffstage: false), findsNothing);
     });
+
+    testWidgets('Trip budget opens the running trip on Overview', (
+      tester,
+    ) async {
+      await pumpHome(
+        tester,
+        seed: (p) async {
+          await seed(p);
+          await p.addBudget(
+            name: 'Test trip',
+            limit: 9000,
+            mode: BudgetMode.include,
+            categoryIds: const {},
+            tag: 'test trip',
+            range: DateTimeRange(
+              start: DateTime(now.year, now.month, now.day - 1),
+              end: DateTime(now.year, now.month, now.day + 1),
+            ),
+          );
+          await p.addTransaction(
+            type: TxType.expense,
+            categoryId: 'food',
+            amount: 250,
+            note: 'trip lunch',
+            // Midnight today: never in the future, whatever time it runs.
+            date: DateTime(now.year, now.month, now.day),
+            tags: const ['test trip'],
+          );
+        },
+      );
+      await tester.tap(find.text('Transactions').last);
+      await settle(tester);
+      LaunchActions.instance.pending.value = LaunchAction.openBudgets;
+      await settle(tester);
+      await settle(tester);
+      expect(find.byType(TripBudgetCard).hitTestable(), findsOneWidget);
+    });
+
+    testWidgets("Trip budget with no budget opens Cockpit's Budgets", (
+      tester,
+    ) async {
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.openBudgetsTab;
+      await settle(tester);
+      expect(find.text('Monthly budgets'), findsOneWidget);
+      // A second tap, then Subscriptions: still only the hub and one group
+      // page, not another pair per tap.
+      LaunchActions.instance.pending.value = LaunchAction.openBudgetsTab;
+      await settle(tester);
+      LaunchActions.instance.pending.value = LaunchAction.openSubscriptions;
+      await settle(tester);
+      expect(
+        find.byWidgetPredicate(
+          (w) => '${w.runtimeType}' == 'ClassifiersScreen',
+          skipOffstage: false,
+        ),
+        findsNWidgets(2),
+      );
+    });
+
+    testWidgets('Cash in hand opens Count cash on Accounts', (tester) async {
+      await pumpHome(
+        tester,
+        seed: (p) async {
+          await seed(p);
+          await p.addAccount(name: 'Test cash', type: AccountType.cash);
+        },
+      );
+      LaunchActions.instance.pending.value = LaunchAction.openCountCash;
+      await settle(tester);
+      // A second tap while the dialog is up stacks no second dialog.
+      LaunchActions.instance.pending.value = LaunchAction.openCountCash;
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.text('Count cash'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Cash in hand with no Cash account opens Accounts alone', (
+      tester,
+    ) async {
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.openCountCash;
+      await settle(tester);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(AccountsScreen).hitTestable(), findsOneWidget);
+      expect(LaunchActions.instance.pending.value, isNull);
+    });
+
+    testWidgets('Who owes you opens the people page once', (tester) async {
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.openPeople;
+      await settle(tester);
+      LaunchActions.instance.pending.value = LaunchAction.openPeople;
+      await settle(tester);
+      // Offstage too: a page under another one is offstage.
+      expect(find.byType(PeopleScreen, skipOffstage: false), findsOneWidget);
+      // One Back is home again.
+      await tester.pageBack();
+      await settle(tester);
+      expect(find.byType(PeopleScreen, skipOffstage: false), findsNothing);
+    });
   });
 
   testWidgets('the Upcoming widget opens a folded Next 7 days for the visit', (
@@ -477,6 +588,19 @@ void main() {
     );
     expect(LaunchActions.fromName('open_ahead'), LaunchAction.openAhead);
     expect(LaunchActions.fromName('open_search'), LaunchAction.openSearch);
+    expect(
+      LaunchActions.fromName('open_budgets_tab'),
+      LaunchAction.openBudgetsTab,
+    );
+    expect(
+      LaunchActions.fromName('open_count_cash'),
+      LaunchAction.openCountCash,
+    );
+    expect(
+      LaunchActions.fromName('open_subscriptions'),
+      LaunchAction.openSubscriptions,
+    );
+    expect(LaunchActions.fromName('open_people'), LaunchAction.openPeople);
     // The card's id rides after a prefix, which only the channel reads.
     expect(LaunchActions.fromName('open_card:c1'), isNull);
   });

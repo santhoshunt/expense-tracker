@@ -21,13 +21,32 @@ import 'add_transaction_sheet.dart';
 class PeopleScreen extends StatefulWidget {
   const PeopleScreen({super.key});
 
+  /// Whether a people page is open, so the Who owes you widget does not
+  /// stack a second one.
+  static bool get isOpen => _PeopleScreenState._open > 0;
+
   @override
   State<PeopleScreen> createState() => _PeopleScreenState();
 }
 
 class _PeopleScreenState extends State<PeopleScreen> {
+  /// People pages mounted now ([PeopleScreen.isOpen]).
+  static int _open = 0;
+
   /// Folded by default and per visit: settled people are history.
   bool _settledOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _open++;
+  }
+
+  @override
+  void dispose() {
+    _open--;
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

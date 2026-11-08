@@ -1377,11 +1377,24 @@ String? _balanceNowLine(FinanceProvider finance, Account account) {
 /// shows as it is typed. Less in hand than recorded can be logged as one
 /// To sort expense, dated just before the count so the balance leaves it
 /// out. [initial] is the account to count, else the Default one; with two
-/// or more Cash accounts a switch picks among them.
+/// or more Cash accounts a switch picks among them. Only one opens at a
+/// time: a widget tap over one opened in the app does nothing.
 Future<void> showCountCashDialog(
   BuildContext context, {
   Account? initial,
 }) async {
+  if (_countCashOpen) return;
+  _countCashOpen = true;
+  try {
+    await _countCash(context, initial: initial);
+  } finally {
+    _countCashOpen = false;
+  }
+}
+
+bool _countCashOpen = false;
+
+Future<void> _countCash(BuildContext context, {Account? initial}) async {
   final finance = context.read<FinanceProvider>();
   final picked = initial ?? finance.defaultCashAccount;
   if (picked == null) return;

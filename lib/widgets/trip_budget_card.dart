@@ -50,6 +50,24 @@ class BudgetPill extends StatelessWidget {
   }
 }
 
+/// What is left of [limit] after [spent], per day of [range] after [today]
+/// (every day of it before the start, none after the end). Null once
+/// nothing is left or no day is ahead. The Trip card's dashed boxes and the
+/// Trip budget home-screen widget both read it.
+double? tripFutureAllowance({
+  required DateTimeRange range,
+  required double limit,
+  required double spent,
+  required DateTime today,
+}) {
+  final days = daysCovered(range.start, range.end);
+  final todayIndex = daysCovered(range.start, today) - 1;
+  // Days after today: all of them before the start, none after the end.
+  final futureDays = (days - math.max(todayIndex + 1, 0)).clamp(0, days);
+  final left = limit - spent;
+  return left > 0 && futureDays > 0 ? left / futureDays : null;
+}
+
 /// A dated budget's spend for each day of [range]: filled bars up to
 /// [today], and for the days still to come dashed boxes at what is left of
 /// [limit] per remaining day, with a dashed line across at that height.
@@ -79,8 +97,12 @@ class TripDayBars extends StatelessWidget {
     final todayIndex = daysCovered(range.start, today) - 1;
     // Days after today: all of them before the start, none after the end.
     final futureDays = (days - math.max(todayIndex + 1, 0)).clamp(0, days);
-    final left = limit - spent;
-    final allowance = left > 0 && futureDays > 0 ? left / futureDays : null;
+    final allowance = tripFutureAllowance(
+      range: range,
+      limit: limit,
+      spent: spent,
+      today: today,
+    );
     DateTime dayAt(int i) =>
         DateTime(range.start.year, range.start.month, range.start.day + i);
     String dayText(DateTime d) =>

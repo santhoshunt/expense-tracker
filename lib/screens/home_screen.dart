@@ -44,6 +44,7 @@ import 'add_transaction_sheet.dart';
 import 'app_nav.dart';
 import 'dashboard_screen.dart';
 import 'home_app_bar.dart';
+import 'people_screen.dart';
 import 'search_screen.dart';
 import 'transactions_screen.dart';
 
@@ -178,6 +179,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _priceRiseMonitor = PriceRiseMonitor();
   final _budgetWidgets = BudgetWidgetService();
   final _homeWidgets = HomeWidgetsService();
+
   FinanceProvider? _finance;
   SettingsProvider? _settings;
 
@@ -583,7 +585,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       case LaunchAction.openAccounts:
         setState(() => _showTab(kHomeTabAccounts));
+      // Pushed routes close first, as for the other outside taps, so a
+      // repeat tap does not stack another pair of Cockpit pages.
       case LaunchAction.openSubscriptions:
+        Navigator.of(context).popUntil((r) => r.isFirst);
         goCockpitSubscriptions(context);
       // A payment-to-check note: its row's edit sheet, or the list when the
       // row has gone since.
@@ -642,6 +647,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           context,
           MaterialPageRoute<void>(builder: (_) => const SearchScreen()),
         );
+      // The Cash in hand widget: Count cash over Accounts, once at a time.
+      // With no Cash account left the dialog returns at once, leaving
+      // Accounts.
+      case LaunchAction.openCountCash:
+        setState(() => _showTab(kHomeTabAccounts));
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) showCountCashDialog(context);
+        });
+      // The Trip budget widget with nothing on Overview's Budgets: closes
+      // pushed routes first, as openSubscriptions does.
+      case LaunchAction.openBudgetsTab:
+        Navigator.of(context).popUntil((r) => r.isFirst);
+        goCockpitBudgets(context);
+      // The Who owes you widget: already open, a second one would need a
+      // second Back.
+      case LaunchAction.openPeople:
+        if (PeopleScreen.isOpen) break;
+        goPeople(context);
     }
   }
 

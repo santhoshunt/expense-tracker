@@ -250,7 +250,7 @@ class _ScrubChartState extends State<_ScrubChart> {
   /// The picked day, 1 to the month's last; null shows the plain chart.
   int? _day;
 
-  late final FixedExtentScrollController _dial = FixedExtentScrollController(
+  late final _DayDialController _dial = _DayDialController(
     initialItem: widget.series.today - 1,
   );
 
@@ -544,7 +544,7 @@ class _DayDial extends StatelessWidget {
   final int lastDay;
   final int centre;
   final Set<int> dueDays;
-  final FixedExtentScrollController controller;
+  final _DayDialController controller;
 
   /// A turn of the dial landed on a day.
   final ValueChanged<int> onChanged;
@@ -568,6 +568,22 @@ class _DayDial extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final orange = AppColors.of(context).orange;
     final weekday = DateFormat('EEEEE');
+    // Every day is laid out as wide as the widest number, so a day that has
+    // to shrink shrinks by the same amount as its neighbours and the
+    // letters stay on one line.
+    final widest = TextPainter(
+      text: TextSpan(
+        text: '28',
+        style: DefaultTextStyle.of(context).style.merge(
+          const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.3),
+    )..layout();
+    // 2dp a side keeps a gap between numbers that shrank to fit.
+    final dayWidth = widest.width + 4;
+    widest.dispose();
     final dial = SizedBox(
       height: 60,
       child: DecoratedBox(
@@ -579,7 +595,9 @@ class _DayDial extends StatelessWidget {
         ),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final cell = constraints.maxWidth / 11;
+            final width = constraints.maxWidth;
+            final cell = width / 11;
+            controller.cell = cell;
             return Stack(
               clipBehavior: Clip.none,
               fit: StackFit.expand,
@@ -595,23 +613,42 @@ class _DayDial extends StatelessWidget {
                     ],
                     stops: const [0, 0.27, 0.73, 1],
                   ).createShader(bounds),
-                  child: RotatedBox(
-                    quarterTurns: 3,
-                    child: ListWheelScrollView(
+                  // A flat list, not a 3D wheel: phones cut the tops off
+                  // the letters the wheel drew in perspective.
+                  child: NotificationListener<ScrollUpdateNotification>(
+                    onNotification: (n) {
+                      final i = (n.metrics.pixels / cell).round().clamp(
+                        0,
+                        lastDay - 1,
+                      );
+                      if (i != controller.index) {
+                        controller.index = i;
+                        onChanged(i + 1);
+                      }
+                      return false;
+                    },
+                    child: ListView.builder(
+                      // A new width (a turned phone) builds a fresh list,
+                      // so it snaps to the new day width and starts on
+                      // the same day.
+                      key: ValueKey(cell),
                       controller: controller,
+                      scrollDirection: Axis.horizontal,
+                      physics: _DaySnapPhysics(cell),
                       itemExtent: cell,
-                      physics: const FixedExtentScrollPhysics(),
-                      diameterRatio: 1000,
-                      perspective: 0.0001,
-                      overAndUnderCenterOpacity: 1,
-                      onSelectedItemChanged: (i) => onChanged(i + 1),
-                      children: [
-                        for (var d = 1; d <= lastDay; d++)
-                          RotatedBox(
-                            quarterTurns: 1,
-                            child: ExcludeSemantics(
-                              child: FittedBox(
-                                fit: BoxFit.scaleDown,
+                      // Day 1 and the last day can both sit in the middle.
+                      padding: EdgeInsets.symmetric(
+                        horizontal: (width - cell) / 2,
+                      ),
+                      itemCount: lastDay,
+                      itemBuilder: (context, i) {
+                        final d = i + 1;
+                        return ExcludeSemantics(
+                          child: Center(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: SizedBox(
+                                width: dayWidth,
                                 child: Column(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
@@ -625,6 +662,8 @@ class _DayDial extends StatelessWidget {
                                     ),
                                     Text(
                                       '$d',
+                                      maxLines: 1,
+                                      softWrap: false,
                                       style: TextStyle(
                                         fontSize: 14,
                                         color: d == centre
@@ -635,23 +674,31 @@ class _DayDial extends StatelessWidget {
                                             : null,
                                       ),
                                     ),
-                                    if (dueDays.contains(d)) ...[
-                                      const SizedBox(height: 3),
-                                      Container(
-                                        width: 5,
-                                        height: 5,
-                                        decoration: BoxDecoration(
-                                          color: orange,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                    ],
+                                    // Every day keeps the dot's room, so days
+                                    // with a dot line up with the rest.
+                                    SizedBox(
+                                      height: 8,
+                                      child: dueDays.contains(d)
+                                          ? Align(
+                                              alignment: Alignment.bottomCenter,
+                                              child: Container(
+                                                width: 5,
+                                                height: 5,
+                                                decoration: BoxDecoration(
+                                                  color: orange,
+                                                  shape: BoxShape.circle,
+                                                ),
+                                              ),
+                                            )
+                                          : null,
+                                    ),
                                   ],
                                 ),
                               ),
                             ),
                           ),
-                      ],
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -700,7 +747,11 @@ class _DayDial extends StatelessWidget {
           decreasedValue: centre > 1 ? heading(centre - 1) : null,
           onIncrease: centre < lastDay ? () => onStep(centre + 1) : null,
           onDecrease: centre > 1 ? () => onStep(centre - 1) : null,
-          child: dial,
+          // Past 1.3x the day numbers would run into each other.
+          child: MediaQuery.withClampedTextScaling(
+            maxScaleFactor: 1.3,
+            child: dial,
+          ),
         ),
         const SizedBox(height: 4),
         Text(
@@ -1078,4 +1129,71 @@ class _ComparisonChartPainter extends CustomPainter {
       old.referenceName != referenceName ||
       old.selectedDay != selectedDay ||
       old.highlightColor != highlightColor;
+}
+
+/// Scrolls the day dial one day per [cell] and remembers the day in the
+/// middle, so the sheet moves the dial by day rather than by pixels.
+class _DayDialController extends ScrollController {
+  _DayDialController({required int initialItem})
+    : index = initialItem,
+      super(keepScrollOffset: false);
+
+  /// The day in the middle, counted from 0.
+  int index;
+
+  /// One day's width; the dial sets it on each layout, before the list
+  /// first reads [initialScrollOffset].
+  double cell = 0;
+
+  @override
+  double get initialScrollOffset => index * cell;
+
+  void jumpToItem(int i) {
+    if (cell > 0) jumpTo(i * cell);
+  }
+
+  Future<void> animateToItem(
+    int i, {
+    required Duration duration,
+    required Curve curve,
+  }) => cell > 0
+      ? animateTo(i * cell, duration: duration, curve: curve)
+      : Future.value();
+}
+
+/// Lets a fling run as far as it would, then settles on the nearest day.
+class _DaySnapPhysics extends ScrollPhysics {
+  final double cell;
+
+  const _DaySnapPhysics(this.cell, {super.parent});
+
+  @override
+  _DaySnapPhysics applyTo(ScrollPhysics? ancestor) =>
+      _DaySnapPhysics(cell, parent: buildParent(ancestor));
+
+  @override
+  Simulation? createBallisticSimulation(
+    ScrollMetrics position,
+    double velocity,
+  ) {
+    final fling = super.createBallisticSimulation(position, velocity);
+    if (cell <= 0) return fling;
+    final end = fling?.x(double.infinity) ?? position.pixels;
+    final target = ((end / cell).round() * cell).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
+    final tolerance = toleranceFor(position);
+    if ((target - position.pixels).abs() < tolerance.distance &&
+        velocity.abs() < tolerance.velocity) {
+      return null;
+    }
+    return ScrollSpringSimulation(
+      spring,
+      position.pixels,
+      target,
+      velocity,
+      tolerance: tolerance,
+    );
+  }
 }

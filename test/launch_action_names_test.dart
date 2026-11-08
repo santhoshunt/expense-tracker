@@ -39,6 +39,26 @@ void main() {
     expect(LaunchActions.fromName('open_search'), LaunchAction.openSearch);
   });
 
+  test('the v2.2.0 widgets name their actions', () {
+    // Trip budget with nothing on Overview's Budgets: Cockpit's Budgets tab.
+    expect(
+      LaunchActions.fromName('open_budgets_tab'),
+      LaunchAction.openBudgetsTab,
+    );
+    // Cash in hand: Count cash over Accounts.
+    expect(
+      LaunchActions.fromName('open_count_cash'),
+      LaunchAction.openCountCash,
+    );
+    // Subscriptions: Cockpit's Subscriptions tab, as the price-rise alert.
+    expect(
+      LaunchActions.fromName('open_subscriptions'),
+      LaunchAction.openSubscriptions,
+    );
+    // Who owes you: the people page, once.
+    expect(LaunchActions.fromName('open_people'), LaunchAction.openPeople);
+  });
+
   group('the Card cycle widget', () {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;

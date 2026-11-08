@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -30,7 +31,8 @@ import kotlin.math.abs
  * The Month pace, Upcoming, Today and Add, Spending split, Budgets
  * list, Recent, Quick actions, Big bills and This week widgets (the last
  * two in a 4x2 and a compact 4x1 size), Accounts, Payments to check,
- * Expected balance (4x2 and a compact 2x1), Card cycle and Search bar.
+ * Expected balance (4x2 and a compact 2x1), Card cycle, Search bar, Trip
+ * budget, Cash in hand, Subscriptions and Who owes you.
  * Pure display, like [BudgetWidgetProvider]: the Dart side writes the
  * snapshots (`flutter.home_widget_data_v1`, home_widgets_service.dart, and
  * the budget one for Budgets list) and this draws them. The snapshot
@@ -126,6 +128,10 @@ object HomeWidgets {
         ExpectedBalanceCompactWidgetProvider::class.java,
         CardCycleWidgetProvider::class.java,
         SearchBarWidgetProvider::class.java,
+        TripBudgetWidgetProvider::class.java,
+        CashInHandWidgetProvider::class.java,
+        SubscriptionsWidgetProvider::class.java,
+        WhoOwesYouWidgetProvider::class.java,
     )
 
     private fun today(): Long = LocalDate.now().toEpochDay()
@@ -187,19 +193,31 @@ object HomeWidgets {
                     ({ w, h, b -> card(context, w, h, b, id, data, theme) })
                 SearchBarWidgetProvider::class.java.name ->
                     ({ _, _, _ -> search(context, id, theme) })
+                TripBudgetWidgetProvider::class.java.name ->
+                    ({ w, h, b -> trip(context, w, h, b, id, data, theme) })
+                CashInHandWidgetProvider::class.java.name ->
+                    ({ w, h, _ -> cash(context, w, h, id, data, theme) })
+                SubscriptionsWidgetProvider::class.java.name ->
+                    ({ w, h, _ -> subscriptions(context, w, h, id, data, theme) })
+                WhoOwesYouWidgetProvider::class.java.name ->
+                    ({ w, h, _ -> owed(context, w, h, id, data, theme) })
                 else -> return
             }
             // The fallbacks are the smallest a launcher gives: 4 columns of
-            // about 62dp (2 for the compact Expected balance), and one row
-            // of 48dp or two of 110dp.
+            // about 62dp (2 for the compact Expected balance, Cash in hand
+            // and Who owes you), and one row of 48dp or two of 110dp.
             val oneRow = provider == TodayAddWidgetProvider::class.java.name ||
                 provider == QuickActionsWidgetProvider::class.java.name ||
                 provider == BigBillsCompactWidgetProvider::class.java.name ||
                 provider == ThisWeekCompactWidgetProvider::class.java.name ||
                 provider == ExpectedBalanceCompactWidgetProvider::class.java.name ||
-                provider == SearchBarWidgetProvider::class.java.name
-            val fallbackW =
-                if (provider == ExpectedBalanceCompactWidgetProvider::class.java.name) 110 else 250
+                provider == SearchBarWidgetProvider::class.java.name ||
+                provider == CashInHandWidgetProvider::class.java.name
+            val fallbackW = if (
+                provider == ExpectedBalanceCompactWidgetProvider::class.java.name ||
+                provider == CashInHandWidgetProvider::class.java.name ||
+                provider == WhoOwesYouWidgetProvider::class.java.name
+            ) 110 else 250
             WidgetKit.update(context, manager, id, fallbackW, if (oneRow) 48 else 110, build)
         } catch (_: Exception) {
             // Drawn again on the next data change or 30-minute redraw.
@@ -1671,11 +1689,43 @@ object HomeWidgets {
     private fun daysName(n: Int): String = if (n == 1) "1 day" else "$n days"
 
     /** The first of [sizes] at which bold [text] fits [roomDp], else the
-     * last: a figure in a half-width column shrinks rather than ending in
-     * an ellipsis at large text or on a narrow widget. */
+     * last scaled down until it fits (never under 8sp): a figure in a
+     * half-width column shrinks rather than ending in an ellipsis at large
+     * text or on a narrow widget. */
     private fun figureSp(context: Context, text: String, roomDp: Float, sizes: List<Float>): Float =
         sizes.firstOrNull { WidgetKit.textWidthDp(context, text, it, bold = true) <= roomDp }
-            ?: sizes.last()
+            ?: run {
+                val last = sizes.last()
+                val wide = WidgetKit.textWidthDp(context, text, last, bold = true)
+                // Width grows with the size; 0.97 leaves room for rounding.
+                if (wide <= 0f) last else (last * roomDp / wide * 0.97f).coerceIn(8f, last)
+            }
+
+    /** The [sizes] whose one line fits [roomDp] at the user's font size,
+     * else the last size alone: a figure steps down by height before
+     * [figureSp] picks by width, so large text never clips it. */
+    private fun fitHeight(context: Context, sizes: List<Float>, roomDp: Float): List<Float> =
+        sizes.filter { WidgetKit.lineDp(context, it) <= roomDp }.ifEmpty { listOf(sizes.last()) }
+
+    /** [text] when it fits [roomDp] at [sp], else the longest start of it
+     * that fits with "…" after it, or "…" alone: a name trimmed by hand
+     * where a row cannot shrink it ahead of what follows. */
+    private fun fitText(
+        context: Context,
+        text: String,
+        sp: Float,
+        roomDp: Float,
+        bold: Boolean = false,
+    ): String {
+        if (WidgetKit.textWidthDp(context, text, sp, bold) <= roomDp) return text
+        for (end in text.length - 1 downTo 1) {
+            // Never between the two halves of an emoji.
+            if (Character.isHighSurrogate(text[end - 1])) continue
+            val cut = text.substring(0, end).trimEnd() + "…"
+            if (WidgetKit.textWidthDp(context, cut, sp, bold) <= roomDp) return cut
+        }
+        return "…"
+    }
 
     /** The width each of two figure columns has: the content width less
      * the 8dp gap, halved. */
@@ -1684,6 +1734,9 @@ object HomeWidgets {
     private val LEFT_FIGURE_SP = listOf(22f, 20f, 18f, 16f)
     private val RIGHT_FIGURE_SP = listOf(16f, 15f, 14f, 13f, 12f)
     private val COMPACT_FIGURE_SP = listOf(18f, 16f, 14f, 12f)
+
+    /** The Who owes you figure: the mockup's 20px, stepping down. */
+    private val TWO_COLUMN_FIGURE_SP = listOf(20f, 18f, 16f, 14f)
 
     /** The first of [labels] that fits [roomDp] at 12sp, else the last: a
      * date label drops its weekday, then the date, rather than ending in
@@ -2011,6 +2064,527 @@ object HomeWidgets {
         return views
     }
 
+    // --- Trip budget --------------------------------------------------------
+
+    /** The trip to draw on epoch day [t]: the first in the snapshot running
+     * on it, else the earliest still to start (the snapshot lists running
+     * ones in Budgets order, then upcoming ones by start date), else null. A
+     * trip that ended overnight drops without the app. */
+    private fun pickTrip(trips: JSONArray?, t: Long): JSONObject? {
+        if (trips == null) return null
+        val all = (0 until trips.length()).mapNotNull { trips.optJSONObject(it) }
+        return all.firstOrNull { it.optLong("startDay") <= t && t <= it.optLong("endDay") }
+            ?: all.filter { it.optLong("startDay") > t }.minByOrNull { it.optLong("startDay") }
+    }
+
+    /** A trip's dates, longest first: "12 to 16 Dec", "28 Nov to 2 Dec" or
+     * "5 Dec", with the year after it when the trip ends in another year, as
+     * the app's fmtDayRange writes them; then without the year, then with
+     * only the end's month ("28 to 2 Dec"), for a column too narrow. */
+    private fun tripDates(start: LocalDate, end: LocalDate): List<String> {
+        val range = when {
+            start == end -> start.format(dayMonth)
+            start.year == end.year && start.month == end.month ->
+                "${start.dayOfMonth} to ${end.format(dayMonth)}"
+            else -> "${start.format(dayMonth)} to ${end.format(dayMonth)}"
+        }
+        val short = if (start == end) range else "${start.dayOfMonth} to ${end.format(dayMonth)}"
+        return listOfNotNull(
+            if (end.year != LocalDate.now().year) "$range ${end.year}" else null,
+            range,
+            short,
+        ).distinct()
+    }
+
+    /** A dated budget (a trip): while it runs, its name and day, what is
+     * left, the spend so far, today's spend against the limit over its days
+     * and a bar per day; before it starts, its name, when it starts, the
+     * budget and the dates. With neither, a line saying no trip runs. The
+     * tap opens Overview's Budgets when that section lists something, else
+     * Cockpit's Budgets tab. */
+    private fun trip(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        bitmaps: WidgetKit.Bitmaps,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val block = data?.optJSONObject("trip")
+        val toOverview =
+            block?.optBoolean("hasBudgets") == true && block.optBoolean("sectionVisible", true)
+        val views = base(
+            context, R.layout.home_widget_trip, theme, id,
+            if (toOverview) QuickActions.OPEN_BUDGETS else QuickActions.OPEN_BUDGETS_TAB
+        )
+        views.setTextColor(R.id.hw_title, theme.text)
+        views.setTextColor(R.id.hw_side, theme.textSecondary)
+        views.setTextColor(R.id.hw_left_label, theme.textSecondary)
+        views.setTextColor(R.id.hw_right_label, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        if (block == null) {
+            showEmpty(views, context.getString(R.string.home_widget_empty))
+            return views
+        }
+        val t = today()
+        val trip = pickTrip(block.optJSONArray("trips"), t)
+        if (trip == null) {
+            showEmpty(views, context.getString(R.string.home_widget_trip_none))
+            return views
+        }
+        showBody(views)
+        val name = trip.optString("name")
+        val startDay = trip.optLong("startDay")
+        val endDay = trip.optLong("endDay")
+        val days = (endDay - startDay + 1).toInt().coerceAtLeast(1)
+        val limit = trip.optDouble("limit", 0.0)
+        val spent = trip.optDouble("spent", 0.0)
+        // Missing days (a malformed snapshot) read 0.
+        val byDayArr = trip.optJSONArray("byDay")
+        val byDay = List(days) { byDayArr?.optDouble(it, 0.0) ?: 0.0 }
+        // The app's own allowance, only on the day it was worked out: on a
+        // later day the days ahead draw as stubs until the app syncs.
+        val allowance = if (trip.has("allowance") && data.optLong("computedDay") == t) {
+            trip.optDouble("allowance", 0.0).takeIf { it > 0 }
+        } else null
+        val running = startDay <= t
+        val todayIndex = if (running) (t - startDay).toInt() else -1
+
+        val column = halfColumnDp(widthDp)
+        val room = (heightDp - 2 * PAD_V).toFloat()
+        val leftSizes = fitHeight(context, LEFT_FIGURE_SP, room)
+        val rightSizes = fitHeight(context, RIGHT_FIGURE_SP, room)
+        val suffix: String
+        val side: String
+        val sideColor: Int
+        val leftText: String
+        val leftColor: Int
+        val rightText: String
+        val rightColor: Int
+        if (running) {
+            val over = spent > limit + 0.5
+            suffix = " · day ${todayIndex + 1} of $days"
+            side = if (over) "${WidgetKit.rupees(spent - limit)} over"
+            else "${WidgetKit.rupees(limit - spent)} left"
+            sideColor = if (over) theme.over else theme.textSecondary
+            views.setTextViewText(R.id.hw_left_label, "Spent")
+            leftText = WidgetKit.rupees(spent)
+            leftColor = if (over) theme.over else theme.text
+            // Today against the limit spread evenly over the trip's days;
+            // " of ₹B" drops where it cannot fit even at the smallest size.
+            val todaySpent = byDay.getOrElse(todayIndex) { 0.0 }
+            val share = limit / days
+            val full = "${WidgetKit.rupees(todaySpent)} of ${WidgetKit.rupees(share)}"
+            views.setTextViewText(R.id.hw_right_label, "Today")
+            rightText = if (
+                WidgetKit.textWidthDp(context, full, rightSizes.last(), bold = true) <= column
+            ) full else WidgetKit.rupees(todaySpent)
+            rightColor = if (todaySpent > share + 0.5) theme.over else theme.text
+        } else {
+            val n = startDay - t
+            suffix = ""
+            side = if (n == 1L) "Starts tomorrow" else "Starts in $n days"
+            sideColor = theme.textSecondary
+            views.setTextViewText(R.id.hw_left_label, "Budget")
+            leftText = WidgetKit.rupees(limit)
+            leftColor = theme.text
+            views.setTextViewText(R.id.hw_right_label, "Dates")
+            // The longest form that fits the column at the smallest size.
+            val dates = tripDates(LocalDate.ofEpochDay(startDay), LocalDate.ofEpochDay(endDay))
+            rightText = dates.firstOrNull {
+                WidgetKit.textWidthDp(context, it, rightSizes.last(), bold = true) <= column
+            } ?: dates.last()
+            rightColor = theme.text
+        }
+
+        // Only the name is trimmed, so "day N of M" stays; the side figure
+        // drops where the name would get under 48dp beside it, as the
+        // Subscriptions pill does.
+        val row = (widthDp - 2 * PAD_H).toFloat()
+        val sideDp = WidgetKit.textWidthDp(context, side, 12f)
+        val suffixDp = WidgetKit.textWidthDp(context, suffix, 13f, bold = true)
+        val showSide = row - 8 - sideDp - suffixDp >= 48
+        views.setViewVisibility(R.id.hw_side, if (showSide) View.VISIBLE else View.GONE)
+        views.setTextViewText(R.id.hw_side, side)
+        views.setTextColor(R.id.hw_side, sideColor)
+        val nameRoom = (if (showSide) row - 8 - sideDp else row) - suffixDp
+        views.setTextViewText(
+            R.id.hw_title,
+            fitText(context, name, 13f, nameRoom, bold = true) + suffix
+        )
+        val leftSp = figureSp(context, leftText, column, leftSizes)
+        val rightSp = figureSp(context, rightText, column, rightSizes)
+        views.setTextViewText(R.id.hw_left, leftText)
+        views.setTextViewTextSize(R.id.hw_left, TypedValue.COMPLEX_UNIT_SP, leftSp)
+        views.setTextColor(R.id.hw_left, leftColor)
+        views.setTextViewText(R.id.hw_right, rightText)
+        views.setTextViewTextSize(R.id.hw_right, TypedValue.COMPLEX_UNIT_SP, rightSp)
+        views.setTextColor(R.id.hw_right, rightColor)
+
+        // The figures always show; as the height shrinks the Spent and Today
+        // labels drop first, then the strip (6dp above, 20dp tall), then the
+        // header.
+        val figure = maxOf(WidgetKit.lineDp(context, leftSp), WidgetKit.lineDp(context, rightSp))
+        val labels = WidgetKit.lineDp(context, 12f)
+        val header = maxOf(WidgetKit.lineDp(context, 13f), WidgetKit.lineDp(context, 12f)) + 2
+        val strip = 6f + 20f
+        val showHeader = header + figure <= room
+        val headerDp = if (showHeader) header else 0f
+        val showStrip = headerDp + figure + strip <= room
+        val stripDp = if (showStrip) strip else 0f
+        val showLabels = headerDp + figure + stripDp + labels <= room
+        views.setViewVisibility(R.id.hw_header, if (showHeader) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.hw_left_label, if (showLabels) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.hw_right_label, if (showLabels) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.hw_strip, if (showStrip) View.VISIBLE else View.GONE)
+        if (showStrip) {
+            bitmaps.get("trip:$widthDp") {
+                tripStrip(context, widthDp, byDay, days, todayIndex, allowance, theme)
+            }?.let { views.setImageViewBitmap(R.id.hw_strip, it) }
+        }
+        return views
+    }
+
+    /** One bar per day of a trip: days up to [todayIndex] filled in the
+     * accent at their spend (a 2dp stub on the track with none), the days
+     * after as dashed boxes at [allowance] (the Trip card's dashed boxes),
+     * or stubs without one. Scaled to the largest day so far or the
+     * allowance. Drawn at the width the strip has, 20dp tall, at most 2
+     * pixels per dp and 1200 pixels wide, as [strip] is. */
+    private fun tripStrip(
+        context: Context,
+        widgetW: Int,
+        byDay: List<Double>,
+        days: Int,
+        todayIndex: Int,
+        allowance: Double?,
+        theme: WidgetTheme,
+    ): Bitmap {
+        val density = minOf(context.resources.displayMetrics.density, 2f)
+        val w = ((widgetW - 2 * PAD_H) * density).toInt().coerceIn(64, 1200)
+        val h = (20 * density).toInt().coerceAtLeast(16)
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bmp)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        val dashed = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = density
+            color = theme.textSecondary
+            pathEffect = DashPathEffect(floatArrayOf(3 * density, 3 * density), 0f)
+        }
+        val n = days.coerceAtLeast(1)
+        // Narrower gaps as the days grow: a trip can run 3 months.
+        val gap = density * when {
+            n <= 14 -> 4
+            n <= 31 -> 2
+            else -> 1
+        }
+        val barW = ((w - gap * (n - 1)) / n).coerceAtLeast(1f)
+        val floor = h.toFloat()
+        val stub = 2 * density
+        val top = maxOf(
+            (0..minOf(todayIndex, n - 1)).maxOfOrNull { byDay.getOrElse(it) { 0.0 } } ?: 0.0,
+            allowance ?: 0.0,
+        )
+        val r = minOf(2 * density, barW / 2)
+        for (i in 0 until n) {
+            val x = i * (barW + gap)
+            val v = if (i <= todayIndex) byDay.getOrElse(i) { 0.0 } else allowance
+            if (v == null || v <= 0 || top <= 0) {
+                paint.color = theme.track
+                canvas.drawRect(x, floor - stub, x + barW, floor, paint)
+                continue
+            }
+            val barH = (floor * (v / top)).toFloat().coerceIn(stub, floor)
+            if (i <= todayIndex) {
+                paint.color = theme.accent
+                canvas.drawRoundRect(RectF(x, floor - barH, x + barW, floor), r, r, paint)
+            } else {
+                // Inset by half the stroke, so the outline stays inside.
+                val half = density / 2
+                canvas.drawRoundRect(
+                    RectF(x + half, floor - barH + half, x + barW - half, floor - half),
+                    r, r, dashed
+                )
+            }
+        }
+        return bmp
+    }
+
+    // --- Cash in hand -------------------------------------------------------
+
+    /** What the open Cash accounts hold, and "Count cash", which the whole
+     * widget opens. Where the height cannot hold the three lines, Count
+     * cash drops first, then the title, as [aheadCompact] drops its lines:
+     * the tap still counts cash. With no Cash account the tap opens
+     * Accounts. */
+    private fun cash(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val block = data?.optJSONObject("cash")
+        val count = block?.optInt("count", 0) ?: 0
+        val views = base(
+            context, R.layout.home_widget_cash, theme, id,
+            if (count > 0) QuickActions.OPEN_COUNT_CASH else QuickActions.OPEN_ACCOUNTS
+        )
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_sub, theme.accentText)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        if (block == null) {
+            showEmpty(views, context.getString(R.string.home_widget_empty))
+            return views
+        }
+        if (count == 0) {
+            showEmpty(views, context.getString(R.string.home_widget_cash_none))
+            return views
+        }
+        showBody(views)
+        // The width inside the 12dp side padding, the height inside the 4dp.
+        val across = (widthDp - 24).toFloat()
+        val room = (heightDp - 8).toFloat()
+        val title = context.getString(R.string.home_widget_cash_label)
+        views.setTextViewText(R.id.hw_title, title)
+        val total = block.optDouble("total", 0.0)
+        val amount = signedRupees(total)
+        views.setTextViewText(R.id.hw_amount, amount)
+        val amountSp = figureSp(
+            context, amount, across, fitHeight(context, COMPACT_FIGURE_SP, room)
+        )
+        views.setTextViewTextSize(R.id.hw_amount, TypedValue.COMPLEX_UNIT_SP, amountSp)
+        views.setTextColor(R.id.hw_amount, if (total < 0) theme.over else theme.text)
+        views.setTextViewText(R.id.hw_sub, context.getString(R.string.home_widget_cash_count))
+        // The figure always, then the title, then Count cash.
+        val withTitle = WidgetKit.lineDp(context, 12f) + WidgetKit.lineDp(context, amountSp)
+        val withCount = withTitle + WidgetKit.lineDp(context, 13f)
+        val titleFits = withTitle <= room && WidgetKit.textWidthDp(context, title, 12f) <= across
+        views.setViewVisibility(R.id.hw_title, if (titleFits) View.VISIBLE else View.GONE)
+        views.setViewVisibility(R.id.hw_sub, if (withCount <= room) View.VISIBLE else View.GONE)
+        return views
+    }
+
+    // --- Subscriptions ------------------------------------------------------
+
+    private class SubscriptionRow(
+        val row: Int,
+        val name: Int,
+        val pillWrap: Int,
+        val pillBg: Int,
+        val pill: Int,
+        val date: Int,
+    )
+
+    private val subscriptionRows = listOf(
+        SubscriptionRow(
+            R.id.hw_row1, R.id.hw_name1, R.id.hw_pill_wrap1, R.id.hw_pill_bg1, R.id.hw_pill1,
+            R.id.hw_date1,
+        ),
+        SubscriptionRow(
+            R.id.hw_row2, R.id.hw_name2, R.id.hw_pill_wrap2, R.id.hw_pill_bg2, R.id.hw_pill2,
+            R.id.hw_date2,
+        ),
+        SubscriptionRow(
+            R.id.hw_row3, R.id.hw_name3, R.id.hw_pill_wrap3, R.id.hw_pill_bg3, R.id.hw_pill3,
+            R.id.hw_date3,
+        ),
+    )
+
+    /** What the subscriptions cost a month (spending only; with only
+     * savings plans, what those set aside) and the next renewals soonest
+     * first: the name, an "Up ₹X" pill for a price rise or "Savings" for a
+     * savings plan, and the date. A renewal more than [BILL_GRACE_DAYS]
+     * past its date drops on the day the widget draws. Rows drop from the
+     * end as the height shrinks; a name that would fall under 48dp loses
+     * its pill first. */
+    private fun subscriptions(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_subs, theme, id, QuickActions.OPEN_SUBSCRIPTIONS
+        )
+        views.setTextColor(R.id.hw_title, theme.text)
+        views.setTextColor(R.id.hw_side, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val block = data?.optJSONObject("subscriptions")
+        if (block == null) {
+            showEmpty(views, context.getString(R.string.home_widget_empty))
+            return views
+        }
+        val t = today()
+        val all = block.optJSONArray("rows")
+        val rows = mutableListOf<JSONObject>()
+        if (all != null) {
+            for (i in 0 until all.length()) {
+                val o = all.optJSONObject(i) ?: continue
+                if (o.optLong("dueDay", t) >= t - BILL_GRACE_DAYS) rows += o
+            }
+        }
+        if (rows.isEmpty()) {
+            showEmpty(views, context.getString(R.string.home_widget_subs_none))
+            return views
+        }
+        showBody(views)
+        val row = (widthDp - 2 * PAD_H).toFloat()
+        val title = context.getString(R.string.home_widget_subs_label)
+        views.setTextViewText(R.id.hw_title, title)
+        val monthly = block.optDouble("monthly", 0.0)
+        val savings = block.optDouble("savingsMonthly", 0.0)
+        val side = when {
+            monthly >= 0.5 -> "${WidgetKit.rupees(monthly)} a month"
+            savings >= 0.5 -> "${WidgetKit.rupees(savings)} savings a month"
+            else -> ""
+        }
+        // As card(): the total shows only beside the whole title.
+        val showSide = side.isNotEmpty() &&
+            WidgetKit.textWidthDp(context, title, 13f, bold = true) + 8 +
+            WidgetKit.textWidthDp(context, side, 12f) <= row
+        views.setViewVisibility(R.id.hw_side, if (showSide) View.VISIBLE else View.GONE)
+        views.setTextViewText(R.id.hw_side, side)
+
+        // As many rows as the height holds under the header: a row is its
+        // 4dp gap and the 13sp name or the 11sp pill, whichever is taller.
+        val header = maxOf(WidgetKit.lineDp(context, 13f), WidgetKit.lineDp(context, 12f)) + 2
+        val room = heightDp - 2 * PAD_V - header
+        val rowDp = 4 + maxOf(WidgetKit.lineDp(context, 13f), WidgetKit.lineDp(context, 11f) + 2)
+        val fit = WidgetKit.rowsThatFit(room, rowDp, 1, subscriptionRows.size)
+        subscriptionRows.forEachIndexed { i, ids ->
+            val o = if (i < fit) rows.getOrNull(i) else null
+            views.setViewVisibility(ids.row, if (o == null) View.GONE else View.VISIBLE)
+            if (o == null) return@forEachIndexed
+            val day = o.optLong("dueDay", t)
+            val date = dueName(day, LocalDate.ofEpochDay(day).format(weekdayDayMonth))
+            views.setTextViewText(ids.date, date)
+            views.setTextColor(ids.date, theme.textSecondary)
+            val rise = if (o.has("rise")) o.optDouble("rise", 0.0) else 0.0
+            val pill = when {
+                rise >= 0.5 -> "Up ${WidgetKit.rupees(rise)}"
+                o.optBoolean("savings", false) -> "Savings"
+                else -> ""
+            }
+            // The name and its pill share what the date and an 8dp gap
+            // leave; the pill (6dp margin, 6dp padding each side) goes
+            // where the name would keep under 48dp.
+            val beside = row - WidgetKit.textWidthDp(context, date, 13f) - 8
+            val pillDp = 6 + 12 + WidgetKit.textWidthDp(context, pill, 11f)
+            val showPill = pill.isNotEmpty() && beside - pillDp >= 48
+            views.setViewVisibility(ids.pillWrap, if (showPill) View.VISIBLE else View.GONE)
+            if (showPill) {
+                views.setTextViewText(ids.pill, pill)
+                views.setTextColor(ids.pill, theme.textSecondary)
+                views.setInt(
+                    ids.pillBg, "setColorFilter", if (rise >= 0.5) theme.warn else theme.accent
+                )
+            }
+            views.setTextViewText(
+                ids.name,
+                fitText(context, o.optString("label"), 13f, if (showPill) beside - pillDp else beside)
+            )
+            views.setTextColor(ids.name, theme.text)
+        }
+        return views
+    }
+
+    // --- Who owes you -------------------------------------------------------
+
+    private class OwedRow(val row: Int, val name: Int, val amount: Int)
+
+    private val owedRows = listOf(
+        OwedRow(R.id.hw_row1, R.id.hw_name1, R.id.hw_amt1),
+        OwedRow(R.id.hw_row2, R.id.hw_name2, R.id.hw_amt2),
+        OwedRow(R.id.hw_row3, R.id.hw_name3, R.id.hw_amt3),
+        OwedRow(R.id.hw_row4, R.id.hw_name4, R.id.hw_amt4),
+    )
+
+    /** Everything still owed back on split bills, then the people who owe
+     * the most, each a name and an amount, and "+N more" for the rest. The
+     * figure always shows; then the title; then as many people as the
+     * height holds, costing the "+N more" line at its own 11sp height. */
+    private fun owed(
+        context: Context,
+        widthDp: Int,
+        heightDp: Int,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(context, R.layout.home_widget_owed, theme, id, QuickActions.OPEN_PEOPLE)
+        views.setTextColor(R.id.hw_title, theme.textSecondary)
+        views.setTextColor(R.id.hw_more, theme.textSecondary)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        val block = data?.optJSONObject("owed")
+        if (block == null) {
+            showEmpty(views, context.getString(R.string.home_widget_empty))
+            return views
+        }
+        val count = block.optInt("count", 0)
+        if (count == 0) {
+            showEmpty(views, context.getString(R.string.home_widget_owed_none))
+            return views
+        }
+        showBody(views)
+        val title = context.getString(R.string.home_widget_owed_title)
+        views.setTextViewText(R.id.hw_title, title)
+        val amount = WidgetKit.rupees(block.optDouble("total", 0.0))
+        // The width inside the 12dp side padding, the height inside the 10dp.
+        val amountSp = figureSp(
+            context, amount, widthDp - 24f,
+            fitHeight(context, TWO_COLUMN_FIGURE_SP, heightDp - 20f)
+        )
+        views.setTextViewText(R.id.hw_amount, amount)
+        views.setTextViewTextSize(R.id.hw_amount, TypedValue.COMPLEX_UNIT_SP, amountSp)
+        views.setTextColor(R.id.hw_amount, theme.safe)
+        val room = heightDp - 20f - WidgetKit.lineDp(context, amountSp)
+        // Dropped rather than cut to "Owed to…" when too wide, as Cash in
+        // hand's title is.
+        val showTitle = WidgetKit.lineDp(context, 12f) <= room &&
+            WidgetKit.textWidthDp(context, title, 12f) <= widthDp - 24f
+        views.setViewVisibility(R.id.hw_title, if (showTitle) View.VISIBLE else View.GONE)
+        val left = room - (if (showTitle) WidgetKit.lineDp(context, 12f) else 0f)
+        val rowDp = 2 + WidgetKit.lineDp(context, 13f)
+        val moreDp = 2 + WidgetKit.lineDp(context, 11f)
+        val people = block.optJSONArray("people")
+        val entries = mutableListOf<JSONObject>()
+        if (people != null) {
+            for (i in 0 until people.length()) people.optJSONObject(i)?.let { entries += it }
+        }
+        val fit = WidgetKit.rowsThatFit(left, rowDp, 0, owedRows.size)
+        val shown = when {
+            count <= fit -> minOf(count, entries.size)
+            else -> {
+                // The "+N more" line costs its own 11sp height, not a row.
+                val withMore = WidgetKit.rowsThatFit(left - moreDp, rowDp, 0, owedRows.size)
+                when {
+                    withMore >= 1 -> minOf(withMore, entries.size)
+                    fit == 1 -> 1
+                    else -> 0
+                }
+            }
+        }
+        val showMore = count > shown && shown >= 1 && shown * rowDp + moreDp <= left
+        owedRows.forEachIndexed { i, ids ->
+            val o = if (i < shown) entries.getOrNull(i) else null
+            views.setViewVisibility(ids.row, if (o == null) View.GONE else View.VISIBLE)
+            if (o == null) return@forEachIndexed
+            views.setTextViewText(ids.name, o.optString("name"))
+            views.setTextColor(ids.name, theme.textSecondary)
+            views.setTextViewText(ids.amount, WidgetKit.rupees(o.optDouble("owed", 0.0)))
+            views.setTextColor(ids.amount, theme.textSecondary)
+        }
+        views.setViewVisibility(R.id.hw_more, if (showMore) View.VISIBLE else View.GONE)
+        views.setTextViewText(R.id.hw_more, "+${count - shown} more")
+        return views
+    }
+
     // --- Search bar ---------------------------------------------------------
 
     /** A search field that opens the search screen, and an Add button at its
@@ -2190,6 +2764,19 @@ class CardCycleWidgetProvider : HomeWidgetProviderBase() {
         prefs.apply()
     }
 }
+
+/** Trip budget (4x2): a running trip's spend, today's share and a bar per
+ * day, or the next trip. */
+class TripBudgetWidgetProvider : HomeWidgetProviderBase()
+
+/** Cash in hand (2x1): the Cash accounts' total; the tap opens Count cash. */
+class CashInHandWidgetProvider : HomeWidgetProviderBase()
+
+/** Subscriptions (4x2): the monthly cost and the next three renewals. */
+class SubscriptionsWidgetProvider : HomeWidgetProviderBase()
+
+/** Who owes you (2x2): the total owed back and the people who owe most. */
+class WhoOwesYouWidgetProvider : HomeWidgetProviderBase()
 
 /** Keep on a Payments to check widget row. Queues the row's payload under
  * [HomeWidgets.KEPT_KEY], cancels its payment-to-check note and redraws the

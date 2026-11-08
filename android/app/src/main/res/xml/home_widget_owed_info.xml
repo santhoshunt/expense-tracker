@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Who owes you (2x2). updatePeriodMillis 0: nothing on it changes by
+     date, and the app redraws it on every data change, as the Search bar
+     needs no timed redraw either. No configure step. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/home_widget_owed_description"
+    android:initialLayout="@layout/home_widget_owed"
+    android:minWidth="110dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="2"
+    android:previewLayout="@layout/home_widget_owed_preview"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

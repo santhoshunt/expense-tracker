@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cash in hand (2x1). Nothing in it changes by date and the app pushes
+     every data change, so it needs no timed redraw
+     (updatePeriodMillis=0). No configure step. -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/home_widget_cash_description"
+    android:initialLayout="@layout/home_widget_cash"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:previewLayout="@layout/home_widget_cash_preview"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

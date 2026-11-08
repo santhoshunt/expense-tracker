@@ -280,6 +280,132 @@ void main() {
       expect(find.text('All Sep'), findsNothing);
       expect(find.text(fmtMoneyWhole(2790)), findsOneWidget);
     });
+
+    testWidgets('the day dial keeps letters whole, in line and apart', (
+      tester,
+    ) async {
+      final series = ComparisonSeries(
+        month: DateTime(2026, 10),
+        previousMonth: DateTime(2026, 9),
+        days: 31,
+        today: 10,
+        actual: [for (var d = 1; d <= 10; d++) d * 120.0],
+        predicted: [for (var d = 10; d <= 31; d++) d * 120.0],
+        lastMonth: [for (var d = 1; d <= 30; d++) d * 100.0],
+        usual: [for (var d = 1; d <= 31; d++) d * 90.0],
+        dueByDay: {
+          12: [(label: 'Rent', amount: 500, due: DateTime(2026, 10, 12))],
+        },
+      );
+      final dial = find.byWidgetPredicate(
+        (w) => w is ListView && w.scrollDirection == Axis.horizontal,
+      );
+      Rect paintRect(Element e) {
+        final box = e.renderObject! as RenderBox;
+        return MatrixUtils.transformRect(
+          box.getTransformTo(null),
+          Offset.zero & box.size,
+        );
+      }
+
+      for (final (width, scale) in [(360.0, 1.0), (320.0, 2.0)]) {
+        tester.view.physicalSize = Size(width, 1400);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        // A fresh app each pass, so the last pass's sheet is gone.
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpWidget(
+          MaterialApp(
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(scale)),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: Builder(
+                builder: (context) => Center(
+                  child: ElevatedButton(
+                    onPressed: () => showComparisonChartSheet(
+                      context,
+                      series: series,
+                      startOnUsual: false,
+                    ),
+                    child: const Text('open'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+
+        final box = tester.getRect(dial);
+        final letters = <Rect>[];
+        final numbers = <Rect>[];
+        for (final e
+            in find
+                .descendant(of: dial, matching: find.byType(Text))
+                .evaluate()) {
+          final r = paintRect(e);
+          // Only the days on screen; the list builds a few past each edge.
+          if (r.center.dx < box.left || r.center.dx > box.right) continue;
+          final data = (e.widget as Text).data!;
+          (int.tryParse(data) == null ? letters : numbers).add(r);
+        }
+        final at = 'at ${width}dp, text x$scale';
+        expect(letters, hasLength(11), reason: at);
+        for (final r in letters) {
+          expect(r.top, greaterThanOrEqualTo(box.top), reason: at);
+          expect(r.bottom, lessThanOrEqualTo(box.bottom), reason: at);
+          // Day 12 carries a dot and still sits on the same line.
+          expect(r.top, moreOrLessEquals(letters.first.top), reason: at);
+        }
+        numbers.sort((a, b) => a.left.compareTo(b.left));
+        for (var i = 1; i < numbers.length; i++) {
+          // At least 1dp of gap between neighbouring numbers.
+          expect(
+            numbers[i].left - numbers[i - 1].right,
+            greaterThanOrEqualTo(1),
+            reason: at,
+          );
+        }
+        if (scale != 1) continue;
+
+        // Three days' width to the left picks the 13th, as the wheel did.
+        final cell = box.width / 11;
+        final g = await tester.startGesture(box.center);
+        await g.moveBy(const Offset(-20, 0));
+        await tester.pump();
+        for (var k = 0; k < 3; k++) {
+          await g.moveBy(Offset(-cell, 0));
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+        await tester.pump(const Duration(milliseconds: 300));
+        await g.up();
+        await tester.pumpAndSettle();
+        expect(find.text('Tue Oct 13'), findsOneWidget);
+
+        // A wider screen under the open sheet: the dial stays on the 13th
+        // and a fling settles exactly on a day of the new width.
+        tester.view.physicalSize = const Size(440, 1400);
+        await tester.pumpAndSettle();
+        final wide = tester.getRect(dial);
+        final step = wide.width / 11;
+        ScrollPosition position() => tester
+            .state<ScrollableState>(
+              find.descendant(of: dial, matching: find.byType(Scrollable)),
+            )
+            .position;
+        expect(position().pixels, moreOrLessEquals(12 * step));
+        await tester.fling(dial, Offset(-2.3 * step, 0), 300);
+        await tester.pumpAndSettle();
+        final days = position().pixels / step;
+        expect(days, moreOrLessEquals(days.roundToDouble(), epsilon: 1e-6));
+        expect(days, greaterThan(12));
+      }
+    });
   });
 
   group('folds', () {

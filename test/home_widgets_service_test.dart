@@ -1,6 +1,7 @@
 import 'dart:convert';
 
-import 'package:flutter/material.dart' show Brightness, Color, ThemeMode;
+import 'package:flutter/material.dart'
+    show Brightness, Color, DateTimeRange, ThemeMode;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,6 +9,8 @@ import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/card_rewards.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/models/reminder.dart';
+import 'package:expense_tracker/models/spend_budget.dart';
+import 'package:expense_tracker/models/subscription_cycle.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/budget_widget_service.dart';
@@ -16,9 +19,11 @@ import 'package:expense_tracker/services/forward_series.dart';
 import 'package:expense_tracker/services/home_widgets_service.dart';
 import 'package:expense_tracker/services/recurring_detector.dart';
 import 'package:expense_tracker/services/spend_comparison.dart';
+import 'package:expense_tracker/services/subscriptions.dart';
 import 'package:expense_tracker/utils/contrast.dart';
 import 'package:expense_tracker/utils/figma_palette.dart';
 import 'package:expense_tracker/utils/format.dart';
+import 'package:expense_tracker/widgets/trip_budget_card.dart';
 
 /// The Month pace, Upcoming and Today widgets' snapshot.
 void main() {
@@ -566,6 +571,283 @@ void main() {
     // No statement day: the cycle is the calendar month.
     expect(second['cycleEnd'], epochDay(DateTime(2026, 7, 31)));
     expect(second['rewardsLabel'], isNull);
+  });
+
+  Map<String, dynamic> snapshotOf(FinanceProvider p, SettingsProvider s) =>
+      jsonDecode(
+            jsonEncode(
+              buildHomeWidgetSnapshot(p, s, now, const [], patterns: const []),
+            ),
+          )
+          as Map<String, dynamic>;
+
+  test(
+    'the snapshot lists running then upcoming trips with their days',
+    () async {
+      FinanceProvider.figuresClock = () => now;
+      addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
+      final p = FinanceProvider();
+      await p.load();
+      final s = SettingsProvider();
+      await s.load();
+      Future<void> trip(
+        String name,
+        double limit,
+        String tag,
+        DateTime start,
+        DateTime end,
+      ) => p.addBudget(
+        name: name,
+        limit: limit,
+        mode: BudgetMode.include,
+        categoryIds: const {},
+        tag: tag,
+        range: DateTimeRange(start: start, end: end),
+      );
+      await trip(
+        'Test trip',
+        15000,
+        'test trip',
+        DateTime(2026, 7, 16),
+        DateTime(2026, 7, 20),
+      );
+      await trip(
+        'Later trip',
+        9000,
+        'later trip',
+        DateTime(2026, 8, 1),
+        DateTime(2026, 8, 3),
+      );
+      await trip(
+        'Old trip',
+        5000,
+        'old trip',
+        DateTime(2026, 7, 1),
+        DateTime(2026, 7, 5),
+      );
+      await p.addBudget(
+        name: 'Food cap',
+        limit: 5000,
+        mode: BudgetMode.include,
+        categoryIds: const {'food'},
+      );
+      Future<void> spend(DateTime d, double amount, [List<String>? tags]) =>
+          p.addTransaction(
+            type: TxType.expense,
+            categoryId: 'food',
+            amount: amount,
+            note: '',
+            date: d,
+            tags: tags ?? const [],
+          );
+      await spend(DateTime(2026, 7, 16, 10), 2000, ['test trip']);
+      await spend(DateTime(2026, 7, 18, 9), 1100, ['test trip']);
+      await spend(DateTime(2026, 7, 18, 11), 500);
+
+      final block = snapshotOf(p, s)['trip'] as Map<String, dynamic>;
+      expect(block['hasBudgets'], isTrue);
+      expect(block['sectionVisible'], isTrue);
+      final trips = block['trips'] as List;
+      expect([for (final t in trips) t['name']], ['Test trip', 'Later trip']);
+      final first = trips.first as Map<String, dynamic>;
+      expect(first['startDay'], epochDay(DateTime(2026, 7, 16)));
+      expect(first['endDay'], epochDay(DateTime(2026, 7, 20)));
+      expect(first['limit'], 15000);
+      expect(first['spent'], 3100);
+      expect(first['byDay'], [2000, 0, 1100, 0, 0]);
+      // ₹11,900 left over the 2 days after today.
+      expect(first['allowance'], 5950);
+      expect(
+        first['allowance'],
+        tripFutureAllowance(
+          range: DateTimeRange(
+            start: DateTime(2026, 7, 16),
+            end: DateTime(2026, 7, 20),
+          ),
+          limit: 15000,
+          spent: 3100,
+          today: now,
+        ),
+      );
+      // Before its start: the whole limit over all 3 days.
+      expect((trips.last as Map<String, dynamic>)['allowance'], 3000);
+
+      // Past its limit: no allowance.
+      await spend(DateTime(2026, 7, 17, 10), 16000, ['test trip']);
+      final over =
+          ((snapshotOf(p, s)['trip'] as Map<String, dynamic>)['trips'] as List)
+                  .first
+              as Map<String, dynamic>;
+      expect(over['name'], 'Test trip');
+      expect(over.containsKey('allowance'), isFalse);
+    },
+  );
+
+  test('a trip ended over a week ago lists nothing in Budgets', () async {
+    FinanceProvider.figuresClock = () => now;
+    addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
+    final p = FinanceProvider();
+    await p.load();
+    final s = SettingsProvider();
+    await s.load();
+    // Ended 13 days before now, past the 7 days kTripEndedDays lists it.
+    await p.addBudget(
+      name: 'Old trip',
+      limit: 5000,
+      mode: BudgetMode.include,
+      categoryIds: const {},
+      tag: 'old trip',
+      range: DateTimeRange(
+        start: DateTime(2026, 7, 1),
+        end: DateTime(2026, 7, 5),
+      ),
+    );
+    final block = snapshotOf(p, s)['trip'] as Map<String, dynamic>;
+    expect(block['hasBudgets'], isFalse);
+    expect(block['trips'], isEmpty);
+  });
+
+  test('the snapshot carries the Cash accounts\' total', () async {
+    final s = SettingsProvider();
+    await s.load();
+    final empty = FinanceProvider();
+    await empty.load();
+    final none = snapshotOf(empty, s)['cash'] as Map<String, dynamic>;
+    expect(none['count'], 0);
+    expect(none['total'], 0);
+
+    final p = FinanceProvider();
+    await p.load();
+    final wallet = await p.addAccount(
+      name: 'Test cash',
+      type: AccountType.cash,
+    );
+    await p.setManualBalance(wallet, 3000);
+    final pouch = await p.addAccount(
+      name: 'Second cash',
+      type: AccountType.cash,
+    );
+    await p.setManualBalance(pouch, 1400);
+    final bank = await p.addAccount(name: 'Test bank', type: AccountType.bank);
+    await p.setManualBalance(bank, 50000);
+    final cash = snapshotOf(p, s)['cash'] as Map<String, dynamic>;
+    expect(cash['total'], 4400);
+    expect(cash['count'], 2);
+  });
+
+  test(
+    'the snapshot carries subscriptions with price rises and savings',
+    () async {
+      FinanceProvider.figuresClock = () => now;
+      addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
+      final p = FinanceProvider();
+      await p.load();
+      final s = SettingsProvider();
+      await s.load();
+      Future<String> pay(String note, double amount, DateTime d, String cat) =>
+          p.addTransaction(
+            type: TxType.expense,
+            categoryId: cat,
+            amount: amount,
+            note: note,
+            date: d,
+          );
+      await pay('Test stream', 499, DateTime(2026, 4, 20, 10), 'bills');
+      await pay('Test stream', 499, DateTime(2026, 5, 20, 10), 'bills');
+      await pay('Test stream', 649, DateTime(2026, 6, 20, 10), 'bills');
+      String? chitId;
+      for (final m in [4, 5, 6]) {
+        chitId = await pay(
+          'Test chit',
+          2000,
+          DateTime(2026, m, 25, 10),
+          kSavingsTransferCategoryId,
+        );
+      }
+      final chitTx = p.transactions.firstWhere((t) => t.id == chitId);
+      await p.setSubscriptionPins({
+        subscriptionKeyOf(chitTx)!: SubscriptionCycle.monthly,
+      });
+      for (final m in [4, 5, 6]) {
+        await pay('Test fibre', 799, DateTime(2026, m, 28, 10), 'bills');
+      }
+
+      final expected = buildSubscriptions(
+        p.countedTransactions,
+        now: now,
+        alias: p.merchantAlias,
+        hidden: s.hiddenUpcoming,
+        pinned: p.subscriptionPins,
+      );
+      final block = snapshotOf(p, s)['subscriptions'] as Map<String, dynamic>;
+      final rows = [
+        for (final r in block['rows'] as List) r as Map<String, dynamic>,
+      ];
+      expect(
+        [for (final r in rows) r['label']],
+        [for (final i in expected.active) i.hit.label],
+      );
+      expect(rows, hasLength(3));
+      for (var i = 0; i < rows.length; i++) {
+        expect(rows[i]['dueDay'], epochDay(expected.active[i].hit.nextDue));
+      }
+      // Labels are the notes title-cased (merchantDisplayLabel).
+      final stream = rows.firstWhere((r) => r['label'] == 'Test Stream');
+      expect(stream['rise'], 150);
+      expect(stream['savings'], isFalse);
+      final chit = rows.firstWhere((r) => r['label'] == 'Test Chit');
+      expect(chit['savings'], isTrue);
+      expect(chit.containsKey('rise'), isFalse);
+      final fibre = rows.firstWhere((r) => r['label'] == 'Test Fibre');
+      expect(fibre.containsKey('rise'), isFalse);
+      expect(block['monthly'], closeTo(expected.monthlyTotal, 1e-9));
+      expect(
+        block['savingsMonthly'],
+        closeTo(expected.savingsMonthlyTotal, 1e-9),
+      );
+      // Spending only: the chit sits in its own total.
+      expect(block['savingsMonthly'], greaterThan(0));
+    },
+  );
+
+  test('the snapshot carries who owes you, largest first', () async {
+    final p = FinanceProvider();
+    await p.load();
+    final s = SettingsProvider();
+    await s.load();
+    final none = snapshotOf(p, s)['owed'] as Map<String, dynamic>;
+    expect(none['count'], 0);
+    expect(none['people'], isEmpty);
+
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 4000,
+      note: 'Test dinner',
+      date: DateTime(2026, 7, 10, 20),
+      people: const [
+        SplitShare(name: 'Ravi', amount: 1500),
+        SplitShare(name: 'Meena', amount: 1000),
+        SplitShare(name: 'Arun', amount: 750),
+      ],
+    );
+    // Settled by hand: off the balance and the list.
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 1200,
+      note: 'Test lunch',
+      date: DateTime(2026, 7, 12, 13),
+      people: const [SplitShare(name: 'Priya', amount: 500, settled: true)],
+    );
+    final owed = snapshotOf(p, s)['owed'] as Map<String, dynamic>;
+    expect(owed['total'], 3250);
+    expect(owed['count'], 3);
+    final people = [
+      for (final o in owed['people'] as List) o as Map<String, dynamic>,
+    ];
+    expect([for (final o in people) o['name']], ['Ravi', 'Meena', 'Arun']);
+    expect([for (final o in people) o['owed']], [1500, 1000, 750]);
   });
 
   test('epochDay counts local calendar days from 1970', () {

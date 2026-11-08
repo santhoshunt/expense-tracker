@@ -7,12 +7,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/account.dart';
 import '../models/card_rewards.dart';
+import '../models/dashboard_layout.dart';
+import '../models/spend_budget.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/contrast.dart';
 import '../utils/figma_palette.dart';
 import '../utils/format.dart';
+import '../widgets/trip_budget_card.dart';
 import 'big_bills.dart';
 import 'budget_widget_service.dart';
 import 'card_bill.dart';
@@ -24,6 +27,7 @@ import 'notification_ids.dart';
 import 'recurring_detector.dart';
 import 'safe_to_spend.dart';
 import 'spend_comparison.dart';
+import 'subscriptions.dart';
 import 'upcoming_items.dart';
 import 'weekly_digest.dart';
 
@@ -38,10 +42,11 @@ int epochDay(DateTime d) =>
     Duration.millisecondsPerDay;
 
 /// Feeds the Month pace, Upcoming, Today and Add, Spending split, Recent,
-/// Big bills, This week, Accounts, Payments to check, Expected balance and
-/// Card cycle widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart
-/// computes and native draws; the snapshot carries dates and a usual-by-day
-/// curve so the widgets stay right across midnight without the app running.
+/// Big bills, This week, Accounts, Payments to check, Expected balance,
+/// Card cycle, Trip budget, Cash in hand, Subscriptions and Who owes you
+/// widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart computes and
+/// native draws; the snapshot carries dates and a usual-by-day curve so the
+/// widgets stay right across midnight without the app running.
 class HomeWidgetsService {
   static const _dataKey = 'home_widget_data_v1';
   static const _themeKey = 'budget_widget_theme_v1';
@@ -88,6 +93,7 @@ class HomeWidgetsService {
         now,
         _recurring(finance, now),
         patterns: _patterns,
+        subscriptions: cachedSubscriptions(finance, settings.hiddenUpcoming),
         light: widgetThemeIsLight(settings, brightness),
       ),
     );
@@ -110,13 +116,16 @@ class HomeWidgetsService {
 /// The widgets' snapshot for [now]. Amounts are formatted here so the ₹
 /// grouping matches the app; the raw figures ride along for the bar.
 /// [light] is the widget theme's brightness ([widgetThemeIsLight]), which
-/// the category glyph colours are baked for.
+/// the category glyph colours are baked for. [subscriptions] is the app's
+/// cached list ([cachedSubscriptions]); without it the snapshot builds one
+/// for [now], since the cache dates its rows by the real day.
 Map<String, dynamic> buildHomeWidgetSnapshot(
   FinanceProvider finance,
   SettingsProvider settings,
   DateTime now,
   List<RecurringHit> hits, {
   List<RecurringHit>? patterns,
+  SubscriptionSummary? subscriptions,
   bool light = false,
 }) {
   final month = DateTime(now.year, now.month);
@@ -233,6 +242,27 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       for (final a in finance.openAccounts)
         if (a.isCard) _cardRow(finance, a, now),
     ],
+    // Running and upcoming trips with their dates as epoch days: Kotlin
+    // picks the stage on the day it draws.
+    'trip': _tripBlock(finance, settings, now, month),
+    // The Cash in hand widget: the open Cash accounts' total and count.
+    'cash': {
+      'total': finance.cashBalanceTotal,
+      'count': finance.cashBalanceCount,
+    },
+    // The Subscriptions widget: the monthly cost and the soonest renewals.
+    'subscriptions': _subscriptionsBlock(
+      subscriptions ??
+          buildSubscriptions(
+            finance.countedTransactions,
+            now: now,
+            alias: finance.merchantAlias,
+            hidden: settings.hiddenUpcoming,
+            pinned: finance.subscriptionPins,
+          ),
+    ),
+    // The Who owes you widget: the total owed back and who owes most.
+    'owed': _owedBlock(finance),
     // Left out while the ledger failed to load: no row could be confirmed.
     // Shown whatever the payment-to-check notes switch says.
     if (finance.loadWarnings.isEmpty)
@@ -367,6 +397,112 @@ Map<String, dynamic> _cardRow(
   };
 }
 
+/// The Trip budget widget's block. `hasBudgets` says whether Overview's
+/// Budgets section lists anything (a monthly budget, or a dated one not
+/// [TripStage.gone]) and `sectionVisible` whether that section shows, so
+/// the tap lands there or on Cockpit's Budgets tab.
+Map<String, dynamic> _tripBlock(
+  FinanceProvider finance,
+  SettingsProvider settings,
+  DateTime now,
+  DateTime month,
+) => {
+  'hasBudgets': finance.budgets.any(
+    (b) => b.range == null || b.stageOn(now) != TripStage.gone,
+  ),
+  'sectionVisible': !settings
+      .dashboardLayout(DashboardPage.overview)
+      .hidden
+      .contains(DashboardSection.budgets),
+  'trips': [
+    for (final b in _widgetTrips(finance, now))
+      _tripRow(finance, b, now, month),
+  ],
+};
+
+/// Dated budgets with a limit that run on [now], in Budgets order, then the
+/// upcoming ones by start date (ties in Budgets order).
+List<SpendBudget> _widgetTrips(FinanceProvider finance, DateTime now) {
+  final all = finance.budgets;
+  bool dated(SpendBudget b) => b.limit > 0 && b.range != null;
+  final running = [
+    for (final b in all)
+      if (dated(b) && b.stageOn(now) == TripStage.running) b,
+  ];
+  final upcoming = [
+    for (final b in all)
+      if (dated(b) && b.stageOn(now) == TripStage.upcoming) b,
+  ];
+  // List.sort is not stable: the index breaks ties.
+  upcoming.sort((a, b) {
+    final byStart = a.range!.start.compareTo(b.range!.start);
+    return byStart != 0 ? byStart : all.indexOf(a).compareTo(all.indexOf(b));
+  });
+  return [...running, ...upcoming];
+}
+
+/// One trip: its days as epoch days, spend so far and per day, and the
+/// Trip card's allowance for the days after [now] when it has one.
+Map<String, dynamic> _tripRow(
+  FinanceProvider finance,
+  SpendBudget b,
+  DateTime now,
+  DateTime month,
+) {
+  final range = b.range!;
+  final spent = finance.budgetSpentFor(b, month);
+  final allowance = tripFutureAllowance(
+    range: range,
+    limit: b.limit,
+    spent: spent,
+    today: now,
+  );
+  return {
+    'name': b.name,
+    'startDay': epochDay(range.start),
+    'endDay': epochDay(range.end),
+    'limit': b.limit,
+    'spent': spent,
+    'byDay': finance.budgetSpendByDay(b),
+    'allowance': ?allowance,
+  };
+}
+
+/// The Subscriptions widget's block: the monthly totals (spending, then
+/// savings) and the first [kSubscriptionWidgetRows] active items, soonest
+/// due first. Kotlin drops rows past the grace days on the day it draws.
+Map<String, dynamic> _subscriptionsBlock(SubscriptionSummary s) => {
+  'monthly': s.monthlyTotal,
+  'savingsMonthly': s.savingsMonthlyTotal,
+  'rows': [
+    for (final i in s.active.take(kSubscriptionWidgetRows))
+      {
+        'label': i.hit.label,
+        'dueDay': epochDay(i.hit.nextDue),
+        'rise': ?i.priceRise?.amount,
+        'savings': i.isSavings,
+      },
+  ],
+};
+
+/// The Who owes you widget's block: everything still owed back, how many
+/// people owe it, and the first [kOwedWidgetRows] of them, largest first
+/// ([FinanceProvider.peopleBalances]' order).
+Map<String, dynamic> _owedBlock(FinanceProvider finance) {
+  final owing = [
+    for (final b in finance.peopleBalances)
+      if (b.owed > 0) b,
+  ];
+  return {
+    'total': finance.totalOwed,
+    'count': owing.length,
+    'people': [
+      for (final b in owing.take(kOwedWidgetRows))
+        {'name': b.name, 'owed': b.owed},
+    ],
+  };
+}
+
 /// The Big bills widgets' block. [month]'s key dates the 12-month strip,
 /// so a widget drawn in a later month shifts it without the app.
 Map<String, dynamic> _bigBills(BigBillsPlan plan, DateTime month) => {
@@ -435,6 +571,14 @@ const int kRecentWidgetRows = 4;
 /// refill slots whose Keep was tapped on the home screen, before the app
 /// has run again.
 const int kCheckWidgetRows = 6;
+
+/// Rows the Subscriptions widget carries. It shows up to 3; the rest stand
+/// in for rows that pass their grace days before the app runs again.
+const int kSubscriptionWidgetRows = 6;
+
+/// People the Who owes you widget carries; it shows as many as its height
+/// holds, with "+N more" for the rest.
+const int kOwedWidgetRows = 4;
 
 /// How a widget colours an amount (the snapshot's `kind`): 'in' green,
 /// 'out' red, and 'neutral' plain for money that is neither income nor

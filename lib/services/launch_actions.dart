@@ -48,8 +48,8 @@ enum LaunchAction {
   /// for the id [LaunchActions.takeTxId] hands over.
   openTransaction,
 
-  /// A subscription price-rise alert: Cockpit, Budgets and bills,
-  /// Subscriptions.
+  /// A subscription price-rise alert and the Subscriptions widget: Cockpit,
+  /// Budgets and bills, Subscriptions.
   openSubscriptions,
 
   /// The Payments to check widget's +N more line: Transactions filtered to
@@ -65,6 +65,16 @@ enum LaunchAction {
 
   /// The Search bar widget: the search screen with the keyboard up.
   openSearch,
+
+  /// The Trip budget widget with no budget on Overview: Cockpit's Budgets
+  /// tab.
+  openBudgetsTab,
+
+  /// The Cash in hand widget: Count cash over the Accounts tab.
+  openCountCash,
+
+  /// The Who owes you widget: the people page, pushed once.
+  openPeople,
 }
 
 /// Receives [LaunchAction]s from Android and holds the newest one in
@@ -147,6 +157,10 @@ class LaunchActions {
     'open_checks' => LaunchAction.openChecks,
     'open_ahead' => LaunchAction.openAhead,
     'open_search' => LaunchAction.openSearch,
+    'open_budgets_tab' => LaunchAction.openBudgetsTab,
+    'open_count_cash' => LaunchAction.openCountCash,
+    'open_subscriptions' => LaunchAction.openSubscriptions,
+    'open_people' => LaunchAction.openPeople,
     // The widget names no week: it always opens the current one.
     'open_weekly_digest' => LaunchAction.openThisWeek,
     _ => null,

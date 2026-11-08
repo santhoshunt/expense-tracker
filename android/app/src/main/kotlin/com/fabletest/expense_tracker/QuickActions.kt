@@ -56,6 +56,19 @@ object QuickActions {
     /** The Search bar widget: the search screen with the keyboard up. */
     const val OPEN_SEARCH = "open_search"
 
+    /** The Trip budget widget with no budget on Overview's Budgets (none
+     * listed, or the section hidden): Cockpit's Budgets tab. */
+    const val OPEN_BUDGETS_TAB = "open_budgets_tab"
+
+    /** The Cash in hand widget: the Count cash dialog over Accounts. */
+    const val OPEN_COUNT_CASH = "open_count_cash"
+
+    /** The Subscriptions widget: Cockpit's Subscriptions tab. */
+    const val OPEN_SUBSCRIPTIONS = "open_subscriptions"
+
+    /** The Who owes you widget: the people page, pushed once. */
+    const val OPEN_PEOPLE = "open_people"
+
     /** Opens the enabled launcher entry with [action].
      *
      * The component comes from getLaunchIntentForPackage, never from
@@ -87,7 +100,8 @@ object QuickActions {
             OPEN_PACE, OPEN_UPCOMING, OPEN_TODAY, OPEN_BREAKDOWN,
             OPEN_TRANSACTIONS, OPEN_BIG_BILLS, OPEN_WEEKLY_DIGEST,
             OPEN_REVIEW, OPEN_ACCOUNTS, OPEN_CHECKS, OPEN_AHEAD,
-            OPEN_SEARCH -> action
+            OPEN_SEARCH, OPEN_BUDGETS_TAB, OPEN_COUNT_CASH,
+            OPEN_SUBSCRIPTIONS, OPEN_PEOPLE -> action
             else -> action?.takeIf {
                 (it.startsWith(OPEN_TX_PREFIX) && it.length > OPEN_TX_PREFIX.length) ||
                     (it.startsWith(OPEN_CARD_PREFIX) && it.length > OPEN_CARD_PREFIX.length)
