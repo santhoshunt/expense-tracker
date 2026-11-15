@@ -132,6 +132,11 @@ void main() {
         type: AccountType.creditCard,
       );
       await p.setManualBalance(owing, 2000);
+      final paid = await p.addAccount(
+        name: 'Card Paid',
+        type: AccountType.creditCard,
+      );
+      await p.setManualBalance(paid, 0);
       await p.addAccount(name: 'Sample FD', type: AccountType.savings);
 
       expect(p.isOrphanedAccount(p.accountById('acc_gone')!), isTrue);
@@ -139,12 +144,13 @@ void main() {
       // linked card.
       expect(p.bankBalanceCount, 2);
       expect(p.bankBalanceTotal, 1000);
-      // Only the card with a known outstanding adds to the total.
+      // Only the card that owes is counted: not the one with no limit,
+      // not the one known to owe nothing.
       expect(p.cardOutstandingCount, 1);
       expect(p.cardOutstandingTotal, 2000);
       expect(p.cardsMissingLimit, 1);
       // Every open bank-like account and card, emptied or not.
-      expect(p.netAccountCount, 5);
+      expect(p.netAccountCount, 6);
     });
 
     testWidgets('a lone card with no limit is one net account', (tester) async {

@@ -602,104 +602,113 @@ class _DayDial extends StatelessWidget {
               clipBehavior: Clip.none,
               fit: StackFit.expand,
               children: [
-                ShaderMask(
-                  blendMode: BlendMode.dstIn,
-                  shaderCallback: (bounds) => LinearGradient(
-                    colors: [
-                      Colors.white.withValues(alpha: 0.3),
-                      Colors.white,
-                      Colors.white,
-                      Colors.white.withValues(alpha: 0.3),
-                    ],
-                    stops: const [0, 0.27, 0.73, 1],
-                  ).createShader(bounds),
-                  // A flat list, not a 3D wheel: phones cut the tops off
-                  // the letters the wheel drew in perspective.
-                  child: NotificationListener<ScrollUpdateNotification>(
-                    onNotification: (n) {
-                      final i = (n.metrics.pixels / cell).round().clamp(
-                        0,
-                        lastDay - 1,
-                      );
-                      if (i != controller.index) {
-                        controller.index = i;
-                        onChanged(i + 1);
-                      }
-                      return false;
-                    },
-                    child: ListView.builder(
-                      // A new width (a turned phone) builds a fresh list,
-                      // so it snaps to the new day width and starts on
-                      // the same day.
-                      key: ValueKey(cell),
-                      controller: controller,
-                      scrollDirection: Axis.horizontal,
-                      physics: _DaySnapPhysics(cell),
-                      itemExtent: cell,
-                      // Day 1 and the last day can both sit in the middle.
-                      padding: EdgeInsets.symmetric(
-                        horizontal: (width - cell) / 2,
-                      ),
-                      itemCount: lastDay,
-                      itemBuilder: (context, i) {
-                        final d = i + 1;
-                        return ExcludeSemantics(
-                          child: Center(
-                            child: FittedBox(
-                              fit: BoxFit.scaleDown,
-                              child: SizedBox(
-                                width: dayWidth,
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(
-                                      weekday.format(
-                                        DateTime(month.year, month.month, d),
+                NotificationListener<ScrollUpdateNotification>(
+                  onNotification: (n) {
+                    final i = (n.metrics.pixels / cell).round().clamp(
+                      0,
+                      lastDay - 1,
+                    );
+                    if (i != controller.index) {
+                      controller.index = i;
+                      onChanged(i + 1);
+                    }
+                    return false;
+                  },
+                  child: ListView.builder(
+                    // A new width (a turned phone) builds a fresh list,
+                    // so it snaps to the new day width and starts on
+                    // the same day.
+                    key: ValueKey(cell),
+                    controller: controller,
+                    scrollDirection: Axis.horizontal,
+                    physics: _DaySnapPhysics(cell),
+                    itemExtent: cell,
+                    // Day 1 and the last day can both sit in the middle.
+                    padding: EdgeInsets.symmetric(
+                      horizontal: (width - cell) / 2,
+                    ),
+                    itemCount: lastDay,
+                    itemBuilder: (context, i) {
+                      final d = i + 1;
+                      final position = Scrollable.of(context).position;
+                      return ExcludeSemantics(
+                        child: Center(
+                          child: FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: SizedBox(
+                              width: dayWidth,
+                              // Days dim toward the dial's ends through
+                              // their own colours, following the scroll.
+                              // A ShaderMask over the list did the same
+                              // and phones cut the tops off the letters
+                              // drawn inside it.
+                              child: ListenableBuilder(
+                                listenable: position,
+                                builder: (context, _) {
+                                  // 0 in the middle, 0.5 at either end.
+                                  final off =
+                                      (i * cell - position.pixels).abs() /
+                                      width;
+                                  final fade = (0.3 + 0.7 * (0.5 - off) / 0.27)
+                                      .clamp(0.3, 1.0);
+                                  return Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        weekday.format(
+                                          DateTime(month.year, month.month, d),
+                                        ),
+                                        style: text.bodySmall?.copyWith(
+                                          color: scheme.onSurfaceVariant
+                                              .withValues(alpha: fade),
+                                        ),
                                       ),
-                                      style: text.bodySmall?.copyWith(
-                                        color: scheme.onSurfaceVariant,
+                                      Text(
+                                        '$d',
+                                        maxLines: 1,
+                                        softWrap: false,
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color:
+                                              (d == centre
+                                                      ? scheme.onSurface
+                                                      : scheme.onSurfaceVariant)
+                                                  .withValues(alpha: fade),
+                                          fontWeight: d == centre
+                                              ? FontWeight.w700
+                                              : null,
+                                        ),
                                       ),
-                                    ),
-                                    Text(
-                                      '$d',
-                                      maxLines: 1,
-                                      softWrap: false,
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: d == centre
-                                            ? scheme.onSurface
-                                            : scheme.onSurfaceVariant,
-                                        fontWeight: d == centre
-                                            ? FontWeight.w700
+                                      // Every day keeps the dot's room, so days
+                                      // with a dot line up with the rest.
+                                      SizedBox(
+                                        height: 8,
+                                        child: dueDays.contains(d)
+                                            ? Align(
+                                                alignment:
+                                                    Alignment.bottomCenter,
+                                                child: Container(
+                                                  width: 5,
+                                                  height: 5,
+                                                  decoration: BoxDecoration(
+                                                    color: orange.withValues(
+                                                      alpha: fade,
+                                                    ),
+                                                    shape: BoxShape.circle,
+                                                  ),
+                                                ),
+                                              )
                                             : null,
                                       ),
-                                    ),
-                                    // Every day keeps the dot's room, so days
-                                    // with a dot line up with the rest.
-                                    SizedBox(
-                                      height: 8,
-                                      child: dueDays.contains(d)
-                                          ? Align(
-                                              alignment: Alignment.bottomCenter,
-                                              child: Container(
-                                                width: 5,
-                                                height: 5,
-                                                decoration: BoxDecoration(
-                                                  color: orange,
-                                                  shape: BoxShape.circle,
-                                                ),
-                                              ),
-                                            )
-                                          : null,
-                                    ),
-                                  ],
-                                ),
+                                    ],
+                                  );
+                                },
                               ),
                             ),
                           ),
-                        );
-                      },
-                    ),
+                        ),
+                      );
+                    },
                   ),
                 ),
                 Center(

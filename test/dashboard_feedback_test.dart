@@ -371,6 +371,20 @@ void main() {
             reason: at,
           );
         }
+        // No mask over the days: phones cut the letters' tops inside one.
+        // The end days dim through their own colour instead.
+        expect(
+          find.ancestor(of: dial, matching: find.byType(ShaderMask)),
+          findsNothing,
+          reason: at,
+        );
+        double alphaOf(String day) => tester
+            .widget<Text>(find.descendant(of: dial, matching: find.text(day)))
+            .style!
+            .color!
+            .a;
+        expect(alphaOf('10'), 1, reason: at);
+        expect(alphaOf('5'), lessThan(0.5), reason: at);
         if (scale != 1) continue;
 
         // Three days' width to the left picks the 13th, as the wheel did.

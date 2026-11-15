@@ -244,10 +244,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          amount: cardDue > 0.005 ? '−${fmtMoney(cardDue)}' : fmtMoney(0),
-          color: cardDue > 0.005
-              ? moneyColor(context, type: TxType.expense)
-              : null,
+          amount: '−${fmtMoney(cardDue)}',
+          color: moneyColor(context, type: TxType.expense),
         ),
     ];
 

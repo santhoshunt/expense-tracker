@@ -5485,9 +5485,11 @@ class FinanceProvider extends ChangeNotifier {
   double get cardOutstandingTotal =>
       _cardTotalAccounts.fold(0.0, (s, a) => s + (accountOutstanding(a) ?? 0));
 
-  /// How many cards add a known outstanding to [cardOutstandingTotal].
-  int get cardOutstandingCount =>
-      _cardTotalAccounts.where((a) => accountOutstanding(a) != null).length;
+  /// How many cards owe something: the ones that add more than zero to
+  /// [cardOutstandingTotal]. A card known to owe nothing is not counted.
+  int get cardOutstandingCount => _cardTotalAccounts
+      .where((a) => (accountOutstanding(a) ?? 0) > 0.005)
+      .length;
 
   /// Open accounts of the kinds [netWorth] is made of: banks, debit cards
   /// linked to none, Cash and credit cards. Emptied accounts and cards with
