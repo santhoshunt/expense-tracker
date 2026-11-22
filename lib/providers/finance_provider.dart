@@ -183,6 +183,10 @@ class _AccountFigures {
   /// Non-null exactly when [outstanding] is null on a card.
   final OutstandingBlocker? outstandingBlocker;
 
+  /// The figure comes from a bank alert that stated more available than the
+  /// user-entered limit: a real credit, or a limit the bank has since raised.
+  final bool alertAboveLimit;
+
   const _AccountFigures({
     required this.balance,
     required this.balanceSource,
@@ -195,6 +199,7 @@ class _AccountFigures {
     required this.txCount,
     required this.rowsSinceSource,
     required this.outstandingBlocker,
+    required this.alertAboveLimit,
   });
 }
 
@@ -380,6 +385,7 @@ class FinanceProvider extends ChangeNotifier {
   static const _importRulesSeededKey = 'import_rules_seeded_v1';
   static const _importRulesPrunedKey = 'import_rules_pruned_v1';
   static const _importRulesSeededV2Key = 'import_rules_seeded_v2';
+  static const _importRulesSeededV3Key = 'import_rules_seeded_v3';
   static const _customCategoriesKey = 'custom_categories_v1';
   static const _builtinOverridesKey = 'builtin_category_overrides_v1';
   static const _groupsKey = 'category_groups_v1';
@@ -1575,6 +1581,21 @@ class FinanceProvider extends ChangeNotifier {
         if (added) await _persist(importRules: true);
         await prefs.setBool(_importRulesSeededV2Key, true);
       }
+      // The same one-time top-up for the ignore phrases added in 2.3.1.
+      if (!(prefs.getBool(_importRulesSeededV3Key) ?? false)) {
+        final existingIds = _importRules.map((r) => r.id).toSet();
+        var added = false;
+        for (final pattern in kIgnorePhrasesAddedV231) {
+          final id = _builtinImportRuleId(pattern, ImportRuleKind.ignore);
+          if (existingIds.contains(id)) continue;
+          _importRules.add(
+            ImportRule(id: id, pattern: pattern, kind: ImportRuleKind.ignore),
+          );
+          added = true;
+        }
+        if (added) await _persist(importRules: true);
+        await prefs.setBool(_importRulesSeededV3Key, true);
+      }
       // One-time seeding of the starter parent groups. The flag — not the data —
       // gates reseeding, so deleting or renaming Needs/Wants sticks.
       if (!(prefs.getBool(_groupsSeededKey) ?? false)) {
@@ -2130,6 +2151,13 @@ class FinanceProvider extends ChangeNotifier {
     bool discards = false,
   }) async {
     final prefs = await SharedPreferences.getInstance();
+    // The plugin reports a write it could not make (Android's commit()
+    // returning false) as false, not as an exception, so it is turned into
+    // one here for [_persist] to see.
+    Future<void> saved(Future<bool> write) async {
+      if (!await write) throw StateError('A storage write failed');
+    }
+
     if (tx) {
       // Ordering guard: two rapid mutations both persist, and with the
       // isolate codec the OLDER encode can finish LAST — writing it would
@@ -2145,95 +2173,117 @@ class FinanceProvider extends ChangeNotifier {
         _txWriteDispatched = seq;
         final write = prefs.setString(_txKey, blob);
         _txWriteInFlight = write;
-        await write;
+        await saved(write);
       } else {
-        // A newer write carries these rows too; return once it has landed.
-        await _txWriteInFlight;
+        // A newer write carries these rows too; return once it has landed,
+        // and fail as it fails.
+        await saved(_txWriteInFlight!);
       }
     }
     if (rules) {
-      await prefs.setString(
-        _rulesKey,
-        jsonEncode(_rules.map((r) => r.toJson()).toList()),
+      await saved(
+        prefs.setString(
+          _rulesKey,
+          jsonEncode(_rules.map((r) => r.toJson()).toList()),
+        ),
       );
     }
     if (accounts) {
-      await prefs.setString(
-        _accountsKey,
-        jsonEncode(_accounts.map((a) => a.toJson()).toList()),
+      await saved(
+        prefs.setString(
+          _accountsKey,
+          jsonEncode(_accounts.map((a) => a.toJson()).toList()),
+        ),
       );
     }
     if (importRules) {
-      await prefs.setString(
-        _importRulesKey,
-        jsonEncode(_importRules.map((r) => r.toJson()).toList()),
+      await saved(
+        prefs.setString(
+          _importRulesKey,
+          jsonEncode(_importRules.map((r) => r.toJson()).toList()),
+        ),
       );
     }
     if (categories) {
-      await prefs.setString(
-        _customCategoriesKey,
-        jsonEncode(customCategories.map((c) => c.toJson()).toList()),
+      await saved(
+        prefs.setString(
+          _customCategoriesKey,
+          jsonEncode(customCategories.map((c) => c.toJson()).toList()),
+        ),
       );
     }
     if (overrides) {
-      await prefs.setString(
-        _builtinOverridesKey,
-        jsonEncode(builtinOverrides.values.map((c) => c.toJson()).toList()),
+      await saved(
+        prefs.setString(
+          _builtinOverridesKey,
+          jsonEncode(builtinOverrides.values.map((c) => c.toJson()).toList()),
+        ),
       );
     }
     if (groups) {
-      await prefs.setString(
-        _groupsKey,
-        jsonEncode({
-          'groups': _groups.map((g) => g.toJson()).toList(),
-          'assignments': _groupAssignments,
-        }),
+      await saved(
+        prefs.setString(
+          _groupsKey,
+          jsonEncode({
+            'groups': _groups.map((g) => g.toJson()).toList(),
+            'assignments': _groupAssignments,
+          }),
+        ),
       );
     }
     if (budgets) {
-      await prefs.setString(
-        _budgetsKey,
-        jsonEncode(_budgets.map((b) => b.toJson()).toList()),
+      await saved(
+        prefs.setString(
+          _budgetsKey,
+          jsonEncode(_budgets.map((b) => b.toJson()).toList()),
+        ),
       );
     }
     if (aliases) {
-      await prefs.setString(_merchantAliasesKey, jsonEncode(_merchantAliases));
+      await saved(
+        prefs.setString(_merchantAliasesKey, jsonEncode(_merchantAliases)),
+      );
     }
     if (reminders) {
-      await prefs.setString(
-        _remindersKey,
-        jsonEncode(_reminders.map((r) => r.toJson()).toList()),
+      await saved(
+        prefs.setString(
+          _remindersKey,
+          jsonEncode(_reminders.map((r) => r.toJson()).toList()),
+        ),
       );
     }
     // One flag, several keys: a collection that failed to load stays as
     // stored (it loaded empty), so a change to another cannot overwrite it.
     if (marks && !_loadWarnings.contains('tag colours')) {
-      await prefs.setString(_tagColorsKey, jsonEncode(_tagColors));
+      await saved(prefs.setString(_tagColorsKey, jsonEncode(_tagColors)));
     }
     if (marks && !_loadWarnings.contains('tag names')) {
-      await prefs.setString(_tagNamesKey, jsonEncode(_savedTags));
+      await saved(prefs.setString(_tagNamesKey, jsonEncode(_savedTags)));
     }
     if (marks && !_loadWarnings.contains('saved filters')) {
-      await prefs.setString(
-        _savedFiltersKey,
-        jsonEncode(_savedFilters.map((f) => f.toJson()).toList()),
+      await saved(
+        prefs.setString(
+          _savedFiltersKey,
+          jsonEncode(_savedFilters.map((f) => f.toJson()).toList()),
+        ),
       );
     }
     if (marks && !_loadWarnings.contains('subscription marks')) {
-      await prefs.setString(
-        _subscriptionPinsKey,
-        jsonEncode({
-          for (final e in _subscriptionPins.entries) e.key: e.value.name,
-        }),
+      await saved(
+        prefs.setString(
+          _subscriptionPinsKey,
+          jsonEncode({
+            for (final e in _subscriptionPins.entries) e.key: e.value.name,
+          }),
+        ),
       );
     }
     if (marks && !_loadWarnings.contains('payment marks')) {
-      await prefs.setString(_patternPaidKey, jsonEncode(_patternPaid));
+      await saved(prefs.setString(_patternPaidKey, jsonEncode(_patternPaid)));
     }
     if (discards) {
-      await prefs.setStringList(
-        _discardedImportsKey,
-        _discardedImports.toList(),
+      await saved(
+        prefs.setStringList(_discardedImportsKey, _discardedImports.toList()),
       );
     }
   }
@@ -3642,9 +3692,17 @@ class FinanceProvider extends ChangeNotifier {
     List<ClassifierRule> rules,
     String text,
     TxType type,
+  ) => _matchRuleInLowered(rules, text.toLowerCase(), type);
+
+  /// [_matchRuleIn] for a [lowered] text: the row's text is lower-cased
+  /// once, not once per rule.
+  ClassifierRule? _matchRuleInLowered(
+    List<ClassifierRule> rules,
+    String lowered,
+    TxType type,
   ) {
     for (final r in rules) {
-      if (!r.matches(text)) continue;
+      if (!r.matchesLowered(lowered)) continue;
       if (r.isSpamRule || categoryById(r.categoryId).type == type) return r;
     }
     return null;
@@ -3789,9 +3847,10 @@ class FinanceProvider extends ChangeNotifier {
       if (t.source != TxSource.sms || t.userCategorized) continue;
       final text = t.smsBody;
       if (text.isEmpty) continue;
+      final lowered = text.toLowerCase();
       // The cheap test first: the dialog asks on every change to a field.
-      if (!setMore.any((r) => r.matches(text))) continue;
-      final rule = _matchRuleIn(rules, text, t.type);
+      if (!setMore.any((r) => r.matchesLowered(lowered))) continue;
+      final rule = _matchRuleInLowered(rules, lowered, t.type);
       if (rule == null || rule.isSpamRule) continue;
       final next = _resorted(
         t,
@@ -5561,10 +5620,9 @@ class FinanceProvider extends ChangeNotifier {
     final double? outstanding;
     OutstandingBlocker? outstandingBlocker;
     if (manualIsNewer) {
-      outstanding = (acc.manualBalance! - deltaAfterManual).clamp(
-        0,
-        double.infinity,
-      );
+      // No floor: below zero the card is in credit, as when a refund lands
+      // after the bill was paid in full.
+      outstanding = acc.manualBalance! - deltaAfterManual;
     } else if (limit == null || anchor == null || limitCollapsed) {
       outstanding = null;
       // Cards only — a bank reaching this branch is normal, not blocked.
@@ -5576,10 +5634,10 @@ class FinanceProvider extends ChangeNotifier {
             : OutstandingBlocker.limitUnknown;
       }
     } else {
-      outstanding = (limit - anchor.balanceAfter! - deltaAfterAnchor).clamp(
-        0,
-        double.infinity,
-      );
+      final owed = limit - anchor.balanceAfter! - deltaAfterAnchor;
+      // A user-entered limit lets the card go into credit. A guessed one
+      // keeps the floor: below zero there may just mean the guess is low.
+      outstanding = limitIsEstimated ? math.max(0.0, owed) : owed;
     }
 
     return _AccountFigures(
@@ -5600,6 +5658,10 @@ class FinanceProvider extends ChangeNotifier {
       txCount: all.length,
       rowsSinceSource: rowsSinceSource,
       outstandingBlocker: outstandingBlocker,
+      alertAboveLimit:
+          balanceSource == BalanceSource.alert &&
+          !limitIsEstimated &&
+          anchor!.balanceAfter! > limit! + 0.005,
     );
   }
 
@@ -5652,6 +5714,12 @@ class FinanceProvider extends ChangeNotifier {
   /// [_computeFigures]. Callers should prompt for the real credit limit rather
   /// than render a zero.
   double? accountOutstanding(Account account) => _figures(account).outstanding;
+
+  /// Whether [account]'s figure comes from a bank alert stating more
+  /// available than the limit the user entered. In credit, that is either a
+  /// real credit or a limit the bank has raised since: the tile asks.
+  bool cardAlertAboveLimit(Account account) =>
+      _figures(account).alertAboveLimit;
 
   /// Cards whose amount owed is unknowable until the user enters their total
   /// credit limit. Surfaced in the balance breakdown so the headline figure
@@ -5722,8 +5790,19 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Sum of credit-card outstanding amounts (0 where unknown — see
   /// [cardsMissingLimit], which counts what this is silently omitting).
-  double get cardOutstandingTotal =>
-      _cardTotalAccounts.fold(0.0, (s, a) => s + (accountOutstanding(a) ?? 0));
+  /// Only cards that owe add to it, so one card in credit never hides
+  /// another card's due.
+  double get cardOutstandingTotal => _cardTotalAccounts.fold(
+    0.0,
+    (s, a) => s + math.max(0.0, accountOutstanding(a) ?? 0),
+  );
+
+  /// What the banks owe back on cards in credit, as a positive sum. A card
+  /// counts only past half a paisa, so rounding never shows "₹0.00".
+  double get cardCreditTotal => _cardTotalAccounts.fold(0.0, (s, a) {
+    final o = accountOutstanding(a) ?? 0;
+    return o < -0.005 ? s - o : s;
+  });
 
   /// How many cards owe something: the ones that add more than zero to
   /// [cardOutstandingTotal]. A card known to owe nothing is not counted.
@@ -5738,12 +5817,16 @@ class FinanceProvider extends ChangeNotifier {
       .where((a) => !a.isClosed && (_isBankLike(a) || a.isCard || a.isCash))
       .length;
 
-  /// Liquid money on hand: bank and cash balances minus card outstanding.
+  /// Liquid money on hand: bank and cash balances minus card outstanding,
+  /// plus credit on cards.
   /// Savings/asset accounts are NOT included — they aren't spendable. The
   /// authoritative figure once accounts exist, since bank-stated balances
   /// don't depend on the SMS history being complete.
   double get netWorth =>
-      bankBalanceTotal + cashBalanceTotal - cardOutstandingTotal;
+      bankBalanceTotal +
+      cashBalanceTotal -
+      cardOutstandingTotal +
+      cardCreditTotal;
 
   /// Open wallets' balances in ₹, points at their value. Shown beside net
   /// balance, never inside it: wallet money only spends on its platform.
@@ -6258,8 +6341,8 @@ class FinanceProvider extends ChangeNotifier {
   Future<void> setCreditLimit(String id, double? limit) async {
     final i = _accounts.indexWhere((a) => a.id == id);
     if (i == -1) return;
-    // A zero/negative limit isn't a limit: outstanding would clamp to 0
-    // and the tile reads "₹0 owed" while money is genuinely owed. Clearing
+    // A zero/negative limit isn't a limit: outstanding would read as zero
+    // or as credit while money is genuinely owed. Clearing
     // is expressed with null only.
     if (limit != null && (!limit.isFinite || limit <= 0)) return;
     _accounts[i] = limit == null
@@ -6558,8 +6641,8 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Folds [sourceId] into [targetId]: the target absorbs all of the source's
   /// keys (so its transactions resolve to the target) and the source is
-  /// removed. Transactions are never rewritten. A saved filter on the
-  /// source lists the target from then on.
+  /// removed. Transactions are never rewritten. A saved filter or a reminder
+  /// on the source is on the target from then on.
   Future<void> mergeAccounts(String sourceId, String targetId) async {
     if (sourceId == targetId) return;
     final si = _accounts.indexWhere((a) => a.id == sourceId);
@@ -6596,9 +6679,21 @@ class FinanceProvider extends ChangeNotifier {
     final filtersChanged = _editSavedFilters(
       (f) => f.accountId == sourceId ? f.copyWith(accountId: targetId) : f,
     );
+    // Left on the source, a reminder would point at an account that no
+    // longer exists, as importData already avoids for a folded account.
+    var remindersChanged = false;
+    for (var j = 0; j < _reminders.length; j++) {
+      if (_reminders[j].accountId != sourceId) continue;
+      _reminders[j] = _reminders[j].copyWith(accountId: targetId);
+      remindersChanged = true;
+    }
     _rebuildKeyIndex();
     notifyListeners();
-    await _persist(accounts: true, marks: filtersChanged);
+    await _persist(
+      accounts: true,
+      marks: filtersChanged,
+      reminders: remindersChanged,
+    );
   }
 
   /// Deletes an account. Its transactions remain but become unassigned
@@ -7619,8 +7714,20 @@ class FinanceProvider extends ChangeNotifier {
   /// treated as the same bank alert sent twice, unless both are inbox alerts
   /// stating different balances after them. Fuzzy matching is only used to
   /// *skip* an import, never to touch existing user data.
-  Future<(int, int, int)> addImported(List<ParsedTxn> parsed) async {
+  Future<(int, int, int)> addImported(List<ParsedTxn> incoming) async {
     _lastImportCounted = 0;
+    // A row whose amount is not a finite figure up to the parser's ceiling,
+    // or whose stated balance is not finite, is skipped. The paise
+    // conversion below throws on such an amount and the ledger encode
+    // rejects such a balance, so one bad row would stop this import and,
+    // never saved, every later one.
+    final parsed = [
+      for (final p in incoming)
+        if (p.amount.isFinite &&
+            p.amount.abs() <= SmsTxnParser.maxAmount &&
+            (p.balanceAfter?.isFinite ?? true))
+          p,
+    ];
     if (parsed.isEmpty) return (0, 0, 0);
     // This call's own figure: _lastImportCounted can be reset by another
     // import while this one awaits its save.

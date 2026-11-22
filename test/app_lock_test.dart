@@ -83,6 +83,32 @@ void main() {
         reason: 'threshold itself counts',
       );
     });
+
+    test('a clock set back while away re-locks', () {
+      // Set back by hours, so the time away comes out negative.
+      expect(
+        shouldLock(
+          enabled: true,
+          backgroundedAt: now.add(const Duration(hours: 5)),
+          now: now,
+        ),
+        isTrue,
+      );
+      // Any step back counts: the time away cannot be known.
+      expect(
+        shouldLock(
+          enabled: true,
+          backgroundedAt: now.add(const Duration(seconds: 1)),
+          now: now,
+        ),
+        isTrue,
+      );
+      // Unchanged clock, no time away: still a quick switch.
+      expect(
+        shouldLock(enabled: true, backgroundedAt: now, now: now),
+        isFalse,
+      );
+    });
   });
 
   group('what an unlock attempt reports', () {

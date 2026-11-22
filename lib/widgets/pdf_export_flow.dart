@@ -25,43 +25,18 @@ Future<void> exportPdfWithRange(
     if (picked == null || !context.mounted) return;
     range = picked.range;
   }
-  // A barrier: a full-ledger report takes a moment, and no second tap may
-  // start another.
-  final navigator = Navigator.of(context, rootNavigator: true);
-  unawaited(
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => const PopScope(
-        canPop: false,
-        child: Dialog(
-          child: Padding(
-            padding: EdgeInsets.all(24),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                SizedBox(
-                  width: 24,
-                  height: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2.5),
-                ),
-                SizedBox(width: 16),
-                Flexible(child: Text('Building PDF report…')),
-              ],
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
   String? path;
   Object? error;
   try {
-    path = await BackupService.exportPdf(finance, range: range);
+    // A barrier: a full-ledger report takes a moment, and no second tap may
+    // start another.
+    path = await withBusySpinner(
+      context,
+      'Building PDF report…',
+      () => BackupService.exportPdf(finance, range: range),
+    );
   } catch (e) {
     error = e;
-  } finally {
-    if (navigator.mounted) navigator.pop();
   }
   if (error != null) {
     showAppToastOn(
@@ -76,5 +51,56 @@ Future<void> exportPdfWithRange(
       tone: AppToastTone.success,
       icon: Icons.download_done,
     );
+  }
+}
+
+/// Runs [work] behind a spinner dialog that no tap or back press closes,
+/// and closes that dialog when [work] ends, however it ends.
+///
+/// The dialog's own route is removed, never the top one: a page pushed over
+/// the spinner meanwhile (a home-screen widget opening Cockpit) stays, and
+/// the spinner does not outlive its work.
+Future<T> withBusySpinner<T>(
+  BuildContext context,
+  String label,
+  Future<T> Function() work,
+) async {
+  final navigator = Navigator.of(context, rootNavigator: true);
+  // As showDialog builds it, kept so this exact route can be removed.
+  final route = DialogRoute<void>(
+    context: context,
+    themes: InheritedTheme.capture(from: context, to: navigator.context),
+    barrierColor: DialogTheme.of(context).barrierColor ?? Colors.black54,
+    barrierDismissible: false,
+    builder: (_) => PopScope(
+      canPop: false,
+      child: Dialog(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2.5),
+              ),
+              const SizedBox(width: 16),
+              Flexible(child: Text(label)),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+  unawaited(navigator.push(route));
+  try {
+    return await work();
+  } finally {
+    if (route.isCurrent) {
+      navigator.pop();
+    } else if (route.isActive) {
+      navigator.removeRoute(route);
+    }
   }
 }

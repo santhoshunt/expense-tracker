@@ -106,6 +106,14 @@ Future<void> showBalanceBreakdownSheet(
                         label: 'Credit card outstanding',
                         amount: '−${fmtMoney(finance.cardOutstandingTotal)}',
                       ),
+                      // Money the banks owe back on cards adds to the net.
+                      if (finance.cardCreditTotal > 0)
+                        BreakdownRow(
+                          icon: Icons.credit_card,
+                          color: AppColors.of(ctx).green,
+                          label: 'Credit on cards',
+                          amount: '+${fmtMoney(finance.cardCreditTotal)}',
+                        ),
                       // Cards with no total credit limit contribute nothing above,
                       // so say so — otherwise the net figure reads as complete
                       // when it is quietly optimistic.

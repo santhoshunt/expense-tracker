@@ -90,7 +90,10 @@ String fmtMonth(DateTime d) => _monthYear.format(d);
 /// that treats a failed parse as "no value" turns "45,000" into a silent
 /// *clear* of the very balance the user was trying to set.
 double? parseAmount(String raw) {
-  final cleaned = raw.replaceAll(RegExp(r'[₹,\s]'), '');
+  // A leading true minus "−", as the app prints it, reads as a hyphen.
+  final cleaned = raw
+      .replaceAll(RegExp(r'[₹,\s]'), '')
+      .replaceFirst(RegExp('^\u{2212}'), '-');
   if (cleaned.isEmpty) return null;
   // tryParse accepts "NaN" and "Infinity"; neither is an amount, and NaN
   // throws the moment anything rounds it.

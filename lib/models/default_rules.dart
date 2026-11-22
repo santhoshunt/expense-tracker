@@ -84,6 +84,7 @@ const List<String> kDefaultIgnorePhrases = [
   // 'statement' intentionally omitted: too broad — Yes Bank and many others
   // include "For statement enquiry call …" in the footer of genuine alerts.
   ...kIgnorePhrasesAddedV128,
+  ...kIgnorePhrasesAddedV231,
 ];
 
 /// Added in 1.28: bill and card-due reminders ("… is due on 15-Jan. Ignore
@@ -97,6 +98,17 @@ const List<String> kIgnorePhrasesAddedV128 = [
   'is blocked',
   'received today for processing',
   'e-voucher',
+];
+
+/// Added in 2.3.1, and seeded once more for existing users as the 1.28
+/// list was: a card-due reminder that ends "Please ignore if already paid",
+/// and a failed payment that says "if your a/c was debited, the amount
+/// will be refunded". Both name an amount and a verb, so only a phrase
+/// tells them from a real alert.
+const List<String> kIgnorePhrasesAddedV231 = [
+  'ignore if already paid',
+  'unsuccessful',
+  'not successful',
 ];
 
 /// Signals that a parsed transaction is likely promotional or informational

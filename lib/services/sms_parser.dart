@@ -117,11 +117,52 @@ class SmsTxnParser {
   // which needs decimals so a date ("credited by 05-07-2026") never reads as
   // an amount. Read through [_amountText].
   // The paise form must end there: "INR.5000.00" is not ₹0.50.
+  // "Rs" and "INR" must not follow a letter: in "2 burgers 1 coke" the
+  // "rs 1" inside "burgers" read as the amount. A digit run longer than any
+  // real figure never matches, so it is not read as a cut-off number, and
+  // one of 309 digits or more would parse to Infinity.
   static final RegExp _amountRe = RegExp(
-    r'(?:rs[.:]?|inr[.:]?|₹)\s*(\.\d{1,2}(?!\.?\d)|\d[\d,]*(?:\.\d{1,2})?)'
-    r'|(?<=\b(?:debited|credited)\s+by\s+)(\d[\d,]*\.\d{1,2})\b',
+    r'(?:(?<![a-z])(?:rs|inr)[.:]?|₹)\s*'
+    r'(\.\d{1,2}(?!\.?\d)|\d[\d,]{0,24}(?![\d,])(?:\.\d{1,2})?)'
+    r'|(?<=\b(?:debited|credited)\s+by\s+)(\d[\d,]{0,24}\.\d{1,2})\b',
     caseSensitive: false,
   );
+
+  /// The largest amount or balance the parser reads, in rupees. A bigger
+  /// figure is a misread or a broken message, and every figure up to this
+  /// one still converts to whole paise exactly.
+  static const double maxAmount = 1e12;
+
+  /// The amount [m] states, or null when it is not a positive finite figure
+  /// up to [maxAmount].
+  static double? _readAmount(RegExpMatch m) {
+    final v = double.tryParse(_amountText(m).replaceAll(',', ''));
+    if (v == null || !v.isFinite || v <= 0 || v > maxAmount) return null;
+    return v;
+  }
+
+  /// Patterns read at most this many characters of a body. A real alert
+  /// states its amount, account and verbs well inside it, and the cap keeps
+  /// the cost of a very long message bounded.
+  static const int _maxMatchLength = 2000;
+
+  /// A whitespace run longer than this is collapsed before patterns run.
+  /// Shorter runs are left alone, so a normal alert reaches the patterns
+  /// unchanged.
+  static final RegExp _longSpaceRunRe = RegExp(r'\s{33,}');
+
+  /// The text the patterns read for [body]: each long whitespace run
+  /// collapsed to one newline (when it held one) or one space, then cut to
+  /// [_maxMatchLength]. Only for matching: the stored text, and the
+  /// duplicate keys built from it, keep the body as it arrived.
+  static String _forMatching(String body) {
+    var s = body.replaceAllMapped(
+      _longSpaceRunRe,
+      (m) => m[0]!.contains('\n') ? '\n' : ' ',
+    );
+    if (s.length > _maxMatchLength) s = s.substring(0, _maxMatchLength);
+    return s;
+  }
 
   static String _amountText(RegExpMatch m) => m.group(1) ?? m.group(2)!;
 
@@ -138,8 +179,13 @@ class SmsTxnParser {
     caseSensitive: false,
   );
 
+  // The name starts with a non-space character, so only `\s+` can take the
+  // spaces after the keyword. When the name could start with a space too,
+  // a long run of spaces took seconds to reject.
   static final RegExp _merchantRe = RegExp(
-    r"\b(?:at|to|from|towards|info:?|vpa)\s+([A-Za-z0-9@._'&*\- ]{2,50}?)(?=\s+(?:on|via|ref|upi|avl|bal|a/c|ac|dt)\b|[.,;\n]|$)",
+    r"\b(?:at|to|from|towards|info:?|vpa)\s+"
+    r"([A-Za-z0-9@._'&*\-][A-Za-z0-9@._'&*\- ]{1,49}?)"
+    r"(?=\s+(?:on|via|ref|upi|avl|bal|a/c|ac|dt)\b|[.,;\n]|$)",
     caseSensitive: false,
   );
 
@@ -206,9 +252,15 @@ class SmsTxnParser {
   // Indian Bank's "Avl Bal- Rs.", BOB's "Available credit limit is". A
   // trailing "CR"/"DR" belongs to the figure, so it is never read as a
   // credit or debit verb.
+  //
+  // Each optional word carries its own trailing spaces, so one run of
+  // spaces can be taken by one loop only. With a bare `\s*` between every
+  // optional word, a run of a few hundred spaces took seconds to reject.
+  // The figure's digit run is bounded as in [_amountRe].
   static final RegExp _balanceAfterRe = RegExp(
     r'(?:avl|avail|available(?:\s+credit)?|avbl|avb|aval|avlbl|a\/v)\.?\s*(?:bal(?:ance)?|lmt|limit|lim)\.?'
-    r'\s*(?:is|of)?\s*[:.\-]?\s*(?:rs[.:]?|inr[.:]?|₹)?\s*([\d,]+(?:\.\d{1,2})?)'
+    r'\s*(?:(?:is|of)\s*)?(?:[:.\-]\s*)?(?:(?:rs[.:]?|inr[.:]?|₹)\s*)?'
+    r'([\d,]{1,25}(?![\d,])(?:\.\d{1,2})?)'
     r'(?:\s*(?:cr|dr)\b\.?)?',
     caseSensitive: false,
   );
@@ -217,11 +269,13 @@ class SmsTxnParser {
   // "Total Bal", "New Bal", "Current Bal" (Canara, AU, Federal, IDFC, BOB,
   // IndusInd). A "bal" after a word naming some other figure (a minimum,
   // an outstanding loan, reward points) is not the account's balance.
+  // Spaces are split between loops as in [_balanceAfterRe].
   static final RegExp _bareBalanceRe = RegExp(
     r'(?<![a-z])(?<!(?:minimum|min|average|avg|sufficient|maintain|monthly'
     r'|outstanding|o\/s|loan|principal|points?|rewards?|due|emi)\.?\s+)'
-    r'bal(?:ance)?\.?\s*(?:is|of)?\s*[:.\-]?\s*(?:rs[.:]?|inr[.:]?|₹)?\s*'
-    r'([\d,]+(?:\.\d{1,2})?)(?:\s*(?:cr|dr)\b\.?)?',
+    r'bal(?:ance)?\.?\s*(?:(?:is|of)\s*)?(?:[:.\-]\s*)?'
+    r'(?:(?:rs[.:]?|inr[.:]?|₹)\s*)?'
+    r'([\d,]{1,25}(?![\d,])(?:\.\d{1,2})?)(?:\s*(?:cr|dr)\b\.?)?',
     caseSensitive: false,
   );
 
@@ -231,6 +285,14 @@ class SmsTxnParser {
     for (final m in _bareBalanceRe.allMatches(body)) (m.start, m.end),
   ];
 
+  /// Put before a debit or credit verb: after "be", "not" or "if" the verb
+  /// is a promise, a failure or a condition ("will be debited", "has not
+  /// been credited", "if debited"), also with "auto" between ("will be
+  /// auto-debited"). "Has been debited" still counts. A message needs at
+  /// least one verb for money that has moved.
+  static const String _notDoneGuard =
+      r'(?<!\b(?:be|not|not\s+been|if)\s+(?:auto[\s-]?)?)';
+
   // Verbs are matched on word boundaries: a bare `credit` would also match
   // "Credit Card" and turn card promos into six-figure incomes. The
   // boundaries are letters only, so Federal's "Rs.1100credited" still reads.
@@ -239,7 +301,8 @@ class SmsTxnParser {
     // "charged" covers card-swipe confirmations: "Rs X charged to your card"
     // "Dr." (Canara, AU, BOB) only before an amount or from/to, never
     // "Dr. Sharma"; "Txn Rs.X" is HDFC's card UPI alert; "w/d" SBI's ATM.
-    r'(?<![a-z])(debited|spent|sent|paid|withdrawn|purchase|deducted|charged|used'
+    '(?<![a-z])$_notDoneGuard'
+    r'(debited|spent|sent|paid|withdrawn|purchase|deducted|charged|used'
     r'|w\/d|transferred(?=\s+from\b)|txn(?=\s+(?:rs|inr|₹))|done(?=\s+at\b)'
     r'|dr\.?(?=\s*(?:inr|rs|₹|from\b|to\b)))(?![a-z])',
     caseSensitive: false,
@@ -276,7 +339,8 @@ class SmsTxnParser {
     // spend" or a balance's trailing "CR."; "Transaction Reversed!" is
     // HDFC's card refund.
     // "will be reversed if unauthorised" is a promise, not money back.
-    r'(?<![a-z])(credited|received|deposited|refunded|refund|(?<!be\s)reversed'
+    '(?<![a-z])$_notDoneGuard'
+    r'(credited|received|deposited|refunded|refund|(?<!be\s)reversed'
     r'|cr\.?(?=\s*(?:inr|rs|₹|to\s+(?:your\s+)?(?:a\/?c|acct|account)\b)))'
     r'(?![a-z])',
     caseSensitive: false,
@@ -493,7 +557,11 @@ class SmsTxnParser {
   /// [accountKeyOf] plus whether the fragment named a debit card
   /// ("Debit Card XX5678"): (key, isCard, isDebitCard). A bare masked
   /// number or an "a/c" fragment is never a debit card.
-  static (String?, bool, bool) accountKeyAndKindOf(String sender, String body) {
+  static (String?, bool, bool) accountKeyAndKindOf(
+    String sender,
+    String message,
+  ) {
+    final body = _forMatching(message);
     final senderCode = bankCodeOf(sender);
     for (final m in _acctKeyRe.allMatches(body)) {
       // The bank name sits directly before the fragment keyword
@@ -678,16 +746,22 @@ class SmsTxnParser {
   }
 
   /// The bank reference (UPI ref, RRN, UTR, IMPS number), or null.
-  static String? refOf(String body) => _refRe.firstMatch(body)?.group(1);
+  static String? refOf(String body) =>
+      _refRe.firstMatch(_forMatching(body))?.group(1);
 
   /// Extracts the `Avl Bal` / `Avl Lmt` figure, else a bare `Bal` one, or
   /// null when absent. "Outstanding Bal Rs.12,000. Avl Lmt Rs.88,000" is
-  /// 88,000: the prefixed figure wins wherever it sits.
-  static double? balanceAfterOf(String body) {
+  /// 88,000: the prefixed figure wins wherever it sits. A figure that is not
+  /// finite or is above [maxAmount] counts as absent: a non-finite one would
+  /// make every later save fail.
+  static double? balanceAfterOf(String message) {
+    final body = _forMatching(message);
     final m =
         _balanceAfterRe.firstMatch(body) ?? _bareBalanceRe.firstMatch(body);
     if (m == null) return null;
-    return double.tryParse(m.group(1)!.replaceAll(',', ''));
+    final v = double.tryParse(m.group(1)!.replaceAll(',', ''));
+    if (v == null || !v.isFinite || v > maxAmount) return null;
+    return v;
   }
 
   /// [balanceAfterOf] as v1.27 read it. Kept ONLY for the v5 migration, to
@@ -709,9 +783,10 @@ class SmsTxnParser {
   /// [ignorePhrases] defaults to the built-ins; the import service passes the
   /// user's editable import rules instead.
   static bool bodyLooksTransactional(
-    String body, {
+    String message, {
     List<String> ignorePhrases = kDefaultIgnorePhrases,
   }) {
+    final body = _forMatching(message);
     // Word-boundary matching, same as classifier rules — raw `contains`
     // let signals fire inside words ("earn" in "Learn more").
     for (final p in ignorePhrases) {
@@ -754,7 +829,7 @@ class SmsTxnParser {
   /// rather than a DLT code.
   static ParsedTxn? parse(
     String sender,
-    String body,
+    String message,
     DateTime smsDate, {
     bool relaxedSender = false,
     List<String> ignorePhrases = kDefaultIgnorePhrases,
@@ -764,16 +839,15 @@ class SmsTxnParser {
         senderLooksFinancial(sender) ||
         (relaxedSender && senderLooksBankBrand(sender));
     if (!senderOk) return null;
+    final body = _forMatching(message);
     if (!bodyLooksTransactional(body, ignorePhrases: ignorePhrases)) {
       return null;
     }
 
     final amountMatch = _pickAmountMatch(body);
     if (amountMatch == null) return null;
-    final amount = double.tryParse(
-      _amountText(amountMatch).replaceAll(',', ''),
-    );
-    if (amount == null || amount <= 0) return null;
+    final amount = _readAmount(amountMatch);
+    if (amount == null) return null;
 
     var type = _direction(body, amountMatch.start);
     if (type == null) return null;
@@ -799,7 +873,9 @@ class SmsTxnParser {
 
     final merchant = _merchant(body);
     final ref = refOf(body);
-    final date = resolveDateTime(body, smsDate);
+    // From the message as it arrived, as the stored text: the date is part of
+    // the duplicate keys, and the date and time patterns are linear.
+    final date = resolveDateTime(message, smsDate);
     // Categorisation is rule-driven (built-in keyword mappings are seeded as
     // editable ClassifierRules), except credit-card bill payments, which the
     // parser recognises structurally: issuer-side confirmations become
@@ -822,7 +898,8 @@ class SmsTxnParser {
       ref: ref,
       categoryId: categoryId,
       sender: sender.trim(),
-      rawBody: body.trim(),
+      // The message as it arrived: duplicate checks key on this text.
+      rawBody: message.trim(),
       spamSuspect: looksLikeSpam(body, spamSignals: spamSignals),
       acctKey: acctKey,
       balanceAfter: balanceAfterOf(body),
@@ -831,7 +908,7 @@ class SmsTxnParser {
     );
   }
 
-  /// True when [body] from [sender] passes the sender and transactional
+  /// True when [message] from [sender] passes the sender and transactional
   /// checks [parse] applies first, but yields no positive amount or no
   /// direction: a bank alert this parser cannot read, often because the
   /// bank changed its format. Promotions ([looksLikeSpam]) never count.
@@ -843,7 +920,7 @@ class SmsTxnParser {
   /// spend.
   static bool looksUnreadable(
     String sender,
-    String body, {
+    String message, {
     bool relaxedSender = false,
     List<String> ignorePhrases = kDefaultIgnorePhrases,
     List<String> spamSignals = kDefaultSpamSignals,
@@ -852,6 +929,7 @@ class SmsTxnParser {
         senderLooksFinancial(sender) ||
         (relaxedSender && senderLooksBankBrand(sender));
     if (!senderOk) return false;
+    final body = _forMatching(message);
     // A promotion quoting a limit ("available limit of Rs.1,50,000")
     // has no amount the parser takes, but it is no alert either.
     // Link signals are left out: real alerts carry "Not you? https://..."
@@ -870,18 +948,13 @@ class SmsTxnParser {
     }
     final amountMatch = _pickAmountMatch(body);
     if (amountMatch == null) return true;
-    final amount = double.tryParse(
-      _amountText(amountMatch).replaceAll(',', ''),
-    );
-    if (amount == null || amount <= 0) return true;
+    if (_readAmount(amountMatch) == null) return true;
     return _direction(body, amountMatch.start) == null;
   }
 
-  /// A debit or credit that has happened. After "be", "not" or "if" it is a
-  /// promise, a failure or a condition ("will be debited", "has not been
-  /// credited", "if debited"); "has been debited" still counts.
+  /// A debit or credit that has happened ([_notDoneGuard]).
   static final RegExp _doneVerbRe = RegExp(
-    r'(?<![a-z])(?<!\b(?:be|not|not\s+been|if)\s+)'
+    '(?<![a-z])$_notDoneGuard'
     r'(?:debited|credited|spent|withdrawn|deducted|charged)(?![a-z])',
     caseSensitive: false,
   );
@@ -947,11 +1020,12 @@ class SmsTxnParser {
   /// pipeline (dedup against existing transactions is not simulated).
   static String explain(
     String sender,
-    String body,
+    String message,
     DateTime smsDate, {
     List<String> ignorePhrases = kDefaultIgnorePhrases,
     List<String> spamSignals = kDefaultSpamSignals,
   }) {
+    final body = _forMatching(message);
     final strictOk = senderLooksFinancial(sender);
     final brandOk = senderLooksBankBrand(sender);
     if (!strictOk && !brandOk) {
@@ -975,10 +1049,7 @@ class SmsTxnParser {
                 'figure, not a transaction amount.'
           : 'Not imported. No amount in Rs, INR or ₹ found.';
     }
-    final amount = double.tryParse(
-      _amountText(amountMatch).replaceAll(',', ''),
-    );
-    if (amount == null || amount <= 0) {
+    if (_readAmount(amountMatch) == null) {
       return 'Not imported. The amount could not be read.';
     }
 
@@ -990,7 +1061,7 @@ class SmsTxnParser {
 
     final result = parse(
       sender,
-      body,
+      message,
       smsDate,
       relaxedSender: true,
       ignorePhrases: ignorePhrases,
@@ -1006,10 +1077,14 @@ class SmsTxnParser {
           )
         : '';
 
-    final timeSource =
-        _bodyTimeOfDay(body, near: _dateRe.firstMatch(body)?.end) != null
+    // Read from the message as it arrived, as [parse] reads the date.
+    final bodyTime = _bodyTimeOfDay(
+      message,
+      near: _dateRe.firstMatch(message)?.end,
+    );
+    final timeSource = bodyTime != null
         ? 'from the message'
-        : (_dateRe.hasMatch(body)
+        : (_dateRe.hasMatch(message)
               ? 'date from the message, time of arrival'
               : 'time of arrival');
 
@@ -1141,7 +1216,7 @@ class SmsTxnParser {
   /// Extracts the payee/merchant name from an alert body (`''` when none).
   /// Public: recurring-payment detection re-derives merchant identity from
   /// stored bodies, since [Tx] deliberately has no merchant field.
-  static String merchantOf(String body) => _merchant(body);
+  static String merchantOf(String body) => _merchant(_forMatching(body));
 
   /// Account/card fragments that the keyword regex can pick up first, e.g.
   /// "from Card XX7031 at AMAZON" → "Card XX7031".

@@ -15,6 +15,7 @@ import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/screens/people_screen.dart';
 import 'package:expense_tracker/screens/search_screen.dart';
+import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
 import 'package:expense_tracker/services/launch_actions.dart';
 import 'package:expense_tracker/services/monthly_recap.dart';
@@ -430,6 +431,109 @@ void main() {
           skipOffstage: false,
         ),
         findsNWidgets(2),
+      );
+    });
+
+    testWidgets('Subscriptions and Trip budget land over a typed add sheet', (
+      tester,
+    ) async {
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.addExpense;
+      await settle(tester);
+      await tester.enterText(addSheet, '432');
+      final typed = find.byWidgetPredicate(
+        (w) => w is EditableText && w.controller.text == '432',
+        skipOffstage: false,
+      );
+      final cockpit = find.byWidgetPredicate(
+        (w) => '${w.runtimeType}' == 'ClassifiersScreen',
+        skipOffstage: false,
+      );
+
+      LaunchActions.instance.pending.value = LaunchAction.openSubscriptions;
+      await settle(tester);
+      expect(typed, findsOneWidget, reason: 'the sheet stays under Cockpit');
+      // A repeat tap closes the Cockpit pages above the sheet, not the
+      // sheet, and stacks no second pair.
+      LaunchActions.instance.pending.value = LaunchAction.openBudgetsTab;
+      await settle(tester);
+      expect(find.text('Monthly budgets'), findsOneWidget);
+      expect(cockpit, findsNWidgets(2));
+      expect(typed, findsOneWidget);
+
+      // Back twice: the sheet again, its guard still asking first.
+      await tester.binding.handlePopRoute();
+      await settle(tester);
+      await tester.binding.handlePopRoute();
+      await settle(tester);
+      expect(cockpit, findsNothing);
+      expect(addSheet, findsOneWidget, reason: 'on screen again');
+      expect(typed, findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await settle(tester);
+      expect(find.text('Discard changes?'), findsOneWidget);
+    });
+
+    testWidgets("Search's Open in Transactions over a typed add sheet keeps "
+        'the sheet', (tester) async {
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.addExpense;
+      await settle(tester);
+      await tester.enterText(addSheet, '517');
+      LaunchActions.instance.pending.value = LaunchAction.openSearch;
+      await settle(tester);
+      expect(find.byType(SearchScreen), findsOneWidget);
+      // A results page, as a Show all or merchant tap pushes it.
+      Navigator.of(tester.element(find.byType(SearchScreen))).push(
+        MaterialPageRoute<void>(
+          builder: (_) => SearchPaymentsPage(
+            title: 'Test results',
+            rowsOf: (f) => f.transactions,
+            transactionsRequest: const TxFilterRequest(),
+          ),
+        ),
+      );
+      await settle(tester);
+
+      await tester.tap(find.byTooltip('Open in Transactions'));
+      await settle(tester);
+      expect(find.byType(SearchScreen, skipOffstage: false), findsNothing);
+      expect(addSheet, findsOneWidget, reason: 'the sheet is on top again');
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is EditableText && w.controller.text == '517',
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a Cockpit link to the dashboard over a typed add sheet '
+        'keeps the sheet', (tester) async {
+      await pumpHome(tester, seed: seed);
+      LaunchActions.instance.pending.value = LaunchAction.addExpense;
+      await settle(tester);
+      await tester.enterText(addSheet, '286');
+      LaunchActions.instance.pending.value = LaunchAction.openBudgetsTab;
+      await settle(tester);
+
+      // Monthly cap's tip links to the dashboard through AppNav.
+      await tester.tap(find.bySemanticsLabel('About Monthly cap'));
+      await settle(tester);
+      await tester.tap(find.text('Open the dashboard'));
+      await settle(tester);
+      expect(
+        find.byWidgetPredicate(
+          (w) => '${w.runtimeType}' == 'ClassifiersScreen',
+          skipOffstage: false,
+        ),
+        findsNothing,
+      );
+      expect(addSheet, findsOneWidget, reason: 'the sheet is on top again');
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is EditableText && w.controller.text == '286',
+        ),
+        findsOneWidget,
       );
     });
 

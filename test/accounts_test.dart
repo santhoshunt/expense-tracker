@@ -201,7 +201,9 @@ void main() {
     expect(p.accountOutstanding(card), closeTo(10000 - 5912.37 + 1850, 0.001));
   });
 
-  test('overpaying a card clamps outstanding at zero', () async {
+  test('overpaying a card with a set limit puts it in credit', () async {
+    // Since 2.3.1 a user-entered limit lets the figure go below zero: the
+    // bank owes the 15000 back, and available runs past the limit.
     final (p, cardId) = await anchoredCard([
       cardTxn(
         type: TxType.income,
@@ -212,8 +214,8 @@ void main() {
       ),
     ]);
     final card = p.accountById(cardId)!;
-    expect(p.accountOutstanding(card), 0);
-    expect(p.accountAvailable(card), 300000);
+    expect(p.accountOutstanding(card), -15000);
+    expect(p.accountAvailable(card), 315000);
   });
 
   test('a pending import does not raise the estimated credit limit', () async {

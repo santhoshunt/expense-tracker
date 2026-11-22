@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_palettes.dart';
+import 'contrast.dart';
 import 'figma_palette.dart';
 
 /// Theme-aware semantic colours (income green, warning orange, chart blue /
@@ -266,6 +267,13 @@ ThemeData _buildAppTheme({
     scrim: Colors.black,
   );
 
+  // Accent text on text buttons and the toast's action. The raw default
+  // accent read at 3.3:1 on white and 2.8:1 on the light toast fill, under
+  // the 4.5:1 text needs. Darkened against surface2, the toast fill, which
+  // is darker than white, bg and cards, so it passes on those too. Dark
+  // mode keeps the accent, as accentTextFor does.
+  final accentText = dark ? accent : darkenForContrast(accent, surface2, 4.5);
+
   // Cards carry a trace of the accent, echoing AmbientBackground's glow.
   final cardFill = cardFillFor(surface, accent, light: !dark);
   final appColors = (!dark ? AppColors.light : AppColors.dark).copyWith(
@@ -395,6 +403,9 @@ ThemeData _buildAppTheme({
             ),
           ),
     ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(foregroundColor: accentText),
+    ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         foregroundColor: textSecondary,
@@ -451,7 +462,7 @@ ThemeData _buildAppTheme({
       behavior: SnackBarBehavior.fixed,
       backgroundColor: surface2,
       contentTextStyle: TextStyle(fontSize: 14, color: textPrimary),
-      actionTextColor: accent,
+      actionTextColor: accentText,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadius.button),
         side: BorderSide(color: border),

@@ -25,7 +25,8 @@ class ImportHealthBanner extends StatefulWidget {
   State<ImportHealthBanner> createState() => _ImportHealthBannerState();
 }
 
-class _ImportHealthBannerState extends State<ImportHealthBanner> {
+class _ImportHealthBannerState extends State<ImportHealthBanner>
+    with WidgetsBindingObserver {
   ImportHealthState _health = ImportHealthState.empty;
   DateTime? _lastScan;
   Object? _rev;
@@ -33,23 +34,43 @@ class _ImportHealthBannerState extends State<ImportHealthBanner> {
   DateTime? _silentFor;
   Object? _silentRev;
 
+  /// Whether the app went to the background since the last resume.
+  bool _away = false;
+
   @override
   void initState() {
     super.initState();
     // An import that added no rows (every alert unreadable, say) does not
     // change the ledger, so it signals here instead.
     importHealthChanged.addListener(_onChanged);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
     importHealthChanged.removeListener(_onChanged);
+    WidgetsBinding.instance.removeObserver(this);
     // Gone with the card: it no longer counts.
     _report(false);
     super.dispose();
   }
 
-  void _onChanged() => unawaited(_reload());
+  void _onChanged() => unawaited(_reload(fromStorage: true));
+
+  /// Back from the background: the headless import may have written the
+  /// record and the scan marker from its own isolate, which only a read
+  /// from storage sees. Not on every resume: the notification shade passes
+  /// through inactive and back without leaving the app.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused) {
+      _away = true;
+    } else if (state == AppLifecycleState.resumed && _away) {
+      _away = false;
+      unawaited(_reload(fromStorage: true));
+    }
+  }
 
   /// Mounted cards that currently show a warning: the notice is up while
   /// any does, so a card going never clears one that is mounting.
@@ -70,9 +91,12 @@ class _ImportHealthBannerState extends State<ImportHealthBanner> {
     (_) => ImportHealthBanner.showing.value = _showingCards > 0,
   );
 
-  /// Read on a ledger change and on [importHealthChanged].
-  Future<void> _reload() async {
-    final health = await ImportHealth.load();
+  /// Read [fromStorage] on mount, on [importHealthChanged] and on a return
+  /// from the background; on a ledger change from the cached prefs. Delete
+  /// all data removes the record with no signal, so a ledger change still
+  /// reads it, but without re-reading every stored key.
+  Future<void> _reload({bool fromStorage = false}) async {
+    final health = await ImportHealth.load(fromStorage: fromStorage);
     var lastScan = await ImportHealth.lastScan();
     // With Read SMS revoked the marker stops, and silence measured to it
     // would never grow: that is the case the warning's advice names, so
@@ -109,16 +133,19 @@ class _ImportHealthBannerState extends State<ImportHealthBanner> {
     final finance = context.watch<FinanceProvider>();
     final now = DateTime.now();
     if (!identical(_rev, finance.revision)) {
+      // From storage only on the first build, the mount.
+      final mount = _rev == null;
       _rev = finance.revision;
       _silentFor = null;
-      unawaited(_reload());
+      unawaited(_reload(fromStorage: mount));
     }
     // Worked out again when the ledger or the last scan moves.
     if (_silentFor != _lastScan || _silentRev != _rev) {
       _silentFor = _lastScan;
       _silentRev = _rev;
       _silent = detectSilentBanks(
-        [...finance.transactions, ...finance.pendingTransactions],
+        // Walked once, without copying the ledger into a new list.
+        finance.transactions.followedBy(finance.pendingTransactions),
         now,
         scannedUntil: _lastScan,
       );

@@ -247,6 +247,17 @@ class _AccountsScreenState extends State<AccountsScreen> {
           amount: '−${fmtMoney(cardDue)}',
           color: moneyColor(context, type: TxType.expense),
         ),
+      // Money the banks owe back adds to the net, in the user's favour.
+      if (finance.cardCreditTotal > 0)
+        _NetLine(
+          label: const Text(
+            'Credit on cards',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          amount: fmtMoney(finance.cardCreditTotal),
+          color: moneyColor(context, type: TxType.income),
+        ),
     ];
 
     return Column(
@@ -848,6 +859,28 @@ class _AccountCard extends StatelessWidget {
                                                 Text(' due', style: muted),
                                               ],
                                             )
+                                          // In credit: money in the user's
+                                          // favour, in the income green.
+                                          : owed < -0.005
+                                          ? Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Text(
+                                                  fmtMoney(-owed),
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                    color: moneyColor(
+                                                      context,
+                                                      type: TxType.income,
+                                                    ),
+                                                  ),
+                                                ),
+                                                Text(
+                                                  ' credit balance',
+                                                  style: muted,
+                                                ),
+                                              ],
+                                            )
                                           : const Text(
                                               'Nothing due',
                                               style: TextStyle(
@@ -1317,11 +1350,20 @@ Future<void> showSetBalanceDialog(BuildContext context, Account account) async {
                 'go back to SMS figures only.',
     ),
     prefix: perPoint == null ? '₹ ' : null,
+    // A card can be in credit, typed as a minus: its keyboard has the key.
+    keyboard: isCard
+        ? const TextInputType.numberWithOptions(decimal: true, signed: true)
+        : const TextInputType.numberWithOptions(decimal: true),
     helperOf: (t) => perPoint != null && parseAmount(t.trim()) != null
         ? '= ${fmtMoney(parseAmount(t.trim())! * perPoint)}'
+        : isCard
+        ? 'Leave blank to clear it. A minus means the bank owes you.'
         : 'Leave blank to clear it',
     initial: manual == null
         ? ''
+        : isCard && manual < 0
+        // The true minus the app prints; parseAmount reads it back.
+        ? '−${(-manual).toStringAsFixed(2)}'
         : perPoint == null
         ? manual.toStringAsFixed(2)
         : fmtFieldNumber(manual / perPoint),
@@ -1343,6 +1385,8 @@ Future<void> showSetBalanceDialog(BuildContext context, Account account) async {
     messenger,
     value == null
         ? '${account.displayName} balance cleared'
+        : isCard && value < -0.005
+        ? '${account.displayName} set to ${fmtMoney(-value)} in credit'
         : '${account.displayName} balance set to ${fmtMoney(value)}',
     () => finance.restoreAccount(before),
     icon: Icons.account_balance_wallet_outlined,
@@ -1367,7 +1411,11 @@ String? _balanceNowLine(FinanceProvider finance, Account account) {
       'the sum of ${p.rowsSince} transaction${p.rowsSince == 1 ? '' : 's'}',
     _ => null,
   };
-  return source == null ? null : 'Now ${fmtMoney(figure)} · $source';
+  if (source == null) return null;
+  // A card below zero is in credit: the bank owes the user.
+  return account.isCard && figure < -0.005
+      ? 'Now ${fmtMoney(-figure)} in credit · $source'
+      : 'Now ${fmtMoney(figure)} · $source';
 }
 
 /// Count cash: the cash in hand now re-anchors a Cash account's balance
@@ -1839,6 +1887,10 @@ class _CardFigures extends StatelessWidget {
     final available = finance.accountAvailable(account);
     final limit = finance.accountCreditLimit(account);
     final p = finance.accountProvenance(account);
+    // Below zero the card is in credit: shown as a positive figure.
+    final credit = outstanding != null && outstanding < -0.005
+        ? -outstanding
+        : null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1848,7 +1900,7 @@ class _CardFigures extends StatelessWidget {
           children: [
             Flexible(
               child: Text(
-                'Outstanding',
+                credit != null ? 'Credit balance' : 'Outstanding',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: scheme.onSurfaceVariant),
@@ -1859,12 +1911,17 @@ class _CardFigures extends StatelessWidget {
               child: FittedBox(
                 fit: BoxFit.scaleDown,
                 // Plain text colour: the usage bar below carries the red.
+                // A credit is money in the user's favour, in green.
                 child: Text(
-                  outstanding == null ? 'Unknown' : fmtMoney(outstanding),
+                  outstanding == null
+                      ? 'Unknown'
+                      : fmtMoney(credit ?? outstanding),
                   style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
-                    color: scheme.onSurface,
+                    color: credit != null
+                        ? moneyColor(context, type: TxType.income)
+                        : scheme.onSurface,
                   ),
                 ),
               ),
@@ -1905,6 +1962,24 @@ class _CardFigures extends StatelessWidget {
             provenanceLine(p),
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
           ),
+          // An alert stating more available than the entered limit is a
+          // real credit or a limit the bank raised: the app cannot tell.
+          if (credit != null && finance.cardAlertAboveLimit(account)) ...[
+            const SizedBox(height: 4),
+            Text(
+              "The bank states more available than this card's limit. If "
+              'the limit went up, set the new one.',
+              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: LinkPill(
+                onTap: () => showCreditLimitDialog(context, account),
+                label: 'Set credit limit…',
+              ),
+            ),
+          ],
         ],
         if (outstanding != null && limit != null && available != null) ...[
           const SizedBox(height: 10),
@@ -1993,7 +2068,11 @@ class _CardFigures extends StatelessWidget {
                 return Text(
                   // Unknown is not zero: with no outstanding figure there
                   // is no telling whether anything is owed.
-                  outstanding == null ? 'Dues unknown' : 'No dues',
+                  outstanding == null
+                      ? 'Dues unknown'
+                      : credit != null
+                      ? 'No dues · ${fmtMoney(credit)} comes off the next bill'
+                      : 'No dues',
                   style: TextStyle(
                     color: scheme.onSurfaceVariant,
                     fontSize: 12,

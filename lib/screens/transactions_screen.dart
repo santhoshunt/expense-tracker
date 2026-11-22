@@ -801,6 +801,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     FinanceProvider finance,
     List<Tx> allConfirmed,
   ) {
+    transactionsPipelineRuns++;
     final filtered = _applyFilters(allConfirmed, finance, f);
 
     // Group by month, months always newest-first; sort within each month.
@@ -1265,9 +1266,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 final f = _Filter.values[i];
                 if (f != _filter) setState(() => _filter = f);
               },
+              // Each page is built only once the PageView mounts it, so a
+              // data change filters the tab on screen, not all four.
               children: [
                 for (final f in _Filter.values)
-                  _buildPage(f, finance, allConfirmed),
+                  Builder(builder: (_) => _buildPage(f, finance, allConfirmed)),
               ],
             ),
           ),
@@ -3911,6 +3914,11 @@ class _SelectedCount extends StatelessWidget {
     );
   }
 }
+
+/// How many times a tab's list was filtered, grouped and sorted, so a test
+/// can tell that a tab nobody looks at costs nothing.
+@visibleForTesting
+int transactionsPipelineRuns = 0;
 
 /// The smallest a selection-bar label may be scaled to fit, as a share of
 /// its size at the user's text scale.

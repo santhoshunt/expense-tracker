@@ -148,14 +148,22 @@ class ImportHealthState {
   static const empty = ImportHealthState({});
 }
 
-/// Reads and writes [kImportHealthKey]. Every call reloads from prefs, so a
-/// background engine's writes are seen the next time the app asks.
+/// Reads and writes [kImportHealthKey]. Writes reload from prefs first, so a
+/// background engine's writes are never lost.
 class ImportHealth {
   /// The record, without anything older than [kSilenceGiveUpDays]: a bank
   /// with no new misses would otherwise keep its sample texts for good.
-  static Future<ImportHealthState> load({DateTime? now}) async {
+  ///
+  /// [fromStorage] reloads prefs first, which re-reads every stored key
+  /// (the ledger among them), to see what the headless import wrote from
+  /// its own isolate. Without it the read comes from this isolate's cached
+  /// copy, which already holds this isolate's own writes.
+  static Future<ImportHealthState> load({
+    DateTime? now,
+    bool fromStorage = true,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.reload();
+    if (fromStorage) await prefs.reload();
     final cutoff = (now ?? DateTime.now()).subtract(
       const Duration(days: kSilenceGiveUpDays),
     );

@@ -3839,7 +3839,9 @@ class _BalanceCard extends StatelessWidget {
                               '${finance.cashBalanceCount > 0 ? '${fmtMoney(finance.cashBalanceTotal).startsWith('−') ? '−' : '+'} ${fmtMoney(finance.cashBalanceTotal.abs())} in cash ' : ''}'
                               '− '
                               '${fmtMoney(finance.cardOutstandingTotal)} '
-                              'on cards = ${fmtMoney(finance.netWorth)}',
+                              'on cards '
+                              '${finance.cardCreditTotal > 0 ? '+ ${fmtMoney(finance.cardCreditTotal)} credit on cards ' : ''}'
+                              '= ${fmtMoney(finance.netWorth)}',
                           link: const InfoLink(
                             prompt: 'A card missing its credit limit?',
                             label: 'Open accounts',

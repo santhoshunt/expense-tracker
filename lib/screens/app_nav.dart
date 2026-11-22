@@ -283,10 +283,9 @@ class AppNav {
     return id;
   }
 
-  void _toRoot(BuildContext context) =>
-      Navigator.of(context).popUntil((r) => r.isFirst);
+  void _toRoot(BuildContext context) => closePagesAboveGuard(context);
 
-  /// Closes any pushed routes and shows home tab [tab].
+  /// Closes pushed routes ([closePagesAboveGuard]) and shows home tab [tab].
   void openHomeTab(BuildContext context, int tab) {
     _toRoot(context);
     _setHomeTab?.call(tab);
@@ -339,6 +338,15 @@ class AppNav {
     );
   }
 }
+
+/// Pops pushed routes down to Home, stopping early at one that refuses a
+/// pop: the add sheet's PopScope keeps typed input behind a Discard prompt,
+/// which popUntil would skip, so its input would be lost unasked. What the
+/// caller opens next lands under that route.
+void closePagesAboveGuard(BuildContext context) => Navigator.of(context)
+    .popUntil(
+      (r) => r.isFirst || r.popDisposition == RoutePopDisposition.doNotPop,
+    );
 
 /// A page that appears at once, under the page pushed right after it, so
 /// only that page's transition shows. Back from it still animates.

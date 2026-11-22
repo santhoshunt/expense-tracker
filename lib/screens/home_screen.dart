@@ -517,9 +517,11 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   /// Takes the pending action only when Home is mounted and the app is
-  /// unlocked; otherwise it waits for the next change. Nothing here pops
-  /// open routes: Navigator.popUntil skips the add sheet's unsaved-changes
-  /// guard, so whatever is open stays and the action lands on top.
+  /// unlocked; otherwise it waits for the next change. Whatever is open
+  /// stays and the action lands on top. The two Cockpit actions close pages
+  /// first, but only down to a route that guards its own pop
+  /// ([closePagesAboveGuard]): Navigator.popUntil skips the add sheet's
+  /// unsaved-changes guard.
   void _runLaunchAction() {
     if (!mounted || appLocked.value) return;
     // Coming back to the front passes through inactive with frames running,
@@ -585,10 +587,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         );
       case LaunchAction.openAccounts:
         setState(() => _showTab(kHomeTabAccounts));
-      // Pushed routes close first, as for the other outside taps, so a
-      // repeat tap does not stack another pair of Cockpit pages.
+      // Pushed routes close first, so a repeat tap does not stack another
+      // pair of Cockpit pages. A guarded route stays, with Cockpit over it.
       case LaunchAction.openSubscriptions:
-        Navigator.of(context).popUntil((r) => r.isFirst);
+        closePagesAboveGuard(context);
         goCockpitSubscriptions(context);
       // A payment-to-check note: its row's edit sheet, or the list when the
       // row has gone since.
@@ -658,7 +660,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       // The Trip budget widget with nothing on Overview's Budgets: closes
       // pushed routes first, as openSubscriptions does.
       case LaunchAction.openBudgetsTab:
-        Navigator.of(context).popUntil((r) => r.isFirst);
+        closePagesAboveGuard(context);
         goCockpitBudgets(context);
       // The Who owes you widget: already open, a second one would need a
       // second Back.

@@ -9,6 +9,10 @@ import 'undo_snackbar.dart';
 /// Whether returning to the foreground should re-lock: enabled, previously
 /// backgrounded, and away longer than [threshold]. Pure — the gate's only
 /// decision, kept testable without lifecycle plumbing.
+///
+/// A clock that went back while away (set back in the phone's settings)
+/// gives a negative time away; that locks too, since the real time away
+/// cannot be known.
 bool shouldLock({
   required bool enabled,
   required DateTime? backgroundedAt,
@@ -16,7 +20,8 @@ bool shouldLock({
   Duration threshold = const Duration(minutes: 2),
 }) {
   if (!enabled || backgroundedAt == null) return false;
-  return now.difference(backgroundedAt) >= threshold;
+  final away = now.difference(backgroundedAt);
+  return away.isNegative || away >= threshold;
 }
 
 /// Whether the app's content is hidden behind [LockGate] right now. True

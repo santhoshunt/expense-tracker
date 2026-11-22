@@ -128,12 +128,15 @@ void main() {
   });
 
   group('parser honors custom lists', () {
+    // A completed debit only a default phrase ("e-statement") rejects. An
+    // e-mandate ("will be debited") no longer serves here: since 2.3.1 a
+    // promised debit is not read as a debit with or without the phrase.
     const mandateBody =
-        'Rs.649.00 will be debited from your a/c on 05-07-26 towards '
-        'Netflix subscription.';
+        'Rs.649.00 debited from your a/c on 02-07-26 towards STREAMFLIX '
+        'subscription. Your e-statement is ready.';
 
     test('removing an ignore phrase lets the message import', () {
-      // Default list rejects the e-mandate ("will be debited")…
+      // Default list rejects it ("e-statement")…
       expect(SmsTxnParser.parse('VM-HDFCBK', mandateBody, smsDate), isNull);
       // …an emptied ignore list lets it parse.
       final r = SmsTxnParser.parse(

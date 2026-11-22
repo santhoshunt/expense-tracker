@@ -1074,40 +1074,8 @@ class _DataSectionState extends State<_DataSection> {
   /// Runs [work] behind a modal spinner so a full-ledger export/import isn't
   /// a frozen, feedback-free screen. The barrier also blocks a second tap
   /// while the first operation is still writing.
-  Future<T> _withBusy<T>(String label, Future<T> Function() work) async {
-    final navigator = Navigator.of(context, rootNavigator: true);
-    unawaited(
-      showDialog<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => PopScope(
-          canPop: false,
-          child: Dialog(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(
-                    width: 24,
-                    height: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2.5),
-                  ),
-                  const SizedBox(width: 16),
-                  Flexible(child: Text(label)),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-    try {
-      return await work();
-    } finally {
-      if (navigator.mounted) navigator.pop();
-    }
-  }
+  Future<T> _withBusy<T>(String label, Future<T> Function() work) =>
+      withBusySpinner(context, label, work);
 
   /// [range] is the export sheet's dates for a CSV or PDF (null for all);
   /// [replace] is the import sheet's Merge or Replace.

@@ -1138,6 +1138,9 @@ class BackupService {
                     else if (a.isCard)
                       switch (finance.accountOutstanding(a)) {
                         null => 'owed —',
+                        // Below zero the bank owes the user.
+                        final o when o < -0.005 =>
+                          '${_money.format(-o)} in credit',
                         final o => '${_money.format(o)} owed',
                       }
                     else
@@ -1152,8 +1155,14 @@ class BackupService {
               _netLine('Cash in hand', _money.format(finance.cashBalanceTotal)),
             _netLine(
               'Credit card outstanding',
-              '− ${_money.format(finance.cardOutstandingTotal)}',
+              // A hyphen: the report's NotoSans has no true minus (U+2212).
+              '- ${_money.format(finance.cardOutstandingTotal)}',
             ),
+            if (finance.cardCreditTotal > 0)
+              _netLine(
+                'Credit on cards',
+                '+ ${_money.format(finance.cardCreditTotal)}',
+              ),
             if (finance.cardsMissingLimit > 0)
               pw.Text(
                 '${finance.cardsMissingLimit} card(s) with unknown '

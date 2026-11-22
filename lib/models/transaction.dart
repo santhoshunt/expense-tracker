@@ -1101,10 +1101,14 @@ bool _isPatternDigit(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x39;
 /// inside "UPI Ref 30**7316**123456". A letter may still neighbour a digit
 /// ("swiggy" matches inside "swiggy8") — pinned by tests. Other edge
 /// characters (symbols, spaces) match anywhere.
-bool patternMatchesText(String pattern, String text) {
-  final p = pattern.toLowerCase().trim();
+bool patternMatchesText(String pattern, String text) =>
+    patternMatchesLowered(pattern.toLowerCase().trim(), text.toLowerCase());
+
+/// [patternMatchesText] for a [p] already lower-cased and trimmed and a [t]
+/// already lower-cased. A caller testing many patterns against one text
+/// lower-cases the text once.
+bool patternMatchesLowered(String p, String t) {
   if (p.isEmpty) return false;
-  final t = text.toLowerCase();
   final first = p.codeUnitAt(0);
   final last = p.codeUnitAt(p.length - 1);
   bool clashes(int edge, int neighbour) =>
@@ -1163,7 +1167,21 @@ class ClassifierRule {
 
   /// True when any alternative matches — see [patternMatchesText] for the
   /// per-alternative boundary rules.
-  bool matches(String text) => patterns.any((p) => patternMatchesText(p, text));
+  bool matches(String text) => matchesLowered(text.toLowerCase());
+
+  /// [matches] for a [text] already lower-cased: rule matching runs every
+  /// rule over every row, so the row's text is lower-cased once and each
+  /// rule's alternatives once ([_loweredPatterns]).
+  bool matchesLowered(String text) {
+    final ps = _loweredPatterns[this] ??= [
+      for (final p in patterns) p.toLowerCase().trim(),
+    ];
+    return ps.any((p) => patternMatchesLowered(p, text));
+  }
+
+  /// Each rule's [patterns], lower-cased and trimmed, kept beside the rule:
+  /// the constructor stays const, and [pattern] never changes on a rule.
+  static final Expando<List<String>> _loweredPatterns = Expando();
 
   /// An empty [payee] or empty [tags] clears that field; null keeps it.
   ClassifierRule copyWith({
