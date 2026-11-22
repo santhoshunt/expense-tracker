@@ -303,7 +303,7 @@ void main() {
         countIn: oct1,
       );
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 34);
+      expect(data['version'], 35);
       final q = await loaded();
       await q.importData(data as Map<String, dynamic>, replace: true);
       expect(q.transactions.single.countIn, oct1);

@@ -23,17 +23,21 @@ abstract final class NotificationIds {
   /// (NotificationService.showImportCheckSummary).
   static const importCheckSummary = 93001;
 
-  /// Card bill due alerts (UpcomingMonitor).
-  static const cardBillStart = 94000;
-  static const cardBillEnd = 94999;
+  /// Card bill due alerts (UpcomingMonitor). Until v2.3.1 these three ranges
+  /// were 1,000 wide (94000, 95000 and 96000 up), where two items due in the
+  /// same window had a few percent chance of sharing an id at 10 items and
+  /// the second replaced the first in the shade. An alert posted under an
+  /// old id on an upgraded phone stays until it is dismissed.
+  static const cardBillStart = 600000;
+  static const cardBillEnd = 699999;
 
   /// Recurring payment expected alerts (UpcomingMonitor).
-  static const recurringStart = 95000;
-  static const recurringEnd = 95999;
+  static const recurringStart = 700000;
+  static const recurringEnd = 799999;
 
   /// Manual reminder alerts (UpcomingMonitor).
-  static const reminderStart = 96000;
-  static const reminderEnd = 96999;
+  static const reminderStart = 800000;
+  static const reminderEnd = 899999;
 
   /// The scheduled monthly recap (NotificationService.scheduleRecap).
   static const recap = 97000;

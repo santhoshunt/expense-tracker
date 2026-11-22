@@ -142,7 +142,9 @@ class RewardEstimate {
 
 /// What [charges] earn under [r]: each group's earnings summed and held to
 /// its cap, the rest at the base rate, the total rounded down as banks do.
-/// A charge under its group's minimum earns nothing.
+/// A charge under its group's minimum earns nothing; on a card counting
+/// whole ₹100s each charge earns on its complete hundreds
+/// ([CardRewards.earnOn]).
 RewardEstimate estimateRewards(CardRewards r, Iterable<RewardCharge> charges) {
   final byGroup = <RewardGroup, double>{};
   var base = 0.0;

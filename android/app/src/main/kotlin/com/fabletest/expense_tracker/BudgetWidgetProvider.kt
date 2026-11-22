@@ -69,9 +69,18 @@ open class BudgetWidgetProvider : AppWidgetProvider() {
             // escaping exception kills the whole app process: a widget that
             // cannot draw keeps its last picture instead.
             try {
-                val detailed = manager.getAppWidgetInfo(appWidgetId)
-                    ?.provider?.className ==
-                    BudgetWidgetDetailedProvider::class.java.name
+                // Only the two budget widgets: the receiver is exported and
+                // any app may send it an update naming this app's other
+                // widgets, which must keep their own layouts. No info at all
+                // still draws compact: a launcher can report none just after
+                // the widget is placed, and a forged id names another widget,
+                // whose info is there.
+                val provider = manager.getAppWidgetInfo(appWidgetId)?.provider?.className
+                if (provider != null &&
+                    provider != BudgetWidgetProvider::class.java.name &&
+                    provider != BudgetWidgetDetailedProvider::class.java.name
+                ) return
+                val detailed = provider == BudgetWidgetDetailedProvider::class.java.name
                 WidgetKit.update(
                     context, manager, appWidgetId, 250, if (detailed) 110 else 48
                 ) { _, h, bitmaps -> build(context, appWidgetId, detailed, h, bitmaps) }

@@ -52,6 +52,13 @@ class CloudBackup {
 const kDriveReconnectMessage =
     'Reconnect Google Drive in Settings to keep backing up.';
 
+/// Recorded when a scheduled backup was due but skipped because a stored
+/// collection did not load in full. A successful upload clears it, as it
+/// clears any other recorded failure.
+const kDriveBackupsPausedMessage =
+    'Backups are paused: some data did not load. Restore from a backup, or '
+    'use Back up now.';
+
 /// Why Drive access could not be had. [message] is shown as is.
 class DriveAuthException implements Exception {
   final String message;
@@ -649,6 +656,21 @@ class DriveBackupService {
       final last = await lastBackupAt();
       final freq = await getFrequency();
       if (!isDue(last, freq, DateTime.now())) return;
+      // A collection that failed to decode at start-up is missing or partial
+      // in memory, so a backup now would leave rows out, and each such
+      // upload pushes an older good backup toward pruning. The background
+      // SMS import stops for the same reason (main.dart). 'setup' is not
+      // one of these: a later start-up step threw after every collection
+      // loaded. The skip is recorded so Settings says why the date stands
+      // still, written once rather than on every launch. Back up now still
+      // runs on request.
+      if (finance.loadWarnings.any((w) => w != 'setup')) {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getString(_lastErrorKey) != kDriveBackupsPausedMessage) {
+          await prefs.setString(_lastErrorKey, kDriveBackupsPausedMessage);
+        }
+        return;
+      }
       await uploadNow(finance, settings: settings);
     } catch (e) {
       try {

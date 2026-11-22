@@ -20,6 +20,22 @@ void main() {
     }
   });
 
+  test('every hashed range holds 100,000 ids', () {
+    // At 1,000 slots, 20 card bills, payments or reminders due in the same
+    // window shared an id about one time in six.
+    for (final (start, end) in [
+      (NotificationIds.cardBillStart, NotificationIds.cardBillEnd),
+      (NotificationIds.recurringStart, NotificationIds.recurringEnd),
+      (NotificationIds.reminderStart, NotificationIds.reminderEnd),
+      (NotificationIds.unusualStart, NotificationIds.unusualEnd),
+      (NotificationIds.customBudgetStart, NotificationIds.customBudgetEnd),
+      (NotificationIds.importCheckStart, NotificationIds.importCheckEnd),
+      (NotificationIds.priceRiseStart, NotificationIds.priceRiseEnd),
+    ]) {
+      expect(end - start + 1, 100000, reason: '$start to $end');
+    }
+  });
+
   test('the fixed ids in NotificationService match the table', () {
     expect(NotificationService.reviewNotificationId, NotificationIds.review);
     expect(NotificationService.recapNotificationId, NotificationIds.recap);

@@ -2604,18 +2604,21 @@ object HomeWidgets {
 
     // --- Cashbacks ----------------------------------------------------------
 
-    /** The snapshot's Cashbacks rows in its order (the most rupees earned
-     * first); null without the block. */
+    /** The snapshot's Cashbacks rows to show, in its order (the most rupees
+     * earned first); null without the block. A row whose cycle has ended is
+     * left out: its figure belongs to the cycle before, and the new cycle
+     * has earned nothing as far as this snapshot knows. The header and
+     * [CashbacksWidgetService] both read the rows here, so the total, the
+     * count and the list always agree. */
     fun cashbackRows(data: JSONObject?): List<JSONObject>? {
         val rows = data?.optJSONArray("cashbacks") ?: return null
         return (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+            .filter { cashbackTill(it) != null }
     }
 
     /** " · till 20 Nov", the day a Cashbacks [row]'s statement cycle ends;
-     * null once that day has passed. The snapshot is then from the cycle
-     * before: the row shows its zero figure and stays out of the total
-     * until the app sends the new cycle's, as the Card cycle widget shows
-     * ₹0. */
+     * null once that day has passed, when [cashbackRows] leaves the row
+     * out. */
     fun cashbackTill(row: JSONObject): String? =
         row.day("cycleEnd")?.takeIf { it >= today() }
             ?.let { " · till ${LocalDate.ofEpochDay(it).format(dayMonth)}" }
@@ -2624,8 +2627,8 @@ object HomeWidgets {
      * title and the total in the header, and under it a list of the cards
      * that scrolls, so it needs no width or height to fit rows to
      * ([CashbacksWidgetService] draws them). The total adds the rupee
-     * figures of the cards whose cycle still runs; a points card with no
-     * value per point has none, and with no such card the total hides. */
+     * figures of the rows shown; a points card with no value per point has
+     * none, and with no such row the total hides. */
     private fun cashbacks(
         context: Context,
         id: Int,
@@ -2669,7 +2672,7 @@ object HomeWidgets {
             )
         )
         val rows = cashbackRows(data)
-        val counted = rows.orEmpty().filter { cashbackTill(it) != null && !it.isNull("rupees") }
+        val counted = rows.orEmpty().filter { !it.isNull("rupees") }
         views.setViewVisibility(R.id.hw_right, if (counted.isEmpty()) View.GONE else View.VISIBLE)
         views.setTextViewText(
             R.id.hw_right,
@@ -2678,10 +2681,21 @@ object HomeWidgets {
         val empty = rows.isNullOrEmpty()
         views.setViewVisibility(R.id.hw_list, if (empty) View.GONE else View.VISIBLE)
         views.setViewVisibility(R.id.hw_empty, if (empty) View.VISIBLE else View.GONE)
+        // The app lists only cards that earned, so an empty list alone does
+        // not say whether any card has reward rules: cashbacksSetUp does. A
+        // snapshot from before it listed every card with rules, so there
+        // any row at all means rules are set up.
+        val setUp = data != null && data.optBoolean(
+            "cashbacksSetUp",
+            (data.optJSONArray("cashbacks")?.length() ?: 0) > 0
+        )
         views.setTextViewText(
             R.id.hw_empty,
-            if (rows == null) context.getString(R.string.home_widget_empty)
-            else context.getString(R.string.home_widget_cashbacks_empty)
+            when {
+                rows == null -> context.getString(R.string.home_widget_empty)
+                setUp -> context.getString(R.string.home_widget_cashbacks_none)
+                else -> context.getString(R.string.home_widget_cashbacks_empty)
+            }
         )
         return views
     }

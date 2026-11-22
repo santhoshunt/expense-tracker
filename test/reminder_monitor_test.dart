@@ -5,6 +5,7 @@ import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
+import 'package:expense_tracker/services/notification_ids.dart';
 import 'package:expense_tracker/services/notification_service.dart';
 import 'package:expense_tracker/services/reminder_schedule.dart';
 import 'package:expense_tracker/services/upcoming_monitor.dart';
@@ -117,7 +118,13 @@ void main() {
     expect(title, 'Reminder: Money to home');
     expect(body, contains('₹5,000.00'));
     expect(body, contains('due today'));
-    expect(nid, inInclusiveRange(96000, 96999));
+    expect(
+      nid,
+      inInclusiveRange(
+        NotificationIds.reminderStart,
+        NotificationIds.reminderEnd,
+      ),
+    );
 
     await monitor.check(finance, settings);
     expect(notifications.shown, hasLength(1), reason: 'marker dedupes');

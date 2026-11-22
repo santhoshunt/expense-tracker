@@ -652,9 +652,18 @@ void main() {
       rewards: const CardRewards(unit: points, baseRate: 4),
       spend: 1000,
     );
-    // Nothing earned yet on either: a tie, which goes by name.
-    await card('Zero card B', rewards: const CardRewards(baseRate: 1));
-    await card('Zero card A', rewards: const CardRewards(baseRate: 1));
+    // Left out: nothing earned this cycle, as cashback (no spend, and 1% of
+    // ₹60 rounded down) or as points.
+    await card('Zero card', rewards: const CardRewards(baseRate: 1));
+    await card(
+      'Small spend card',
+      rewards: const CardRewards(baseRate: 1),
+      spend: 60,
+    );
+    await card(
+      'Zero points card',
+      rewards: const CardRewards(unit: points, baseRate: 2, pointValue: 0.5),
+    );
     // Left out: no rewards set up, a closed card, and a bank account.
     await card('Plain card', spend: 3000);
     final closed = await card(
@@ -665,27 +674,27 @@ void main() {
     await p.closeAccount(closed);
     await p.addAccount(name: 'Test bank', type: AccountType.bank);
 
-    final rows = (snapshotOf(p, s)['cashbacks'] as List)
-        .cast<Map<String, dynamic>>();
+    final snapshot = snapshotOf(p, s);
+    final rows = (snapshot['cashbacks'] as List).cast<Map<String, dynamic>>();
     expect(
       [for (final r in rows) r['name']],
       [
         'Travel card',
         'Miles card',
         'Shopping card',
-        'Zero card A',
-        'Zero card B',
         'Fuel card',
         'Cab card',
         'Dining card',
       ],
     );
+    expect(snapshot['cashbacksSetUp'], isTrue);
     Map<String, dynamic> row(String name) =>
         rows.singleWhere((r) => r['name'] == name);
 
     final shopping = row('Shopping card');
     expect(shopping['figure'], '₹20');
-    expect(shopping['zero'], '₹0');
+    // Nothing earned is left out, so no row carries a zero figure.
+    expect(shopping.containsKey('zero'), isFalse);
     expect(shopping['rupees'], 20);
     // The statement day; without one the cycle is the calendar month.
     expect(shopping['cycleEnd'], epochDay(DateTime(2026, 7, 25)));
@@ -696,7 +705,6 @@ void main() {
     // A points card shows points; its rupee worth feeds the total.
     final miles = row('Miles card');
     expect(miles['figure'], '120 points');
-    expect(miles['zero'], '0 points');
     expect(miles['rupees'], 30);
     // With no value per point it has no rupee figure, so the widget keeps
     // it out of the total.
@@ -707,9 +715,56 @@ void main() {
     expect(row('Dining card')['figure'], '40 points');
     expect(row('Cab card')['figure'], '40 points');
     expect(row('Cab card')['rupees'], isNull);
+  });
 
-    expect(row('Zero card A')['figure'], '₹0');
-    expect(row('Zero card A')['rupees'], 0);
+  test('with every card at nothing earned the Cashbacks list is empty but '
+      'marked set up', () async {
+    FinanceProvider.figuresClock = () => now;
+    addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
+    final p = FinanceProvider();
+    await p.load();
+    final s = SettingsProvider();
+    await s.load();
+    final cash = await p.addAccount(
+      name: 'Quiet card',
+      type: AccountType.creditCard,
+    );
+    await p.setCardRewards(cash, const CardRewards(baseRate: 2));
+    final points = await p.addAccount(
+      name: 'Quiet points card',
+      type: AccountType.creditCard,
+    );
+    await p.setCardRewards(
+      points,
+      const CardRewards(unit: RewardUnit.points, baseRate: 3),
+    );
+
+    final snapshot = snapshotOf(p, s);
+    expect(snapshot['cashbacks'], isEmpty);
+    // Kotlin then says nothing is earned yet, not that nothing is set up.
+    expect(snapshot['cashbacksSetUp'], isTrue);
+  });
+
+  test('with no open card with reward rules the Cashbacks list is empty and '
+      'marked not set up', () async {
+    FinanceProvider.figuresClock = () => now;
+    addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
+    final p = FinanceProvider();
+    await p.load();
+    final s = SettingsProvider();
+    await s.load();
+    await p.addAccount(name: 'Plain card', type: AccountType.creditCard);
+    // Rules on a closed card do not count.
+    final closed = await p.addAccount(
+      name: 'Old card',
+      type: AccountType.creditCard,
+    );
+    await p.setCardRewards(closed, const CardRewards(baseRate: 1));
+    await p.closeAccount(closed);
+
+    final snapshot = snapshotOf(p, s);
+    expect(snapshot['cashbacks'], isEmpty);
+    expect(snapshot['cashbacksSetUp'], isFalse);
   });
 
   test(

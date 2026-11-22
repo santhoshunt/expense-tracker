@@ -1281,8 +1281,21 @@ void main() {
       expect(foldValue('1 tag'), findsOneWidget);
       expect(preview(tester), 'No past payments change.');
 
-      // Back on a spending category, what was typed is still there.
-      await classifyAs(tester, 'Food & Dining');
+      // Back on a spending category, what was typed is still there. The
+      // picker opens on the chosen transfer, its last section, so the list
+      // scrolls back up to the spending rows.
+      await tester.ensureVisible(find.text('Classify as'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Classify as'));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('Food & Dining'),
+        -200,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Food & Dining').last);
+      await tester.pumpAndSettle();
       expect(
         tester.widget<TextField>(payeeField).controller!.text,
         'Quillfern Teas',

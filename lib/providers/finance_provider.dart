@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection' show UnmodifiableListView, UnmodifiableMapView;
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -487,8 +488,14 @@ class FinanceProvider extends ChangeNotifier {
 
   /// Confirmed transactions, newest first. Pending SMS imports are excluded —
   /// they live in [pendingTransactions] until reviewed.
-  List<Tx> get transactions =>
-      _d.confirmed ??= [for (final (t, _) in _ordered.reversed) t];
+  ///
+  /// This and the other lists and maps kept in [_d] are handed out as
+  /// unmodifiable views, made once when the value is cached: one caller's
+  /// in-place sort would otherwise reorder the list for every reader, and
+  /// a view made per call would break callers that cache on identity.
+  List<Tx> get transactions => _d.confirmed ??= UnmodifiableListView([
+    for (final (t, _) in _ordered.reversed) t,
+  ]);
 
   /// SMS imports awaiting user review, newest first.
   List<Tx> get pendingTransactions {
@@ -496,7 +503,7 @@ class FinanceProvider extends ChangeNotifier {
     if (cached != null) return cached;
     final list = _transactions.where((t) => t.pending).toList();
     list.sort((a, b) => b.date.compareTo(a.date));
-    return _d.pending = list;
+    return _d.pending = UnmodifiableListView(list);
   }
 
   /// Number of pending imports, without materialising or sorting the list —
@@ -758,7 +765,7 @@ class FinanceProvider extends ChangeNotifier {
       if (t.date.isBefore(cutoff)) continue;
       gross[t.categoryId] = (gross[t.categoryId] ?? 0) + t.amount;
     }
-    return gross;
+    return UnmodifiableMapView(gross);
   }();
 
   /// Confirmed transactions bucketed by month — see [_Derived.byMonth].
@@ -770,7 +777,8 @@ class FinanceProvider extends ChangeNotifier {
       final d = t.effectiveDate;
       (buckets[d.year * 12 + d.month] ??= []).add(t);
     }
-    return buckets;
+    // [confirmedInMonth] hands the buckets out.
+    return buckets..updateAll((_, rows) => UnmodifiableListView(rows));
   }();
 
   /// Confirmed rows whose [Tx.effectiveDate] falls in [month], oldest first.
@@ -871,8 +879,9 @@ class FinanceProvider extends ChangeNotifier {
         if (isTransferCategory(t.categoryId)) savings += moved;
       }
       if (isTransferCategory(t.categoryId)) {
-        // Refunded in full: no zero bucket in the transfer lists.
-        if (moved == 0 && t.amount > 0) continue;
+        // Refunded in full: no zero bucket in the transfer lists. Within
+        // half a paisa: refunds in parts can sum to a hair under the amount.
+        if (moved < 0.005 && refundedFor(t) > 0) continue;
         if (t.type == TxType.income) {
           transferIn += moved;
         } else {
@@ -901,8 +910,9 @@ class FinanceProvider extends ChangeNotifier {
         // test the row's real category) came back empty.
         final spend = netSpendOf(t);
         // A purchase refunded in full adds no zero bucket: the category
-        // lists and charts would show a ₹0 row for it.
-        if (spend > 0 || refundedFor(t) == 0) {
+        // lists and charts would show a ₹0 row for it. Within half a
+        // paisa: refunds in parts can sum to a hair under the amount.
+        if (spend >= 0.005 || refundedFor(t) == 0) {
           expense += spend;
           byCategory[t.categoryId] = (byCategory[t.categoryId] ?? 0) + spend;
         }
@@ -937,7 +947,8 @@ class FinanceProvider extends ChangeNotifier {
         return MapEntry(key, e.value);
       }).toList();
       entries.sort((a, b) => b.value.compareTo(a.value));
-      return entries;
+      // [expenseByCategory] and its kin hand these out.
+      return UnmodifiableListView(entries);
     }
 
     return _MonthTotals(
@@ -986,8 +997,9 @@ class FinanceProvider extends ChangeNotifier {
         continue;
       }
       final spend = netSpendOf(t);
-      // Refunded in full: no spend that day from this row.
-      if (spend == 0 && refundedFor(t) > 0) continue;
+      // Refunded in full, to within half a paisa: no spend that day from
+      // this row.
+      if (spend < 0.005 && refundedFor(t) > 0) continue;
       final day = t.effectiveDate.day;
       byDay[day] = (byDay[day] ?? 0) + spend;
     }
@@ -1010,7 +1022,7 @@ class FinanceProvider extends ChangeNotifier {
       }
       final spend = netSpendOf(t);
       // Refunded in full: no payment that day, as in [expenseByDayInMonth].
-      if (spend == 0 && refundedFor(t) > 0) continue;
+      if (spend < 0.005 && refundedFor(t) > 0) continue;
       spent += spend;
       count++;
     }
@@ -1037,7 +1049,8 @@ class FinanceProvider extends ChangeNotifier {
   /// today — quiet Mondays drag the Monday average down, so this answers
   /// "which days do I usually spend more", not "which days have I ever
   /// spent on".
-  List<double> avgExpenseByWeekday() => _d.weekdayAvg ??= _weekdayAvg();
+  List<double> avgExpenseByWeekday() =>
+      _d.weekdayAvg ??= UnmodifiableListView(_weekdayAvg());
 
   List<double> _weekdayAvg() {
     final rows = _ordered;
@@ -1327,9 +1340,19 @@ class FinanceProvider extends ChangeNotifier {
   /// Collection names whose stored blob failed to decode during [load] and
   /// was skipped. Non-empty means the user should be told (the home screen
   /// shows a banner) — the alternative used to be an unhandled throw and a
-  /// permanent loading spinner on every launch.
+  /// permanent loading spinner on every launch. A name starting "some " (as
+  /// 'some transactions') means the collection loaded with unreadable
+  /// entries left out; 'setup' means a step after the decodes failed.
   final List<String> _loadWarnings = [];
   List<String> get loadWarnings => List.unmodifiable(_loadWarnings);
+
+  /// Whether the collection [name] loaded whole: it did not fail, and no
+  /// entry of it was left out. A step that prunes, links or saves on the
+  /// strength of a complete collection runs only then; on a partial one it
+  /// would, for example, unlink a transfer whose other leg was the row left
+  /// out, and save that.
+  bool _loadedWhole(String name) =>
+      !_loadWarnings.contains(name) && !_loadWarnings.contains('some $name');
 
   /// Runs one collection's decode; on ANY failure the collection is left in
   /// [reset]'s state and the name is recorded, so a single corrupted blob
@@ -1355,77 +1378,144 @@ class FinanceProvider extends ChangeNotifier {
     }
   }
 
+  /// Reads [raw]'s entries one at a time: an entry [read] throws on is left
+  /// out and counted, so one bad row does not cost the rest. Throws when
+  /// [raw] is not a list.
+  static (List<T>, int) _decodeEach<T>(
+    Object? raw,
+    T Function(Map<String, dynamic>) read,
+  ) {
+    final out = <T>[];
+    var skipped = 0;
+    for (final e in raw as List) {
+      try {
+        out.add(read(e as Map<String, dynamic>));
+      } catch (_) {
+        skipped++;
+      }
+    }
+    return (out, skipped);
+  }
+
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     _loadWarnings.clear();
     _reminderMarks.clear();
+    // The stored bytes of a collection that did not load, or loaded with
+    // entries left out, go under a side key before anything can save over
+    // them. The next save writes only what loaded, and without the copy the
+    // rest would be gone for good. Like the ledger's copy has always been,
+    // it is rewritten on every load that fails.
+    Future<void> Function() copyOf(String key, String raw) =>
+        () => prefs.setString('${key}_corrupt', raw);
+    // Some entries were left out: the user is told, and the bytes are kept.
+    // Called last in a decode, so a later throw cannot add a second warning.
+    Future<void> partly(String name, String key, String raw) async {
+      _loadWarnings.add(name);
+      try {
+        await copyOf(key, raw)();
+      } catch (_) {}
+    }
+
     final txRaw = prefs.getString(_txKey);
     if (txRaw != null) {
       await _guardedLoad(
         'transactions',
         () async {
-          final decoded = (await _decodeTxBlob(
-            txRaw,
-          )).map((e) => Tx.fromJson(e as Map<String, dynamic>)).toList();
+          final (decoded, skipped) = _decodeEach(
+            await _decodeTxBlob(txRaw),
+            Tx.fromJson,
+          );
           _transactions
             ..clear()
             ..addAll(decoded);
+          if (skipped > 0) await partly('some transactions', _txKey, txRaw);
         },
         _transactions.clear,
-        quarantine: () => prefs.setString('${_txKey}_corrupt', txRaw),
+        quarantine: copyOf(_txKey, txRaw),
       );
     }
     final rulesRaw = prefs.getString(_rulesKey);
     if (rulesRaw != null) {
-      await _guardedLoad('rules', () async {
-        final decoded = (jsonDecode(rulesRaw) as List)
-            .map((e) => ClassifierRule.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _rules
-          ..clear()
-          ..addAll(decoded);
-      }, _rules.clear);
+      await _guardedLoad(
+        'rules',
+        () async {
+          final decoded = (jsonDecode(rulesRaw) as List)
+              .map((e) => ClassifierRule.fromJson(e as Map<String, dynamic>))
+              .toList();
+          _rules
+            ..clear()
+            ..addAll(decoded);
+        },
+        _rules.clear,
+        quarantine: copyOf(_rulesKey, rulesRaw),
+      );
     }
     final accountsRaw = prefs.getString(_accountsKey);
     if (accountsRaw != null) {
-      await _guardedLoad('accounts', () async {
-        final decoded = (jsonDecode(accountsRaw) as List)
-            .map((e) => Account.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _accounts
-          ..clear()
-          ..addAll(decoded);
-      }, _accounts.clear);
+      // All or nothing, unlike the ledger: with an account left out, the
+      // passes that check links would unlink reminders, cards and filters
+      // from it for good, and they skip only on the 'accounts' warning.
+      await _guardedLoad(
+        'accounts',
+        () async {
+          final decoded = (jsonDecode(accountsRaw) as List)
+              .map((e) => Account.fromJson(e as Map<String, dynamic>))
+              .toList();
+          _accounts
+            ..clear()
+            ..addAll(decoded);
+        },
+        _accounts.clear,
+        quarantine: copyOf(_accountsKey, accountsRaw),
+      );
     }
     final importRulesRaw = prefs.getString(_importRulesKey);
     if (importRulesRaw != null) {
-      await _guardedLoad('import rules', () async {
-        final decoded = (jsonDecode(importRulesRaw) as List)
-            .map((e) => ImportRule.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _importRules
-          ..clear()
-          ..addAll(decoded);
-      }, _importRules.clear);
+      await _guardedLoad(
+        'import rules',
+        () async {
+          final decoded = (jsonDecode(importRulesRaw) as List)
+              .map((e) => ImportRule.fromJson(e as Map<String, dynamic>))
+              .toList();
+          _importRules
+            ..clear()
+            ..addAll(decoded);
+        },
+        _importRules.clear,
+        quarantine: copyOf(_importRulesKey, importRulesRaw),
+      );
     }
     final customCatsRaw = prefs.getString(_customCategoriesKey);
     if (customCatsRaw != null) {
-      await _guardedLoad('categories', () async {
-        setCustomCategories(
-          (jsonDecode(customCatsRaw) as List)
-              .map((e) => TxCategory.fromJson(e as Map<String, dynamic>))
-              .toList(),
-        );
-      }, () => setCustomCategories(const []));
+      await _guardedLoad(
+        'categories',
+        () async {
+          setCustomCategories(
+            (jsonDecode(customCatsRaw) as List)
+                .map((e) => TxCategory.fromJson(e as Map<String, dynamic>))
+                .toList(),
+          );
+        },
+        () => setCustomCategories(const []),
+        quarantine: copyOf(_customCategoriesKey, customCatsRaw),
+      );
     }
     final overridesRaw = prefs.getString(_builtinOverridesKey);
     if (overridesRaw != null) {
-      await _guardedLoad('category styles', () async {
-        setBuiltinOverrides({
-          for (final e in jsonDecode(overridesRaw) as List)
-            (e as Map<String, dynamic>)['id'] as String: TxCategory.fromJson(e),
-        });
-      }, () => setBuiltinOverrides(const {}));
+      await _guardedLoad(
+        'category styles',
+        () async {
+          setBuiltinOverrides({
+            for (final e in jsonDecode(overridesRaw) as List)
+              (e as Map<String, dynamic>)['id'] as String: TxCategory.fromJson(
+                e,
+              ),
+          });
+        },
+        () => setBuiltinOverrides(const {}),
+        quarantine: copyOf(_builtinOverridesKey, overridesRaw),
+      );
     }
     final groupsRaw = prefs.getString(_groupsKey);
     if (groupsRaw != null) {
@@ -1433,9 +1523,10 @@ class FinanceProvider extends ChangeNotifier {
         'groups',
         () async {
           final blob = jsonDecode(groupsRaw) as Map<String, dynamic>;
-          final groups = (blob['groups'] as List? ?? const [])
-              .map((e) => CategoryGroup.fromJson(e as Map<String, dynamic>))
-              .toList();
+          final (groups, skipped) = _decodeEach(
+            blob['groups'] ?? const [],
+            CategoryGroup.fromJson,
+          );
           final assignments = Map<String, String>.from(
             blob['assignments'] as Map? ?? const {},
           );
@@ -1445,85 +1536,148 @@ class FinanceProvider extends ChangeNotifier {
           _groupAssignments
             ..clear()
             ..addAll(assignments);
+          if (skipped > 0) await partly('some groups', _groupsKey, groupsRaw);
         },
         () {
           _groups.clear();
           _groupAssignments.clear();
         },
+        quarantine: copyOf(_groupsKey, groupsRaw),
       );
     }
     final budgetsRaw = prefs.getString(_budgetsKey);
     if (budgetsRaw != null) {
-      await _guardedLoad('budgets', () async {
-        final decoded = (jsonDecode(budgetsRaw) as List)
-            .map((e) => SpendBudget.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _budgets
-          ..clear()
-          ..addAll(decoded);
-      }, _budgets.clear);
+      await _guardedLoad(
+        'budgets',
+        () async {
+          final (decoded, skipped) = _decodeEach(
+            jsonDecode(budgetsRaw),
+            SpendBudget.fromJson,
+          );
+          _budgets
+            ..clear()
+            ..addAll(decoded);
+          if (skipped > 0) {
+            await partly('some budgets', _budgetsKey, budgetsRaw);
+          }
+        },
+        _budgets.clear,
+        quarantine: copyOf(_budgetsKey, budgetsRaw),
+      );
     }
     final aliasesRaw = prefs.getString(_merchantAliasesKey);
     if (aliasesRaw != null) {
-      await _guardedLoad('merchantAliases', () async {
-        _merchantAliases
-          ..clear()
-          ..addAll(_decodeAliases(jsonDecode(aliasesRaw)));
-      }, _merchantAliases.clear);
+      await _guardedLoad(
+        'merchantAliases',
+        () async {
+          _merchantAliases
+            ..clear()
+            ..addAll(_decodeAliases(jsonDecode(aliasesRaw)));
+        },
+        _merchantAliases.clear,
+        quarantine: copyOf(_merchantAliasesKey, aliasesRaw),
+      );
     }
     final tagColorsRaw = prefs.getString(_tagColorsKey);
     if (tagColorsRaw != null) {
-      await _guardedLoad('tag colours', () async {
-        _tagColors
-          ..clear()
-          ..addAll(_decodeTagColors(jsonDecode(tagColorsRaw)));
-      }, _tagColors.clear);
+      await _guardedLoad(
+        'tag colours',
+        () async {
+          _tagColors
+            ..clear()
+            ..addAll(_decodeTagColors(jsonDecode(tagColorsRaw)));
+        },
+        _tagColors.clear,
+        quarantine: copyOf(_tagColorsKey, tagColorsRaw),
+      );
     }
     final tagNamesRaw = prefs.getString(_tagNamesKey);
     if (tagNamesRaw != null) {
-      await _guardedLoad('tag names', () async {
-        _savedTags
-          ..clear()
-          ..addAll(_decodeTagNames(jsonDecode(tagNamesRaw)));
-      }, _savedTags.clear);
+      await _guardedLoad(
+        'tag names',
+        () async {
+          _savedTags
+            ..clear()
+            ..addAll(_decodeTagNames(jsonDecode(tagNamesRaw)));
+        },
+        _savedTags.clear,
+        quarantine: copyOf(_tagNamesKey, tagNamesRaw),
+      );
     }
     final savedFiltersRaw = prefs.getString(_savedFiltersKey);
     if (savedFiltersRaw != null) {
-      await _guardedLoad('saved filters', () async {
-        _savedFilters
-          ..clear()
-          ..addAll(_decodeSavedFilters(jsonDecode(savedFiltersRaw)));
-      }, _savedFilters.clear);
+      await _guardedLoad(
+        'saved filters',
+        () async {
+          _savedFilters
+            ..clear()
+            ..addAll(_decodeSavedFilters(jsonDecode(savedFiltersRaw)));
+        },
+        _savedFilters.clear,
+        quarantine: copyOf(_savedFiltersKey, savedFiltersRaw),
+      );
     }
     final pinsRaw = prefs.getString(_subscriptionPinsKey);
     if (pinsRaw != null) {
-      await _guardedLoad('subscription marks', () async {
-        _subscriptionPins
-          ..clear()
-          ..addAll(_decodePins(jsonDecode(pinsRaw)));
-      }, _subscriptionPins.clear);
+      await _guardedLoad(
+        'subscription marks',
+        () async {
+          _subscriptionPins
+            ..clear()
+            ..addAll(_decodePins(jsonDecode(pinsRaw)));
+        },
+        _subscriptionPins.clear,
+        quarantine: copyOf(_subscriptionPinsKey, pinsRaw),
+      );
     }
     final patternPaidRaw = prefs.getString(_patternPaidKey);
     if (patternPaidRaw != null) {
-      await _guardedLoad('payment marks', () async {
-        _patternPaid
-          ..clear()
-          ..addAll(_decodePatternPaid(jsonDecode(patternPaidRaw)));
-      }, _patternPaid.clear);
+      await _guardedLoad(
+        'payment marks',
+        () async {
+          _patternPaid
+            ..clear()
+            ..addAll(_decodePatternPaid(jsonDecode(patternPaidRaw)));
+        },
+        _patternPaid.clear,
+        quarantine: copyOf(_patternPaidKey, patternPaidRaw),
+      );
     }
     final remindersRaw = prefs.getString(_remindersKey);
     if (remindersRaw != null) {
-      await _guardedLoad('reminders', () async {
-        final decoded = (jsonDecode(remindersRaw) as List)
-            .map((e) => Reminder.fromJson(e as Map<String, dynamic>))
-            .toList();
-        _reminders
-          ..clear()
-          ..addAll(decoded);
-      }, _reminders.clear);
+      await _guardedLoad(
+        'reminders',
+        () async {
+          final (decoded, skipped) = _decodeEach(
+            jsonDecode(remindersRaw),
+            Reminder.fromJson,
+          );
+          _reminders
+            ..clear()
+            ..addAll(decoded);
+          if (skipped > 0) {
+            await partly('some reminders', _remindersKey, remindersRaw);
+          }
+        },
+        _reminders.clear,
+        quarantine: copyOf(_remindersKey, remindersRaw),
+      );
     }
+    // Every step from here on is best-effort, as the migration block below
+    // is: a throw in one is recorded under 'setup' and the next step still
+    // runs, so the app always finishes loading. A step that throws on the
+    // stored data would otherwise throw again on every launch and leave the
+    // app on its loading spinner for good.
+    Future<void> step(FutureOr<void> Function() body) async {
+      try {
+        await body();
+      } catch (_) {
+        if (!_loadWarnings.contains('setup')) _loadWarnings.add('setup');
+      }
+    }
+
     // Index must be live before backfill so _ensureAccount sees existing keys.
-    _rebuildKeyIndex();
+    await step(_rebuildKeyIndex);
     // Seeding + migrations are best-effort: a failure mid-way (disk full,
     // an isolate dying during a persist) must not prevent the app from
     // opening — flags follow data, so an aborted pass simply re-runs.
@@ -1598,7 +1752,10 @@ class FinanceProvider extends ChangeNotifier {
       }
       // One-time seeding of the starter parent groups. The flag — not the data —
       // gates reseeding, so deleting or renaming Needs/Wants sticks.
-      if (!(prefs.getBool(_groupsSeededKey) ?? false)) {
+      // Not over groups that failed to load or loaded in part: they only
+      // look empty. The flag stays unset, so a later launch decides.
+      if (!(prefs.getBool(_groupsSeededKey) ?? false) &&
+          _loadedWhole('groups')) {
         if (_groups.isEmpty && _groupAssignments.isEmpty) {
           _seedDefaultGroups();
           await _persist(groups: true);
@@ -1874,32 +2031,49 @@ class FinanceProvider extends ChangeNotifier {
         await prefs.setBool(flag, true);
       }
     } catch (_) {
-      _loadWarnings.add('setup');
+      if (!_loadWarnings.contains('setup')) _loadWarnings.add('setup');
     }
-    _rebuildKeyIndex();
+    await step(_rebuildKeyIndex);
+    // The steps below that read the ledger or the reminders and then prune,
+    // link or save run only when that collection loaded whole: on a partial
+    // one their reading is wrong, and the save or the done-flag would make
+    // it final.
+    final ledgerWhole = _loadedWhole('transactions');
+    final remindersWhole = _loadedWhole('reminders');
     // Category registry is final now: reminders can be validated and any
     // half-pair (a leg deleted by an older build, a hand-edited backup)
     // unlinked.
-    if (_sanitizeReminders()) await _persist(reminders: true);
+    await step(() async {
+      if (remindersWhole && _sanitizeReminders()) {
+        await _persist(reminders: true);
+      }
+    });
     // Once: payments already imported that paid a reminder 4 to 15 days
     // early, which the narrower window of older builds missed. Forward-only
     // like every mark, so it never reopens an occurrence.
-    if (!(prefs.getBool(_remindersEarlyRescanKey) ?? false) &&
-        !_loadWarnings.contains('transactions') &&
-        !_loadWarnings.contains('reminders')) {
-      final since = DateTime.now().subtract(const Duration(days: 31));
-      final rows = [
-        for (final t in _transactions)
-          if (!t.date.isBefore(since)) t,
-      ]..sort((a, b) => a.date.compareTo(b.date));
-      if (_markRemindersPaidBy(rows, replay: true)) {
-        await _persist(reminders: true);
+    await step(() async {
+      if (!(prefs.getBool(_remindersEarlyRescanKey) ?? false) &&
+          ledgerWhole &&
+          remindersWhole) {
+        final since = DateTime.now().subtract(const Duration(days: 31));
+        final rows = [
+          for (final t in _transactions)
+            if (!t.date.isBefore(since)) t,
+        ]..sort((a, b) => a.date.compareTo(b.date));
+        if (_markRemindersPaidBy(rows, replay: true)) {
+          await _persist(reminders: true);
+        }
+        // A save that failed leaves the marks in memory only: try again on
+        // the next launch.
+        if (!_persistFailed) {
+          await prefs.setBool(_remindersEarlyRescanKey, true);
+        }
       }
-      // A save that failed leaves the marks in memory only: try again on
-      // the next launch.
-      if (!_persistFailed) await prefs.setBool(_remindersEarlyRescanKey, true);
-    }
-    if (_clearOrphanPairs()) await _persist(tx: true);
+    });
+    // A pair or split whose other row was left out only looks orphaned.
+    await step(() async {
+      if (ledgerWhole && _clearOrphanPairs()) await _persist(tx: true);
+    });
     // Also final for the split rules: older builds left shares on rows that
     // later became income or transfers. Not when the category registry
     // failed to load: a reset override would make a category the user
@@ -1907,115 +2081,140 @@ class FinanceProvider extends ChangeNotifier {
     final registryIntact =
         !_loadWarnings.contains('categories') &&
         !_loadWarnings.contains('category styles');
-    if (registryIntact && _sanitizeAllSplits()) await _persist(tx: true);
+    await step(() async {
+      if (ledgerWhole && registryIntact && _sanitizeAllSplits()) {
+        await _persist(tx: true);
+      }
+    });
     // Once: imports waiting in review get a rule's category, a guess or To
     // sort, and those that would now count at once ([_isSureImport]) count,
     // marked new ([_countSurePendingImports]). Not when the ledger, rules,
-    // accounts or category registry failed to load: the test would read
-    // the wrong data and the flag would make that final.
-    if (!(prefs.getBool(_importsCountFirstKey) ?? false) &&
-        registryIntact &&
-        !_loadWarnings.contains('transactions') &&
-        !_loadWarnings.contains('rules') &&
-        !_loadWarnings.contains('accounts')) {
-      final counted = _countSurePendingImports();
-      if (counted.rows > 0) {
-        await _persist(
-          tx: true,
-          reminders: counted.reminders,
-          accounts: counted.accounts,
-        );
+    // accounts or category registry failed to load, or the ledger or the
+    // reminders it marks paid loaded in part: the test would read the
+    // wrong data and the flag would make that final.
+    await step(() async {
+      if (!(prefs.getBool(_importsCountFirstKey) ?? false) &&
+          registryIntact &&
+          ledgerWhole &&
+          remindersWhole &&
+          !_loadWarnings.contains('rules') &&
+          !_loadWarnings.contains('accounts')) {
+        final counted = _countSurePendingImports();
+        if (counted.rows > 0) {
+          await _persist(
+            tx: true,
+            reminders: counted.reminders,
+            accounts: counted.accounts,
+          );
+        }
+        // A save that failed leaves the rows counted in memory only: try
+        // again on the next launch.
+        if (!_persistFailed) await prefs.setBool(_importsCountFirstKey, true);
       }
-      // A save that failed leaves the rows counted in memory only: try
-      // again on the next launch.
-      if (!_persistFailed) await prefs.setBool(_importsCountFirstKey, true);
-    }
+    });
     // Once, on the first launch of 1.41.0: Bank accounts that only ever had
     // debit card alerts become debit cards ([_detectDebitCards]). Not when
     // the ledger or the accounts failed to load: the flag would make a
     // reading of the wrong data final.
-    if (!(prefs.getBool(_debitCardsDetectedKey) ?? false) &&
-        !_loadWarnings.contains('transactions') &&
-        !_loadWarnings.contains('accounts')) {
-      if (_detectDebitCards()) await _persist(accounts: true);
-      // A save that failed leaves the change in memory only: try again on
-      // the next launch.
-      if (!_persistFailed) await prefs.setBool(_debitCardsDetectedKey, true);
-    }
-    _refundReviewIds
-      ..clear()
-      ..addAll(prefs.getStringList(_refundSuggestIdsKey) ?? const []);
-    _discardedImports
-      ..clear()
-      ..addAll(prefs.getStringList(_discardedImportsKey) ?? const []);
-    _atmAutoMove = prefs.getBool(_atmAutoMoveKey) ?? false;
+    await step(() async {
+      if (!(prefs.getBool(_debitCardsDetectedKey) ?? false) &&
+          ledgerWhole &&
+          !_loadWarnings.contains('accounts')) {
+        if (_detectDebitCards()) await _persist(accounts: true);
+        // A save that failed leaves the change in memory only: try again on
+        // the next launch.
+        if (!_persistFailed) await prefs.setBool(_debitCardsDetectedKey, true);
+      }
+    });
+    await step(() {
+      _refundReviewIds
+        ..clear()
+        ..addAll(prefs.getStringList(_refundSuggestIdsKey) ?? const []);
+    });
+    await step(() {
+      _discardedImports
+        ..clear()
+        ..addAll(prefs.getStringList(_discardedImportsKey) ?? const []);
+    });
+    await step(() {
+      _atmAutoMove = prefs.getBool(_atmAutoMoveKey) ?? false;
+    });
     // Once, on the first launch of 1.42.0: refunds from the last 90 days
     // are linked to their purchase when sure, or offered for review
     // ([_linkPastRefunds]). Not when the ledger, the accounts or the
     // category registry failed to load: the flag would make a reading of
     // the wrong data final.
-    if (!(prefs.getBool(_refundsLinkedKey) ?? false) &&
-        registryIntact &&
-        !_loadWarnings.contains('transactions') &&
-        !_loadWarnings.contains('accounts')) {
-      final reviewBefore = _refundReviewIds.length;
-      if (_linkPastRefunds() > 0) await _persist(tx: true);
-      if (_refundReviewIds.length != reviewBefore) {
-        await _saveRefundReviewIds();
+    await step(() async {
+      if (!(prefs.getBool(_refundsLinkedKey) ?? false) &&
+          registryIntact &&
+          ledgerWhole &&
+          !_loadWarnings.contains('accounts')) {
+        final reviewBefore = _refundReviewIds.length;
+        if (_linkPastRefunds() > 0) await _persist(tx: true);
+        if (_refundReviewIds.length != reviewBefore) {
+          await _saveRefundReviewIds();
+        }
+        // A save that failed leaves the links in memory only: try again on
+        // the next launch.
+        if (!_persistFailed) await prefs.setBool(_refundsLinkedKey, true);
       }
-      // A save that failed leaves the links in memory only: try again on
-      // the next launch.
-      if (!_persistFailed) await prefs.setBool(_refundsLinkedKey, true);
-    }
+    });
     // Colours of tags no row carries any more: the Undo that could bring
     // such a tag back does not outlive the app session. A saved tag keeps
     // its colour with no payments.
-    if (_tagColors.isNotEmpty &&
-        !_loadWarnings.contains('transactions') &&
-        !_loadWarnings.contains('tag names')) {
-      final live = {
-        for (final t in _transactions)
-          for (final tag in t.tags) tagKey(tag),
-        for (final t in _savedTags) tagKey(t),
-      };
-      final before = _tagColors.length;
-      _tagColors.removeWhere((k, _) => !live.contains(k));
-      if (_tagColors.length != before) await _persist(marks: true);
-    }
+    await step(() async {
+      if (_tagColors.isNotEmpty &&
+          ledgerWhole &&
+          !_loadWarnings.contains('tag names')) {
+        final live = {
+          for (final t in _transactions)
+            for (final tag in t.tags) tagKey(tag),
+          for (final t in _savedTags) tagKey(t),
+        };
+        final before = _tagColors.length;
+        _tagColors.removeWhere((k, _) => !live.contains(k));
+        if (_tagColors.length != before) await _persist(marks: true);
+      }
+    });
     // A mark whose merchant has no payment left inside detection's 24-month
     // reach never shows as a subscription, so it could not be removed. The
     // prune uses the key the Subscription switch saves ([subscriptionKeyOf]),
     // so a savings mark on a transfer survives.
-    if (_subscriptionPins.isNotEmpty &&
-        !_loadWarnings.contains('transactions')) {
-      final now = DateTime.now();
-      final reach = DateTime(now.year - 2, now.month, now.day);
-      final seen = <String>{};
-      for (final t in _transactions) {
-        if (t.pending || t.date.isBefore(reach)) continue;
-        final key = subscriptionKeyOf(t);
-        if (key != null && _subscriptionPins.containsKey(key)) seen.add(key);
+    await step(() async {
+      if (_subscriptionPins.isNotEmpty && ledgerWhole) {
+        final now = DateTime.now();
+        final reach = DateTime(now.year - 2, now.month, now.day);
+        final seen = <String>{};
+        for (final t in _transactions) {
+          if (t.pending || t.date.isBefore(reach)) continue;
+          final key = subscriptionKeyOf(t);
+          if (key != null && _subscriptionPins.containsKey(key)) seen.add(key);
+        }
+        final before = _subscriptionPins.length;
+        _subscriptionPins.removeWhere((k, _) => !seen.contains(k));
+        if (_subscriptionPins.length != before) await _persist(marks: true);
       }
-      final before = _subscriptionPins.length;
-      _subscriptionPins.removeWhere((k, _) => !seen.contains(k));
-      if (_subscriptionPins.length != before) await _persist(marks: true);
-    }
+    });
     // A payment mark only matters until the payment's next date passes it.
-    if (_patternPaid.isNotEmpty) {
-      final cutoff = DateTime.now().subtract(const Duration(days: 70));
-      final before = _patternPaid.length;
-      _patternPaid.removeWhere(
-        (_, v) => DateTime.tryParse(v)?.isBefore(cutoff) ?? true,
-      );
-      if (_patternPaid.length != before) await _persist(marks: true);
-    }
+    await step(() async {
+      if (_patternPaid.isNotEmpty) {
+        final cutoff = DateTime.now().subtract(const Duration(days: 70));
+        final before = _patternPaid.length;
+        _patternPaid.removeWhere(
+          (_, v) => DateTime.tryParse(v)?.isBefore(cutoff) ?? true,
+        );
+        if (_patternPaid.length != before) await _persist(marks: true);
+      }
+    });
     // Card bills paid by a transfer the app saw: their cycle is paid, not
     // overdue. Not when the ledger or the accounts failed to load.
-    if (!_loadWarnings.contains('transactions') &&
-        !_loadWarnings.contains('accounts') &&
-        _markCardCyclesPaid()) {
-      await _persist(accounts: true);
-    }
+    await step(() async {
+      if (ledgerWhole &&
+          !_loadWarnings.contains('accounts') &&
+          _markCardCyclesPaid()) {
+        await _persist(accounts: true);
+      }
+    });
     _loaded = true;
     notifyListeners();
   }
@@ -2547,7 +2746,8 @@ class FinanceProvider extends ChangeNotifier {
     for (final rows in groups.values) {
       rows.sort(compareSplitParts);
     }
-    return groups;
+    // [splitPartsOf] hands the groups out.
+    return groups..updateAll((_, rows) => UnmodifiableListView(rows));
   }();
 
   /// Every row of [t]'s split payment in [compareSplitParts] order, the
@@ -2997,11 +3197,19 @@ class FinanceProvider extends ChangeNotifier {
     // its reminder payment back, a deleted or confirmed row puts it back.
     final reviewMoves = <Tx>[];
     final readded = <Tx>[];
+    // One lookup built per call: a search of the ledger per row made the
+    // Undo of a bulk edit cost rows times ledger. The first row with an id
+    // wins, as the search found it.
+    final indexOf = <String, int>{};
+    for (var i = 0; i < _transactions.length; i++) {
+      indexOf.putIfAbsent(_transactions[i].id, () => i);
+    }
     for (final snap in snapshot) {
       final old = _sanitizeSplit(snap);
-      final i = _transactions.indexWhere((t) => t.id == old.id);
+      final i = indexOf[old.id] ?? -1;
       if (i == -1) {
         if (!reAddMissing) continue;
+        indexOf[old.id] = _transactions.length;
         _transactions.add(old);
         reviewMoves.add(old);
         readded.add(old);
@@ -5326,10 +5534,10 @@ class FinanceProvider extends ChangeNotifier {
 
   /// [transactions] that count ([countsInTotals]), newest first. For
   /// callers that fold rows themselves (top merchants, recurring detection).
-  List<Tx> get countedTransactions => _d.counted ??= [
+  List<Tx> get countedTransactions => _d.counted ??= UnmodifiableListView([
     for (final t in transactions)
       if (countsInTotals(t)) t,
-  ];
+  ]);
 
   /// accountId → its confirmed transactions, oldest first (so index order is
   /// also `(date, insertionIndex)` order). Built once per notification.
@@ -8736,37 +8944,21 @@ class FinanceProvider extends ChangeNotifier {
   /// budgets, custom categories and built-in overrides, then reseeds the
   /// built-in defaults — a true factory reset.
   Future<void> clearAll({bool includeConfig = false}) async {
+    // Everything in memory is cleared and the listeners told before the
+    // first await: a frame built while the storage work runs would mix the
+    // emptied lists with figures cached from the old data.
     _transactions.clear();
     _accounts.clear();
     _keyIndex.clear();
-    final prefs = await SharedPreferences.getInstance();
-    for (final key
-        in prefs
-            .getKeys()
-            .where(
-              (k) =>
-                  k.startsWith('budget_alert_fired_') ||
-                  k.startsWith(kRangeBudgetAlertPrefix) ||
-                  k.startsWith('price_rise_fired_') ||
-                  k.startsWith('unusual_alert_fired_'),
-            )
-            .toList()) {
-      await prefs.remove(key);
-    }
-    // The unreadable alerts kept for the import warning hold bank SMS text.
-    await prefs.remove(kImportHealthKey);
     // Past refunds waiting for review name rows that are gone.
     _refundReviewIds.clear();
-    await prefs.remove(_refundSuggestIdsKey);
     _reminderMarks.clear();
     // With the rows gone, a rescan may bring back any alert.
     _discardedImports.clear();
-    await prefs.remove(_discardedImportsKey);
     // With no Cash account left, the first ATM alert asks again.
     _atmAutoMove = false;
     _atmMoves.clear();
     _released.clear();
-    await prefs.remove(_atmAutoMoveKey);
     if (includeConfig) {
       _rules.clear();
       _importRules.clear();
@@ -8789,6 +8981,48 @@ class FinanceProvider extends ChangeNotifier {
       _seedDefaultGroups();
     }
     notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    for (final key
+        in prefs
+            .getKeys()
+            .where(
+              (k) =>
+                  k.startsWith('budget_alert_fired_') ||
+                  k.startsWith(kRangeBudgetAlertPrefix) ||
+                  k.startsWith('price_rise_fired_') ||
+                  k.startsWith('unusual_alert_fired_'),
+            )
+            .toList()) {
+      await prefs.remove(key);
+    }
+    // The unreadable alerts kept for the import warning hold bank SMS text.
+    await prefs.remove(kImportHealthKey);
+    await prefs.remove(_refundSuggestIdsKey);
+    await prefs.remove(_discardedImportsKey);
+    await prefs.remove(_atmAutoMoveKey);
+    // The copies load kept of what it could not read go with the data they
+    // copy: the ledger's holds bank alert text.
+    for (final key in [
+      _txKey,
+      _accountsKey,
+      if (includeConfig) ...[
+        _rulesKey,
+        _importRulesKey,
+        _customCategoriesKey,
+        _builtinOverridesKey,
+        _groupsKey,
+        _budgetsKey,
+        _merchantAliasesKey,
+        _remindersKey,
+        _tagColorsKey,
+        _tagNamesKey,
+        _savedFiltersKey,
+        _subscriptionPinsKey,
+        _patternPaidKey,
+      ],
+    ]) {
+      await _removeCorruptCopy(prefs, key);
+    }
     await _persist(
       tx: true,
       accounts: true,
@@ -8855,7 +9089,8 @@ class FinanceProvider extends ChangeNotifier {
     // groups may carry 'id', 'name', 'merchantWords' and 'minimum';
     // 'tagNames' (tags saved with no payments).
     // v34: rules may carry 'payee' and 'tags'; 'savedFilters'.
-    'version': 34,
+    // v35: card rewards may carry 'wholeHundreds'.
+    'version': _backupVersion,
     'transactions': [for (final t in _transactions) _backupJsonOf(t)],
     'discardedImports': _discardedImports.toList(),
     'accounts': _accounts.map((a) => a.toJson()).toList(),
@@ -8892,6 +9127,40 @@ class FinanceProvider extends ChangeNotifier {
     // v32 addition: whether ATM withdrawals move to Cash on import.
     'atmAutoMove': _atmAutoMove,
   };
+
+  /// Removes the copy [load] keeps of [key]'s bytes when they could not be
+  /// read whole. Best effort: a copy left behind only takes space.
+  static Future<void> _removeCorruptCopy(
+    SharedPreferences prefs,
+    String key,
+  ) async {
+    try {
+      await prefs.remove('${key}_corrupt');
+    } catch (_) {}
+  }
+
+  /// The backup format [exportData] writes; see the history beside its
+  /// 'version' entry. [importData] refuses a file from a newer format.
+  static const int _backupVersion = 35;
+
+  /// Where in decoded JSON [node] the first number that is not finite sits,
+  /// as `.accounts[2].manualBalance`, or null when every number is finite.
+  /// Builds no text on the way down, so a clean file costs one walk.
+  static String? _nonFinitePath(Object? node) {
+    if (node is double) return node.isFinite ? null : '';
+    if (node is Map) {
+      for (final e in node.entries) {
+        final at = _nonFinitePath(e.value);
+        if (at != null) return '.${e.key}$at';
+      }
+    } else if (node is List) {
+      for (var i = 0; i < node.length; i++) {
+        final at = _nonFinitePath(node[i]);
+        if (at != null) return '[$i]$at';
+      }
+    }
+    return null;
+  }
 
   /// [t] as a backup holds it: no alert text, the merchant it names instead.
   static Map<String, dynamic> _backupJsonOf(Tx t) {
@@ -8943,7 +9212,11 @@ class FinanceProvider extends ChangeNotifier {
   /// With [replace] everything is overwritten; otherwise entries are merged,
   /// skipping ids that already exist. Returns transactions added. Any
   /// `goals` from older backups are ignored (the feature was removed).
-  /// Throws [FormatException] when the payload is not a valid backup.
+  /// A second transaction or account with an id already in the file is
+  /// dropped. Throws [FormatException] when the payload is not a valid
+  /// backup, holds a number that is not finite or is too large, or comes
+  /// from a newer format; and on a replace whose save failed, after putting
+  /// the data from before back.
   Future<int> importData(
     Map<String, dynamic> data, {
     required bool replace,
@@ -8952,6 +9225,17 @@ class FinanceProvider extends ChangeNotifier {
     if (data['app'] != 'expense_tracker' || rawTx is! List) {
       throw const FormatException('Not an Expense Tracker backup file');
     }
+    // jsonDecode reads a figure such as 1e999 as Infinity, which every
+    // later save fails to encode. Any such number, in any field (card
+    // rewards and the settings block included), rejects the file before
+    // any state changes.
+    final badNumber = _nonFinitePath(data);
+    if (badNumber != null) {
+      throw FormatException(
+        'Backup contains an invalid number '
+        '(${badNumber.replaceFirst('.', '')}).',
+      );
+    }
     // Parse everything up front so a malformed entry rejects the whole file
     // instead of leaving a half-imported state.
     //
@@ -8959,6 +9243,13 @@ class FinanceProvider extends ChangeNotifier {
     // v5+ backups are trusted verbatim — an sms row there with an empty
     // smsBody and a non-empty note carries a genuine user note.
     final version = (data['version'] as num?)?.toInt() ?? 0;
+    // A newer build's fields would be dropped without a word.
+    if (version > _backupVersion) {
+      throw const FormatException(
+        'This backup was made by a newer version of the app. Update the '
+        'app, then restore it.',
+      );
+    }
     var txs = rawTx
         .map((e) => Tx.fromJson(Map<String, dynamic>.from(e as Map)))
         .toList();
@@ -8967,22 +9258,58 @@ class FinanceProvider extends ChangeNotifier {
     // non-positive one silently corrupts totals — reject the file up here,
     // BEFORE any state is touched, like every other malformed entry.
     for (final t in txs) {
-      if (!t.amount.isFinite || t.amount <= 0) {
+      if (!t.amount.isFinite ||
+          t.amount <= 0 ||
+          t.amount > SmsTxnParser.maxAmount) {
         throw const FormatException(
           'Backup contains a transaction with an invalid amount.',
         );
       }
     }
+    // Other figures may be negative (a card in credit, a balance after an
+    // overdraft) but none may pass the ceiling the alert parser uses.
+    void notTooLarge(double? v, String where) {
+      if (v != null && v.abs() > SmsTxnParser.maxAmount) {
+        throw FormatException(
+          'Backup contains an amount that is too large ($where).',
+        );
+      }
+    }
+
+    for (final (i, t) in txs.indexed) {
+      notTooLarge(t.balanceAfter, 'transactions[$i].balanceAfter');
+      notTooLarge(t.myShare, 'transactions[$i].myShare');
+      for (final p in t.people) {
+        notTooLarge(p.amount, 'transactions[$i].people');
+        notTooLarge(p.paid, 'transactions[$i].people');
+      }
+    }
+    // The first row with an id wins: a second one would reach the ledger
+    // as a duplicate, in a merge as well as a replace. Dropped after the
+    // checks, so their messages count entries as the file does.
+    final seenTxIds = <String>{};
+    txs = txs.where((t) => seenTxIds.add(t.id)).toList();
     if (version < 5) {
       txs = txs.map((t) => t.migrateSmsBodyFromNote()).toList();
     }
     // Accounts are a v2 addition — absent in older backups (defaults to none).
     final rawAccounts = data['accounts'];
-    final accounts = rawAccounts is List
+    final fileAccounts = rawAccounts is List
         ? rawAccounts
               .map((e) => Account.fromJson(Map<String, dynamic>.from(e as Map)))
               .toList()
         : <Account>[];
+    for (final (i, a) in fileAccounts.indexed) {
+      notTooLarge(a.manualBalance, 'accounts[$i].manualBalance');
+      notTooLarge(a.creditLimit, 'accounts[$i].creditLimit');
+      notTooLarge(a.goalAmount, 'accounts[$i].goalAmount');
+      notTooLarge(a.pointValue, 'accounts[$i].pointValue');
+    }
+    // The first account with an id wins, as for rows above.
+    final seenAccountIds = <String>{};
+    final accounts = fileAccounts
+        .where((a) => seenAccountIds.add(a.id))
+        .toList();
     // Custom categories are a v4 addition — absent in older backups (null,
     // meaning "leave whatever the device already has").
     final rawCategories = data['categories'];
@@ -9017,6 +9344,9 @@ class FinanceProvider extends ChangeNotifier {
               )
               .toList()
         : null;
+    for (final (i, b) in (importedBudgets ?? const <SpendBudget>[]).indexed) {
+      notTooLarge(b.limit, 'budgets[$i].limit');
+    }
     // v12 addition; absent = leave the device's aliases alone.
     final rawAliases = data['merchantAliases'];
     final importedAliases = rawAliases is Map
@@ -9063,6 +9393,9 @@ class FinanceProvider extends ChangeNotifier {
               )
               .toList()
         : null;
+    for (final (i, r) in (importedReminders ?? const <Reminder>[]).indexed) {
+      notTooLarge(r.expectedAmount, 'reminders[$i].expectedAmount');
+    }
     // Built-in overrides are a v7 addition. Ids that aren't built-ins are
     // dropped (a hand-edited file must not invent categories); since
     // built-ins became fully editable, type/transfer-ness is TRUSTED from
@@ -9140,6 +9473,107 @@ class FinanceProvider extends ChangeNotifier {
     }
 
     if (replace) {
+      // A replace must land whole or not at all: a write that failed half
+      // way used to leave the file's rows with the device's old accounts,
+      // categories and reminders. What is in memory is copied here, with no
+      // await between the copy and the change, and when a write fails it
+      // is put back and saved again through the same writes, so the ledger
+      // write keeps its ordering guard.
+      final prefs = await SharedPreferences.getInstance();
+      // A marks key whose collection failed to load is never saved while
+      // its warning stands (see _persistOrThrow), so its stored bytes read
+      // now are still current, and are what a failed replace puts back.
+      final marksBefore = {
+        for (final (name, key) in const [
+          ('tag colours', _tagColorsKey),
+          ('tag names', _tagNamesKey),
+          ('saved filters', _savedFiltersKey),
+          ('subscription marks', _subscriptionPinsKey),
+          ('payment marks', _patternPaidKey),
+        ])
+          if (_loadWarnings.contains(name)) key: prefs.getString(key),
+      };
+      final before = (
+        tx: List.of(_transactions),
+        accounts: List.of(_accounts),
+        categories: customCategories,
+        overrides: builtinOverrides,
+        groups: List.of(_groups),
+        assignments: Map.of(_groupAssignments),
+        budgets: List.of(_budgets),
+        aliases: Map.of(_merchantAliases),
+        reminders: List.of(_reminders),
+        tagColors: Map.of(_tagColors),
+        savedTags: List.of(_savedTags),
+        savedFilters: List.of(_savedFilters),
+        pins: Map.of(_subscriptionPins),
+        patternPaid: Map.of(_patternPaid),
+        rules: List.of(_rules),
+        importRules: List.of(_importRules),
+        discarded: List.of(_discardedImports),
+        atmAutoMove: _atmAutoMove,
+        reminderMarks: Map.of(_reminderMarks),
+        warnings: List.of(_loadWarnings),
+      );
+      // A change made while the replace's save was awaited (an import from
+      // a notification, say) is lost here with the file's data: keeping it
+      // would leave a state that is neither the old data nor the new.
+      Future<void> rollBack(Future<void> Function() writeBack) async {
+        void refill<T>(List<T> list, List<T> from) => list
+          ..clear()
+          ..addAll(from);
+        void refillMap<K, V>(Map<K, V> map, Map<K, V> from) => map
+          ..clear()
+          ..addAll(from);
+        refill(_transactions, before.tx);
+        refill(_accounts, before.accounts);
+        setCustomCategories(before.categories);
+        setBuiltinOverrides(before.overrides);
+        refill(_groups, before.groups);
+        refillMap(_groupAssignments, before.assignments);
+        refill(_budgets, before.budgets);
+        refillMap(_merchantAliases, before.aliases);
+        refill(_reminders, before.reminders);
+        refillMap(_tagColors, before.tagColors);
+        refill(_savedTags, before.savedTags);
+        refill(_savedFilters, before.savedFilters);
+        refillMap(_subscriptionPins, before.pins);
+        refillMap(_patternPaid, before.patternPaid);
+        refill(_rules, before.rules);
+        refill(_importRules, before.importRules);
+        _discardedImports
+          ..clear()
+          ..addAll(before.discarded);
+        _atmAutoMove = before.atmAutoMove;
+        refillMap(_reminderMarks, before.reminderMarks);
+        refill(_loadWarnings, before.warnings);
+        _rebuildKeyIndex();
+        // Storage gets the old data back from memory, through the writes
+        // the replace made: memory holds an edit whose own save was still
+        // being encoded when the restore began, which stored bytes read
+        // then would not. A collection with no key before gets one holding
+        // what memory has, often empty. Should a write fail again, memory
+        // holds the old data and the save-failed banner's Retry writes it.
+        var putBack = true;
+        try {
+          await writeBack();
+        } catch (_) {
+          putBack = false;
+        }
+        for (final MapEntry(:key, :value) in marksBefore.entries) {
+          try {
+            final ok = value == null
+                ? await prefs.remove(key)
+                : await prefs.setString(key, value);
+            putBack = ok && putBack;
+          } catch (_) {
+            putBack = false;
+          }
+        }
+        if (!putBack) _persistFailed = true;
+        notifyListeners();
+      }
+
       _transactions
         ..clear()
         ..addAll(txs);
@@ -9229,13 +9663,14 @@ class FinanceProvider extends ChangeNotifier {
       // and its load warning goes.
       _loadWarnings.removeWhere(
         (name) => switch (name) {
-          'transactions' || 'accounts' => true,
+          'transactions' || 'some transactions' || 'accounts' => true,
           'categories' => categories != null,
           'category styles' => importedOverrides != null,
-          'groups' => importedGroups != null || importedAssignments != null,
-          'budgets' => importedBudgets != null,
+          'groups' || 'some groups' =>
+            importedGroups != null || importedAssignments != null,
+          'budgets' || 'some budgets' => importedBudgets != null,
           'merchantAliases' => importedAliases != null,
-          'reminders' => importedReminders != null,
+          'reminders' || 'some reminders' => importedReminders != null,
           'rules' => importedRules != null,
           'import rules' => importedImportRules != null,
           'tag colours' => importedTagColors != null,
@@ -9253,28 +9688,70 @@ class FinanceProvider extends ChangeNotifier {
       _ensureAccountsForTransactions();
       _acctKindHints = const {};
       notifyListeners();
-      await _persist(
-        tx: true,
-        accounts: true,
-        categories: categories != null,
-        overrides: importedOverrides != null,
-        groups: importedGroups != null || importedAssignments != null,
-        budgets: importedBudgets != null,
-        aliases: importedAliases != null,
-        reminders: importedReminders != null || remindersSanitized,
-        rules: importedRules != null,
-        importRules: importedImportRules != null,
-        marks:
-            importedTagColors != null ||
-            importedTagNames != null ||
-            importedSavedFilters != null ||
-            importedPins != null ||
-            importedPatternPaid != null,
-        discards: importedDiscarded != null,
-      );
-      if (importedAtmAutoMove != null) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool(_atmAutoMoveKey, importedAtmAutoMove);
+      // Writes what memory holds for every collection the file supplies:
+      // the restored data, or after a failure the data from before.
+      Future<void> writeAll() async {
+        await _persistOrThrow(
+          tx: true,
+          accounts: true,
+          categories: categories != null,
+          overrides: importedOverrides != null,
+          groups: importedGroups != null || importedAssignments != null,
+          budgets: importedBudgets != null,
+          aliases: importedAliases != null,
+          reminders: importedReminders != null || remindersSanitized,
+          rules: importedRules != null,
+          importRules: importedImportRules != null,
+          marks:
+              importedTagColors != null ||
+              importedTagNames != null ||
+              importedSavedFilters != null ||
+              importedPins != null ||
+              importedPatternPaid != null,
+          discards: importedDiscarded != null,
+        );
+        if (importedAtmAutoMove != null &&
+            !await prefs.setBool(_atmAutoMoveKey, _atmAutoMove)) {
+          throw StateError('A storage write failed');
+        }
+      }
+
+      try {
+        await writeAll();
+      } catch (_) {
+        await rollBack(writeAll);
+        // A FormatException, so the restore screens show this text after
+        // "Import failed:" rather than calling the file unreadable.
+        throw const FormatException(
+          'Could not save the restored data. The data from before the '
+          'restore is kept.',
+        );
+      }
+      // The copy kept of a collection that once failed to load is replaced
+      // on purpose by the file's data: it goes, with the bank alert text
+      // the ledger copy holds.
+      for (final (supplied, key) in [
+        (true, _txKey),
+        (true, _accountsKey),
+        (categories != null, _customCategoriesKey),
+        (importedOverrides != null, _builtinOverridesKey),
+        (importedGroups != null || importedAssignments != null, _groupsKey),
+        (importedBudgets != null, _budgetsKey),
+        (importedAliases != null, _merchantAliasesKey),
+        (importedReminders != null, _remindersKey),
+        (importedRules != null, _rulesKey),
+        (importedImportRules != null, _importRulesKey),
+        (importedTagColors != null, _tagColorsKey),
+        (importedTagNames != null, _tagNamesKey),
+        (importedSavedFilters != null, _savedFiltersKey),
+        (importedPins != null, _subscriptionPinsKey),
+        (importedPatternPaid != null, _patternPaidKey),
+      ]) {
+        if (supplied) await _removeCorruptCopy(prefs, key);
+      }
+      if (_persistFailed) {
+        _persistFailed = false;
+        notifyListeners();
       }
       return txs.length;
     }

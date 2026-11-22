@@ -289,7 +289,8 @@ void main() {
       csv.split('\r\n').first,
       endsWith(
         ',pairId,tags,people,repaidBy,countIn,walletCounted,unseen,refundOf,'
-        'payee,acctKind,smsAt,splitId,guessed,noCashback',
+        'payee,acctKind,smsAt,splitId,guessed,noCashback,smsMerchant,'
+        'rewardGroup,rewardPickedAt',
       ),
     );
     final rows = BackupService.txsFromCsv(csv);

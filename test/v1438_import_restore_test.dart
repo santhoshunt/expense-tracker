@@ -201,7 +201,7 @@ void main() {
         expect(json, isNot(contains('QUILLFERN')));
         expect(json, isNot(contains('XX3141')));
         final data = jsonDecode(json) as Map<String, dynamic>;
-        expect(data['version'], 34);
+        expect(data['version'], 35);
         expect(data['discardedImports'], hasLength(1));
 
         SharedPreferences.setMockInitialValues({});
@@ -307,7 +307,10 @@ void main() {
       final csv = BackupService.buildCsv(p);
       expect(
         csv.split('\r\n').first,
-        endsWith(',acctKind,smsAt,splitId,guessed,noCashback'),
+        endsWith(
+          ',acctKind,smsAt,splitId,guessed,noCashback,smsMerchant,'
+          'rewardGroup,rewardPickedAt',
+        ),
       );
       final (txs, kinds) = BackupService.csvImportOf(csv);
       expect(kinds, {'HDFC:4412': 'card'});
@@ -531,7 +534,7 @@ void main() {
       expect(await p.addSavedTag('Diwali', null), isTrue);
       final data =
           jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
-      expect(data['version'], 34);
+      expect(data['version'], 35);
 
       SharedPreferences.setMockInitialValues({});
       final phone = await fresh();
@@ -756,7 +759,7 @@ void main() {
       await p.saveFilter(trip('flt_1_0', 'Hill trip'));
       final data =
           jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
-      expect(data['version'], 34);
+      expect(data['version'], 35);
       expect(data['savedFilters'], [trip('flt_1_0', 'Hill trip').toJson()]);
 
       SharedPreferences.setMockInitialValues({});

@@ -25,7 +25,8 @@ import '../widgets/motion.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/undo_snackbar.dart';
-import 'card_rewards_page.dart' show everythingElseLabel, rewardGroupLabel;
+import 'card_rewards_page.dart'
+    show everythingElseLabel, rewardGroupLabel, wholeHundredsNote;
 import 'classifiers_screen.dart' show showRuleDialog;
 
 /// What a new entry starts with, for callers that already know (the People
@@ -1602,6 +1603,8 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             : 'Under $min: earns nothing from $label.',
       );
     }
+    // The ≈ figure beside the rate would otherwise look miscounted.
+    if (r.rules.wholeHundreds) parts.add(wholeHundredsNote);
     return parts.join(' ');
   }
 

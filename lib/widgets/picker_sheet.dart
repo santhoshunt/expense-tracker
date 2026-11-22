@@ -107,24 +107,81 @@ class _PickerSheetBody<T> extends StatefulWidget {
 
 class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
   final _searchCtrl = TextEditingController();
+  final _scroll = ScrollController();
   final _selectedKey = GlobalKey();
   var _query = '';
-  var _scrolledToSelected = false;
+
+  /// Counts reveals, so an older one still stepping down the list stops
+  /// when a newer one starts.
+  var _reveals = 0;
+
+  /// The list's padding, a header's and a row's, and a row's least height:
+  /// together they give the least offset a row can sit at.
+  static const _listPadding = EdgeInsets.fromLTRB(12, 6, 12, 16);
+  static const _headerPadding = EdgeInsets.fromLTRB(14, 12, 14, 4);
+  static const _rowPadding = EdgeInsets.symmetric(vertical: 2);
+  static const _rowMinHeight = 52.0;
 
   @override
   void initState() {
     super.initState();
     // The current selection can sit far below the fold in a 40-row list.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _ensureSelected());
+    _revealSelected(opening: true);
   }
 
-  void _ensureSelected() {
-    if (_scrolledToSelected) return;
-    final c = _selectedKey.currentContext;
-    if (c != null) {
-      _scrolledToSelected = true;
-      Scrollable.ensureVisible(c, alignment: 0.4);
+  /// Brings the selected row into view after the next frame: centred a
+  /// little above the middle on opening, and after a search only as far as
+  /// needed, so the list does not jump on every key.
+  void _revealSelected({required bool opening}) {
+    final run = ++_reveals;
+    void step(int attempt) {
+      if (!mounted || run != _reveals || !_scroll.hasClients) return;
+      final row = _selectedKey.currentContext;
+      if (row != null) {
+        if (opening) {
+          Scrollable.ensureVisible(row, alignment: 0.4);
+        } else {
+          Scrollable.ensureVisible(
+            row,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          );
+          Scrollable.ensureVisible(
+            row,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart,
+          );
+        }
+        return;
+      }
+      // The list builds only the rows in and near its view, so a row further
+      // away has no context yet. The first step jumps to the least offset the
+      // row can sit at, which puts it at or below the top of the view; each
+      // later step moves one view down, until the row is built.
+      final visible = _visible;
+      final index = visible.indexWhere(_isSelected);
+      final p = _scroll.position;
+      if (index < 0 || attempt > visible.length) return;
+      if (attempt > 0 && p.pixels >= p.maxScrollExtent) return;
+      final target = attempt == 0
+          ? visible
+                .take(index)
+                .fold(
+                  _listPadding.top,
+                  (sum, i) =>
+                      sum +
+                      (i.isHeader
+                          ? _headerPadding.vertical
+                          : _rowMinHeight + _rowPadding.vertical),
+                )
+          : p.pixels + p.viewportDimension;
+      p.jumpTo(
+        target.clamp(p.minScrollExtent, p.maxScrollExtent).toDouble(),
+      );
+      WidgetsBinding.instance
+        ..addPostFrameCallback((_) => step(attempt + 1))
+        ..ensureVisualUpdate();
     }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => step(0));
   }
 
   /// Rows surviving the query: items matching on their label or subtitle
@@ -171,7 +228,7 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
     final visible = _visible;
 
     return DisposeScope(
-      disposables: [_searchCtrl],
+      disposables: [_searchCtrl, _scroll],
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -219,11 +276,14 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
                             onPressed: () {
                               _searchCtrl.clear();
                               setState(() => _query = '');
+                              _revealSelected(opening: false);
                             },
                           ),
                   ),
-                  onChanged: (v) =>
-                      setState(() => _query = v.trim().toLowerCase()),
+                  onChanged: (v) {
+                    setState(() => _query = v.trim().toLowerCase());
+                    _revealSelected(opening: false);
+                  },
                 ),
               ),
             ),
@@ -234,18 +294,14 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
                     child: Text('No matches.', style: textTheme.bodySmall),
                   )
                 : ListView(
+                    controller: _scroll,
                     shrinkWrap: true,
-                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 16),
+                    padding: _listPadding,
                     children: [
                       for (final item in visible)
                         item.isHeader
                             ? Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  14,
-                                  12,
-                                  14,
-                                  4,
-                                ),
+                                padding: _headerPadding,
                                 child: Text(
                                   item.label.toUpperCase(),
                                   style: textTheme.labelSmall?.copyWith(
@@ -270,7 +326,7 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
       button: true,
       selected: isSelected,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
+        padding: _rowPadding,
         child: Material(
           key: isSelected ? _selectedKey : null,
           color: isSelected
@@ -281,7 +337,7 @@ class _PickerSheetBodyState<T> extends State<_PickerSheetBody<T>> {
           child: InkWell(
             onTap: () => Navigator.pop(context, PickerResult<T>(item.value)),
             child: Container(
-              constraints: const BoxConstraints(minHeight: 52),
+              constraints: const BoxConstraints(minHeight: _rowMinHeight),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               child: Row(
                 children: [

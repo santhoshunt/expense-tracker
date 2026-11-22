@@ -151,7 +151,10 @@ void main() {
       final csv = BackupService.buildCsvOf([manual(payee: 'Kappa Cafe')]);
       expect(
         csv.split('\r\n').first,
-        endsWith(',payee,acctKind,smsAt,splitId,guessed,noCashback'),
+        endsWith(
+          ',payee,acctKind,smsAt,splitId,guessed,noCashback,smsMerchant,'
+          'rewardGroup,rewardPickedAt',
+        ),
       );
       expect(BackupService.txsFromCsv(csv).single.payee, 'Kappa Cafe');
     });
@@ -171,7 +174,7 @@ void main() {
         final t = p.transactions.firstWhere((t) => t.id == id);
         expect(t.payee, 'Kappa Cafe');
         expect(p.rowTitleFor(t), 'Kappa Cafe');
-        expect(p.exportData()['version'], 34);
+        expect(p.exportData()['version'], 35);
         // The stored ledger keeps it across a restart.
         final again = await loaded();
         expect(

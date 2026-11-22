@@ -29,12 +29,13 @@
         android:src="@drawable/widget_card_border"
         android:visibility="gone" />
 
+    <!-- The 16dp at each side sits on the children, not here, so the list
+         can draw its scrollbar in that space, clear of the row figures. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:gravity="center_vertical"
         android:orientation="vertical"
-        android:paddingHorizontal="16dp"
         android:paddingVertical="10dp">
 
         <LinearLayout
@@ -42,7 +43,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp">
 
             <TextView
                 android:id="@+id/hw_title"
@@ -69,15 +71,26 @@
                 android:visibility="gone" />
         </LinearLayout>
 
-        <!-- The height left under the header; the rows scroll inside it. -->
+        <!-- The height left under the header; the rows scroll inside it.
+             The rows end 16dp from the widget's right edge, under the
+             header's total: 4dp of margin, then 12dp of padding that the
+             scrollbar is drawn over (outsideOverlay), so it sits 4dp in
+             from the edge, clear of the rounded corner and of the figures.
+             The rows themselves stay inside the padding (clipToPadding).
+             CashbacksWidgetService counts the 16dp at each side. -->
         <ListView
             android:id="@+id/hw_list"
             android:layout_width="match_parent"
             android:layout_height="0dp"
+            android:layout_marginEnd="4dp"
             android:layout_weight="1"
+            android:clipToPadding="true"
             android:divider="@null"
             android:dividerHeight="0dp"
             android:listSelector="@android:color/transparent"
+            android:paddingEnd="12dp"
+            android:paddingStart="16dp"
+            android:scrollbarStyle="outsideOverlay"
             android:visibility="gone" />
 
         <TextView
@@ -87,6 +100,7 @@
             android:layout_marginTop="4dp"
             android:ellipsize="end"
             android:maxLines="3"
+            android:paddingHorizontal="16dp"
             android:text="@string/home_widget_empty"
             android:textColor="#B4C0C8"
             android:textSize="13sp" />

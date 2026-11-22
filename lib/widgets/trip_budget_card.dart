@@ -165,7 +165,13 @@ class TripDayBars extends StatelessWidget {
 
               final style = text.labelSmall;
               return SizedBox(
-                height: (style?.fontSize ?? 11) * 1.6,
+                // Grows with the user's text size, so large numbers do not
+                // spill onto the caption below.
+                height:
+                    MediaQuery.textScalerOf(
+                      context,
+                    ).scale(style?.fontSize ?? 11) *
+                    1.6,
                 child: Stack(
                   clipBehavior: Clip.none,
                   children: [

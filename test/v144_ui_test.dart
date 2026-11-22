@@ -11,6 +11,8 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/accounts_screen.dart'
     show showCountCashDialog;
 import 'package:expense_tracker/screens/add_transaction_sheet.dart';
+import 'package:expense_tracker/screens/card_rewards_page.dart'
+    show wholeHundredsNote;
 import 'package:expense_tracker/services/card_rewards.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/transaction_tile.dart';
@@ -477,6 +479,47 @@ void main() {
         find.text(
           'Picked before for Amazon on this card. Pick another group to '
           'change it for Amazon on this card.',
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a card counting whole ₹100s earns on them and says so', (
+      tester,
+    ) async {
+      final p = FinanceProvider();
+      await p.load();
+      final card = await p.addAccount(
+        name: 'Demo Card Two',
+        type: AccountType.creditCard,
+      );
+      await p.setCardRewards(
+        card,
+        const CardRewards(
+          groups: [
+            RewardGroup(
+              id: 'gD',
+              name: 'Demo Mart',
+              categoryIds: {},
+              merchantWords: {'demo mart'},
+              rate: 5,
+            ),
+          ],
+          baseRate: 1,
+          wholeHundreds: true,
+        ),
+      );
+      await onCard(p, card, [
+        row('d1', 250, category: 'shopping', payee: 'Demo Mart'),
+      ]);
+      await openRow(tester, p, 'd1');
+      // Two hundreds at 5%, not 5% of ₹250.
+      expect(find.text('5% Demo Mart · ≈ ₹10'), findsOneWidget);
+      await openRewards(tester);
+      expect(
+        find.text(
+          'Set by the merchant name Demo Mart. A pick here is kept for Demo '
+          'Mart on this card. $wholeHundredsNote',
         ),
         findsOneWidget,
       );

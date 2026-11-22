@@ -2049,8 +2049,9 @@ class _CardFigures extends StatelessWidget {
                   'first group naming its merchant, else the first holding '
                   "its category, else Everything else. Under a group's "
                   'minimum it earns nothing from that group. A split '
-                  'payment earns once, on its total. The bank decides the '
-                  'real figure.',
+                  'payment earns once, on its total. '
+                  '${account.rewards?.wholeHundreds == true ? '$wholeHundredsNote ' : ''}'
+                  'The bank decides the real figure.',
               link: InfoLink(
                 prompt: 'Change the rates?',
                 label: 'Rewards…',

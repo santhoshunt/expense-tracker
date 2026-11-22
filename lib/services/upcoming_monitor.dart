@@ -127,7 +127,8 @@ class UpcomingMonitor {
         if (s.daysUntil > cardWindowDays) continue;
         checks.add((
           key: cardDueKey(a.id, s.due),
-          // 94000 to 94999; every range is listed in NotificationIds.
+          // NotificationIds.cardBillStart to cardBillEnd; every range is
+          // listed in NotificationIds.
           id: NotificationIds.cardBill(a.id),
           title: s.daysUntil < 0
               ? '${a.name} bill overdue'

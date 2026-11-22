@@ -18,6 +18,12 @@ import 'info_tip.dart';
 class NotificationSwitches extends StatefulWidget {
   const NotificationSwitches({super.key});
 
+  /// Forgets the status remembered across page visits. Tests call it, so
+  /// one case's status does not show in the next case's first frame.
+  @visibleForTesting
+  static void resetRememberedStatus() =>
+      _NotificationSwitchesState._lastKnownNotifStatus = null;
+
   @override
   State<NotificationSwitches> createState() => _NotificationSwitchesState();
 }

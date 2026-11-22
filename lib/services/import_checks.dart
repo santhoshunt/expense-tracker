@@ -165,7 +165,8 @@ abstract final class ImportChecks {
 
   /// Confirms the queued Keep taps in the ledger, from the notes
   /// ([kImportChecksKeptKey]) and from the Payments to check widget
-  /// ([kImportChecksWidgetKeptKey]), then drops them from both queues. A tap
+  /// ([kImportChecksWidgetKeptKey]), then drops them from both queues once
+  /// the ledger is saved. A tap
   /// landing between the second reload and the write is lost and its row
   /// stays guessed; the row still counts and its pill still offers Keep.
   static Future<void> applyKept(FinanceProvider finance) async {
@@ -178,6 +179,11 @@ abstract final class ImportChecks {
     await finance.confirmGuesses([
       for (final p in [...read, ...fromWidget]) ?parseImportCheckPayload(p),
     ]);
+    // Both queues stay while the ledger write failed, as SmsImportService
+    // keeps captured alerts unacknowledged: drained now, the Keep would be
+    // lost if the app closed before a later write landed. Applying them
+    // again is harmless, since confirmGuesses skips a row no longer guessed.
+    if (finance.persistFailed) return;
     await prefs.reload();
     if (read.isNotEmpty) {
       final now = [...?prefs.getStringList(kImportChecksKeptKey)];

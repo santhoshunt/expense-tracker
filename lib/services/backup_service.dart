@@ -13,6 +13,7 @@ import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/dates.dart' show monthKey;
+import 'recurring_detector.dart' show alertMerchantOf;
 import '../utils/fiscal_year.dart';
 
 /// Export (JSON backup / CSV / PDF report) and import (JSON / CSV) of the
@@ -204,6 +205,14 @@ class BackupService {
     'guessed',
     // A card row left out of the reward estimate (Tx.cashbackOff).
     'noCashback',
+    // The merchant an imported alert names (alertMerchantOf), written in
+    // place of the alert text this file leaves out. Without it a restored
+    // SMS row loses its title, its merchant name and its subscription.
+    'smsMerchant',
+    // The reward group picked on a card row and when (Tx.rewardGroup,
+    // Tx.rewardPickedAt); empty when nothing was picked.
+    'rewardGroup',
+    'rewardPickedAt',
   ];
 
   /// A split's people as one CSV cell:
@@ -241,14 +250,35 @@ class BackupService {
     return out;
   }
 
-  /// Quote-escapes [v]; a leading formula trigger (`= + - @`, per OWASP)
-  /// additionally gets a `'` prefix — spreadsheets evaluate such cells even
-  /// inside quotes, so a note or an RCS sender name starting with `=` would
-  /// otherwise execute on open. `cell()` strips the prefix on re-import so
-  /// the app's own round-trip stays lossless.
+  /// Quote-escapes [v]; a value that could run as a formula
+  /// ([_csvFormulaLike]) additionally gets a `'` prefix. Spreadsheets
+  /// evaluate such cells even inside quotes, so a note or an RCS sender name
+  /// starting with `=` would otherwise execute on open. `cell()` strips the
+  /// prefix on re-import so the app's own round-trip stays lossless.
   static String _csvEscape(String v) {
-    final guarded = v.isNotEmpty && '=+-@'.contains(v[0]) ? "'$v" : v;
+    final guarded = _csvFormulaLike(v) ? "'$v" : v;
     return '"${guarded.replaceAll('"', '""')}"';
+  }
+
+  static final _csvLeadingBlankRe = RegExp(r'[\s\x00-\x1F\x7F]*');
+
+  /// Whether [v] needs [_csvEscape]'s `'` prefix, and on import whether a
+  /// value after its `'` had one. Spreadsheets skip leading spaces and
+  /// control characters before reading a formula, and OWASP lists a leading
+  /// tab or carriage return as a trigger of its own, so the first character
+  /// alone is not enough. A value that already starts with `'` before such
+  /// text gets one more, so the single `'` the import strips gives back
+  /// exactly what was typed.
+  static bool _csvFormulaLike(String v) {
+    // Counted, not recursed: a hand-edited cell may hold many apostrophes.
+    var i = 0;
+    while (i < v.length && v[i] == "'") {
+      i++;
+    }
+    if (i == v.length) return false;
+    if (v[i] == '\t' || v[i] == '\r') return true;
+    final lead = _csvLeadingBlankRe.matchAsPrefix(v, i)!.end;
+    return lead < v.length && '=+-@'.contains(v[lead]);
   }
 
   /// Parses a money cell. Commas are Indian thousands grouping and are
@@ -393,6 +423,15 @@ class BackupService {
           _csvEscape(t.splitId ?? ''),
           t.categoryGuessed.toString(),
           t.cashbackOff.toString(),
+          // As the JSON backup writes it: read from the alert while the row
+          // still holds it, else the merchant a restore carried.
+          _csvEscape(alertMerchantOf(t)),
+          _csvEscape(t.rewardGroup ?? ''),
+          _csvEscape(
+            t.rewardGroup == null
+                ? ''
+                : t.rewardPickedAt?.toIso8601String() ?? '',
+          ),
         ].join(','),
       );
     }
@@ -570,14 +609,23 @@ class BackupService {
     final splitIdCol = col('splitid');
     final guessedCol = col('guessed');
     final noCashbackCol = col('nocashback');
+    // Older files lack these; their SMS rows name no merchant and no card
+    // row has a reward pick.
+    final smsMerchantCol = col('smsmerchant');
+    final rewardGroupCol = col('rewardgroup');
+    final rewardPickedAtCol = col('rewardpickedat');
     final kinds = <String, String>{};
 
     String cell(List<String> r, int? c) {
-      final v = c == null || c >= r.length ? '' : r[c].trim();
+      final v = c == null || c >= r.length ? '' : r[c].trimLeft();
       // Undo _csvEscape's formula guard, keeping the round-trip lossless.
-      return v.length >= 2 && v[0] == "'" && '=+-@'.contains(v[1])
-          ? v.substring(1)
-          : v;
+      // The guard's `'` comes before any leading blanks, so they survive;
+      // trailing ones are trimmed after it, so a value that was only a tab
+      // still reads as empty.
+      return (v.startsWith("'") && _csvFormulaLike(v.substring(1))
+              ? v.substring(1)
+              : v)
+          .trimRight();
     }
 
     // Salted with the import time so fallback ids can never collide across
@@ -684,6 +732,18 @@ class BackupService {
         },
         categoryGuessed: cell(r, guessedCol).toLowerCase() == 'true',
         cashbackOff: cell(r, noCashbackCol).toLowerCase() == 'true',
+        // Only an imported row names an alert's merchant, as Tx keeps it.
+        smsMerchant: cell(r, sourceCol) == TxSource.sms.name
+            ? cell(r, smsMerchantCol)
+            : '',
+        // The pick time only with a pick, as Tx.toJson writes it.
+        rewardGroup: switch (cell(r, rewardGroupCol)) {
+          '' => null,
+          final g => g,
+        },
+        rewardPickedAt: cell(r, rewardGroupCol).isEmpty
+            ? null
+            : DateTime.tryParse(cell(r, rewardPickedAtCol)),
       );
       final kind = cell(r, acctKindCol).toLowerCase();
       if (acctKey.isNotEmpty &&

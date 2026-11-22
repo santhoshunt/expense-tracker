@@ -626,7 +626,8 @@ void main() {
         csv.split('\r\n').first,
         endsWith(
           ',tags,people,repaidBy,countIn,walletCounted,unseen,refundOf,payee,'
-          'acctKind,smsAt,splitId,guessed,noCashback',
+          'acctKind,smsAt,splitId,guessed,noCashback,smsMerchant,rewardGroup,'
+          'rewardPickedAt',
         ),
       );
       final rows = {for (final t in BackupService.txsFromCsv(csv)) t.id: t};
@@ -639,7 +640,7 @@ void main() {
       final bill = await dinner(p);
       await repaid(p, 'Priya', 500);
       final data = p.exportData();
-      expect(data['version'], 34);
+      expect(data['version'], 35);
 
       final fresh = await loaded();
       await fresh.importData(

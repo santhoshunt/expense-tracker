@@ -69,6 +69,37 @@ String? backupStatusLine(DateTime? last, String? error, DateTime now) {
   };
 }
 
+/// After a replacing restore applied a backup's settings: keeps the
+/// restored Auto-import mode by the SMS import page's own rule. A backup
+/// made on another phone can turn on Every SMS without the Receive SMS
+/// permission this phone needs for it, and nothing would then import. The
+/// page asks for that permission before it selects Every SMS and asks for
+/// nothing before any other mode, so only a restored Every SMS asks here,
+/// through [askReceiveSms], and only when this phone was not on it already
+/// ([before]). When the ask is refused, or fails, the mode goes back to
+/// [before], as the page keeps its mode, and this returns false so the
+/// caller can say so.
+Future<bool> keepRestoredAutoImport(
+  SettingsProvider settings, {
+  required AutoImportFrequency before,
+  required Future<bool> Function() askReceiveSms,
+}) async {
+  if (settings.autoImport != AutoImportFrequency.everySms ||
+      before == AutoImportFrequency.everySms) {
+    return true;
+  }
+  var allowed = false;
+  try {
+    allowed = await askReceiveSms();
+  } catch (e) {
+    // A failed ask must not read as a failed restore, which has landed.
+    debugPrint('SMS permission ask after restore failed: $e');
+  }
+  if (allowed) return true;
+  await settings.setAutoImport(before);
+  return false;
+}
+
 /// Settings root: one row per group, each opening a [SettingsGroupPage]
 /// (built in settings_pages.dart). A group with no supported section on
 /// this device is left out.
@@ -1077,6 +1108,28 @@ class _DataSectionState extends State<_DataSection> {
   Future<T> _withBusy<T>(String label, Future<T> Function() work) =>
       withBusySpinner(context, label, work);
 
+  /// [keepRestoredAutoImport] after the file and the Drive restore, with
+  /// the SMS import page's own ask. Only where that page is offered. The
+  /// toast comes after the restore's own, which it replaces.
+  Future<void> _checkRestoredAutoImport(
+    SettingsProvider settings,
+    AutoImportFrequency before,
+    ScaffoldMessengerState messenger,
+  ) async {
+    if (!SmsSource().isSupported) return;
+    final kept = await keepRestoredAutoImport(
+      settings,
+      before: before,
+      askReceiveSms: BackgroundImportScheduler.requestReceiveSms,
+    );
+    if (kept) return;
+    showAppToastOn(
+      messenger,
+      'Auto-import stays as it was: Every SMS needs the SMS permission.',
+      tone: AppToastTone.error,
+    );
+  }
+
   /// [range] is the export sheet's dates for a CSV or PDF (null for all);
   /// [replace] is the import sheet's Merge or Replace.
   Future<void> _handleBackupAction(
@@ -1145,12 +1198,14 @@ class _DataSectionState extends State<_DataSection> {
             );
           }
         case 'import_json':
+          final settings = context.read<SettingsProvider>();
+          final importBefore = settings.autoImport;
           final txAdded = await _withBusy(
             'Importing backup…',
             () => BackupService.importJson(
               finance,
               replace: replace,
-              settings: context.read<SettingsProvider>(),
+              settings: settings,
             ),
           );
           if (txAdded == null) return; // picker cancelled
@@ -1162,6 +1217,9 @@ class _DataSectionState extends State<_DataSection> {
             tone: AppToastTone.success,
             icon: Icons.file_download_done,
           );
+          if (replace) {
+            await _checkRestoredAutoImport(settings, importBefore, messenger);
+          }
         case 'import_csv':
           final added = await _withBusy(
             'Importing CSV…',
@@ -1186,6 +1244,7 @@ class _DataSectionState extends State<_DataSection> {
           }
           if (!mounted) return;
           final settingsProvider = context.read<SettingsProvider>();
+          final driveBefore = settingsProvider.autoImport;
           final restored = await _withBusy('Restoring cloud backup…', () async {
             final backup = await driveService.downloadLatest(interactive: true);
             final added = await finance.importData(
@@ -1211,6 +1270,13 @@ class _DataSectionState extends State<_DataSection> {
             tone: AppToastTone.success,
             icon: Icons.cloud_download_outlined,
           );
+          if (replace) {
+            await _checkRestoredAutoImport(
+              settingsProvider,
+              driveBefore,
+              messenger,
+            );
+          }
       }
     } on DriveAuthException catch (e) {
       showAppToastOn(messenger, e.message, tone: AppToastTone.error);
@@ -1704,7 +1770,7 @@ class _AboutSectionState extends State<_AboutSection> {
         case UpdateAvailable(:final updates) when _installsInApp:
           availableUpdate.value = updates;
           await showUpdateSheet(context, updates);
-        case UpdateAvailable(:final latestTag, :final htmlUrl):
+        case UpdateAvailable(:final latestTag):
           await showDialog<void>(
             context: context,
             builder: (ctx) => AlertDialog(
@@ -1721,8 +1787,10 @@ class _AboutSectionState extends State<_AboutSection> {
                 FilledButton(
                   onPressed: () {
                     Navigator.pop(ctx);
+                    // The app's own constant, never a URL from the network
+                    // response, which a tampered answer could point anywhere.
                     launchUrl(
-                      Uri.parse(htmlUrl),
+                      Uri.parse(UpdateService.releasesPageUrl),
                       mode: LaunchMode.externalApplication,
                     );
                   },

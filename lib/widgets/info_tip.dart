@@ -235,10 +235,10 @@ Future<void> showAnchoredBubble(
   pageBuilder: (ctx, _, _) =>
       _AnchoredBubble(anchor: anchor, maxWidth: maxWidth, child: content(ctx)),
   transitionBuilder: (ctx, animation, _, child) {
-    final curved = CurvedAnimation(
-      parent: animation,
-      curve: Curves.easeOutCubic,
-    );
+    // Runs every frame of the transition. A CurvedAnimation would add a
+    // listener to the route's animation each time and never remove it; a
+    // driven tween holds none of its own.
+    final curved = animation.drive(CurveTween(curve: Curves.easeOutCubic));
     return FadeTransition(
       opacity: curved,
       child: ScaleTransition(

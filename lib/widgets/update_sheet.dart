@@ -106,8 +106,18 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _cancel?.cancel();
+    // A download waiting for the app to come back would otherwise wait for
+    // good, and its file would never be cleared.
+    _resumed?.complete();
+    _resumed = null;
     super.dispose();
   }
+
+  /// Whether Android lets this app install. A check that fails counts as
+  /// no, as in [ChannelUpdateInstaller.canInstall]: the sheet then explains
+  /// the switch, and its Back button still works.
+  Future<bool> _canInstall() =>
+      widget.installer.canInstall().catchError((Object _) => false);
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -118,7 +128,7 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
     // Back from the system settings page: if the switch is now on, the
     // user is returned to the list to tap Download & install again.
     if (_step != _Step.needsPermission) return;
-    widget.installer.canInstall().then((ok) {
+    _canInstall().then((ok) {
       if (ok && mounted) setState(() => _step = _Step.choose);
     });
   }
@@ -139,7 +149,7 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
     _starting = true;
     try {
       await _attempt;
-      if (!await widget.installer.canInstall()) {
+      if (!await _canInstall()) {
         if (mounted) setState(() => _step = _Step.needsPermission);
         return;
       }
@@ -160,6 +170,10 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
   Future<void> _run(ReleaseOption option, DownloadCancel cancel) async {
     final messenger = ScaffoldMessenger.of(context);
     final settings = context.read<SettingsProvider>();
+    // The sheet's own route, so the end closes it and not a page pushed
+    // over it meanwhile (withBusySpinner's shape).
+    final navigator = Navigator.of(context);
+    final route = ModalRoute.of(context);
     String? problem;
     String? failed;
     var keep = false;
@@ -202,7 +216,13 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
     // A failed download stays on the sheet with Retry. Past it, null: the
     // install is under way (success closes the app) or the system stopped
     // reporting; either way the sheet has nothing left.
-    if (mounted) Navigator.of(context).pop();
+    if (mounted && route != null) {
+      if (route.isCurrent) {
+        navigator.pop();
+      } else if (route.isActive) {
+        navigator.removeRoute(route);
+      }
+    }
     if (problem == null) return;
     showAppToastOn(
       messenger,

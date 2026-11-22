@@ -513,11 +513,11 @@ class SettingsProvider extends ChangeNotifier {
   /// banner surface here, and re-setting a preference recovers it.
   Future<void> _persistPref(
     String what,
-    Future<void> Function(SharedPreferences p) write,
+    Future<void> Function(_CheckedPrefs p) write,
   ) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await write(prefs);
+      await write(_CheckedPrefs(prefs));
     } catch (e) {
       debugPrint('Settings persist failed ($what): $e');
     }
@@ -1000,5 +1000,39 @@ class SettingsProvider extends ChangeNotifier {
       await p.setString(_kAheadView, _aheadView);
     });
     notifyListeners();
+  }
+}
+
+/// The preferences a [SettingsProvider._persistPref] callback writes
+/// through. The plugin reports a write it could not make (Android's commit()
+/// returning false) as false, not as an exception, so each write here turns
+/// false into one for _persistPref's catch, as
+/// FinanceProvider._persistOrThrow does. A callback that makes several
+/// writes stops at the first that fails.
+class _CheckedPrefs {
+  final SharedPreferences _prefs;
+  const _CheckedPrefs(this._prefs);
+
+  int? getInt(String key) => _prefs.getInt(key);
+
+  Future<void> setBool(String key, bool value) =>
+      _saved(_prefs.setBool(key, value));
+
+  Future<void> setInt(String key, int value) =>
+      _saved(_prefs.setInt(key, value));
+
+  Future<void> setDouble(String key, double value) =>
+      _saved(_prefs.setDouble(key, value));
+
+  Future<void> setString(String key, String value) =>
+      _saved(_prefs.setString(key, value));
+
+  Future<void> setStringList(String key, List<String> value) =>
+      _saved(_prefs.setStringList(key, value));
+
+  Future<void> remove(String key) => _saved(_prefs.remove(key));
+
+  static Future<void> _saved(Future<bool> write) async {
+    if (!await write) throw StateError('A storage write failed');
   }
 }

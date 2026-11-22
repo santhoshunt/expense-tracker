@@ -112,11 +112,16 @@ class CardRewards {
   /// Points cards only: ₹ per point, so the estimate can show its value.
   final double? pointValue;
 
+  /// Some banks count each payment in whole ₹100s only, so ₹180 earns as
+  /// ₹100. Off by default.
+  final bool wholeHundreds;
+
   const CardRewards({
     this.unit = RewardUnit.cashback,
     this.groups = const [],
     this.baseRate = 0,
     this.pointValue,
+    this.wholeHundreds = false,
   });
 
   /// The group [categoryId] earns in, or null for the base rate.
@@ -146,15 +151,24 @@ class CardRewards {
   }
 
   /// What a payment of [amount] earns in [g] (null: Everything else) before
-  /// any cap: nothing under the group's minimum.
-  double earnOn(RewardGroup? g, double amount) =>
-      meetsMinimum(g, amount) ? amount * rateOf(g) / 100 : 0;
+  /// any cap: nothing under the group's minimum. With [wholeHundreds] the
+  /// payment earns on its complete hundreds; the minimum still tests the
+  /// real amount. The 1e-6 keeps float noise from costing a hundred, so a
+  /// ₹300 that sums to 299.9999999 still counts three.
+  double earnOn(RewardGroup? g, double amount) {
+    if (!meetsMinimum(g, amount)) return 0;
+    final counted = wholeHundreds
+        ? ((amount + 1e-6) / 100).floorToDouble() * 100
+        : amount;
+    return counted * rateOf(g) / 100;
+  }
 
   Map<String, dynamic> toJson() => {
     'unit': unit.name,
     'groups': [for (final g in groups) g.toJson()],
     'baseRate': baseRate,
     if (pointValue != null) 'pointValue': pointValue,
+    if (wholeHundreds) 'wholeHundreds': true,
   };
 
   /// Tolerant of a hand-edited or foreign backup: anything unreadable
@@ -177,6 +191,7 @@ class CardRewards {
       pointValue: value is num && value.isFinite && value > 0
           ? value.toDouble()
           : null,
+      wholeHundreds: json['wholeHundreds'] == true,
     );
   }
 }

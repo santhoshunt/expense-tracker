@@ -244,6 +244,12 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
     ],
     // The Cashbacks widget: what each card with rewards earned this cycle.
     'cashbacks': _cashbacks(finance, now),
+    // Whether any open card has reward rules (cardRewardsFor's own test),
+    // so an empty list above tells "nothing earned yet" from "nothing set
+    // up". Kotlin reads a snapshot without it the old way.
+    'cashbacksSetUp': finance.openAccounts.any(
+      (a) => a.isCard && a.rewards != null,
+    ),
     // Running and upcoming trips with their dates as epoch days: Kotlin
     // picks the stage on the day it draws.
     'trip': _tripBlock(finance, settings, now, month),
@@ -399,14 +405,17 @@ Map<String, dynamic> _cardRow(
   };
 }
 
-/// The Cashbacks widget's rows: every open credit card with rewards set up,
-/// the most rupees earned this cycle first. A points card with no value per
-/// point has no rupee figure: those follow, most points first. Ties go by
-/// name.
+/// The Cashbacks widget's rows: every open credit card with rewards set up
+/// that earned something this cycle, the most rupees first. A card at 0
+/// (cashback or points) is left out, since a row of nothing tells nothing
+/// and pushes the cards that earned down the list. A points card with
+/// no value per point has no rupee figure: those follow, most points first.
+/// Ties go by name.
 List<Map<String, dynamic>> _cashbacks(FinanceProvider finance, DateTime now) {
   final cards = [
     for (final a in finance.openAccounts)
-      if (finance.cardRewardsFor(a) case final r?)
+      // Earned is rounded down, so nothing earned is exactly 0.
+      if (finance.cardRewardsFor(a) case final r? when r.earned > 0)
         (
           account: a,
           earned: r.earned,
@@ -430,10 +439,10 @@ List<Map<String, dynamic>> _cashbacks(FinanceProvider finance, DateTime now) {
 }
 
 /// One Cashbacks row: the card's [earned] as the widget prints it (₹ for a
-/// cashback card, points for a points card), the same for nothing earned,
-/// its worth in [rupees] (null for points with no value) and the cycle's
-/// last day. Kotlin shows `zero` and leaves the card out of the total once
-/// that day has passed, as the Card cycle widget shows ₹0.
+/// cashback card, points for a points card), its worth in [rupees] (null
+/// for points with no value) and the cycle's last day. Kotlin leaves the
+/// row out once that day has passed: the new cycle has earned nothing yet
+/// as far as this snapshot knows.
 Map<String, dynamic> _cashbackRow(
   Account a,
   double earned,
@@ -446,7 +455,6 @@ Map<String, dynamic> _cashbackRow(
   return {
     'name': a.displayName,
     'figure': label(earned),
-    'zero': label(0),
     'rupees': rupees,
     'cycleEnd': epochDay(cardCycleOf(a, now).end),
   };

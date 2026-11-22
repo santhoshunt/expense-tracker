@@ -43,7 +43,14 @@ class UpdateInstaller(
         private val FILE_NAME = Regex("^v[0-9.]+\\.apk$")
     }
 
+    /** The install status receiver. Registered on the worker thread and
+     * unregistered on the main one, so both go through [lock]. */
     private var receiver: BroadcastReceiver? = null
+    private val lock = Any()
+
+    /** Set by [dispose], so a commit still running on the worker cannot
+     * register a receiver on an activity that is gone. */
+    private var disposed = false
 
     /** Verifying and copying a 65 MB APK must not block the UI thread. */
     private val worker = Executors.newSingleThreadExecutor()
@@ -64,14 +71,10 @@ class UpdateInstaller(
     }
 
     fun dispose() {
-        receiver?.let {
-            try {
-                activity.unregisterReceiver(it)
-            } catch (_: Exception) {
-                // Already gone with the activity.
-            }
+        synchronized(lock) {
+            disposed = true
+            stopListening()
         }
-        receiver = null
         worker.shutdown()
     }
 
@@ -228,7 +231,11 @@ class UpdateInstaller(
                     }
                 }
                 sessionId = id
-                main.post { listen() }
+                // Registered here, before the commit: a broadcast reaches
+                // only receivers registered when it is sent, and a posted
+                // registration could come after the system's confirm
+                // request on a busy main thread.
+                listen()
                 // Explicit (package set), so no other app receives it; the
                 // installer fills in the status extras, hence mutable.
                 val intent = Intent(STATUS_ACTION).setPackage(activity.packageName)
@@ -241,6 +248,7 @@ class UpdateInstaller(
             }
         } catch (e: Exception) {
             sessionId = null
+            stopListening()
             try {
                 installer.abandonSession(id)
             } catch (_: Exception) {
@@ -250,8 +258,17 @@ class UpdateInstaller(
         }
     }
 
-    /** The install status receiver: registered at runtime, not exported. */
+    /** The install status receiver: registered at runtime, not exported.
+     * Called on the worker thread; with no handler given, the system still
+     * delivers to the main thread, where [confirm] and [failed] must run.
+     * One receiver at most: a later attempt reuses it, and [sessionId]
+     * keeps out the status of any other session. */
     private fun listen() {
+        synchronized(lock) { registerOnce() }
+    }
+
+    private fun registerOnce() {
+        check(!disposed) { "The app's screen closed." }
         if (receiver != null) return
         val r = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
@@ -261,10 +278,15 @@ class UpdateInstaller(
                     PackageInstaller.EXTRA_STATUS,
                     PackageInstaller.STATUS_FAILURE
                 )) {
+                    // The final status follows the system's confirm screen.
                     PackageInstaller.STATUS_PENDING_USER_ACTION -> confirm(intent)
-                    PackageInstaller.STATUS_SUCCESS -> sessionId = null
+                    PackageInstaller.STATUS_SUCCESS -> {
+                        sessionId = null
+                        stopListening()
+                    }
                     else -> {
                         sessionId = null
+                        stopListening()
                         failed(
                             intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
                                 ?: "Install failed."
@@ -282,6 +304,20 @@ class UpdateInstaller(
         receiver = r
     }
 
+    /** Unregisters the status receiver, if one is registered. */
+    private fun stopListening() {
+        synchronized(lock) {
+            receiver?.let {
+                try {
+                    activity.unregisterReceiver(it)
+                } catch (_: Exception) {
+                    // Already gone with the activity.
+                }
+            }
+            receiver = null
+        }
+    }
+
     /** Shows the system's own "Update this app?" screen. */
     private fun confirm(status: Intent) {
         val screen = IntentCompat.getParcelableExtra(
@@ -296,6 +332,7 @@ class UpdateInstaller(
         val target = screen?.component?.packageName ?: screen?.`package`
         if (screen == null || target == null || target == activity.packageName) {
             sessionId = null
+            stopListening()
             failed("Android didn't show the install screen.")
             return
         }
@@ -311,6 +348,7 @@ class UpdateInstaller(
             activity.startActivity(screen)
         } catch (e: Exception) {
             sessionId = null
+            stopListening()
             failed("Android didn't show the install screen.")
         }
     }

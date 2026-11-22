@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'
     show Importance;
@@ -9,7 +11,10 @@ import 'package:expense_tracker/models/spend_budget.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
+import 'package:expense_tracker/screens/settings_screen.dart'
+    show NotificationsPage;
 import 'package:expense_tracker/services/notification_service.dart';
+import 'package:expense_tracker/widgets/notification_switches.dart';
 
 /// The Cockpit on its Budgets tab, whose button opens Settings,
 /// Notifications.
@@ -30,7 +35,10 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  tearDown(() => NotificationService.statusOverride = null);
+  tearDown(() {
+    NotificationService.statusOverride = null;
+    NotificationSwitches.resetRememberedStatus();
+  });
 
   group('notificationStatusFrom', () {
     test(
@@ -196,5 +204,56 @@ void main() {
     );
     await pumpThrough(tester);
     expect(find.byIcon(Icons.notifications_off_outlined), findsNothing);
+  });
+
+  group('the status remembered across visits', () {
+    Future<void> visit(WidgetTester tester, FinanceProvider p) async {
+      // A fresh page each time: the old one leaves the tree first.
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: p),
+            ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
+          ],
+          child: const MaterialApp(home: NotificationsPage()),
+        ),
+      );
+    }
+
+    final warning = find.byIcon(Icons.notifications_off_outlined);
+
+    testWidgets('a revisit shows the last status on its first frame', (
+      tester,
+    ) async {
+      NotificationService.statusOverride = () async =>
+          NotificationStatus.appBlocked;
+      final p = await withBudget();
+      await visit(tester, p);
+      await pumpThrough(tester);
+      expect(warning, findsOneWidget);
+
+      // The next check has not answered yet: the row stays, so the panel
+      // does not change height under the finger.
+      NotificationService.statusOverride = () =>
+          Completer<NotificationStatus>().future;
+      await visit(tester, p);
+      expect(warning, findsOneWidget);
+    });
+
+    testWidgets('a reset forgets it', (tester) async {
+      NotificationService.statusOverride = () async =>
+          NotificationStatus.appBlocked;
+      final p = await withBudget();
+      await visit(tester, p);
+      await pumpThrough(tester);
+      expect(warning, findsOneWidget);
+
+      NotificationSwitches.resetRememberedStatus();
+      NotificationService.statusOverride = () =>
+          Completer<NotificationStatus>().future;
+      await visit(tester, p);
+      expect(warning, findsNothing);
+    });
   });
 }

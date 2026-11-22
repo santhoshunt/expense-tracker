@@ -238,15 +238,80 @@ void main() {
       for (var i = 0; i < 40; i++)
         PickerItem(value: 'v$i', label: 'Option number $i'),
     ];
+    String? picked;
+    await tester.pumpWidget(
+      host(items: many, value: 'v35', onChanged: (v) => picked = v),
+    );
+    await tester.tap(find.text('Option number 35'));
+    await tester.pumpAndSettle();
+
+    // The row in the sheet, not the field behind it, inside the list's view
+    // without any manual scrolling.
+    final row = find.descendant(
+      of: find.byType(BottomSheet),
+      matching: find.text('Option number 35'),
+    );
+    expect(row, findsOneWidget);
+    final list = tester.getRect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.byType(ListView),
+      ),
+    );
+    final rect = tester.getRect(row);
+    expect(rect.top, greaterThanOrEqualTo(list.top));
+    expect(rect.bottom, lessThanOrEqualTo(list.bottom));
+
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(picked, 'v35');
+  });
+
+  testWidgets('a search brings the selected row back into view', (
+    tester,
+  ) async {
+    final many = [
+      for (var i = 0; i < 40; i++)
+        PickerItem(value: 'v$i', label: 'Option number $i'),
+    ];
     await tester.pumpWidget(host(items: many, value: 'v35', onChanged: (_) {}));
     await tester.tap(find.text('Option number 35'));
     await tester.pumpAndSettle();
 
-    // Visible (hit-testable) without any manual scrolling.
-    final row = find.text('Option number 35').last;
-    expect(tester.getRect(row).height, greaterThan(0));
-    await tester.tap(row); // would throw if off-screen
+    final listFinder = find.descendant(
+      of: find.byType(BottomSheet),
+      matching: find.byType(ListView),
+    );
+    // Back to the top, far from the selection.
+    await tester.drag(listFinder, const Offset(0, 3000));
     await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text('Option number 0'),
+      ),
+      findsOneWidget,
+    );
+
+    // "1" keeps 13 rows plus the selection, which comes last of the 14.
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.byType(TextField),
+      ),
+      '1',
+    );
+    await tester.pumpAndSettle();
+
+    final row = find.descendant(
+      of: find.byType(BottomSheet),
+      matching: find.text('Option number 35'),
+    );
+    expect(row, findsOneWidget);
+    final list = tester.getRect(listFinder);
+    final rect = tester.getRect(row);
+    expect(rect.top, greaterThanOrEqualTo(list.top));
+    expect(rect.bottom, lessThanOrEqualTo(list.bottom));
   });
 
   testWidgets('sheet opened from inside an AlertDialog returns a value', (

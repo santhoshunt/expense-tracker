@@ -95,6 +95,11 @@ String rewardCycleLine(Account card, CardCycle cycle, RewardEstimate last) {
       '${fmtDateCompact(cycle.end)} · last cycle $earned';
 }
 
+/// The sentence each explanation of the estimate adds on a card that counts
+/// whole ₹100s only ([CardRewards.wholeHundreds]).
+const String wholeHundredsNote =
+    'This card counts whole ₹100s only, so ₹180 earns as ₹100.';
+
 /// The categories a reward group may name: spending categories and Paid for
 /// Others, the rows a card's estimate counts. To sort is left out.
 bool isRewardCategory(TxCategory c) =>
@@ -124,6 +129,9 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
   /// keeps the picked unit until its first rate is saved.
   late RewardUnit _unit;
 
+  /// Held here for the same reason as [_unit].
+  late bool _wholeHundreds;
+
   @override
   void initState() {
     super.initState();
@@ -132,6 +140,7 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
         .accountById(widget.accountId)
         ?.rewards;
     _unit = r?.unit ?? RewardUnit.cashback;
+    _wholeHundreds = r?.wholeHundreds ?? false;
     _baseCtrl = TextEditingController(
       text: r == null || r.baseRate == 0 ? '' : fmtFieldNumber(r.baseRate),
     );
@@ -189,6 +198,7 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
       pointValue: u == RewardUnit.points
           ? (value.ok ? value.value : saved?.pointValue)
           : null,
+      wholeHundreds: _wholeHundreds,
     );
     final empty = next.groups.isEmpty && next.baseRate == 0;
     if (empty && saved == null) return;
@@ -243,6 +253,7 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
             groups: List.unmodifiable(rest),
             baseRate: now.baseRate,
             pointValue: now.pointValue,
+            wholeHundreds: now.wholeHundreds,
           ),
         );
       },
@@ -289,9 +300,44 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
                   groups: now.groups,
                   baseRate: now.baseRate,
                   pointValue: before.pointValue,
+                  wholeHundreds: now.wholeHundreds,
                 ),
         );
         if (mounted) setState(() => _unit = before.unit);
+      },
+      icon: Icons.swap_horiz,
+      tone: AppToastTone.change,
+    );
+  }
+
+  /// Whole ₹100s only changes every figure the card earns, so like the
+  /// unit it saves at once and saved rules get an Undo.
+  void _switchWholeHundreds(bool on) {
+    final finance = context.read<FinanceProvider>();
+    final id = widget.accountId;
+    final before = finance.accountById(id)?.rewards;
+    setState(() => _wholeHundreds = on);
+    _save();
+    if (before == null) return;
+    showUndoSnackBar(
+      context,
+      on
+          ? 'Rewards now count whole ₹100s only'
+          : 'Rewards now count the full amount',
+      () {
+        // The switch back, onto the rules as they are now.
+        final now = finance.accountById(id)?.rewards ?? before;
+        finance.setCardRewards(
+          id,
+          CardRewards(
+            unit: now.unit,
+            groups: now.groups,
+            baseRate: now.baseRate,
+            pointValue: now.pointValue,
+            wholeHundreds: before.wholeHundreds,
+          ),
+        );
+        if (mounted) setState(() => _wholeHundreds = before.wholeHundreds);
       },
       icon: Icons.swap_horiz,
       tone: AppToastTone.change,
@@ -380,6 +426,16 @@ class _CardRewardsPageState extends State<CardRewardsPage> {
                         ? 'Rates are points per ₹100 spent.'
                         : 'Rates are a percent of each spend.',
                     style: theme.textTheme.bodySmall,
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Whole ₹100s only'),
+                    subtitle: Text(
+                      'A ₹180 payment earns on ₹100',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    value: _wholeHundreds,
+                    onChanged: _switchWholeHundreds,
                   ),
                   const SizedBox(height: 24),
                   Text('Reward groups', style: theme.textTheme.titleMedium),

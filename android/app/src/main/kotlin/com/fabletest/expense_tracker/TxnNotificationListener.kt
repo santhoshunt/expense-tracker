@@ -2,6 +2,7 @@ package com.fabletest.expense_tracker
 
 import android.app.Notification
 import android.content.Context
+import android.content.SharedPreferences
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
@@ -28,7 +29,14 @@ class TxnNotificationListener : NotificationListenerService() {
     companion object {
         private const val PREFS = "txn_notif_buffer"
         private const val KEY_MESSAGES = "messages"
+        /** The seen-set up to v2.3.1: a string set, which SharedPreferences
+         * keeps without order. Read once, as the start of [KEY_SEEN_ORDERED],
+         * and removed with the first write of that. */
         private const val KEY_SEEN = "seen_hashes"
+
+        /** The seen-set as a JSON array, oldest first, so trimming drops the
+         * oldest hashes rather than arbitrary ones. */
+        private const val KEY_SEEN_ORDERED = "seen_hashes_ordered"
         private const val KEY_LAST_CAPTURE = "last_capture_millis"
 
         /** Numbers each buffered message, so an import can clear exactly the
@@ -88,6 +96,30 @@ class TxnNotificationListener : NotificationListenerService() {
                 .apply()
         }
 
+        /** The seen hashes, oldest first. Before the ordered key exists, the
+         * old unordered set is the start, so nothing seen is forgotten on
+         * the upgrade. A damaged ordered value falls back the same way
+         * (the old set is gone after the first write, so in practice it
+         * starts empty), since a seen-set that can never be read would fail
+         * every later alert. */
+        private fun readSeen(prefs: SharedPreferences): LinkedHashSet<String> {
+            val ordered = prefs.getString(KEY_SEEN_ORDERED, null)
+            if (ordered != null) {
+                try {
+                    val arr = JSONArray(ordered)
+                    return LinkedHashSet((0 until arr.length()).map { arr.optString(it) })
+                } catch (_: Exception) {
+                    // Falls through to the old set or an empty one.
+                }
+            }
+            return LinkedHashSet(prefs.getStringSet(KEY_SEEN, null) ?: emptySet())
+        }
+
+        /** Writes [seen] in order and drops the old unordered key. */
+        private fun SharedPreferences.Editor.putSeen(seen: Set<String>) =
+            putString(KEY_SEEN_ORDERED, JSONArray(seen.toList()).toString())
+                .remove(KEY_SEEN)
+
         private fun hashOf(sender: String, body: String) =
             "${sender}|${body}".hashCode().toString()
 
@@ -114,20 +146,22 @@ class TxnNotificationListener : NotificationListenerService() {
             // would otherwise re-buffer already-imported messages.
             val plainHash = hashOf(sender, body)
             val hash = if (messageTime > 0) hashOf(sender, body, messageTime) else plainHash
-            val seen = LinkedHashSet(prefs.getStringSet(KEY_SEEN, emptySet())!!)
+            val seen = readSeen(prefs)
             if (hash in seen) return
             if (hash != plainHash && plainHash in seen) {
                 // Seen under the key without a time: a repost of a message
                 // already captured. Keyed by time from here on.
                 seen.remove(plainHash)
                 seen.add(hash)
-                prefs.edit().putStringSet(KEY_SEEN, seen).apply()
+                prefs.edit().putSeen(seen).apply()
                 return
             }
             seen.add(hash)
             while (seen.size > MAX_SEEN) seen.remove(seen.first())
 
-            val arr = JSONArray(prefs.getString(KEY_MESSAGES, "[]"))
+            // A damaged buffer starts again empty: left as it is, it would
+            // fail every later alert. What it held cannot be read anyway.
+            val arr = readBuffer(prefs)
             val seq = prefs.getLong(KEY_NEXT_SEQ, 1L)
             arr.put(
                 JSONObject()
@@ -140,19 +174,23 @@ class TxnNotificationListener : NotificationListenerService() {
             while (arr.length() > MAX_BUFFER) {
                 // The evicted (oldest, never-drained) message must also leave
                 // the seen-set, or a repost of it can never be recaptured.
-                val evicted = arr.getJSONObject(0)
-                seen.remove(
-                    evicted.optString("key", "").ifEmpty {
-                        hashOf(evicted.getString("address"), evicted.getString("body"))
-                    }
-                )
+                // An entry that is not an object has no key to remove, and
+                // must not stop the eviction.
+                val evicted = arr.optJSONObject(0)
+                if (evicted != null) {
+                    seen.remove(
+                        evicted.optString("key", "").ifEmpty {
+                            hashOf(evicted.optString("address"), evicted.optString("body"))
+                        }
+                    )
+                }
                 arr.remove(0)
             }
 
             prefs.edit()
                 .putString(KEY_MESSAGES, arr.toString())
                 .putLong(KEY_NEXT_SEQ, seq + 1)
-                .putStringSet(KEY_SEEN, seen)
+                .putSeen(seen)
                 .putLong(KEY_LAST_CAPTURE, System.currentTimeMillis())
                 .putLong(KEY_STORED_TOTAL, prefs.getLong(KEY_STORED_TOTAL, 0L) + 1)
                 .apply()
@@ -186,7 +224,12 @@ class TxnNotificationListener : NotificationListenerService() {
         fun diagnostics(context: Context): Map<String, Any?> {
             flushTotalEvents(context)
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val buffered = JSONArray(prefs.getString(KEY_MESSAGES, "[]")).length()
+            // What an import would get: a buffer that cannot be read counts
+            // 0, as do entries [peek] skips.
+            val arr = readBuffer(prefs)
+            val buffered = (0 until arr.length()).count { i ->
+                arr.optJSONObject(i)?.let { message(it) } != null
+            }
             return mapOf(
                 "connectedAt" to prefs.getLong(KEY_CONNECTED_AT, 0L),
                 "disconnectedAt" to prefs.getLong(KEY_DISCONNECTED_AT, 0L),
@@ -212,38 +255,60 @@ class TxnNotificationListener : NotificationListenerService() {
         @Synchronized
         fun peek(context: Context): Map<String, Any?> {
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val arr = JSONArray(prefs.getString(KEY_MESSAGES, "[]"))
+            val arr = readBuffer(prefs)
             val out = mutableListOf<Map<String, Any?>>()
             var maxSeq = 0L
             for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
+                // An entry that cannot be read is skipped and adds nothing
+                // to maxSeq, so the import never acknowledges past what it
+                // was handed.
+                val o = arr.optJSONObject(i) ?: continue
+                val m = message(o) ?: continue
                 // Messages buffered before sequence numbers count as 0.
                 maxSeq = maxOf(maxSeq, o.optLong("seq", 0L))
-                out.add(
-                    mapOf(
-                        "address" to o.getString("address"),
-                        "body" to o.getString("body"),
-                        "date" to o.getLong("date")
-                    )
-                )
+                out.add(m)
             }
             return mapOf("messages" to out, "maxSeq" to maxSeq)
         }
 
         /** Removes the messages [peek] returned up to [maxSeq]; any captured
-         * since then stay for the next import. */
+         * since then stay for the next import. An entry [peek] cannot read
+         * is dropped too: it can never be delivered, and kept it would sit
+         * in the buffer until evicted. */
         @Synchronized
         fun ack(context: Context, maxSeq: Long) {
             if (maxSeq < 0) return
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            val arr = JSONArray(prefs.getString(KEY_MESSAGES, "[]"))
+            val arr = readBuffer(prefs)
             val keep = JSONArray()
             for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
+                val o = arr.optJSONObject(i) ?: continue
+                if (message(o) == null) continue
                 if (o.optLong("seq", 0L) > maxSeq) keep.put(o)
             }
             prefs.edit().putString(KEY_MESSAGES, keep.toString()).apply()
         }
+
+        /** The stored buffer; empty when it cannot be parsed, since what it
+         * held cannot be read anyway and [store] then starts it again. */
+        private fun readBuffer(prefs: SharedPreferences): JSONArray = try {
+            JSONArray(prefs.getString(KEY_MESSAGES, "[]"))
+        } catch (_: Exception) {
+            JSONArray()
+        }
+
+        /** A buffered entry as [peek] hands it to Dart, or null when [o]
+         * lacks a sender, a body or a date. */
+        private fun message(o: JSONObject): Map<String, Any?>? =
+            try {
+                mapOf(
+                    "address" to o.getString("address"),
+                    "body" to o.getString("body"),
+                    "date" to o.getLong("date")
+                )
+            } catch (_: Exception) {
+                null
+            }
     }
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -265,7 +330,20 @@ class TxnNotificationListener : NotificationListenerService() {
         putDiagTime(applicationContext, KEY_DISCONNECTED_AT)
     }
 
+    /** Runs on the app's main thread, where an escaping exception ends the
+     * whole process: reading another app's extras (a Parcelable this app
+     * cannot unpack) or the stored buffer can throw. One bad notification
+     * is skipped instead, and the replay in [onListenerConnected] goes on
+     * with the next one. */
     override fun onNotificationPosted(sbn: StatusBarNotification) {
+        try {
+            capture(sbn)
+        } catch (_: Exception) {
+            // Skipped; the next notification is read as usual.
+        }
+    }
+
+    private fun capture(sbn: StatusBarNotification) {
         // In-memory count only — a prefs write here would run for EVERY
         // notification on the device, on the listener's main thread.
         noteEvent()

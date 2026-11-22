@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui' show PathMetric;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -15,6 +16,11 @@ import '../utils/format.dart';
 import '../utils/haptics.dart';
 import 'motion.dart';
 import 'section_label.dart';
+
+/// The clock the Ahead section reads today from. Tests move it across
+/// midnight; nothing else should.
+@visibleForTesting
+DateTime Function() aheadClock = DateTime.now;
 
 /// The Ahead tab's Expected balance section: the balance each of the next
 /// [kAheadDays] days leaves, from the headline net balance less spend
@@ -51,7 +57,7 @@ class _AheadProjectionState extends State<AheadProjection> {
 
   ForwardSeries _seriesFor(String hiddenKey) {
     final finance = widget.finance;
-    final now = DateTime.now();
+    final now = aheadClock();
     final day = DateTime(now.year, now.month, now.day);
     final k = _seriesKey;
     final cached = _series;
@@ -169,6 +175,11 @@ class _AheadProjectionState extends State<AheadProjection> {
               onDragEnd: () {
                 setState(() => _dragging = false);
                 _scrollToSelected();
+              },
+              // Also called for every tap or swipe that never became a long
+              // press, so it only clears a drag and never scrolls the list.
+              onDragCancel: () {
+                if (_dragging) setState(() => _dragging = false);
               },
             ),
             const SizedBox(height: 4),
@@ -299,6 +310,7 @@ class _BalanceChart extends StatelessWidget {
   final VoidCallback onDragStart;
   final ValueChanged<int> onSelect;
   final VoidCallback onDragEnd;
+  final VoidCallback onDragCancel;
 
   const _BalanceChart({
     required this.height,
@@ -307,6 +319,7 @@ class _BalanceChart extends StatelessWidget {
     required this.onDragStart,
     required this.onSelect,
     required this.onDragEnd,
+    required this.onDragCancel,
   });
 
   @override
@@ -376,6 +389,10 @@ class _BalanceChart extends StatelessWidget {
             },
             onLongPressMoveUpdate: (d) => move(d.localPosition.dx),
             onLongPressEnd: (_) => onDragEnd(),
+            // A pointer the system cancels after the press was accepted (the
+            // back-edge gesture, the notification shade) ends here, not in
+            // onLongPressEnd.
+            onLongPressCancel: onDragCancel,
             child: SizedBox(
               height: height,
               width: width,
@@ -673,7 +690,9 @@ class _BalanceLinePainter extends CustomPainter {
       old.ring != ring ||
       old.labelStyle != labelStyle ||
       old.textScaler != textScaler ||
-      !_sameList(old.balances, balances);
+      !_sameList(old.balances, balances) ||
+      // The day labels: a new day with unchanged balances still moves them.
+      !listEquals(old.dates, dates);
 
   static bool _sameList(List<double> a, List<double> b) {
     if (a.length != b.length) return false;

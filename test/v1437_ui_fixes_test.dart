@@ -362,7 +362,19 @@ void main() {
 
       await tester.tap(find.text('billdebit'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Food & Dining').last);
+      // The picker opens on the row's transfer category, its last section,
+      // so the list scrolls back up to the spending rows.
+      final food = find.descendant(
+        of: find.byType(BottomSheet),
+        matching: find.text('Food & Dining'),
+      );
+      await tester.scrollUntilVisible(
+        food,
+        -200,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(food);
       await tester.pumpAndSettle();
       expect(row(p, 'leg-out').categoryId, 'food');
       expect(row(p, 'leg-in').pairId, isNull);

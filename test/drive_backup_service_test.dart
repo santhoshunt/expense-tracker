@@ -7,6 +7,10 @@ import 'package:http/http.dart' as http;
 import 'package:google_sign_in_platform_interface/google_sign_in_platform_interface.dart';
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+// The counting store below extends the plugin's in-memory store, which only
+// the platform interface exports. shared_preferences brings it in.
+// ignore: depend_on_referenced_packages
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
@@ -20,6 +24,29 @@ class _ProbeProvider extends FinanceProvider {
   Map<String, dynamic> exportData() {
     exportCalls++;
     return super.exportData();
+  }
+}
+
+/// A ledger whose load warnings the test sets, whatever loaded.
+class _WarnedProvider extends FinanceProvider {
+  _WarnedProvider(this.warnings);
+
+  final List<String> warnings;
+
+  @override
+  List<String> get loadWarnings => warnings;
+}
+
+/// The in-memory store, counting writes of the recorded Drive error.
+class _CountingStore extends InMemorySharedPreferencesStore {
+  _CountingStore(super.data) : super.withData();
+
+  int errorWrites = 0;
+
+  @override
+  Future<bool> setValue(String valueType, String key, Object value) {
+    if (key == 'flutter.drive_last_error') errorWrites++;
+    return super.setValue(valueType, key, value);
   }
 }
 
@@ -365,6 +392,63 @@ void main() {
       expect(prefs.getString('drive_last_error'), kDriveReconnectMessage);
       expect(auth.interactiveCalls, 0);
       expect(drive.requests, isEmpty);
+    });
+
+    Iterable<http.Request> uploads(FakeDrive d) =>
+        d.requests.where((r) => r.url.path.endsWith('/upload/drive/v3/files'));
+
+    test('a scheduled backup is skipped while a collection failed to load, '
+        'says so once, and a clean launch uploads and clears it', () async {
+      final store = _CountingStore({
+        'flutter.drive_connected_email': 'me@example.com',
+        'flutter.saved_filters_v1': '{broken',
+      });
+      SharedPreferencesStorePlatform.instance = store;
+      await (await SharedPreferences.getInstance()).reload();
+      final broken = await withRows();
+      expect(broken.loadWarnings, ['saved filters']);
+      final drive = FakeDrive();
+      final svc = service(FakeDriveAuth(silent: ['tok-1']), drive);
+      await svc.checkAndRunScheduled(broken);
+      expect(uploads(drive), isEmpty);
+      expect(await svc.lastBackupAt(), isNull);
+      expect(await svc.lastError(), kDriveBackupsPausedMessage);
+      expect(store.errorWrites, 1);
+
+      // The next launch, still broken: the message is not written again.
+      await svc.checkAndRunScheduled(broken);
+      expect(uploads(drive), isEmpty);
+      expect(store.errorWrites, 1);
+
+      // A clean launch backs up and clears the message.
+      final loaded = _WarnedProvider(const []);
+      await loaded.load();
+      final healthy = FakeDrive();
+      final clean = service(FakeDriveAuth(silent: ['tok-1']), healthy);
+      await clean.checkAndRunScheduled(loaded);
+      expect(uploads(healthy), hasLength(1));
+      expect(await clean.lastError(), isNull);
+      expect(await clean.lastBackupAt(), isNotNull);
+    });
+
+    test('a late start-up step that threw does not pause backups', () async {
+      SharedPreferences.setMockInitialValues({
+        'drive_connected_email': 'me@example.com',
+      });
+      final p = _WarnedProvider(const ['setup']);
+      await p.load();
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 120,
+        note: 'lunch',
+        date: DateTime(2026, 9, 1),
+      );
+      final drive = FakeDrive();
+      final svc = service(FakeDriveAuth(silent: ['tok-1']), drive);
+      await svc.checkAndRunScheduled(p);
+      expect(uploads(drive), hasLength(1));
+      expect(await svc.lastError(), isNull);
     });
 
     test('an upload goes to the backups folder as multipart', () async {

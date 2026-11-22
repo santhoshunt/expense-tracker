@@ -22,8 +22,9 @@ class CashbacksWidgetService : RemoteViewsService() {
         CashbacksRows(applicationContext, intent.data?.lastPathSegment?.toIntOrNull())
 }
 
-/** One row per credit card with rewards, from the shared snapshot, in the
- * order the app wrote them. [HomeWidgets.render] says when the snapshot or
+/** One row per credit card that earned rewards in a cycle still running,
+ * from the shared snapshot, in the order the app wrote them
+ * ([HomeWidgets.cashbackRows]). [HomeWidgets.render] says when the snapshot or
  * the widget's size changed; the rows, the theme and the width are read
  * again then. No exception may leave a callback: the system hands it to
  * the app's crash handler, which ends the app's process. */
@@ -55,8 +56,9 @@ private class CashbacksRows(private val context: Context, private val widgetId: 
     }
 
     /** The widget's width in portrait, the narrower of its two, inside the
-     * 16dp padding at each side of home_widget_cashbacks; null without the
-     * widget's id or before the launcher has reported a width. */
+     * list's 16dp at each side in home_widget_cashbacks (start padding, and
+     * end margin plus padding, the scrollbar drawn over the latter); null
+     * without the widget's id or before the launcher has reported a width. */
     private fun rowWidthDp(): Int? {
         val id = widgetId ?: return null
         val width = AppWidgetManager.getInstance(context).getAppWidgetOptions(id)
@@ -70,11 +72,12 @@ private class CashbacksRows(private val context: Context, private val widgetId: 
 
     override fun getCount(): Int = rows.size
 
-    /** The card's name, the day its cycle ends and what it earned. Past
-     * that day the "till" part goes and the figure is the card's zero
-     * ([HomeWidgets.cashbackTill]). Null for a row the list asked for just
-     * as the snapshot dropped it: the list keeps its blank row. A row that
-     * fails to build is blank. */
+    /** The card's name, the day its cycle ends and what it earned.
+     * [HomeWidgets.cashbackRows] leaves out a row past that day; one that
+     * passes it after the rows were read (midnight) keeps its figure
+     * without the "till" part until the next read. Null for a row the list
+     * asked for just as the snapshot dropped it: the list keeps its blank
+     * row. A row that fails to build is blank. */
     override fun getViewAt(position: Int): RemoteViews? = try {
         rows.getOrNull(position)?.let { filled(it) }
     } catch (_: Exception) {
@@ -83,7 +86,7 @@ private class CashbacksRows(private val context: Context, private val widgetId: 
 
     private fun filled(row: JSONObject): RemoteViews {
         val till = HomeWidgets.cashbackTill(row)
-        val figure = row.optString(if (till == null) "zero" else "figure")
+        val figure = row.optString("figure")
         // Only the name gives way, so the "till" part goes where the name
         // would keep under 48dp beside it and the figure (8dp from it), as
         // the Subscriptions pill does. All three are 13sp, the figure bold.
