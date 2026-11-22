@@ -4,19 +4,49 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.provider.Telephony
+import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /**
  * The `expense_tracker/sms` methods that need no Activity: reading the SMS
  * inbox, the notification-capture buffer and the widget refreshes. Both the
  * app's engine (through MainActivity) and the headless background-import
  * engine (SmsImportWorker) answer through this, so an import behaves the
- * same with the app open or closed.
+ * same with the app open or closed. [engine] is the one whose channel calls
+ * this; the bridge closes its inbox reader when that engine is destroyed.
  */
-class SmsBridge(private val context: Context) {
+class SmsBridge(private val context: Context, engine: FlutterEngine) {
+    /** The inbox query reads up to 50,000 rows. On the main thread that
+     * stopped touch input and, with Flutter's UI and platform threads merged,
+     * every frame, so it runs here, one query at a time per engine. */
+    private val reader = Executors.newSingleThreadExecutor()
+    private val main = Handler(Looper.getMainLooper())
+
+    /** Set when the engine is destroyed. Its Dart side is gone then, so a
+     * query not yet started is skipped and a finished one is not delivered. */
+    @Volatile
+    private var disposed = false
+
+    init {
+        engine.addEngineLifecycleListener(object : FlutterEngine.EngineLifecycleListener {
+            override fun onPreEngineRestart() = Unit
+
+            override fun onEngineWillDestroy() {
+                disposed = true
+                // shutdown, not shutdownNow: a query already running ends
+                // normally and closes its cursor, and the thread then exits.
+                reader.shutdown()
+            }
+        })
+    }
+
     companion object {
         /** Rows read per provider query; pages continue until the window is
          * exhausted so long scan ranges are not silently truncated. */
@@ -56,7 +86,7 @@ class SmsBridge(private val context: Context) {
                 } else {
                     val since = call.argument<Number>("sinceMillis")?.toLong() ?: 0L
                     val until = call.argument<Number>("untilMillis")?.toLong()
-                    result.success(queryInbox(since, until))
+                    queryOffMain(since, until, result)
                 }
             }
             "notifHasAccess" -> result.success(hasNotificationAccess(context))
@@ -85,6 +115,37 @@ class SmsBridge(private val context: Context) {
             else -> return false
         }
         return true
+    }
+
+    /** Runs [queryInbox] on [reader] and answers [result] exactly once, back
+     * on the main thread where every other answer on this channel is sent. */
+    private fun queryOffMain(since: Long, until: Long?, result: MethodChannel.Result) {
+        val task = Runnable {
+            if (disposed) return@Runnable
+            // queryInbox already turns provider errors into complete=false.
+            // This catch is for anything else, such as running out of memory
+            // building the list: escaping this thread would end the app and
+            // leave the Dart call waiting with no timeout.
+            val answer: Any = try {
+                queryInbox(since, until)
+            } catch (t: Throwable) {
+                t
+            }
+            main.post {
+                if (disposed) return@post
+                if (answer is Throwable) {
+                    result.error("QUERY_FAILED", answer.message, null)
+                } else {
+                    result.success(answer)
+                }
+            }
+        }
+        try {
+            reader.execute(task)
+        } catch (_: RejectedExecutionException) {
+            // The engine was destroyed before this call could start.
+            result.error("QUERY_FAILED", "SMS reader closed", null)
+        }
     }
 
     /** Reads the whole (since, until) window newest-first, paging with a

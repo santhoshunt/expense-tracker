@@ -1705,6 +1705,13 @@ class _TransactionsTabState extends State<_TransactionsTab> {
     });
   }
 
+  /// The rows the search last found, and the ledger revision and query they
+  /// were found for: a recategorise tap rebuilds this tab twice (the edit,
+  /// then the Make rule offer), and only the first changes the ledger.
+  List<Tx> _found = const [];
+  Object? _foundRevision;
+  String? _foundQuery;
+
   @override
   Widget build(BuildContext context) {
     final finance = context.watch<FinanceProvider>();
@@ -1713,17 +1720,22 @@ class _TransactionsTabState extends State<_TransactionsTab> {
     // account, merchant and its alias, tags, people on a split, the payer
     // of a repayment and the amount.
     final q = normalizeSearchText(_search);
-    final txs = q.isEmpty
-        ? all
-        : all
-              .where(
-                (t) => searchHaystack(
-                  t,
-                  accountName: finance.accountForKey(t.acctKey)?.displayName,
-                  merchantAlias: finance.merchantAliasFor(t),
-                ).contains(q),
-              )
-              .toList();
+    if (q.isNotEmpty &&
+        (!identical(_foundRevision, finance.revision) || _foundQuery != q)) {
+      final alias = finance.merchantAlias;
+      _found = all
+          .where(
+            (t) => rowSearchText(
+              t,
+              accountName: finance.accountForKey(t.acctKey)?.displayName,
+              alias: alias,
+            ).contains(q),
+          )
+          .toList();
+      _foundRevision = finance.revision;
+      _foundQuery = q;
+    }
+    final txs = q.isEmpty ? all : _found;
 
     return Column(
       children: [

@@ -460,13 +460,20 @@ List<CategoryCompare> _categories(
 
   // Each category's usual starts at its own first spend: months before it
   // existed say nothing about it.
-  final firstSpend = <String, DateTime>{};
+  // Compared as `year * 12 + month - 1`, so the pass builds no date per
+  // row; each category's month becomes a date once, after it.
+  final firstKey = <String, int>{};
   for (final t in finance.countedTransactions) {
     if (t.type != TxType.expense) continue;
-    final m = DateTime(t.effectiveDate.year, t.effectiveDate.month);
-    final seen = firstSpend[t.categoryId];
-    if (seen == null || m.isBefore(seen)) firstSpend[t.categoryId] = m;
+    final d = t.effectiveDate;
+    final k = d.year * 12 + d.month - 1;
+    final seen = firstKey[t.categoryId];
+    if (seen == null || k < seen) firstKey[t.categoryId] = k;
   }
+  final firstSpend = {
+    for (final e in firstKey.entries)
+      e.key: DateTime(e.value ~/ 12, e.value % 12 + 1),
+  };
 
   final out = [
     for (final id in ids)

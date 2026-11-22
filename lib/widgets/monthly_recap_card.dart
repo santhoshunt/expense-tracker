@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import '../services/monthly_recap.dart';
 import '../services/spend_comparison.dart';
@@ -73,10 +72,10 @@ class MonthlyRecapCard extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
     final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
-    final monthName = DateFormat('MMMM').format(recap.month);
-    final prevShort = DateFormat(
-      'MMM',
-    ).format(DateTime(recap.month.year, recap.month.month - 1));
+    final monthName = monthFormat.format(recap.month);
+    final prevShort = shortMonthFormat.format(
+      DateTime(recap.month.year, recap.month.month - 1),
+    );
     final compare = recap.vsPrevious;
     final showDelta = compare.state == CompareState.ok;
     final deltaText = compare.negligible
@@ -223,10 +222,10 @@ class MonthPaceCard extends StatelessWidget {
     final muted = text.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
     final c = comparison;
     final month = c.month;
-    final monthName = DateFormat('MMMM').format(month);
-    final short = DateFormat('MMM').format(month);
-    final prevShort = DateFormat('MMM').format(c.previousMonth);
-    final prevLong = DateFormat('MMMM').format(c.previousMonth);
+    final monthName = monthFormat.format(month);
+    final short = shortMonthFormat.format(month);
+    final prevShort = shortMonthFormat.format(c.previousMonth);
+    final prevLong = monthFormat.format(c.previousMonth);
     final byDay = c.partial ? ' by this day' : '';
     final prev = c.vsPrevious;
     final compared = prev.state != CompareState.notEnoughHistory;

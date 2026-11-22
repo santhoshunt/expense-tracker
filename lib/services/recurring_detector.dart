@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../models/card_rewards.dart';
 import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
@@ -112,8 +114,26 @@ String? rewardMerchantOf(Tx t) {
   return words.isEmpty ? null : words;
 }
 
+/// [_identityOf]'s answer per row, with [_noIdentity] standing for null.
+/// It reads only fields of the row ([alertMerchantOf]'s, then [Tx.payee]
+/// and [Tx.note]), and a row never changes: an edit makes a new [Tx]. So
+/// the answer holds for as long as the row exists, and an [Expando] lets it
+/// go with the row.
+final Expando<String> _identities = Expando('merchant identity');
+
+/// Stands for "no identity" in [_identities]. An identity is never empty.
+const String _noIdentity = '';
+
 /// [merchantIdentityOf] without its spam and transfer guard.
 String? _identityOf(Tx t) {
+  final known = _identities[t];
+  if (known != null) return known.isEmpty ? null : known;
+  final identity = _identityFromFields(t);
+  _identities[t] = identity ?? _noIdentity;
+  return identity;
+}
+
+String? _identityFromFields(Tx t) {
   // Never key on t.sender — it is the bank's DLT channel, so every debit
   // from the same bank would collapse into one "pattern".
   var identity = alertMerchantOf(t).toLowerCase();
@@ -135,11 +155,28 @@ String? _identityOf(Tx t) {
 /// a manual row or an alert that names none. A row whose alert text is gone
 /// (restored from a backup) uses the merchant the backup carried
 /// ([Tx.smsMerchant]).
+///
+/// The parser runs several regular expressions over the alert, and the
+/// ledger's passes ask for the same rows again and again, so the answer is
+/// kept per row. It reads only [Tx.source], [Tx.smsBody], [Tx.smsMerchant]
+/// and [Tx.note] (through [Tx.smsText]), all final fields of an immutable
+/// row: an edit makes a new [Tx] with nothing kept, so the kept answer can
+/// never be stale, and the [Expando] drops it when the row is gone.
 String alertMerchantOf(Tx t) {
   if (t.source != TxSource.sms) return '';
   if (t.smsBody.isEmpty && t.smsMerchant.isNotEmpty) return t.smsMerchant;
-  return SmsTxnParser.merchantOf(t.smsText);
+  final known = _alertMerchants[t];
+  if (known != null) return known;
+  alertMerchantParses++;
+  return _alertMerchants[t] = SmsTxnParser.merchantOf(t.smsText);
 }
+
+final Expando<String> _alertMerchants = Expando('alert merchant');
+
+/// How many times [alertMerchantOf] has run the parser; tests read it to
+/// check the answer is kept per row.
+@visibleForTesting
+int alertMerchantParses = 0;
 
 /// Typed text as an identity: lowercased, every run of other characters one
 /// space, trimmed. A payee and a note with the same words match.

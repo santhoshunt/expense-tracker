@@ -103,8 +103,10 @@ void main() {
     expect(find.textContaining(kMaskedAmount), findsNothing);
 
     // The chart legend also loses its Income entry. It lives on the Trends
-    // sub-tab, alongside the bar chart it labels.
+    // sub-tab, alongside the bar chart it labels, in a section folded by
+    // default and built only once open.
     await openDashboardView(tester, 'Trends');
+    await openDashboardSection(tester, 'sixMonths');
     await tester.scrollUntilVisible(
       find.text('Expense'),
       300,

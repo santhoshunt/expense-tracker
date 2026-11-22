@@ -14,6 +14,7 @@ import 'glossy.dart';
 import 'grouped_surface.dart';
 import 'motion.dart';
 import 'status_dot.dart';
+import 'text_width.dart';
 
 // Kept importable from here: other screens take isLargeTextScale from this
 // file.
@@ -26,15 +27,12 @@ double _textWidth(BuildContext context, String text, TextStyle? style) {
   if (MediaQuery.boldTextOf(context)) {
     effective = effective.merge(const TextStyle(fontWeight: FontWeight.bold));
   }
-  final painter = TextPainter(
-    text: TextSpan(text: text, style: effective),
-    textDirection: Directionality.of(context),
-    textScaler: MediaQuery.textScalerOf(context),
-    maxLines: 1,
-  )..layout();
-  final width = painter.width;
-  painter.dispose();
-  return width;
+  return measuredTextWidth(
+    text,
+    effective,
+    MediaQuery.textScalerOf(context),
+    Directionality.of(context),
+  );
 }
 
 class TransactionTile extends StatelessWidget {

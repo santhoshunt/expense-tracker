@@ -133,12 +133,18 @@ class TxFilterRequest {
 /// tests the date the row counts in (a dashboard year tap-through, so the
 /// list adds up to the figure tapped); otherwise the date it happened (the
 /// filter sheet's custom range).
-bool txInRange(Tx t, DateTimeRange range, {required bool counted}) {
+bool txInRange(Tx t, DateTimeRange range, {required bool counted}) =>
+    txInRangeTest(range, counted: counted)(t);
+
+/// [txInRange] for many rows: the day bounds are made once, not per row.
+bool Function(Tx) txInRangeTest(DateTimeRange range, {required bool counted}) {
   // Whole days: the picker returns midnights, the rows carry times.
   final start = DateTime(range.start.year, range.start.month, range.start.day);
   final end = DateTime(range.end.year, range.end.month, range.end.day + 1);
-  final d = counted ? t.effectiveDate : t.date;
-  return !d.isBefore(start) && d.isBefore(end);
+  return (t) {
+    final d = counted ? t.effectiveDate : t.date;
+    return !d.isBefore(start) && d.isBefore(end);
+  };
 }
 
 class TransactionsScreen extends StatefulWidget {
@@ -170,6 +176,11 @@ class _PageData {
   final List<DateTime> months;
   final Map<DateTime, int> monthIndexes;
 
+  /// [filtered] by id, built once per pipeline run: every tap while rows
+  /// are selected checks the selection against the rows shown, and two
+  /// selected rows are looked up for Link refund.
+  final Map<String, Tx> byId;
+
   const _PageData({
     required this.filtered,
     required this.groups,
@@ -178,6 +189,7 @@ class _PageData {
     required this.shapes,
     required this.months,
     required this.monthIndexes,
+    required this.byId,
   });
 
   static const empty = _PageData(
@@ -188,6 +200,7 @@ class _PageData {
     shapes: [],
     months: [],
     monthIndexes: {},
+    byId: {},
   );
 }
 
@@ -266,11 +279,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _rangeCounted = false;
     _rangeLabel = null;
   }
-
-  /// Search text per row id (see [searchHaystack]); building one walks the
-  /// SMS body with the merchant regex, so it is kept across pipeline runs
-  /// and dropped only when the ledger revision changes.
-  final Map<String, String> _haystacks = {};
 
   /// Ids of transactions picked in multi-select mode; non-empty = selecting.
   final Set<String> _selected = {};
@@ -647,6 +655,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final accountId = v.accountId;
     final min = v.min;
     final max = v.max;
+    final alias = finance.merchantAlias;
     return all.where((t) {
       if (ids && _idFilter != null && !_idFilter!.contains(t.id)) return false;
       // A bank lists its linked debit cards' rows too, the rows its balance
@@ -717,10 +726,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (min != null && t.amount < min) return false;
       if (max != null && t.amount > max) return false;
       if (q.isNotEmpty) {
-        final hay = _haystacks[t.id] ??= searchHaystack(
+        final hay = rowSearchText(
           t,
           accountName: finance.accountForKey(t.acctKey)?.displayName,
-          merchantAlias: finance.merchantAliasFor(t),
+          alias: alias,
         );
         if (!hay.contains(q)) return false;
       }
@@ -749,6 +758,27 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     _rangeCounted,
   ].join('|');
 
+  /// The filters sheet's draft [v] on tab [f] as one value, so the sheet's
+  /// "Show N" is counted again only when something the count reads has
+  /// changed. [ids] as in [_applyFilters]; the page's search is in every
+  /// count. The id filter and the ledger are compared by identity apart.
+  String _draftKey(_Filters v, _Filter f, bool ids) => [
+    f.index,
+    ids,
+    normalizeSearchText(_search),
+    (v.categories.toList()..sort()).join('\n'),
+    (v.groups.toList()..sort()).join('\n'),
+    (v.budgets.toList()..sort()).join('\n'),
+    (v.tags.toList()..sort()).join('\n'),
+    v.accountId,
+    v.month,
+    v.range?.start,
+    v.range?.end,
+    v.rangeCounted,
+    v.min,
+    v.max,
+  ].join('|');
+
   /// Runs filter → group-by-month → sort → flatten for one filter tab,
   /// caching the result per tab. The cache is dropped only when the ledger
   /// (provider revision) or a non-tab filter input changes — selection taps
@@ -762,8 +792,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final fingerprint = _pipelineInputs();
     if (!identical(_pipelineRevision, finance.revision) ||
         fingerprint != _pipelineFingerprint) {
-      // Category labels, account names and aliases all ride on the revision.
-      if (!identical(_pipelineRevision, finance.revision)) _haystacks.clear();
       _pipelineRevision = finance.revision;
       _pipelineFingerprint = fingerprint;
       _pageCache.clear();
@@ -875,6 +903,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       shapes: shapes,
       months: months,
       monthIndexes: monthIndexes,
+      byId: {for (final t in filtered) t.id: t},
     );
   }
 
@@ -1035,7 +1064,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         child: Semantics(
           button: true,
           label:
-              'Jump to month, showing ${DateFormat('MMMM yyyy').format(month)}',
+              'Jump to month, showing ${_MonthHeader._longYear.format(month)}',
           onTap: jump,
           excludeSemantics: true,
           // Translucent over a strip that ignores pointers: the tap lands
@@ -1089,7 +1118,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     // Read once: each of these getters used to be called two or more times per
     // build, and each one filters the whole ledger.
     final allConfirmed = finance.transactions;
-    final filtered = _pageDataFor(_filter, finance, allConfirmed).filtered;
+    final page = _pageDataFor(_filter, finance, allConfirmed);
+    final filtered = page.filtered;
     _scheduleMenuPublish();
     _newLineShown = finance.unseenCount > 0;
     // Drop selections that no longer exist (deleted, or re-filtered away by
@@ -1098,8 +1128,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       // A picked row ends the menu's empty selection mode: from here an
       // empty selection closes the bar, as after a long-press.
       _selectMode = false;
-      final visible = {for (final t in filtered) t.id};
-      _selected.removeWhere((id) => !visible.contains(id));
+      _selected.removeWhere((id) => !page.byId.containsKey(id));
     }
     final activeAccount = _accountId == null
         ? null
@@ -1241,7 +1270,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     // Pairing is a two-row concept — the button only exists at
                     // exactly two selected.
                     onPair: _selected.length == 2 ? _bulkPair : null,
-                    onLinkRefund: _refundPairIn(finance) == null
+                    onLinkRefund: _refundPairIn(finance, page.byId) == null
                         ? null
                         : _bulkLinkRefund,
                     onDelete: _bulkDelete,
@@ -1978,13 +2007,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   /// The selection as (refund, purchase) when it is exactly one money-in
   /// and one money-out row, in any categories, transfers too; null
-  /// otherwise.
-  (Tx, Tx)? _refundPairIn(FinanceProvider finance) {
+  /// otherwise. [byId] is the shown rows ([_PageData.byId]): build keeps the
+  /// selection to them, so the ledger is walked only for a row edited out
+  /// of view since the last build, as before.
+  (Tx, Tx)? _refundPairIn(FinanceProvider finance, Map<String, Tx> byId) {
     if (_selected.length != 2) return null;
-    final rows = [
-      for (final t in finance.transactions)
-        if (_selected.contains(t.id)) t,
-    ];
+    var rows = [for (final id in _selected) ?byId[id]];
+    if (rows.length != 2) {
+      rows = [
+        for (final t in finance.transactions)
+          if (_selected.contains(t.id)) t,
+      ];
+    }
     if (rows.length != 2) return null;
     final refund = rows.where((t) => t.type == TxType.income).firstOrNull;
     final purchase = rows.where((t) => t.type == TxType.expense).firstOrNull;
@@ -1996,7 +2030,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   /// purchase then counts only what was not refunded.
   Future<void> _bulkLinkRefund() async {
     final finance = context.read<FinanceProvider>();
-    final pair = _refundPairIn(finance);
+    // Through _pageDataFor, not the last build's data: the ledger may have
+    // changed since, and the rows must be as they are now.
+    final pair = _refundPairIn(
+      finance,
+      _pageDataFor(_filter, finance, finance.transactions).byId,
+    );
     if (pair == null) return;
     final (refund, purchase) = pair;
     // The rows as they are, with the other leg of any transfer pair, for
@@ -2149,6 +2188,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     var section = finance.savedFilters.isNotEmpty && !filtering
         ? 'saved'
         : 'date';
+    // "Show N" as last counted, and what it was counted for.
+    var counted = 0;
+    String? countedFor;
+    Object? countedIds;
+    Object? countedRevision;
 
     // The sheet's choices as the list would read them once applied. The
     // range keeps its year flavour only while it is [yearRange], as
@@ -2318,13 +2362,29 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             // As apply() would leave the page: a saved filter still as it
             // loaded brings its tab and drops the "To check" ids.
             final fromSaved = isLoaded();
-            final shown = _applyFilters(
-              finance.transactions,
-              finance,
-              fromSaved ? tab : _filter,
+            // The sheet rebuilds on every frame of the keyboard animation
+            // and every keystroke in its fields; the count walks the ledger,
+            // so it runs only when the draft, the tab or the data changed.
+            final countKey = _draftKey(
               d,
+              fromSaved ? tab : _filter,
               !fromSaved,
-            ).length;
+            );
+            if (countKey != countedFor ||
+                !identical(countedIds, _idFilter) ||
+                !identical(countedRevision, finance.revision)) {
+              countedFor = countKey;
+              countedIds = _idFilter;
+              countedRevision = finance.revision;
+              counted = _applyFilters(
+                finance.transactions,
+                finance,
+                fromSaved ? tab : _filter,
+                d,
+                !fromSaved,
+              ).length;
+            }
+            final shown = counted;
             // How many picks each section holds, for its rail row.
             int picks(String s) => switch (s) {
               'date' => d.month != null || d.range != null ? 1 : 0,
@@ -4330,6 +4390,13 @@ class _MonthHeader extends StatelessWidget {
   /// and the lists are rebuilt (new keys) whenever the rows change.
   static final _totals = Expando<(double, double)>();
 
+  /// Made once, as [TxDayHeader]'s is: the sticky copy builds on every
+  /// scroll frame.
+  static final _long = DateFormat('MMMM');
+  static final _short = DateFormat('MMM');
+  static final _longYear = DateFormat('MMMM yyyy');
+  static final _shortYear = DateFormat('MMM yyyy');
+
   @override
   Widget build(BuildContext context) {
     final (income, expense) = _totals[txs] ??= _listTotals(
@@ -4341,10 +4408,13 @@ class _MonthHeader extends StatelessWidget {
     final now = DateTime.now();
     // Large text takes the short name ("OCT"), so the name and the totals
     // still share the line.
-    final name = isLargeTextScale(context) ? 'MMM' : 'MMMM';
-    final label = (month.year == now.year)
-        ? DateFormat(name).format(month).toUpperCase()
-        : DateFormat('$name yyyy').format(month).toUpperCase();
+    final short = isLargeTextScale(context);
+    final label =
+        (month.year == now.year
+                ? (short ? _short : _long)
+                : (short ? _shortYear : _longYear))
+            .format(month)
+            .toUpperCase();
 
     return Padding(
       // Right padding matches the jump-controls column width so the label

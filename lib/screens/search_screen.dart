@@ -117,8 +117,6 @@ class _SearchScreenState extends State<SearchScreen> {
   Object? _revision;
   int? _yearStartMonth;
 
-  /// [searchHaystack] per row id.
-  final Map<String, String> _hay = {};
   List<_MerchantHit> _merchants = const [];
   Map<String, ({int count, double sum})> _catYear = const {};
 
@@ -184,15 +182,14 @@ class _SearchScreenState extends State<SearchScreen> {
     final sm = _settings.yearStart.month;
     final sameRevision = identical(_revision, f.revision);
     if (sameRevision && _yearStartMonth == sm) return;
-    if (!sameRevision) _hay.clear();
     _revision = f.revision;
     _yearStartMonth = sm;
-    final year = _thisYear(sm);
+    final year = txInRangeTest(_thisYear(sm), counted: true);
     final merchants = <String, _MerchantHit>{};
     final catYear = <String, ({int count, double sum})>{};
     // Newest first, so a merchant takes its latest row's label.
     for (final t in f.transactions) {
-      final inYear = txInRange(t, year, counted: true);
+      final inYear = year(t);
       if (inYear) {
         final c = catYear[t.categoryId] ?? (count: 0, sum: 0.0);
         final add = !f.countsInTotals(t)
@@ -223,12 +220,11 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   /// Whether row [t] holds the normalized query [q].
-  bool _hit(FinanceProvider f, Tx t, String q) =>
-      (_hay[t.id] ??= searchHaystack(
-        t,
-        accountName: f.accountForKey(t.acctKey)?.displayName,
-        merchantAlias: f.merchantAliasFor(t),
-      )).contains(q);
+  bool _hit(FinanceProvider f, Tx t, String q) => rowSearchText(
+    t,
+    accountName: f.accountForKey(t.acctKey)?.displayName,
+    alias: f.merchantAlias,
+  ).contains(q);
 
   /// Why [t] matched [q], for line two of its row.
   String? _noteFor(FinanceProvider f, Tx t, String q) => searchMatchNote(
@@ -238,9 +234,34 @@ class _SearchScreenState extends State<SearchScreen> {
     accountName: f.accountForKey(t.acctKey)?.displayName,
   );
 
-  /// Every chip's hits for [query].
+  /// The last [_collect] answer and what it was found for. A chip switch,
+  /// the field's own rebuilds and the Show all page ask again with nothing
+  /// changed, and each fresh answer walks the whole ledger.
+  _Hits? _hits;
+  Object? _hitsRevision;
+  int? _hitsYear;
+  String? _hitsQuery;
+
+  /// Every chip's hits for [query], found again only when the ledger, the
+  /// year start or the query text changes. The raw text is the key: rules
+  /// match it lowercased rather than normalized.
   _Hits _collect(FinanceProvider f, String query) {
     _refresh(f);
+    final kept = _hits;
+    if (kept != null &&
+        identical(_hitsRevision, f.revision) &&
+        _hitsYear == _yearStartMonth &&
+        _hitsQuery == query) {
+      return kept;
+    }
+    _hitsRevision = f.revision;
+    _hitsYear = _yearStartMonth;
+    _hitsQuery = query;
+    return _hits = _find(f, query);
+  }
+
+  /// Every chip's hits for [query].
+  _Hits _find(FinanceProvider f, String query) {
     final q = normalizeSearchText(query);
     if (q.isEmpty) {
       return (
@@ -692,7 +713,7 @@ class _SearchScreenState extends State<SearchScreen> {
 /// a category or an account), pushed over the results so Back returns to
 /// them. [rowsOf] reads the rows afresh on each change; the app bar's
 /// button opens the same rows in the Transactions tab.
-class SearchPaymentsPage extends StatelessWidget {
+class SearchPaymentsPage extends StatefulWidget {
   final String title;
   final List<Tx> Function(FinanceProvider) rowsOf;
   final TxFilterRequest transactionsRequest;
@@ -709,20 +730,42 @@ class SearchPaymentsPage extends StatelessWidget {
   });
 
   @override
+  State<SearchPaymentsPage> createState() => _SearchPaymentsPageState();
+}
+
+class _SearchPaymentsPageState extends State<SearchPaymentsPage> {
+  /// [SearchPaymentsPage.rowsOf] as last read, and the ledger revision it
+  /// was read on: a merchant's rows walk the whole ledger, so they are read
+  /// again only when the ledger changes.
+  List<Tx> _rows = const [];
+  Object? _rowsRevision;
+
+  @override
+  void didUpdateWidget(SearchPaymentsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.rowsOf != widget.rowsOf) _rowsRevision = null;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final rows = rowsOf(context.watch<FinanceProvider>());
+    final f = context.watch<FinanceProvider>();
+    if (_rowsRevision == null || !identical(_rowsRevision, f.revision)) {
+      _rows = widget.rowsOf(f);
+      _rowsRevision = f.revision;
+    }
+    final rows = _rows;
     return AmbientBackground(
       child: Scaffold(
         backgroundColor: Colors.transparent,
         appBar: AppBar(
-          title: Text(title),
+          title: Text(widget.title),
           actions: [
             IconButton(
               tooltip: 'Open in Transactions',
               icon: const Icon(Icons.open_in_new),
               onPressed: () => AppNav.instance.openTransactions(
                 context,
-                transactionsRequest,
+                widget.transactionsRequest,
               ),
             ),
           ],
@@ -732,7 +775,7 @@ class SearchPaymentsPage extends StatelessWidget {
                 icon: Icons.search_off,
                 message: 'Nothing here any more.',
               )
-            : _PaymentResults(rows: rows, matchNoteOf: matchNoteOf),
+            : _PaymentResults(rows: rows, matchNoteOf: widget.matchNoteOf),
       ),
     );
   }
@@ -777,23 +820,49 @@ class _PaymentResultsState extends State<_PaymentResults> {
     setState(() => _byAmount = v);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final f = context.read<FinanceProvider>();
-    final sm = context.select<SettingsProvider, int>((s) => s.yearStart.month);
-    final theme = Theme.of(context);
-    final muted = theme.textTheme.bodySmall?.copyWith(
-      color: theme.colorScheme.onSurfaceVariant,
-    );
+  /// The list's data and what it was built from: the rows, the ledger
+  /// revision, the year start, the sort, the cap and the current month. A
+  /// sort pick, a parent rebuild or a data change elsewhere would otherwise
+  /// sort, group and total every row again.
+  _ResultsData? _data;
+  List<Tx>? _dataRows;
+  Object? _dataRevision;
+  int? _dataYear;
+  bool? _dataByAmount;
+  int? _dataCap;
+  DateTime? _dataRunning;
+
+  _ResultsData _dataFor(FinanceProvider f, int sm) {
+    final now = DateTime.now();
+    final running = DateTime(now.year, now.month);
+    final kept = _data;
+    if (kept != null &&
+        identical(_dataRows, widget.rows) &&
+        identical(_dataRevision, f.revision) &&
+        _dataYear == sm &&
+        _dataByAmount == _byAmount &&
+        _dataCap == widget.cap &&
+        _dataRunning == running) {
+      return kept;
+    }
+    _dataRows = widget.rows;
+    _dataRevision = f.revision;
+    _dataYear = sm;
+    _dataByAmount = _byAmount;
+    _dataCap = widget.cap;
+    _dataRunning = running;
+    return _data = _buildData(f, sm, running);
+  }
+
+  /// Totals, the top merchants and the rows in list order, as one flat list
+  /// that the item builder reads by index. Each row's tile, and its match
+  /// note, is built only when the list scrolls to it.
+  _ResultsData _buildData(FinanceProvider f, int sm, DateTime running) {
     final rows = widget.rows;
-    final n = rows.length;
     final payments = rows.every((t) => _isPayment(t, f));
-    String word(int n) => payments
-        ? (n == 1 ? 'payment' : 'payments')
-        : (n == 1 ? 'match' : 'matches');
-    final year = _thisYear(sm);
+    final inYear = txInRangeTest(_thisYear(sm), counted: true);
     final spent = rows
-        .where((t) => _isPayment(t, f) && txInRange(t, year, counted: true))
+        .where((t) => _isPayment(t, f) && inYear(t))
         .fold(0.0, (s, t) => s + f.netSpendOf(t));
     final counts = <String, int>{};
     for (final t in rows) {
@@ -813,7 +882,90 @@ class _PaymentResultsState extends State<_PaymentResults> {
     final cut = cap != null && sorted.length > cap;
     final shown = cut ? sorted.sublist(0, cap) : sorted;
 
-    final items = <Widget>[
+    // The total line, and the top merchants line under it when it shows.
+    final head = labels.length >= 2 ? 2 : 1;
+    final items = <_ResultItem>[];
+    final tileIndex = <String, int>{};
+    void tile(Tx t, {bool first = false, bool last = false}) {
+      tileIndex[t.id] = head + items.length;
+      items.add((month: null, tx: t, day: null, first: first, last: last));
+    }
+
+    if (_byAmount) {
+      for (final t in shown) {
+        tile(t);
+      }
+    } else {
+      // Days and months compared as numbers: making a DateTime per row,
+      // several times over, cost more than the rest of this together.
+      int dayOf(Tx t) => t.date.year * 10000 + t.date.month * 100 + t.date.day;
+      final days = [for (final t in shown) dayOf(t)];
+      final byDay = <int, List<Tx>>{};
+      for (var i = 0; i < shown.length; i++) {
+        (byDay[days[i]] ??= []).add(shown[i]);
+      }
+      int? month;
+      for (var i = 0; i < shown.length; i++) {
+        final t = shown[i];
+        final m = t.date.year * 100 + t.date.month;
+        if (m != month) {
+          month = m;
+          final label = DateTime(t.date.year, t.date.month);
+          if (label != running) {
+            items.add((
+              month: label,
+              tx: null,
+              day: null,
+              first: false,
+              last: false,
+            ));
+          }
+        }
+        final day = days[i];
+        final first = i == 0 || days[i - 1] != day;
+        final last = i == shown.length - 1 || days[i + 1] != day;
+        if (first) {
+          items.add((
+            month: null,
+            tx: t,
+            day: byDay[day]!,
+            first: false,
+            last: false,
+          ));
+        }
+        tile(t, first: first, last: last);
+      }
+    }
+    return (
+      count: rows.length,
+      payments: payments,
+      spent: spent,
+      labels: labels,
+      cut: cut,
+      byAmount: _byAmount,
+      items: items,
+      tileIndex: tileIndex,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final f = context.read<FinanceProvider>();
+    final sm = context.select<SettingsProvider, int>((s) => s.yearStart.month);
+    final theme = Theme.of(context);
+    final muted = theme.textTheme.bodySmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    final d = _dataFor(f, sm);
+    final n = d.count;
+    final payments = d.payments;
+    String word(int n) => payments
+        ? (n == 1 ? 'payment' : 'payments')
+        : (n == 1 ? 'match' : 'matches');
+    final spent = d.spent;
+    final labels = d.labels;
+
+    final head = <Widget>[
       Padding(
         padding: const EdgeInsets.fromLTRB(20, 4, 8, 0),
         child: Row(
@@ -860,75 +1012,85 @@ class _PaymentResultsState extends State<_PaymentResults> {
         ),
     ];
 
-    if (_byAmount) {
-      for (final t in shown) {
-        items.add(
-          TransactionTile(
-            key: ValueKey(t.id),
-            tx: t,
-            matchNote: widget.matchNoteOf?.call(t),
-          ),
-        );
-      }
-    } else {
-      DateTime dayOf(Tx t) => DateTime(t.date.year, t.date.month, t.date.day);
-      final byDay = <DateTime, List<Tx>>{};
-      for (final t in shown) {
-        (byDay[dayOf(t)] ??= []).add(t);
-      }
-      final now = DateTime.now();
-      final running = DateTime(now.year, now.month);
-      DateTime? month;
-      for (var i = 0; i < shown.length; i++) {
-        final t = shown[i];
-        final m = DateTime(t.date.year, t.date.month);
-        if (m != month) {
-          month = m;
-          if (m != running) {
-            items.add(
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: SectionLabel(fmtMonth(m)),
-              ),
-            );
-          }
-        }
-        final day = dayOf(t);
-        final first = i == 0 || dayOf(shown[i - 1]) != day;
-        final last = i == shown.length - 1 || dayOf(shown[i + 1]) != day;
-        if (first) items.add(TxDayHeader(day: t.date, txs: byDay[day]!));
-        items.add(
-          TransactionTile(
-            key: ValueKey(t.id),
-            tx: t,
-            grouped: true,
-            groupedFirst: first,
-            groupedLast: last,
-            showDate: false,
-            matchNote: widget.matchNoteOf?.call(t),
-          ),
-        );
-      }
-    }
-    if (cut && widget.onShowAll != null) {
-      items.add(
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: Center(
-            child: TextButton(
-              onPressed: widget.onShowAll,
-              child: Text('Show all $n ${word(n)}'),
-            ),
-          ),
-        ),
-      );
-    }
+    final items = d.items;
+    final showAll = d.cut && widget.onShowAll != null;
 
-    return ListView(
+    // Built by index, as the Transactions tab's list is: the same entries in
+    // the same order as one widget list held, so a screen reader counts and
+    // reads them as before, but only the rows on screen are built.
+    return ListView.builder(
       padding: EdgeInsets.only(
         bottom: 24 + MediaQuery.paddingOf(context).bottom,
       ),
-      children: items,
+      itemCount: head.length + items.length + (showAll ? 1 : 0),
+      // A sort pick moves a row to another index: its tile keeps its state,
+      // as a keyed child of a plain list did.
+      findChildIndexCallback: (key) =>
+          key is ValueKey<String> ? d.tileIndex[key.value] : null,
+      itemBuilder: (context, i) {
+        if (i < head.length) return head[i];
+        final j = i - head.length;
+        if (j == items.length) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Center(
+              child: TextButton(
+                onPressed: widget.onShowAll,
+                child: Text('Show all $n ${word(n)}'),
+              ),
+            ),
+          );
+        }
+        final item = items[j];
+        if (item.month case final m?) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: SectionLabel(fmtMonth(m)),
+          );
+        }
+        final t = item.tx!;
+        if (item.day case final day?) return TxDayHeader(day: t.date, txs: day);
+        if (d.byAmount) {
+          return TransactionTile(
+            key: ValueKey(t.id),
+            tx: t,
+            matchNote: widget.matchNoteOf?.call(t),
+          );
+        }
+        return TransactionTile(
+          key: ValueKey(t.id),
+          tx: t,
+          grouped: true,
+          groupedFirst: item.first,
+          groupedLast: item.last,
+          showDate: false,
+          matchNote: widget.matchNoteOf?.call(t),
+        );
+      },
     );
   }
 }
+
+/// One entry of a results list under its total lines: a month label
+/// ([month]), the day header over [tx]'s day ([day]), or [tx]'s own row,
+/// [first] and [last] in its day's card.
+typedef _ResultItem = ({
+  DateTime? month,
+  Tx? tx,
+  List<Tx>? day,
+  bool first,
+  bool last,
+});
+
+/// A results list's figures and entries ([_PaymentResultsState._dataFor]).
+/// [tileIndex] is each row's index in the whole list, total lines included.
+typedef _ResultsData = ({
+  int count,
+  bool payments,
+  double spent,
+  List<MapEntry<String, int>> labels,
+  bool cut,
+  bool byAmount,
+  List<_ResultItem> items,
+  Map<String, int> tileIndex,
+});

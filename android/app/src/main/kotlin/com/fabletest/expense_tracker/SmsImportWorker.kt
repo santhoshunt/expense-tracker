@@ -120,7 +120,7 @@ class SmsImportWorker(context: Context, params: WorkerParameters) :
             }
         }
 
-        val sms = SmsBridge(context)
+        val sms = SmsBridge(context, engine)
         MethodChannel(engine.dartExecutor.binaryMessenger, "expense_tracker/sms")
             .setMethodCallHandler { call, result ->
                 when {

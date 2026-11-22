@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/finance_provider.dart';
@@ -43,6 +44,46 @@ class UpcomingMonitor {
 
   UpcomingMonitor({NotificationService? notifications})
     : notifications = notifications ?? NotificationService.instance;
+
+  // Recurring detection scans a year of rows, and this runs on every data
+  // change, so the last result is kept, as HomeWidgetsService keeps its
+  // own. Detection reads the ledger, the merchant aliases and the marked
+  // subscriptions, which change only with a notification (a new
+  // [FinanceProvider.revision]), and the clock: its day, and within the
+  // day only which rows are dated after it. Rows are newest first, so
+  // those lead the list and are counted from the front.
+  Object? _hitsRev;
+  int? _hitsDay;
+  int? _hitsAhead;
+  List<RecurringHit> _hits = const [];
+
+  /// How many times [check] has run recurring detection; for tests.
+  @visibleForTesting
+  int detections = 0;
+
+  List<RecurringHit> _recurring(FinanceProvider finance, DateTime clock) {
+    final rows = finance.countedTransactions;
+    var ahead = 0;
+    while (ahead < rows.length && rows[ahead].date.isAfter(clock)) {
+      ahead++;
+    }
+    final day = clock.year * 10000 + clock.month * 100 + clock.day;
+    if (!identical(_hitsRev, finance.revision) ||
+        _hitsDay != day ||
+        _hitsAhead != ahead) {
+      detections++;
+      _hits = detectRecurring(
+        rows,
+        now: clock,
+        alias: finance.merchantAlias,
+        pinned: finance.subscriptionPins,
+      );
+      _hitsRev = finance.revision;
+      _hitsDay = day;
+      _hitsAhead = ahead;
+    }
+    return _hits;
+  }
 
   /// A marker is swept once its due date is this many days old: well past
   /// the longest overdue window (7 days for reminders, repeats and card
@@ -139,13 +180,7 @@ class UpcomingMonitor {
         ));
       }
 
-      final hits = detectRecurring(
-        finance.countedTransactions,
-        now: clock,
-        alias: finance.merchantAlias,
-        pinned: finance.subscriptionPins,
-      );
-      for (final h in hits) {
+      for (final h in _recurring(finance, clock)) {
         if (settings.hiddenUpcoming.contains(h.key)) continue;
         // Marked paid by hand: its alert never came, so nothing to remind.
         if (hitMarkedPaid(finance, h)) continue;

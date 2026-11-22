@@ -81,6 +81,22 @@ class AppColors extends ThemeExtension<AppColors> {
       cardFill: Color.lerp(cardFill, other.cardFill, t),
     );
   }
+
+  // By value: a theme rebuilt with equal colours must equal the one before,
+  // or every widget reading the theme is told to rebuild.
+  @override
+  bool operator ==(Object other) =>
+      other is AppColors &&
+      other.green == green &&
+      other.orange == orange &&
+      other.blue == blue &&
+      other.purple == purple &&
+      other.cardOutline == cardOutline &&
+      other.cardFill == cardFill;
+
+  @override
+  int get hashCode =>
+      Object.hash(green, orange, blue, purple, cardOutline, cardFill);
 }
 
 /// A text button flush with the content around it: no side padding, so

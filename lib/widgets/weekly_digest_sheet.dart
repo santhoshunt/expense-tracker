@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
 import '../models/transaction.dart';
@@ -351,7 +350,7 @@ Future<void> showWeeklyDigestSheet(
                               ).label,
                               sub: [
                                 ?finance.merchantLabelFor(t),
-                                DateFormat('EEE').format(t.effectiveDate),
+                                shortWeekdayFormat.format(t.effectiveDate),
                               ].join(' · '),
                               // Net of linked refunds, as the week's figures.
                               amount: fmtMoneyWhole(finance.netSpendOf(t)),
@@ -556,7 +555,7 @@ class _UndoBar extends StatelessWidget {
 
 /// "Week of 12 Oct", with the year when it is not this one.
 String _weekTitle(DateTime week, DateTime now) =>
-    'Week of ${DateFormat(week.year == now.year ? 'd MMM' : 'd MMM yyyy').format(week)}';
+    'Week of ${week.year == now.year ? dayMonthFormat.format(week) : fmtDate(week)}';
 
 /// Monday to Sunday, one bar each on one scale. A day after today draws
 /// no bar and takes no tap.
@@ -624,12 +623,12 @@ class _DayBars extends StatelessWidget {
                     children: [
                       bar,
                       const SizedBox(height: 4),
-                      Text(DateFormat('EEE').format(day), style: muted),
+                      Text(shortWeekdayFormat.format(day), style: muted),
                     ],
                   ),
                 );
                 final label =
-                    '${DateFormat('EEEE').format(day)} ${fmtMoneyWhole(amount)}';
+                    '${weekdayFormat.format(day)} ${fmtMoneyWhole(amount)}';
                 final tap = onDay;
                 if (!shown || tap == null) {
                   return Semantics(

@@ -3,7 +3,6 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
 import '../models/account.dart';
@@ -278,7 +277,7 @@ class _CardSpendSectionState extends State<CardSpendSection> {
                   q.back == 0
                       ? 'Now'
                       : monthWords
-                      ? DateFormat('MMM').format(q.cycle.start)
+                      ? shortMonthFormat.format(q.cycle.start)
                       : fmtDateCompact(q.cycle.end),
               ],
               spoken: [
@@ -455,16 +454,41 @@ class _CardBarsPainter extends CustomPainter {
 
   double get _top => values.fold(0.0, (m, v) => math.max(m, v));
 
+  // Labels are laid out once for this painter, which paint, hit testing and
+  // semantics share, and paints are reused across bars: paint ran the grid
+  // label's layout twice and every label's once on each call.
+
   /// The gridline's value label, or null when no gridline is drawn.
-  TextPainter? _gridLabel() {
+  late final TextPainter? _gridLabel = () {
     final grid = _gridValue(_top);
     return grid > 0 ? _text(fmtMoneyCompact(grid), labelStyle) : null;
-  }
+  }();
+
+  late final List<TextPainter> _barLabels = [
+    for (final (i, label) in labels.indexed)
+      _text(
+        label,
+        i == selected ? labelStyle.copyWith(color: outlineColor) : labelStyle,
+      ),
+  ];
+
+  late final TextPainter _emptyLabel = _text(
+    emptyText,
+    labelStyle.copyWith(fontSize: 12),
+  );
+
+  late final Paint _rule = Paint()
+    ..color = outlineColor.withValues(alpha: 0.2)
+    ..strokeWidth = 1;
+  final Paint _fill = Paint();
+  final Paint _outline = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.5;
 
   /// Each bar's slot: the gridline label keeps a gutter at the right, so
   /// it never sits on a bar.
   double _slot(double width) {
-    final label = _gridLabel();
+    final label = _gridLabel;
     final gutter = label == null ? 0.0 : label.width + 4;
     return math.max(0.0, width - gutter) / values.length;
   }
@@ -487,30 +511,24 @@ class _CardBarsPainter extends CustomPainter {
     final top = _top;
     final room = math.max(0.0, chartHeight - 14);
 
-    final baseline = Paint()
-      ..color = outlineColor.withValues(alpha: 0.2)
-      ..strokeWidth = 1;
     canvas.drawLine(
       Offset(0, chartHeight),
       Offset(size.width, chartHeight),
-      baseline,
+      _rule,
     );
 
     if (top > 0) {
       final grid = _gridValue(top);
       if (grid > 0) {
         final y = chartHeight - grid / top * room;
-        final dash = Paint()
-          ..color = outlineColor.withValues(alpha: 0.2)
-          ..strokeWidth = 1;
         for (var x = 0.0; x < size.width; x += 7) {
           canvas.drawLine(
             Offset(x, y),
             Offset(math.min(x + 3, size.width), y),
-            dash,
+            _rule,
           );
         }
-        final tp = _gridLabel()!;
+        final tp = _gridLabel!;
         tp.paint(canvas, Offset(size.width - tp.width, y - tp.height - 1));
       }
     }
@@ -529,11 +547,9 @@ class _CardBarsPainter extends CustomPainter {
         if (isRunning) {
           canvas.drawRRect(
             rrect,
-            Paint()..color = runningColor.withValues(alpha: 0.35),
+            _fill..color = runningColor.withValues(alpha: 0.35),
           );
-          final stroke = Paint()
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.5
+          final stroke = _outline
             ..color = isSelected ? outlineColor : runningColor;
           if (isSelected) {
             canvas.drawRRect(rrect, stroke);
@@ -543,27 +559,18 @@ class _CardBarsPainter extends CustomPainter {
         } else {
           canvas.drawRRect(
             rrect,
-            Paint()
+            _fill
               ..color = isSelected
                   ? spendColor
                   : spendColor.withValues(alpha: 0.45),
           );
           if (isSelected) {
-            canvas.drawRRect(
-              rrect,
-              Paint()
-                ..style = PaintingStyle.stroke
-                ..strokeWidth = 1.5
-                ..color = outlineColor,
-            );
+            canvas.drawRRect(rrect, _outline..color = outlineColor);
           }
         }
       }
 
-      final tp = _text(
-        labels[i],
-        i == selected ? labelStyle.copyWith(color: outlineColor) : labelStyle,
-      );
+      final tp = _barLabels[i];
       if (tp.width <= slot) {
         tp.paint(
           canvas,
@@ -573,7 +580,7 @@ class _CardBarsPainter extends CustomPainter {
     }
 
     if (top <= 0) {
-      final tp = _text(emptyText, labelStyle.copyWith(fontSize: 12));
+      final tp = _emptyLabel;
       tp.paint(
         canvas,
         Offset((size.width - tp.width) / 2, (chartHeight - tp.height) / 2),

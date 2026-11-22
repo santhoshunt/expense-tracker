@@ -928,9 +928,11 @@ class _SpamFold extends StatelessWidget {
               ),
             ),
           ),
-          AnimatedFold(
+          // Built only while open: the sheet rebuilds its rows on every
+          // data change, and folded suspects need none of that.
+          AnimatedFold.lazy(
             collapsed: !open,
-            child: Column(
+            builder: (_) => Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Padding(

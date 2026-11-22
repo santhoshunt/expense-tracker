@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' show DateFormat;
 import 'package:provider/provider.dart';
 
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/monthly_recap.dart';
+import '../utils/format.dart';
 import 'monthly_recap_card.dart';
 
 /// A past month's recap as a sheet, opened from the Dashboard's ⋮ menu on
@@ -42,7 +42,7 @@ Future<void> showRecapSheet(
         final earlier = months.where((m) => m.isBefore(shown)).firstOrNull;
         final later = months.where((m) => m.isAfter(shown)).lastOrNull;
         final recap = buildRecapFor(finance, settings, shown);
-        final label = DateFormat('MMMM yyyy').format(shown);
+        final label = fmtMonth(shown);
 
         void step(DateTime to) => setState(() => shown = to);
 

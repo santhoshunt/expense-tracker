@@ -315,6 +315,33 @@ class _Derived {
   /// keys it was built with.
   ReviewQueue? reviewQueue;
   Set<String>? reviewQueueDismissed;
+
+  /// [FinanceProvider.cardSpendWindow] and [FinanceProvider.cardRewardsFor],
+  /// keyed by the card's basis ([FinanceProvider._cardBasis]) and the
+  /// periods asked for. Rewards hold null for a card without them.
+  final Map<Object, CardSpendWindow> cardWindows = {};
+  final Map<Object, RewardEstimate?> cardRewards = {};
+}
+
+/// An open [FinanceProvider._batch]: whether a mutation inside it notified,
+/// and which collections its mutations asked [FinanceProvider._persist] to
+/// save.
+class _Batch {
+  bool open = true;
+  bool notified = false;
+  bool saves = false;
+  bool tx = false;
+  bool rules = false;
+  bool accounts = false;
+  bool importRules = false;
+  bool categories = false;
+  bool overrides = false;
+  bool groups = false;
+  bool budgets = false;
+  bool aliases = false;
+  bool reminders = false;
+  bool marks = false;
+  bool discards = false;
 }
 
 /// The refund links that hold, from one pass over the confirmed rows.
@@ -469,8 +496,66 @@ class FinanceProvider extends ChangeNotifier {
   @override
   void notifyListeners() {
     _d = _Derived();
+    // Inside a [_batch] the cache still resets at once, so the action reads
+    // fresh figures, but listeners hear once, when the action ends.
+    final batch = _openBatch;
+    if (batch != null) {
+      batch.notified = true;
+      return;
+    }
     super.notifyListeners();
   }
+
+  /// Marks this provider's open [_batch] in the zone the action runs in.
+  /// A zone value, not a flag on the provider, so only the action's own
+  /// calls are held back: a mutation from elsewhere that runs while the
+  /// action waits still notifies and saves at once.
+  final Object _batchKey = Object();
+
+  _Batch? get _openBatch => switch (Zone.current[_batchKey]) {
+    final _Batch b when b.open => b,
+    _ => null,
+  };
+
+  /// Runs [action], an action made of several mutations, as one change:
+  /// listeners hear once and the collections it changed are saved once,
+  /// when it ends, rather than after each mutation inside it. Each
+  /// mutation still resets the derived cache at once. A batch inside a
+  /// batch joins the outer one. Ends the same way when [action] throws.
+  /// The save is awaited, so a caller that awaits this finds the data
+  /// saved, as after a single mutation.
+  Future<T> _batch<T>(Future<T> Function() action) async {
+    if (_openBatch != null) return action();
+    final batch = _Batch();
+    try {
+      return await runZoned(action, zoneValues: {_batchKey: batch});
+    } finally {
+      batch.open = false;
+      // The cache was reset by the last mutation already: only listeners
+      // are left to tell.
+      if (batch.notified) super.notifyListeners();
+      if (batch.saves) {
+        await _persist(
+          tx: batch.tx,
+          rules: batch.rules,
+          accounts: batch.accounts,
+          importRules: batch.importRules,
+          categories: batch.categories,
+          overrides: batch.overrides,
+          groups: batch.groups,
+          budgets: batch.budgets,
+          aliases: batch.aliases,
+          reminders: batch.reminders,
+          marks: batch.marks,
+          discards: batch.discards,
+        );
+      }
+    }
+  }
+
+  /// [_batch] for tests, which run actions of their own inside it.
+  @visibleForTesting
+  Future<T> batchForTest<T>(Future<T> Function() action) => _batch(action);
 
   /// Confirmed transactions with their insertion index, oldest first.
   /// See [_Derived.ordered] for why the index is the tie-break.
@@ -2308,6 +2393,25 @@ class FinanceProvider extends ChangeNotifier {
     bool marks = false,
     bool discards = false,
   }) async {
+    // Inside a [_batch], the save waits for the action's end and covers
+    // every collection the action's mutations asked for.
+    final batch = _openBatch;
+    if (batch != null) {
+      batch.saves = true;
+      batch.tx |= tx;
+      batch.rules |= rules;
+      batch.accounts |= accounts;
+      batch.importRules |= importRules;
+      batch.categories |= categories;
+      batch.overrides |= overrides;
+      batch.groups |= groups;
+      batch.budgets |= budgets;
+      batch.aliases |= aliases;
+      batch.reminders |= reminders;
+      batch.marks |= marks;
+      batch.discards |= discards;
+      return;
+    }
     try {
       await _persistOrThrow(
         tx: tx,
@@ -3416,7 +3520,7 @@ class FinanceProvider extends ChangeNotifier {
       if (r.type != TxType.income || r.refundOf != null) continue;
       final candidates = refundCandidatesFor(
         r,
-        transactions,
+        _refundWindowRows(r),
         remainingOf: refundableLeftOf,
         counts: countsInTotals,
       );
@@ -3428,6 +3532,38 @@ class FinanceProvider extends ChangeNotifier {
       }
     }
     return out;
+  }
+
+  /// The confirmed rows [refundCandidatesFor] can take for [refund], newest
+  /// first as in [transactions]: those dated from [kRefundWindowDays] days
+  /// before the refund's day through that day, found by binary search in
+  /// [_ordered] instead of a pass over every row. A day's margin on each
+  /// side covers a date held in UTC, whose calendar day ([refundDayGap])
+  /// can differ from the local one; [refundCandidatesFor] makes the exact
+  /// cut, and the rows keep their order, so the candidates come out as
+  /// from the whole list.
+  List<Tx> _refundWindowRows(Tx refund) {
+    final d = refund.date;
+    final rows = _ordered;
+    int firstFrom(DateTime x) {
+      var lo = 0;
+      var hi = rows.length;
+      while (lo < hi) {
+        final mid = (lo + hi) >> 1;
+        if (rows[mid].$1.date.isBefore(x)) {
+          lo = mid + 1;
+        } else {
+          hi = mid;
+        }
+      }
+      return lo;
+    }
+
+    final start = firstFrom(
+      DateTime(d.year, d.month, d.day - kRefundWindowDays - 1),
+    );
+    final end = firstFrom(DateTime(d.year, d.month, d.day + 2));
+    return [for (var i = end - 1; i >= start; i--) rows[i].$1];
   }
 
   /// Everything the review sheet lists: imports to review, suspected spam,
@@ -6084,10 +6220,35 @@ class FinanceProvider extends ChangeNotifier {
   /// the one picked before for its merchant on this card, else the first
   /// naming its merchant, else the first holding its category, else
   /// Everything else; under that group's minimum it earns nothing.
+  ///
+  /// Kept until the next change, per [_cardBasis], cycle and day: a card
+  /// tile asks on every build.
   RewardEstimate? cardRewardsFor(Account account, {int back = 0}) {
+    final now = figuresClock();
+    final key = (_cardBasis(account, now), back);
+    final cache = _d.cardRewards;
+    if (cache.containsKey(key)) return cache[key];
+    return cache[key] = _cardRewardsFor(account, now, back);
+  }
+
+  /// What the card figures cached in [_Derived] read from [account] and the
+  /// clock: an edit to the account replaces it and notifies, but a caller
+  /// may pass a copy (the tile's Month view clears the statement day), so
+  /// the fields themselves are the key, with the calendar day of [now]
+  /// ([cardCycleOf] reads only the day).
+  static Object _cardBasis(Account account, DateTime now) => (
+    account.id,
+    account.type,
+    account.statementDay,
+    account.closedAt,
+    account.rewards,
+    now.year * 10000 + now.month * 100 + now.day,
+  );
+
+  RewardEstimate? _cardRewardsFor(Account account, DateTime now, int back) {
     final rules = account.rewards;
     if (!account.isCard || rules == null) return null;
-    final cycle = cardCycleOf(account, figuresClock(), back: back);
+    final cycle = cardCycleOf(account, now, back: back);
     final charges = <RewardCharge>[
       for (final t in _rowsInCycle(account, cycle))
         if (earnsOnCard(t))
@@ -6120,9 +6281,16 @@ class FinanceProvider extends ChangeNotifier {
   /// Six of [account]'s periods for the card tile chart, ending with the
   /// one today falls in, or [skip] periods before it. A closed card's
   /// window ends at the period holding its closing date. A card with no
-  /// statement day uses calendar months.
+  /// statement day uses calendar months. Kept until the next change, per
+  /// [_cardBasis] and [skip]: the card tile asks on every build and every
+  /// bar tap.
   CardSpendWindow cardSpendWindow(Account account, {int skip = 0}) {
     final now = figuresClock();
+    return _d.cardWindows[(_cardBasis(account, now), skip)] ??=
+        _cardSpendWindow(account, now, skip);
+  }
+
+  CardSpendWindow _cardSpendWindow(Account account, DateTime now, int skip) {
     var newest = 0;
     final closedAt = account.closedAt;
     if (closedAt != null) {
@@ -6149,7 +6317,8 @@ class FinanceProvider extends ChangeNotifier {
       current: current,
       day: day,
       days: days,
-      bars: bars,
+      // Cached and shared between callers, so handed out unmodifiable.
+      bars: UnmodifiableListView(bars),
       hasOlder: hasOlder,
     );
   }
@@ -6687,12 +6856,14 @@ class FinanceProvider extends ChangeNotifier {
   /// outstanding by nothing — that anchor already reflected it (the
   /// "already registered" case). The returned record carries everything an
   /// Undo needs; null when [accountId] is not a card or [amount] invalid.
+  /// One change ([_batch]): listeners hear once and the ledger is saved
+  /// once, after the row, its account, the paid mark and the pairing.
   Future<CardPaymentResult?> recordCardPayment({
     required String accountId,
     required double amount,
     required DateTime paidOn,
     required DateTime due,
-  }) async {
+  }) => _batch(() async {
     final acct = accountById(accountId);
     if (acct == null || !acct.isCard || !amount.isFinite || amount <= 0) {
       return null;
@@ -6741,7 +6912,7 @@ class FinanceProvider extends ChangeNotifier {
       bankLegBefore: bankLegBefore,
       prevPaidMonth: prevPaidMonth,
     );
-  }
+  });
 
   /// Turns ATM withdrawal [bankTxId] ([isAtmCandidate]) into a move from
   /// the bank to Cash, as [recordCardPayment] does for a card bill: a manual
@@ -6749,8 +6920,9 @@ class FinanceProvider extends ChangeNotifier {
   /// there is none), paired with the bank row so neither counts as spend.
   /// The returned record carries everything [undoCashMoves] needs; null
   /// when the row is gone, is no candidate, or the pairing failed (the leg
-  /// and any account made for it are removed again).
-  Future<CashMove?> moveToCash(String bankTxId) async {
+  /// and any account made for it are removed again). One change
+  /// ([_batch]), as [recordCardPayment] is.
+  Future<CashMove?> moveToCash(String bankTxId) => _batch(() async {
     final before = _transactions.where((t) => t.id == bankTxId).firstOrNull;
     if (before == null || !isAtmCandidate(before)) return null;
     var cash = defaultCashAccount;
@@ -6780,7 +6952,7 @@ class FinanceProvider extends ChangeNotifier {
       cashAccountId: cash.id,
       createdAccountId: createdAccountId,
     );
-  }
+  });
 
   /// Reverses [moves] ([moveToCash]): deletes the Cash legs, puts the bank
   /// rows back as they were, and deletes each Cash account a move created
@@ -8354,14 +8526,23 @@ class FinanceProvider extends ChangeNotifier {
       // A card payment that counted at once pays its card's bill.
       _markCardCyclesPaid();
       _lastImportCounted = counted;
-      notifyListeners();
-      await _persist(tx: true, accounts: true, reminders: paid);
-      // Once the person has answered Move, each ATM withdrawal moves to
-      // Cash; the import toast offers Undo ([takeAtmMoves]). A move confirms
-      // a row that waited in review, so it counts at once.
-      if (_atmAutoMove) {
-        for (final id in newIds) {
-          final t = _transactions.where((r) => r.id == id).firstOrNull;
+      // The import and its ATM moves are one change ([_batch]): listeners
+      // hear once and the ledger is saved once, not once per move step.
+      await _batch(() async {
+        notifyListeners();
+        await _persist(tx: true, accounts: true, reminders: paid);
+        // Once the person has answered Move, each ATM withdrawal moves to
+        // Cash; the import toast offers Undo ([takeAtmMoves]). A move
+        // confirms a row that waited in review, so it counts at once.
+        if (!_atmAutoMove) return;
+        for (final (k, id) in newIds.indexed) {
+          // A move replaces its bank row in place and only adds (or takes
+          // back) its Cash leg after this batch's rows, so each row is
+          // still where it was added. The id check covers anything else.
+          final at = firstNew + k;
+          final t = at < _transactions.length && _transactions[at].id == id
+              ? _transactions[at]
+              : _transactions.where((r) => r.id == id).firstOrNull;
           if (t == null || !isAtmCandidate(t)) continue;
           final wasPending = t.pending;
           final move = await moveToCash(id);
@@ -8370,7 +8551,7 @@ class FinanceProvider extends ChangeNotifier {
           if (wasPending) counted++;
         }
         _lastImportCounted = counted;
-      }
+      });
     }
     return (added, spamDropped, counted);
   }
@@ -8446,9 +8627,11 @@ class FinanceProvider extends ChangeNotifier {
         }
         continue;
       }
-      if (!_couldPair(row, other)) continue;
+      // The date test first: [_couldPair] runs regular expressions over both
+      // alerts, and most rows of the same amount are far apart.
+      if (gap > kPairDateWindow || !_couldPair(row, other)) continue;
       // Kept looking: a duplicate further down the pool comes first.
-      if (gap <= kPairDateWindow) leg = true;
+      leg = true;
     }
     if (leg) return HoldReason.transferLeg;
     if (key == null) return HoldReason.noAccount;

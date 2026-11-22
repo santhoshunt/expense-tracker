@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -9,6 +8,7 @@ import '../providers/settings_provider.dart';
 import '../services/update_downloader.dart';
 import '../services/update_installer.dart';
 import '../services/update_service.dart';
+import '../utils/format.dart';
 import 'link_pill.dart';
 import 'undo_snackbar.dart';
 
@@ -356,9 +356,7 @@ class _UpdateSheetState extends State<UpdateSheet> with WidgetsBindingObserver {
   }
 
   Widget _versionTile(ReleaseOption o, TextStyle? muted) {
-    final date = o.publishedAt == null
-        ? null
-        : DateFormat('d MMM yyyy').format(o.publishedAt!);
+    final date = o.publishedAt == null ? null : fmtDate(o.publishedAt!);
     final open = _notesOpen.contains(o.tag);
     // One version: nothing to choose, so no radio button.
     final only = widget.updates.newer.length == 1;

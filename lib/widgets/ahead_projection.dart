@@ -14,6 +14,7 @@ import '../services/subscriptions.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../utils/haptics.dart';
+import 'dashboard_fold.dart';
 import 'motion.dart';
 import 'section_label.dart';
 
@@ -45,8 +46,10 @@ class AheadProjection extends StatefulWidget {
 
 class _AheadProjectionState extends State<AheadProjection> {
   /// Today. The PageView disposes Ahead on leaving it, so every visit
-  /// starts on today.
-  int _selected = 0;
+  /// starts on today. Its fold keeps the chosen day while folded: the
+  /// section is not built then, and would come back on today.
+  late int _selected =
+      (DashboardFoldScope.memoryOf(context)?[AheadProjection] as int?) ?? 0;
   bool _dragging = false;
   final List<GlobalKey> _rowKeys = [];
 
@@ -107,6 +110,7 @@ class _AheadProjectionState extends State<AheadProjection> {
   void _select(int i) {
     if (i == _selected) return;
     setState(() => _selected = i);
+    DashboardFoldScope.memoryOf(context)?[AheadProjection] = i;
   }
 
   @override
@@ -488,6 +492,13 @@ class _ReadoutBubble extends StatelessWidget {
   }
 }
 
+typedef _Plot = ({
+  Rect plot,
+  double lo,
+  double hi,
+  List<(double level, double top, TextPainter label)> levels,
+});
+
 class _BalanceLinePainter extends CustomPainter {
   final List<double> balances;
   final List<DateTime> dates;
@@ -537,17 +548,31 @@ class _BalanceLinePainter extends CustomPainter {
   /// Between a grid label and the plot, and above the day labels.
   static const _gap = 6.0;
 
+  /// [layout]'s answer and the size it was for. The chart asks for it in
+  /// build, to map a finger, and paint asks again: its labels are laid out
+  /// once for this painter, not on every call.
+  Size? _plotSize;
+  _Plot? _plot;
+
+  /// The day labels under the plot, laid out once for this painter.
+  late final TextPainter _chosenLabel = _text(
+    fmtDateCompact(dates[selected]),
+    bold: true,
+  );
+  late final TextPainter _firstLabel = _text(fmtDateCompact(dates[0]));
+  late final TextPainter _lastLabel = _text(fmtDateCompact(dates.last));
+
   /// The plot's rect in [size], the balance range and the labelled grid
   /// levels. A left gutter as wide as the widest grid label holds the
   /// labels beside the line, not on it; the day labels sit under it. The
   /// chart maps a finger through the same rect.
-  ({
-    Rect plot,
-    double lo,
-    double hi,
-    List<(double level, double top, TextPainter label)> levels,
-  })
-  layout(Size size) {
+  _Plot layout(Size size) {
+    if (size == _plotSize) return _plot!;
+    _plotSize = size;
+    return _plot = _layout(size);
+  }
+
+  _Plot _layout(Size size) {
     var lo = balances.isEmpty ? 0.0 : balances.reduce(math.min);
     var hi = balances.isEmpty ? 0.0 : balances.reduce(math.max);
     if (hi - lo < 1) {
@@ -660,19 +685,19 @@ class _BalanceLinePainter extends CustomPainter {
     // chosen (bold) and last; an end label that would touch the chosen one
     // is left out.
     final labelY = bottom + _inset + _gap;
-    final chosen = _text(fmtDateCompact(dates[selected]), bold: true);
+    final chosen = _chosenLabel;
     final chosenX = (sx - chosen.width / 2)
         .clamp(gutter, math.max(gutter, size.width - chosen.width))
         .toDouble();
     chosen.paint(canvas, Offset(chosenX, labelY));
     if (selected != 0) {
-      final first = _text(fmtDateCompact(dates[0]));
+      final first = _firstLabel;
       if (gutter + first.width + 8 < chosenX) {
         first.paint(canvas, Offset(gutter, labelY));
       }
     }
     if (selected != n - 1) {
-      final last = _text(fmtDateCompact(dates[n - 1]));
+      final last = _lastLabel;
       final lastX = size.width - last.width;
       if (chosenX + chosen.width + 8 < lastX) {
         last.paint(canvas, Offset(lastX, labelY));

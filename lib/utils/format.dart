@@ -20,9 +20,20 @@ final NumberFormat _wholeRupees = NumberFormat.currency(
 );
 final DateFormat _date = DateFormat('d MMM yyyy');
 final DateFormat _dateTime = DateFormat('d MMM yyyy, h:mm a');
-final DateFormat _dayMonth = DateFormat('d MMM');
+final DateFormat dayMonthFormat = DateFormat('d MMM');
 final DateFormat _time = DateFormat('h:mm a');
 final DateFormat _monthYear = DateFormat('MMMM yyyy');
+
+// Formatters for widgets that format dates while they build or paint.
+// Constructing a DateFormat parses its pattern, so each is made once here.
+final DateFormat shortMonthFormat = DateFormat('MMM');
+final DateFormat monthFormat = DateFormat('MMMM');
+final DateFormat shortMonthYearFormat = DateFormat('MMM yyyy');
+final DateFormat shortMonthDayFormat = DateFormat('MMM d');
+final DateFormat weekdayShortMonthDayFormat = DateFormat('EEE MMM d');
+final DateFormat weekdayLetterFormat = DateFormat('EEEEE');
+final DateFormat shortWeekdayFormat = DateFormat('EEE');
+final DateFormat weekdayFormat = DateFormat('EEEE');
 
 /// Stand-in for an amount the user chose to hide (Settings → Privacy →
 /// Hide income). Totals render this; the underlying value never changes.
@@ -136,8 +147,8 @@ String fmtDateMaybeTime(DateTime d) =>
 /// [fmtDateMaybeTime] without the year — for list rows that already sit
 /// under a month header, where "2026" only crowds out the text beside it.
 String fmtDateCompact(DateTime d) => (d.hour == 0 && d.minute == 0)
-    ? _dayMonth.format(d)
-    : '${_dayMonth.format(d)}, ${_time.format(d)}';
+    ? dayMonthFormat.format(d)
+    : '${dayMonthFormat.format(d)}, ${_time.format(d)}';
 
 /// A Count in moment (`Tx.countIn`) as the edit sheet's chip and the bulk
 /// confirm show it: "Thu 1 Oct", with the time only when it isn't midnight
@@ -205,7 +216,7 @@ String fmtDateRange(DateTimeRange r) {
     return '${a.day} – ${fmtDate(b)}';
   }
   if (a.year == b.year) {
-    return '${_dayMonth.format(a)} – ${fmtDate(b)}';
+    return '${dayMonthFormat.format(a)} – ${fmtDate(b)}';
   }
   return '${fmtDate(a)} – ${fmtDate(b)}';
 }
@@ -220,11 +231,11 @@ String fmtDayRange(DateTimeRange r, DateTime now) {
   if (a.year != b.year) return '${fmtDate(a)} to ${fmtDate(b)}';
   final String range;
   if (a == b) {
-    range = _dayMonth.format(a);
+    range = dayMonthFormat.format(a);
   } else if (a.month == b.month) {
-    range = '${a.day} to ${_dayMonth.format(b)}';
+    range = '${a.day} to ${dayMonthFormat.format(b)}';
   } else {
-    range = '${_dayMonth.format(a)} to ${_dayMonth.format(b)}';
+    range = '${dayMonthFormat.format(a)} to ${dayMonthFormat.format(b)}';
   }
   return b.year != now.year ? '$range ${b.year}' : range;
 }

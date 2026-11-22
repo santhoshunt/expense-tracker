@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/finance_provider.dart';
 import '../providers/settings_provider.dart';
@@ -25,6 +26,20 @@ enum BackgroundTrigger {
 
 /// The review notification appears once more rows than this wait.
 const int kReviewNotifyThreshold = 5;
+
+/// How long an SMS run that changed nothing may skip the widget syncs and
+/// the alert checks after the last run that did them. Three hours: half
+/// the 6-hour periodic check, so on a quiet day the widgets and the
+/// date-driven alerts lag by no more than a periodic run would, while a
+/// burst of one-time passwords and promotions, each of which wakes Every
+/// SMS, costs one full pass instead of one each. A new calendar day always
+/// runs them, so a bill that comes due today alerts on the day's first SMS.
+const Duration kQuietSmsFullCheckEvery = Duration(hours: 3);
+
+/// When a run last synced the widgets and ran the alert checks with no
+/// error in any of them, in milliseconds since the epoch. Read only by
+/// [runBackgroundImport].
+const String kLastFullCheckKey = 'background_full_check_at_v1';
 
 /// The native side of background import: WorkManager scheduling, the SMS
 /// receiver switch, and the hand-off between the app's engine and the
@@ -133,6 +148,11 @@ class BackgroundImportScheduler {
 /// for changes); [notify] posts or
 /// clears the review notification. Never throws: [BackgroundImportResult.ok]
 /// is false when the import failed part-way.
+///
+/// An SMS run that changed nothing (a one-time password or a promotion)
+/// skips the widget syncs and the alert checks while the last run that did
+/// them is from today and under [kQuietSmsFullCheckEvery] old. [now] is
+/// the tests' clock.
 Future<BackgroundImportResult> runBackgroundImport(
   FinanceProvider finance,
   SettingsProvider settings,
@@ -143,7 +163,12 @@ Future<BackgroundImportResult> runBackgroundImport(
   bool postReminders = true,
   bool checkAlerts = true,
   NotificationService? notifications,
+  DateTime? now,
 }) async {
+  final at = now ?? DateTime.now();
+  // Every change to the ledger, reminder entries and Keep taps included,
+  // replaces the revision.
+  final revisionBefore = finance.revision;
   var imported = 0;
   // Of [imported], the rows that wait in review rather than counted at once.
   var toReview = 0;
@@ -181,17 +206,27 @@ Future<BackgroundImportResult> runBackgroundImport(
   // that offers Remove.
   if (postReminders && finance.loadWarnings.isEmpty) {
     try {
-      await finance.postDueReminders(DateTime.now());
+      await finance.postDueReminders(at);
     } catch (e) {
       // The import itself still ran; the next open retries these.
       debugPrint('Background reminder entries failed: $e');
     }
   }
-  if (syncWidgets) {
+  final full = await _fullPassDue(
+    trigger,
+    changed: imported > 0 || !identical(revisionBefore, finance.revision),
+    at: at,
+  );
+  // Whether every widget sync and alert check this run made finished
+  // without an error. Only such a pass is recorded as the last full one: a
+  // failed one is retried on the next SMS, as every SMS did before the skip.
+  var clean = true;
+  if (syncWidgets && full) {
     try {
       await BudgetWidgetService().sync(finance, settings);
       await HomeWidgetsService().sync(finance, settings);
     } catch (e) {
+      clean = false;
       debugPrint('Background widget sync failed: $e');
     }
   }
@@ -217,16 +252,55 @@ Future<BackgroundImportResult> runBackgroundImport(
   // v1.39.1 these alerts waited for the next open. Each monitor remembers
   // what it sent, so opening the app later never repeats one. The app's
   // own engine passes [checkAlerts] false and runs its own monitors.
-  if (checkAlerts && finance.loadWarnings.isEmpty) {
-    await runAlertChecks(finance, settings, notifications: notifications);
+  if (checkAlerts && full && finance.loadWarnings.isEmpty) {
+    final allChecked = await runAlertChecks(
+      finance,
+      settings,
+      notifications: notifications,
+    );
+    clean = clean && allChecked;
+  }
+  if (full && clean && (syncWidgets || checkAlerts)) {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(kLastFullCheckKey, at.millisecondsSinceEpoch);
+    } catch (e) {
+      debugPrint('Recording the full check failed: $e');
+    }
   }
   return (imported: imported, ok: ok);
 }
 
+/// Whether this run syncs the widgets and checks the alerts: always, but
+/// for an SMS run that [changed] nothing while the last full pass is from
+/// [at]'s day and less than [kQuietSmsFullCheckEvery] before it.
+Future<bool> _fullPassDue(
+  BackgroundTrigger trigger, {
+  required bool changed,
+  required DateTime at,
+}) async {
+  if (trigger != BackgroundTrigger.sms || changed) return true;
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final ms = prefs.getInt(kLastFullCheckKey);
+    if (ms == null) return true;
+    final last = DateTime.fromMillisecondsSinceEpoch(ms);
+    final sameDay =
+        last.year == at.year && last.month == at.month && last.day == at.day;
+    return !sameDay ||
+        at.isBefore(last) ||
+        at.difference(last) >= kQuietSmsFullCheckEvery;
+  } catch (_) {
+    return true;
+  }
+}
+
 /// Budget, unusual spending, payment-due and price-rise checks, for an
 /// engine with no Home screen to run them. One failing never stops the others.
-/// [notifications] is the tests' stand-in for the plugin.
-Future<void> runAlertChecks(
+/// [notifications] is the tests' stand-in for the plugin. Returns whether
+/// every check finished without an error; a check whose setting is off
+/// returns at once, which counts as finished.
+Future<bool> runAlertChecks(
   FinanceProvider finance,
   SettingsProvider settings, {
   NotificationService? notifications,
@@ -256,13 +330,16 @@ Future<void> runAlertChecks(
       ).check(finance, settings),
     ),
   ];
+  var allChecked = true;
   for (final (name, run) in checks) {
     try {
       await run();
     } catch (e) {
+      allChecked = false;
       debugPrint('Background $name check failed: $e');
     }
   }
+  return allChecked;
 }
 
 /// What one background import did.

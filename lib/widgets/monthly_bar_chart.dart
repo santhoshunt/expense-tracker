@@ -3,7 +3,6 @@ import 'dart:ui' show lerpDouble;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
 import '../providers/finance_provider.dart';
@@ -89,6 +88,11 @@ class _MonthlyBarChartState extends State<MonthlyBarChart>
   List<_MonthData>? _from;
   int? _selected;
 
+  /// The painters' laid-out labels. A morph or a lift brings a new painter
+  /// every frame with mostly the same labels, so they live here, across
+  /// painters, and go with the chart.
+  final _labels = _LabelCache();
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -106,6 +110,7 @@ class _MonthlyBarChartState extends State<MonthlyBarChart>
   void dispose() {
     _select.dispose();
     _morph.dispose();
+    _labels.dispose();
     super.dispose();
   }
 
@@ -162,7 +167,7 @@ class _MonthlyBarChartState extends State<MonthlyBarChart>
       anchor: chartAnchor(paintContext, geo.top(i)),
       maxWidth: kChartPopupWidth,
       content: (_) => ChartPopup(
-        title: DateFormat('MMMM yyyy').format(m.month),
+        title: fmtMonth(m.month),
         rows: widget.seriesOf != null
             ? [(widget.seriesLabel, fmtMoney(m.expense))]
             : [
@@ -200,7 +205,7 @@ class _MonthlyBarChartState extends State<MonthlyBarChart>
       for (final m in widget.shownMonths)
         _MonthData(
           month: m,
-          label: DateFormat('MMM').format(m),
+          label: shortMonthFormat.format(m),
           income: finance?.incomeInMonth(m) ?? 0,
           expense: seriesOf?.call(m) ?? finance!.expenseInMonth(m),
         ),
@@ -261,6 +266,7 @@ class _MonthlyBarChartState extends State<MonthlyBarChart>
                   // Painted text bypasses widget-level scaling; honour it
                   // explicitly.
                   textScaler: scaler,
+                  labels: _labels,
                 ),
               ),
             );
@@ -352,6 +358,12 @@ class _BarChartPainter extends CustomPainter {
   final TextStyle labelStyle;
   final TextScaler textScaler;
 
+  /// The chart's laid-out month and figure labels, shared by its painters.
+  final _LabelCache labels;
+
+  /// One paint for every bar, recoloured per bar.
+  final Paint _bar = Paint();
+
   _BarChartPainter({
     required this.data,
     required this.spoken,
@@ -363,6 +375,7 @@ class _BarChartPainter extends CustomPainter {
     required this.expenseColor,
     required this.labelStyle,
     this.textScaler = TextScaler.noScaling,
+    required this.labels,
   });
 
   @override
@@ -409,7 +422,7 @@ class _BarChartPainter extends CustomPainter {
         );
         canvas.drawRRect(
           rect,
-          Paint()..color = color.withValues(alpha: color.a * alpha),
+          _bar..color = color.withValues(alpha: color.a * alpha),
         );
       }
 
@@ -473,15 +486,14 @@ class _BarChartPainter extends CustomPainter {
     double? fitWidth,
     String? fallback,
   }) {
-    TextPainter painterFor(String s) => TextPainter(
-      text: TextSpan(
-        text: s,
-        style: small ? labelStyle.copyWith(fontSize: 10) : labelStyle,
-      ),
-      textAlign: center ? TextAlign.center : TextAlign.left,
-      textScaler: textScaler,
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: maxWidth ?? double.infinity);
+    TextPainter painterFor(String s) => labels.painter(
+      s,
+      small: small,
+      center: center,
+      maxWidth: maxWidth,
+      style: labelStyle,
+      scaler: textScaler,
+    );
     var tp = painterFor(text);
     if (fitWidth != null && tp.width > fitWidth) {
       if (fallback == null) return;
@@ -504,9 +516,9 @@ class _BarChartPainter extends CustomPainter {
           rect: Rect.fromLTWH(groupWidth * i, 0, groupWidth, size.height),
           properties: SemanticsProperties(
             label: seriesLabel != null
-                ? '${DateFormat('MMMM yyyy').format(d.month)}: '
+                ? '${fmtMonth(d.month)}: '
                       '$seriesLabel ${fmtMoney(d.expense)}'
-                : '${DateFormat('MMMM yyyy').format(d.month)}: income '
+                : '${fmtMonth(d.month)}: income '
                       '${showIncome ? fmtMoney(d.income) : 'hidden'}, expense '
                       '${fmtMoney(d.expense)}',
             textDirection: TextDirection.ltr,
@@ -530,4 +542,51 @@ class _BarChartPainter extends CustomPainter {
       old.incomeColor != incomeColor ||
       old.expenseColor != expenseColor ||
       old.labelStyle != labelStyle;
+}
+
+/// Text painters laid out once per text and kept, for the bar chart's
+/// painters to share. A new label style or text scale starts afresh, and a
+/// morph, which walks the peak figures through many values, drops the lot
+/// past [_limit] so the store stays small.
+class _LabelCache {
+  final _painters = <(String, bool, bool, double?), TextPainter>{};
+  TextStyle? _style;
+  TextScaler? _scaler;
+
+  static const _limit = 64;
+
+  TextPainter painter(
+    String text, {
+    required bool small,
+    required bool center,
+    required double? maxWidth,
+    required TextStyle style,
+    required TextScaler scaler,
+  }) {
+    if (style != _style || scaler != _scaler) {
+      dispose();
+      _style = style;
+      _scaler = scaler;
+    }
+    final key = (text, small, center, maxWidth);
+    final known = _painters[key];
+    if (known != null) return known;
+    if (_painters.length >= _limit) dispose();
+    return _painters[key] = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: small ? style.copyWith(fontSize: 10) : style,
+      ),
+      textAlign: center ? TextAlign.center : TextAlign.left,
+      textScaler: scaler,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: maxWidth ?? double.infinity);
+  }
+
+  void dispose() {
+    for (final p in _painters.values) {
+      p.dispose();
+    }
+    _painters.clear();
+  }
 }

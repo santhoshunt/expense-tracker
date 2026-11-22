@@ -278,7 +278,7 @@ void main() {
               tip: const Icon(Icons.info_outline),
               open: false,
               onChanged: (_) {},
-              children: const [SizedBox(height: 40)],
+              body: () => const [SizedBox(height: 40)],
             ),
           ),
         ),

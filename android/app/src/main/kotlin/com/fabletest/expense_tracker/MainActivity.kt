@@ -111,7 +111,7 @@ class MainActivity : FlutterFragmentActivity() {
             // The worker hands its runs to this engine while it lives.
             BackgroundImport.addLive(it)
         }
-        val smsBridge = SmsBridge(applicationContext)
+        val smsBridge = SmsBridge(applicationContext, flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
             .setMethodCallHandler { call, result ->
                 // Inbox, notification buffer and widgets: shared with the

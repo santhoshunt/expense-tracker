@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
 import '../providers/finance_provider.dart';
@@ -59,7 +58,7 @@ Future<void> showSpendHistorySheet(
             ? windowLabel
             : shown.length == 1
             ? fmtMonth(shown.last)
-            : '${DateFormat(shown.first.year == shown.last.year ? 'MMM' : 'MMM yyyy').format(shown.first)} '
+            : '${(shown.first.year == shown.last.year ? shortMonthFormat : shortMonthYearFormat).format(shown.first)} '
                   'to ${fmtMonth(shown.last)}';
         final h = buildSpendHistory(
           finance,
@@ -72,7 +71,7 @@ Future<void> showSpendHistorySheet(
         final muted = theme.textTheme.bodySmall?.copyWith(
           color: scheme.onSurfaceVariant,
         );
-        final mmmYyyy = DateFormat('MMM yyyy');
+        final mmmYyyy = shortMonthYearFormat;
         final usual = h.usual;
         final biggestMonth = h.biggestMonth;
         // The button opens the tapped period's rows, so it only shows when
@@ -181,7 +180,7 @@ Future<void> showSpendHistorySheet(
                       FigureTile(
                         title: h.anchorRunning
                             ? 'This month so far'
-                            : 'In ${DateFormat('MMMM').format(h.anchor)}',
+                            : 'In ${monthFormat.format(h.anchor)}',
                         value: fmtMoneyWhole(h.anchorAmount),
                         note: mmmYyyy.format(h.anchor),
                       ),

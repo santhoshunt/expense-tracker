@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' show DateFormat;
 import 'package:provider/provider.dart';
 
 import '../models/reminder.dart';
@@ -212,8 +211,8 @@ class BigBillsStrip extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final short = DateFormat('MMM');
-    final name = DateFormat('MMM yyyy');
+    final short = shortMonthFormat;
+    final name = shortMonthYearFormat;
     final largest = plan.months.fold(0.0, (m, e) => e.due > m ? e.due : m);
     final label = [
       for (final e in plan.months)

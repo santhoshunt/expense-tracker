@@ -316,6 +316,12 @@ class BankSilence {
   });
 }
 
+/// Each row's bank code, by the row object. The code depends only on the
+/// row's sender, and a row is never changed in place (an edit replaces the
+/// object), so it holds as long as the row lives: the banner's scan after a
+/// data change runs the sender patterns only on rows it has not seen.
+final Expando<String> _bankOfRow = Expando('bankOfRow');
+
 /// Banks with at least 5 alerts in the 120 days before their latest one,
 /// spread over 30 days or more, whose latest alert is older than 3 times
 /// their usual (median) gap, and at least 10 days, but within the last
@@ -337,7 +343,7 @@ List<BankSilence> detectSilentBanks(
   final byBank = <String, List<DateTime>>{};
   for (final t in rows) {
     if (t.source != TxSource.sms || t.sender.trim().isEmpty) continue;
-    final bank = SmsTxnParser.dedupBankOf(t.sender);
+    final bank = _bankOfRow[t] ??= SmsTxnParser.dedupBankOf(t.sender);
     if (bank.isEmpty) continue;
     (byBank[bank] ??= []).add(t.date);
   }

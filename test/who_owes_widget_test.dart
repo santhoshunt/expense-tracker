@@ -533,7 +533,8 @@ void main() {
           matching: find.byType(AnimatedFold),
         ),
       );
-      expect(fold().collapsed, isTrue);
+      // A folded list builds its rows only once it opens.
+      expect(find.text('Arun'), findsNothing);
       await tester.tap(find.text('Settled (1)'));
       await tester.pumpAndSettle();
       expect(fold().collapsed, isFalse);

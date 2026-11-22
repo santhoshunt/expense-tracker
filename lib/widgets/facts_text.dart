@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../utils/format.dart';
+import 'text_width.dart';
 
 /// Facts on a line that may wrap, joined by " · " as [joinFacts] joins
 /// them: each fact keeps its words together and a line breaks only after a
@@ -33,17 +34,9 @@ class FactsText extends StatelessWidget {
         final style = DefaultTextStyle.of(context).style;
         final scaler = MediaQuery.textScalerOf(context);
         final direction = Directionality.of(context);
-        bool fits(String words) {
-          final painter = TextPainter(
-            text: TextSpan(text: words, style: style),
-            textScaler: scaler,
-            textDirection: direction,
-            maxLines: 1,
-          )..layout();
-          final width = painter.width;
-          painter.dispose();
-          return width <= constraints.maxWidth;
-        }
+        bool fits(String words) =>
+            measuredTextWidth(words, style, scaler, direction) <=
+            constraints.maxWidth;
 
         // A no-break space, then the dot: the dot after a fact stays on
         // its line, so it is measured with the fact.

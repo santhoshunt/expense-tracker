@@ -61,6 +61,11 @@ String importCountsText(int imported, int counted) {
   return '$toReview to review';
 }
 
+/// The clock Home's resume throttle and ledger-check wait read. Tests set
+/// their own, so those run on the test's fake time alone.
+@visibleForTesting
+DateTime Function() homeClock = DateTime.now;
+
 /// Import from SMS: how far back to scan. Null when closed; otherwise the
 /// days to look back, or the picked dates, or neither for "since last
 /// scan". [lastScan] names when that was.
@@ -367,11 +372,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       }
     });
     // A single hook for budget checks: any transaction change (import, manual
-    // add, confirm) notifies the provider, and we re-evaluate the cap.
+    // add, confirm) notifies the provider, and we re-evaluate the cap, once
+    // per burst of changes (_onLedgerChange).
     // _checkBudget also refreshes the home-screen budget widgets; the extra
     // settings listener covers cap/alert edits, which don't notify finance.
     _finance = context.read<FinanceProvider>();
-    _finance!.addListener(_checkBudget);
+    _finance!.addListener(_onLedgerChange);
     _settings = context.read<SettingsProvider>();
     _settings!.addListener(_syncBudgetWidgets);
     _settings!.addListener(_applyBackgroundImport);
@@ -390,28 +396,65 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   /// fires right after a cold start and rapid app switches.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Leaving the screen: a ledger check still waiting runs now, so an
+    // alert or a widget sync is not lost when the app is swiped away.
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _runPendingLedgerCheck();
+      return;
+    }
     if (state != AppLifecycleState.resumed) return;
-    // A process kept alive across midnight on the 1st must rebook, and one
-    // kept alive past Monday 09:00 likewise for the digest.
-    _scheduleRecap();
-    _scheduleWeeklyDigest();
-    // An action that arrived during the switch back waits for resumed.
+    final now = homeClock();
+    // A resume follows every return from a permission dialog, file picker,
+    // share sheet or the unlock prompt. Within a few seconds of the last
+    // resume that did this work in full nothing below can have moved on (a
+    // due bill, a newer release), so that work is skipped. A new day always
+    // counts as moved on. Only a resume stamps the time: the open-time work
+    // in initState is not the same list (it has no unusual spending or
+    // price-rise check), so the first resume after a cold start runs it all,
+    // as before. Two tasks run on every resume regardless: see below.
+    final lastWork = _lastResumeWork;
+    final fresh =
+        lastWork == null ||
+        now.difference(lastWork) >= _resumeThrottle ||
+        !DateUtils.isSameDay(now, lastWork);
+    if (fresh) {
+      _lastResumeWork = now;
+      // A process kept alive across midnight on the 1st must rebook, and
+      // one kept alive past Monday 09:00 likewise for the digest.
+      _scheduleRecap();
+      _scheduleWeeklyDigest();
+    }
+    // Every resume: an action that arrived during the switch back (a
+    // widget or notification tap) waits for resumed.
     _scheduleLaunchAction();
-    _checkForUpdate();
-    // A new day moves Today and the pace marker even with no data change.
-    _syncBudgetWidgets();
-    // A process kept alive past a due day records it on the way back.
-    _postDueReminders();
-    _checkUnusual();
-    _checkPriceRise();
+    if (fresh) {
+      _checkForUpdate();
+      // A new day moves Today and the pace marker even with no data change.
+      _syncBudgetWidgets();
+      // A process kept alive past a due day records it on the way back.
+      _postDueReminders();
+      _checkUnusual();
+      _checkPriceRise();
+    }
+    // Every resume: Keep taps made on payment-to-check notes while away
+    // land in the ledger here.
     _syncImportChecks();
     final last = _lastAutoImportAt;
-    if (last != null &&
-        DateTime.now().difference(last) < const Duration(seconds: 5)) {
+    if (last != null && now.difference(last) < _resumeThrottle) {
       return;
     }
     _autoImport();
   }
+
+  /// How close together two resumes must be for the second to skip the
+  /// open-time work ([didChangeAppLifecycleState]), and two auto-imports
+  /// for the second to be skipped.
+  static const _resumeThrottle = Duration(seconds: 5);
+
+  /// When a resume last ran the open-time work in full.
+  DateTime? _lastResumeWork;
 
   static bool get _updatesSupported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -767,7 +810,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final keepPort = _keepPort;
     if (keepPort != null) ImportChecks.stopListening(keepPort);
     WidgetsBinding.instance.removeObserver(this);
-    _finance?.removeListener(_checkBudget);
+    // A run still waiting would find the screen gone and do nothing.
+    _ledgerCheck?.cancel();
+    _finance?.removeListener(_onLedgerChange);
     _settings?.removeListener(_syncBudgetWidgets);
     _settings?.removeListener(_applyBackgroundImport);
     _settings?.removeListener(_scheduleWeeklyDigest);
@@ -776,6 +821,51 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       BackgroundImportScheduler.runImportHandler = null;
     }
     super.dispose();
+  }
+
+  /// The ledger listener's run, waiting to start ([_onLedgerChange]).
+  Timer? _ledgerCheck;
+
+  /// When the first change of the burst now waiting was made.
+  DateTime? _ledgerBurstStart;
+
+  /// One action can change the ledger several times: the add sheet saves
+  /// the row, files its account and confirms it, each change awaiting its
+  /// own storage write, and quick confirms in the review sheet follow one
+  /// another. Each change used to run every check below. Now the run waits
+  /// for a quarter second with no change, but never more than three
+  /// quarters after the first change, so a long run of taps still gets its
+  /// alerts promptly. The run reads the ledger as it is when it starts, so
+  /// the last change is always in it, and a change after it books the
+  /// next run.
+  ///
+  /// A timer, because the changes of one save are apart by storage writes
+  /// (about 150 ms each for a 20,000-row ledger, measured on a desktop): a
+  /// microtask runs between them, and a frame callback runs after each
+  /// one's frame, and not at all while the app is in the background, where
+  /// a Keep tap still changes the ledger. Nothing awaits the timer, so
+  /// tests are not held up by it. Leaving the screen runs a waiting check
+  /// at once ([_runPendingLedgerCheck]); dispose cancels it.
+  void _onLedgerChange() {
+    const quiet = Duration(milliseconds: 250);
+    const cap = Duration(milliseconds: 750);
+    _ledgerCheck?.cancel();
+    final start = _ledgerBurstStart ??= homeClock();
+    final left = cap - homeClock().difference(start);
+    _ledgerCheck = Timer(
+      left < quiet ? (left.isNegative ? Duration.zero : left) : quiet,
+      _runPendingLedgerCheck,
+    );
+  }
+
+  /// Runs the ledger check [_onLedgerChange] booked, now, if one waits.
+  void _runPendingLedgerCheck() {
+    final pending = _ledgerCheck;
+    if (pending == null) return;
+    pending.cancel();
+    _ledgerCheck = null;
+    _ledgerBurstStart = null;
+    _checkBudget();
   }
 
   void _checkBudget() {
@@ -1023,7 +1113,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   Future<void> _autoImport() async {
     if (!mounted || _autoImporting) return;
     _autoImporting = true;
-    _lastAutoImportAt = DateTime.now();
+    // The resume throttle compares this on the same clock.
+    _lastAutoImportAt = homeClock();
     final settings = context.read<SettingsProvider>();
     final finance = context.read<FinanceProvider>();
     final messenger = ScaffoldMessenger.of(context);

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:intl/intl.dart';
 
 import '../models/transaction.dart';
@@ -39,6 +40,74 @@ String searchHaystack(Tx t, {String? accountName, String? merchantAlias}) {
     _westernFixed.format(t.amount),
   ];
   return normalizeSearchText(parts.join(' '));
+}
+
+/// Times [rowSearchText] has built a row's text rather than reused it.
+@visibleForTesting
+int searchTextBuilds = 0;
+
+/// What [rowSearchText] built for one row, with everything outside the row
+/// that the text was read from.
+class _RowText {
+  final String text;
+  final String? accountName;
+  final String categoryLabel;
+  final bool transfer;
+  final String? identity;
+  final String? alias;
+
+  const _RowText({
+    required this.text,
+    required this.accountName,
+    required this.categoryLabel,
+    required this.transfer,
+    required this.identity,
+    required this.alias,
+  });
+}
+
+/// Keyed by the row object: an edit replaces the row, so its text goes
+/// with it, and a row nobody holds any more frees its entry.
+final Expando<_RowText> _rowTexts = Expando('rowSearchText');
+
+/// [searchHaystack] for [t], built once and kept with the row.
+///
+/// Building one runs the merchant regex over the alert, so the ledger, the
+/// global search and the Cockpit Results share one copy per row. The text
+/// also reads three things the row does not hold: its account's name, its
+/// category's label (a rename keeps the row) and the user's name for its
+/// merchant, looked up through [alias] by the merchant identity, which
+/// itself turns on whether the category is a transfer. The kept text is
+/// used only while all of those still read the same.
+String rowSearchText(Tx t, {String? accountName, MerchantAliasLookup? alias}) {
+  final label = t.category.label;
+  final transfer = isTransferCategory(t.categoryId);
+  final kept = _rowTexts[t];
+  if (kept != null &&
+      kept.accountName == accountName &&
+      kept.categoryLabel == label &&
+      kept.transfer == transfer) {
+    final identity = kept.identity;
+    final named = identity == null ? null : alias?.call(identity);
+    if (named == kept.alias) return kept.text;
+  }
+  searchTextBuilds++;
+  final identity = merchantIdentityOf(t);
+  final named = identity == null ? null : alias?.call(identity);
+  final text = searchHaystack(
+    t,
+    accountName: accountName,
+    merchantAlias: named,
+  );
+  _rowTexts[t] = _RowText(
+    text: text,
+    accountName: accountName,
+    categoryLabel: label,
+    transfer: transfer,
+    identity: identity,
+    alias: named,
+  );
+  return text;
 }
 
 /// Why [t] matched the normalized query [q] when the row's visible text

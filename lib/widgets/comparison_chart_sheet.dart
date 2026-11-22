@@ -3,7 +3,6 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:intl/intl.dart' hide TextDirection;
 
 import '../services/comparison_series.dart';
 import '../utils/app_theme.dart';
@@ -66,8 +65,8 @@ class _ComparisonChartBody extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final muted = TextStyle(color: scheme.onSurfaceVariant);
     final s = series;
-    final prevName = DateFormat('MMMM').format(s.previousMonth);
-    final monthName = DateFormat('MMMM').format(s.month);
+    final prevName = monthFormat.format(s.previousMonth);
+    final monthName = monthFormat.format(s.month);
     final reference = usual ? s.usual : s.lastMonth;
     final refName = usual ? 'Usual' : prevName;
     final soFar = s.actual.isEmpty ? 0.0 : s.actual.last;
@@ -477,13 +476,13 @@ class _ReadoutBubble extends StatelessWidget {
     if (usual) {
       refLabel = 'Usual';
     } else if (d >= s.days) {
-      refLabel = 'All ${DateFormat('MMM').format(prev)}';
+      refLabel = 'All ${shortMonthFormat.format(prev)}';
     } else {
       // As _referenceBy reads it: a shorter last month stops at its end.
       final refDay = math.min(d, ref?.length ?? d);
-      refLabel = DateFormat(
-        'MMM d',
-      ).format(DateTime(prev.year, prev.month, refDay));
+      refLabel = shortMonthDayFormat.format(
+        DateTime(prev.year, prev.month, refDay),
+      );
     }
 
     // Large text past the width or height it may take shrinks to fit
@@ -515,9 +514,9 @@ class _ReadoutBubble extends StatelessWidget {
                       // The day leads even with no figure of its own, as
                       // on a future day with no forecast.
                       line(
-                        DateFormat(
-                          'EEE MMM d',
-                        ).format(DateTime(s.month.year, s.month.month, d)),
+                        weekdayShortMonthDayFormat.format(
+                          DateTime(s.month.year, s.month.month, d),
+                        ),
                         by == null ? '' : fmtMoneyWhole(by),
                         text.bodyMedium?.copyWith(
                           fontWeight: FontWeight.w700,
@@ -567,7 +566,7 @@ class _DayDial extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final orange = AppColors.of(context).orange;
-    final weekday = DateFormat('EEEEE');
+    final weekday = weekdayLetterFormat;
     // Every day is laid out as wide as the widest number, so a day that has
     // to shrink shrinks by the same amount as its neighbours and the
     // letters stay on one line.
@@ -1080,6 +1079,10 @@ class _ComparisonChartPainter extends CustomPainter {
     }
   }
 
+  /// Labels laid out for this painter, by text and style: a repaint with the
+  /// same painter, as while the sheet slides, lays none out again.
+  final Map<(String, TextStyle?), TextPainter> _labels = {};
+
   void _text(
     Canvas canvas,
     String text,
@@ -1088,7 +1091,7 @@ class _ComparisonChartPainter extends CustomPainter {
     double? rightEdge,
     TextStyle? style,
   }) {
-    final tp = TextPainter(
+    final tp = _labels[(text, style)] ??= TextPainter(
       text: TextSpan(text: text, style: style ?? labelStyle),
       textDirection: TextDirection.ltr,
       // Axis labels keep their size: scaled up they would overlap.

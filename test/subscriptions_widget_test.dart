@@ -90,7 +90,6 @@ void main() {
     expect(find.text('Up ${fmtMoneyTidy(150)}'), findsOneWidget);
     expect(find.text('Up ₹150'), findsOneWidget);
     expect(find.text('Stopped (1)'), findsOneWidget);
-    // AnimatedFold keeps its child built at zero height; ask it directly.
     bool folded() => tester
         .widget<AnimatedFold>(
           find.ancestor(
@@ -99,7 +98,8 @@ void main() {
           ),
         )
         .collapsed;
-    expect(folded(), isTrue);
+    // A folded list builds its rows only once it opens.
+    expect(find.text('Gym'), findsNothing);
 
     await tester.tap(find.text('Stopped (1)'));
     await tester.pumpAndSettle();

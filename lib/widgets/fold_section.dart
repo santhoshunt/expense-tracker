@@ -66,9 +66,10 @@ class FoldSection extends StatelessWidget {
               ),
             ),
           ),
-          AnimatedFold(
+          // Its rows are built only while open.
+          AnimatedFold.lazy(
             collapsed: !open,
-            child: Padding(
+            builder: (_) => Padding(
               padding: const EdgeInsets.only(top: 8),
               child: FrostedPanel(
                 radius: BorderRadius.circular(AppRadius.card),

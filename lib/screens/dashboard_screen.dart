@@ -204,6 +204,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     List<Widget> header,
     Map<DashboardSection, _DashSection> sections, {
     required bool fold,
+    Object? foldMemoryFor,
   }) {
     final settings = context.read<SettingsProvider>();
     final layout = settings.dashboardLayout(page);
@@ -253,7 +254,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (_openedForVisit.remove(id)) setState(() {});
           settings.setSectionOpen(id, v);
         },
-        children: s.body(),
+        // Built only while the section shows its cards.
+        body: s.body,
+        memoryFor: foldMemoryFor,
       );
       out.add(slot == null ? folded : KeyedSubtree(key: slot, child: folded));
     }
@@ -2181,7 +2184,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       };
-      return _page(DashboardPage.trends, const [], sections, fold: true);
+      // A folded card's kept state (Show all) goes with the month or year,
+      // as the capped lists keyed by listKey do.
+      return _page(
+        DashboardPage.trends,
+        const [],
+        sections,
+        fold: true,
+        foldMemoryFor: listKey,
+      );
     }
 
     List<Widget> breakdownChildren() {
@@ -2632,7 +2643,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ],
         ),
       };
-      return _page(DashboardPage.breakdown, const [], sections, fold: true);
+      return _page(
+        DashboardPage.breakdown,
+        const [],
+        sections,
+        fold: true,
+        foldMemoryFor: listKey,
+      );
     }
 
     List<Widget> aheadChildren() {

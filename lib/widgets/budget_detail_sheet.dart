@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart' hide TextDirection;
 import 'package:provider/provider.dart';
 
 import '../models/spend_budget.dart';
@@ -162,7 +161,7 @@ Future<void> showBudgetDetailSheet(
           // "left this month" only while it is this month.
           final when = shown == current
               ? 'this month'
-              : 'in ${DateFormat('MMM').format(shown)}';
+              : 'in ${shortMonthFormat.format(shown)}';
           final spent = finance.budgetSpentFor(budget, shown);
           final limit = budget.limit;
           final pct = limit == 0 ? 0.0 : spent / limit;
@@ -430,8 +429,8 @@ Future<void> showBudgetDetailSheet(
                           // they are no longer the last six.
                           label: Text(
                             '${months.length} months: '
-                            '${DateFormat('MMM').format(months.first)} to '
-                            '${DateFormat('MMM').format(months.last)}',
+                            '${shortMonthFormat.format(months.first)} to '
+                            '${shortMonthFormat.format(months.last)}',
                             style: Theme.of(ctx).textTheme.titleSmall,
                           ),
                           tip: const InfoTip(
@@ -556,7 +555,7 @@ class _BudgetTrendBars extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final maxVal = [...spent, limit].fold(0.0, (m, v) => v > m ? v : m);
-    final mmm = DateFormat('MMM');
+    final mmm = shortMonthFormat;
     final morph = motionDuration(context, const Duration(milliseconds: 450));
 
     Color barColor(double v) {
@@ -624,7 +623,7 @@ class _BudgetTrendBars extends StatelessWidget {
       return Semantics(
         button: true,
         selected: isSelected,
-        label: 'Show ${DateFormat('MMMM yyyy').format(months[i])}',
+        label: 'Show ${fmtMonth(months[i])}',
         excludeSemantics: true,
         onTap: () => onSelect(months[i]),
         child: GestureDetector(

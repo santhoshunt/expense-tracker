@@ -102,8 +102,15 @@ WeekDigest buildWeekDigest(
   final spends = <Tx>[];
   var income = 0.0;
   var count = 0;
+  // Most rows are far from the week: a test on the instant, a day wider on
+  // each side than the week, drops them before [weekStartOf] builds a date
+  // for each. The margin covers a date held in UTC, whose calendar day can
+  // differ from the local one; the test after it makes the exact cut.
+  final near = DateTime(start.year, start.month, start.day - 1);
+  final far = DateTime(start.year, start.month, start.day + 8);
   for (final t in finance.countedTransactions) {
     final d = t.effectiveDate;
+    if (d.isBefore(near) || !d.isBefore(far)) continue;
     final day = d.weekday - 1;
     if (day >= daysShown || weekStartOf(d) != start) continue;
     final money = !isTransferCategory(t.categoryId);
@@ -185,13 +192,18 @@ List<double?> usualWeekByDay(FinanceProvider finance, DateTime weekStart) {
     start.month,
     start.day - 7 * kUsualWeeks,
   );
-  // Each earlier week's money out, day by day.
+  // Each earlier week's money out, day by day. As in [buildWeekDigest], a
+  // test on the instant with a day's margin drops rows far from the weeks
+  // before [weekStartOf] builds a date for each.
+  final near = DateTime(earliest.year, earliest.month, earliest.day - 1);
+  final far = DateTime(start.year, start.month, start.day + 1);
   final earlier = <DateTime, List<double>>{};
   for (final t in finance.countedTransactions) {
     if (isTransferCategory(t.categoryId) || t.type != TxType.expense) {
       continue;
     }
     final d = t.effectiveDate;
+    if (d.isBefore(near) || !d.isBefore(far)) continue;
     final week = weekStartOf(d);
     if (week.isBefore(earliest) || !week.isBefore(start)) continue;
     final days = earlier.putIfAbsent(week, () => List<double>.filled(7, 0));
@@ -224,13 +236,20 @@ List<double?> usualWeekByDay(FinanceProvider finance, DateTime weekStart) {
 String weekRangeLabel(DateTime week, {bool withWeekday = false}) {
   final start = weekStartOf(week);
   final end = DateTime(start.year, start.month, start.day + 6);
-  final day = withWeekday ? 'EEE d' : 'd';
-  final dMmm = DateFormat('$day MMM');
+  final day = withWeekday ? _weekdayDayFormat : _dayFormat;
+  final dMmm = withWeekday ? _weekdayDayMonthFormat : _dayMonthFormat;
   final from = start.month == end.month
-      ? DateFormat(day).format(start)
+      ? day.format(start)
       : dMmm.format(start);
   return '$from to ${dMmm.format(end)}';
 }
+
+// Made once rather than on every label: building a DateFormat parses its
+// pattern.
+final DateFormat _dayFormat = DateFormat('d');
+final DateFormat _dayMonthFormat = DateFormat('d MMM');
+final DateFormat _weekdayDayFormat = DateFormat('EEE d');
+final DateFormat _weekdayDayMonthFormat = DateFormat('EEE d MMM');
 
 /// The digest note to have booked as of [now]: when it fires and the
 /// Monday of the week it covers, or null for none (an empty ledger).
