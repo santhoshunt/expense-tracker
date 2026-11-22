@@ -2,6 +2,7 @@ import '../models/account.dart';
 import '../models/reminder.dart';
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../utils/dates.dart';
 import 'card_bill.dart';
 import 'recurring_detector.dart';
 import 'reminder_schedule.dart';
@@ -76,7 +77,6 @@ List<UpcomingItem> buildUpcomingItems(
   required Set<String> hidden,
   required DateTime now,
 }) {
-  final today = DateTime(now.year, now.month, now.day);
   final items = <UpcomingItem>[];
   for (final a in finance.openAccounts) {
     final s = cardBillStatus(a, now);
@@ -87,11 +87,7 @@ List<UpcomingItem> buildUpcomingItems(
       UpcomingItem(
         kind: UpcomingKind.cardBill,
         due: s.due,
-        days: DateTime(
-          s.due.year,
-          s.due.month,
-          s.due.day,
-        ).difference(today).inDays,
+        days: calendarDaysBetween(now, s.due),
         label: '${a.name} bill',
         amount: out,
         urgent: s.urgent,
@@ -168,6 +164,5 @@ bool reminderCoversHit(Reminder r, RecurringHit h, DateTime now) {
     return false;
   }
   if (r.categoryId != h.categoryId) return false;
-  final hitDue = DateTime(h.nextDue.year, h.nextDue.month, h.nextDue.day);
-  return reminderNextDue(r, now).difference(hitDue).inDays.abs() <= 3;
+  return calendarDaysBetween(h.nextDue, reminderNextDue(r, now)).abs() <= 3;
 }

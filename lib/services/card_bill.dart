@@ -182,7 +182,7 @@ CardBillStatus? cardBillStatus(Account account, DateTime now) {
       : (stmt == null || !today.isBefore(stmt))
       ? CardBillPhase.billed
       : CardBillPhase.notBilled;
-  final days = due.difference(today).inDays;
+  final days = calendarDaysBetween(today, due);
   return CardBillStatus(
     due: due,
     cycleDue: cycle,

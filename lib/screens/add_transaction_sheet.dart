@@ -13,6 +13,7 @@ import '../services/recurring_detector.dart';
 import '../services/refund_matching.dart';
 import '../services/subscriptions.dart';
 import '../utils/app_theme.dart';
+import '../utils/dates.dart' show addCalendarDays;
 import '../utils/format.dart';
 import '../widgets/category_split_sheet.dart';
 import '../widgets/animated_fold.dart';
@@ -25,6 +26,7 @@ import '../widgets/motion.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/tag_input.dart';
 import '../widgets/undo_snackbar.dart';
+import 'app_nav.dart' show reportUnsavedInput;
 import 'card_rewards_page.dart'
     show everythingElseLabel, rewardGroupLabel, wholeHundredsNote;
 import 'classifiers_screen.dart' show showRuleDialog;
@@ -504,6 +506,21 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
   bool _subscriptionShowsOn() {
     final key = _subscriptionKey();
     return key != null && _subscriptionNow(key).on;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The PopScope below refuses every pop, so the page guard a link runs
+    // asks this instead: a clean sheet closes like any page, while typed
+    // input or a save, delete or Unpair in flight keeps it open.
+    final route = ModalRoute.of(context);
+    if (route != null) {
+      reportUnsavedInput(
+        route,
+        () => mounted && (_busy || _fingerprint() != _initialFingerprint),
+      );
+    }
   }
 
   @override
@@ -2587,7 +2604,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       context: context,
       initialDate: _date,
       firstDate: DateTime(2000),
-      lastDate: DateTime.now().add(const Duration(days: 1)),
+      lastDate: addCalendarDays(DateTime.now(), 1),
     );
     if (picked == null) return;
     setState(() => _moveDay(picked));

@@ -9,6 +9,17 @@ import 'launch_actions.dart';
 import 'notification_ids.dart';
 import 'notification_service.dart';
 
+/// One budget the monitor evaluates: spend, cap, dedup key, notification
+/// id, an optional budget name for the alert text, and the card a tap opens.
+typedef _BudgetCheck = ({
+  double spent,
+  double cap,
+  String key,
+  int id,
+  String? name,
+  String payload,
+});
+
 /// Evaluates the monthly spending cap AND every custom spend budget after
 /// transactions change, firing a notification when a new threshold is
 /// crossed.
@@ -32,15 +43,83 @@ class BudgetMonitor {
   /// then wait for some unrelated later change.
   bool _rerunRequested = false;
 
-  BudgetMonitor({NotificationService? notifications})
-    : notifications = notifications ?? NotificationService.instance;
+  /// Test seam, as UnusualSpendMonitor has: a fixed date keeps a test from
+  /// straddling a month end between its own clock read and this one.
+  final DateTime Function() clock;
+
+  BudgetMonitor({NotificationService? notifications, DateTime Function()? clock})
+    : notifications = notifications ?? NotificationService.instance,
+      clock = clock ?? DateTime.now;
+
+  /// The alerts posted and not withdrawn, one "id|level|marker key" entry
+  /// per notification id. The markers cannot say this: the provider removes
+  /// a budget's marker when the budget is edited or deleted, and the cap's
+  /// when the cap changes, which are the moments an alert may stop applying.
+  /// Not under `budget_alert_fired_`, so the monthly sweep keeps it.
+  static const showingKey = 'budget_alerts_showing';
+
+  /// False once a run found nothing in [showingKey], so a user with no
+  /// budget left skips the prefs read on every change, as before. True on a
+  /// fresh monitor, which has not looked yet.
+  bool _mayBeShowing = true;
+
+  static ({int id, int level, String key}) _parseShowing(String entry) {
+    final parts = entry.split('|');
+    return (
+      id: int.tryParse(parts[0]) ?? -1,
+      level: int.tryParse(parts.length > 1 ? parts[1] : '') ?? 0,
+      key: parts.length > 2 ? parts.sublist(2).join('|') : '',
+    );
+  }
+
+  /// Withdraws each alert in [showing] whose reason went in the period it
+  /// spoke of: its budget deleted or its limit cleared, the cap cleared, or
+  /// the spend now under the level it announced (a row deleted, refunded,
+  /// moved or now guessed, or the limit raised). The marker keeps the level,
+  /// so the same level is not announced again this period: the alert says a
+  /// line was crossed, which the user heard about this month, and a dip and
+  /// return (an Undo, a row moved back) would otherwise sound twice for one
+  /// crossing. A higher level still alerts. A withdrawn entry leaves
+  /// [showing], and only a post adds one back, so no run can post and
+  /// withdraw the same alert in turn without the spend moving. An alert about a
+  /// month that has ended, or a dated budget whose dates are over, was true
+  /// of that period and stays; only its entry goes. Rewrites [showing] in
+  /// place and in prefs when it changed.
+  Future<void> _withdrawStale(
+    SharedPreferences prefs,
+    FinanceProvider finance,
+    List<String> showing,
+    List<_BudgetCheck> checks,
+    DateTime now,
+  ) async {
+    final ym = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    var changed = false;
+    for (final entry in [...showing]) {
+      final (:id, :level, :key) = _parseShowing(entry);
+      final c = checks.where((c) => c.key == key).firstOrNull;
+      if (c != null && c.cap > 0 && c.spent / c.cap * 100 >= level) continue;
+      final ended = key.startsWith(kRangeBudgetAlertPrefix)
+          ? finance.budgets.any(
+              (b) =>
+                  b.range != null &&
+                  rangeBudgetAlertKey(b.id) == key &&
+                  b.stageOn(now) != TripStage.running,
+            )
+          : !key.endsWith(ym);
+      if (!ended) await notifications.cancelId(id);
+      showing.remove(entry);
+      changed = true;
+    }
+    if (changed) await prefs.setStringList(showingKey, showing);
+    _mayBeShowing = showing.isNotEmpty;
+  }
 
   Future<void> check(FinanceProvider finance, SettingsProvider settings) async {
     if (_busy) {
       _rerunRequested = true;
       return;
     }
-    final now = DateTime.now();
+    final now = clock();
     final hasCap = settings.monthlyBudget > 0;
     // A dated budget alerts only while its dates run.
     final customBudgets = finance.budgets
@@ -50,10 +129,13 @@ class BudgetMonitor {
               (b.range == null || b.stageOn(now) == TripStage.running),
         )
         .toList();
-    if (!settings.budgetAlerts || (!hasCap && customBudgets.isEmpty)) return;
+    if (!settings.budgetAlerts) return;
     // With every threshold switched off no check can fire — skip the spend
     // computation entirely (this runs on every provider notification).
     if (!settings.alert80 && !settings.alert90 && !settings.alertOver) return;
+    // No budget left to alert on: only an alert still up for one that went
+    // (the cap cleared, the last budget deleted) needs this run.
+    if (!hasCap && customBudgets.isEmpty && !_mayBeShowing) return;
     _busy = true;
     try {
       final month = DateTime(now.year, now.month);
@@ -75,17 +157,7 @@ class BudgetMonitor {
       // budget name for the alert text, and the card a tap opens. Spend on
       // a guessed category ([Tx.categoryGuessed]) waits until the user
       // confirms it: a wrong guess must not fire an alert.
-      final checks =
-          <
-            ({
-              double spent,
-              double cap,
-              String key,
-              int id,
-              String? name,
-              String payload,
-            })
-          >[
+      final checks = <_BudgetCheck>[
             if (hasCap)
               (
                 spent:
@@ -111,6 +183,14 @@ class BudgetMonitor {
                 payload: kBudgetsPayload,
               ),
           ];
+
+      final showing = [...?prefs.getStringList(showingKey)];
+      _mayBeShowing = showing.isNotEmpty;
+      // A ledger that failed to load cannot show a budget is back under.
+      if (showing.isNotEmpty && finance.loadWarnings.isEmpty) {
+        await _withdrawStale(prefs, finance, showing, checks, now);
+      }
+      if (!hasCap && customBudgets.isEmpty) return;
 
       for (final c in checks) {
         final lastNotified = prefs.getInt(c.key) ?? 0;
@@ -143,6 +223,12 @@ class BudgetMonitor {
           payload: c.payload,
         );
         await prefs.setInt(c.key, level);
+        // The new alert replaced any other under its id in the shade.
+        showing
+          ..removeWhere((e) => _parseShowing(e).id == c.id)
+          ..add('${c.id}|$level|${c.key}');
+        await prefs.setStringList(showingKey, showing);
+        _mayBeShowing = true;
       }
     } finally {
       _busy = false;

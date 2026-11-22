@@ -113,8 +113,9 @@ void main() {
 
     test('a pick time with no pick is not read', () {
       final csv = BackupService.buildCsvOf([manualRow('m1')]).replaceFirst(
-        RegExp(r'"",""$', multiLine: true),
-        '"","2026-09-06T13:15:00.000"',
+        // rewardGroup, rewardPickedAt, then the empty receivedMs (v2.3.4).
+        RegExp(r'"","",$', multiLine: true),
+        '"","2026-09-06T13:15:00.000",',
       );
       final back = BackupService.txsFromCsv(csv).single;
       expect(back.rewardGroup, isNull);
@@ -126,16 +127,17 @@ void main() {
         smsRow(),
         manualRow('m1', rewardGroup: 'grp_dining'),
       ]);
-      String dropLast3(String line) {
+      // The three, and receivedMs that v2.3.4 appended after them.
+      String dropLast4(String line) {
         var end = line.length;
-        for (var i = 0; i < 3; i++) {
+        for (var i = 0; i < 4; i++) {
           end = line.lastIndexOf(',', end - 1);
         }
         return line.substring(0, end);
       }
 
       final old = [
-        for (final line in csv.split('\r\n')) dropLast3(line),
+        for (final line in csv.split('\r\n')) dropLast4(line),
       ].join('\r\n');
       expect(old.split('\r\n').first, endsWith(',noCashback'));
       final back = {for (final t in BackupService.txsFromCsv(old)) t.id: t};

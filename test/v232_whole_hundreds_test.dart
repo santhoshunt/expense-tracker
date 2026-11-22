@@ -219,7 +219,7 @@ void main() {
     test('a backup carries the switch through a restore', () async {
       final p = await seeded(hundreds, const []);
       final data = jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
-      expect(data['version'], 35);
+      expect(data['version'], 36);
       SharedPreferences.setMockInitialValues({});
       final fresh = FinanceProvider();
       await fresh.load();

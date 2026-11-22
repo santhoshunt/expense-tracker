@@ -113,8 +113,8 @@ bool isBillRow(Tx t, Map<String, double?> billKeys, List<Reminder> reminders) {
     }
     if (reminderDueDatesBetween(
       r,
-      day.subtract(const Duration(days: kReminderGraceDays)),
-      day.add(const Duration(days: kReminderEarlyPayDays)),
+      addCalendarDays(day, -kReminderGraceDays),
+      addCalendarDays(day, kReminderEarlyPayDays),
     ).isNotEmpty) {
       return true;
     }
@@ -144,7 +144,7 @@ MonthForecast? computeMonthForecast(
     finance,
     patterns: patterns,
     hidden: hidden,
-    from: today.subtract(const Duration(days: 7)),
+    from: addCalendarDays(today, -7),
     to: DateTime(now.year, now.month, last),
     now: now,
   );
@@ -166,7 +166,7 @@ MonthForecast? computeMonthForecast(
   bool paidFor(RecurringHit h) {
     final cycle = h.cycle;
     final slot = cycle == null
-        ? h.nextDue.subtract(Duration(days: h.intervalDays))
+        ? addCalendarDays(h.nextDue, -h.intervalDays)
         : DateTime(h.nextDue.year, h.nextDue.month - cycle.months);
     return slot.year == now.year && slot.month == now.month;
   }

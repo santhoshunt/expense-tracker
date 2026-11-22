@@ -537,6 +537,15 @@ class Tx {
   /// field existed.
   final DateTime? smsAt;
 
+  /// When the alert behind an imported row reached the phone, as the inbox
+  /// or the notification reported it. Import dedup recognises the alert
+  /// again by it (FinanceProvider.addImported): unlike [date], no change
+  /// to how a date is read from the text moves it, and it is stored as
+  /// epoch milliseconds, so a change of the phone's time zone does not move
+  /// it either. Null on manual rows and on rows imported before v2.3.4,
+  /// which are recognised by their [smsArrivedAt] as before.
+  final DateTime? receivedAt;
+
   /// Category split: one payment or credit divided into rows of several
   /// categories of its direction shares this id. The row that holds the alert (its text,
   /// reference and balance) is the anchor; the others are plain parts on
@@ -592,6 +601,7 @@ class Tx {
     this.payee = '',
     this.smsMerchant = '',
     this.smsAt,
+    this.receivedAt,
     this.splitId,
     this.categoryGuessed = false,
     this.cashbackOff = false,
@@ -674,6 +684,7 @@ class Tx {
       payee: payee,
       smsMerchant: smsMerchant,
       smsAt: smsAt,
+      receivedAt: receivedAt,
       splitId: splitId,
       categoryGuessed: categoryGuessed,
       cashbackOff: cashbackOff,
@@ -760,6 +771,8 @@ class Tx {
     smsMerchant: smsMerchant,
     // A re-dated import remembers when its alert arrived.
     smsAt: _smsAtFor(date ?? this.date),
+    // Carried verbatim like smsBody: it is the alert's identity.
+    receivedAt: receivedAt,
     splitId: clearSplitId ? null : (splitId ?? this.splitId),
     categoryGuessed: categoryGuessed ?? this.categoryGuessed,
     cashbackOff: cashbackOff ?? this.cashbackOff,
@@ -797,6 +810,8 @@ class Tx {
     if (payee.isNotEmpty) 'payee': payee,
     if (smsMerchant.isNotEmpty) 'smsMerchant': smsMerchant,
     if (smsAt != null) 'smsAt': smsAt!.toIso8601String(),
+    // An instant, not local wall time: the same moment in every time zone.
+    if (receivedAt != null) 'receivedMs': receivedAt!.millisecondsSinceEpoch,
     if (splitId != null) 'splitId': splitId,
     if (categoryGuessed) 'guessed': true,
     if (cashbackOff) 'noCashback': true,
@@ -853,6 +868,12 @@ class Tx {
           final at? when !at.isAtSameMomentAs(date) => at,
           _ => null,
         },
+        _ => null,
+      },
+      // Tolerant like smsAt: an out-of-range or non-numeric value is dropped.
+      receivedAt: switch (json['receivedMs']) {
+        final num ms when ms.isFinite && ms.abs() <= 8640000000000000 =>
+          DateTime.fromMillisecondsSinceEpoch(ms.toInt()),
         _ => null,
       },
       splitId: json['splitId'] is String ? json['splitId'] as String : null,

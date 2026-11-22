@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import '../models/card_rewards.dart';
 import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
+import '../utils/dates.dart';
 import 'sms_parser.dart';
 
 /// Detects roughly-monthly payment patterns (rent, SIPs, EMIs, OTT,
@@ -62,8 +63,7 @@ class RecurringHit {
   });
 
   /// Calendar days from [now] to [nextDue]; negative = overdue.
-  int daysUntil(DateTime now) =>
-      nextDue.difference(DateTime(now.year, now.month, now.day)).inDays;
+  int daysUntil(DateTime now) => calendarDaysBetween(now, nextDue);
 }
 
 /// Identity key for grouping, or null when the row carries none: transfers
@@ -271,7 +271,7 @@ List<RecurringHit> detectRecurringPatterns(
       if (byDay.length < 3) return;
       final gaps = [
         for (var i = 1; i < days.length; i++)
-          days[i].difference(days[i - 1]).inDays,
+          calendarDaysBetween(days[i - 1], days[i]),
       ];
       // One payment made early (a bill paid when it arrives) shortens one
       // gap and, unless it is the latest, stretches the next: together they
@@ -306,8 +306,8 @@ List<RecurringHit> detectRecurringPatterns(
       // A latest payment made early paid the cycle due one interval after
       // the payment before it; the next one is due one interval after that.
       nextDue = lastEarly
-          ? days[days.length - 2].add(Duration(days: interval * 2))
-          : days.last.add(Duration(days: interval));
+          ? addCalendarDays(days[days.length - 2], interval * 2)
+          : addCalendarDays(days.last, interval);
     }
 
     final ordered = [for (final d in days) byDay[d]!];

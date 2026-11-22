@@ -43,7 +43,8 @@ jobs:
           kotlin.daemon.jvmargs=-Xmx2G
           EOF
 
-      - run: flutter pub get
+      # Fails if pubspec.lock would change or a package's hash differs from it.
+      - run: flutter pub get --enforce-lockfile
       - run: flutter test # never ship a red build; runs before the key exists
 
       - name: Restore release keystore

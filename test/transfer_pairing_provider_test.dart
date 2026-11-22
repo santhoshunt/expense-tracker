@@ -290,7 +290,7 @@ void main() {
       endsWith(
         ',pairId,tags,people,repaidBy,countIn,walletCounted,unseen,refundOf,'
         'payee,acctKind,smsAt,splitId,guessed,noCashback,smsMerchant,'
-        'rewardGroup,rewardPickedAt',
+        'rewardGroup,rewardPickedAt,receivedMs',
       ),
     );
     final rows = BackupService.txsFromCsv(csv);

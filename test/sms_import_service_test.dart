@@ -227,7 +227,11 @@ void main() {
       final marker = prefs.getInt(_markerKey)!;
       expect(marker, greaterThanOrEqualTo(before.millisecondsSinceEpoch));
       expect(marker, lessThanOrEqualTo(DateTime.now().millisecondsSinceEpoch));
-      expect(source.lastSince!.millisecondsSinceEpoch, marker);
+      // An incremental scan starts its overlap before the marker (v2.3.4).
+      expect(
+        source.lastSince!.millisecondsSinceEpoch,
+        marker - const Duration(minutes: 10).inMilliseconds,
+      );
 
       final alert = msg(DateTime.now().add(const Duration(milliseconds: 200)));
       source.inbox = [alert];

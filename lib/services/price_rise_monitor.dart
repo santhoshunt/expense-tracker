@@ -63,7 +63,7 @@ class PriceRiseMonitor {
           if (!k.startsWith(markerPrefix)) continue;
           final paid = DateTime.tryParse(k.substring(k.lastIndexOf('_') + 1));
           if (paid == null) continue;
-          if (today.difference(paid).inDays > markerKeepDays) {
+          if (calendarDaysBetween(paid, today) > markerKeepDays) {
             await prefs.remove(k);
           }
         }
@@ -74,7 +74,7 @@ class PriceRiseMonitor {
         if (item.priceRise == null) continue;
         final paid = item.hit.history.last.date;
         final paidDay = DateTime(paid.year, paid.month, paid.day);
-        if (today.difference(paidDay).inDays > freshDays) continue;
+        if (calendarDaysBetween(paidDay, today) > freshDays) continue;
         final key = firedKey(item.hit.key, paidDay);
         if (prefs.getBool(key) ?? false) continue;
         // No permission: a show() is silently dropped. Bail WITHOUT the

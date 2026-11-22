@@ -45,6 +45,15 @@ class SmsImportService {
   /// A stored scan marker further ahead of the clock than this is wrong.
   static const _markerSlack = Duration(minutes: 5);
 
+  /// How far before the scan marker an incremental scan starts reading. The
+  /// messaging app can write a message into the inbox after a scan already
+  /// read a later one (a slow database write, a delivery report settling),
+  /// and a scan starting at the marker would never see it. Ten minutes
+  /// covers such late writes; the import recognises every message it
+  /// already holds ([FinanceProvider.addImported]), so the re-read adds
+  /// nothing twice.
+  static const _scanOverlap = Duration(minutes: 10);
+
   final SmsSource source;
   final NotificationSource notifications;
 
@@ -278,16 +287,20 @@ class SmsImportService {
       await prefs.setInt(_lastScanKey, scanStartMillis);
     }
     final int sinceMillis;
+    // An incremental scan's marker: messages at or before it were read by an
+    // earlier scan and are read again only for the overlap.
+    int? rereadUpTo;
     if (range != null) {
       sinceMillis = range.start.millisecondsSinceEpoch;
     } else if (lookback != null) {
       sinceMillis = scanStart.subtract(lookback).millisecondsSinceEpoch;
     } else {
-      sinceMillis =
-          prefs.getInt(_lastScanKey) ??
-          scanStart
-              .subtract(const Duration(days: _backfillDays))
-              .millisecondsSinceEpoch;
+      rereadUpTo = prefs.getInt(_lastScanKey);
+      sinceMillis = rereadUpTo != null
+          ? rereadUpTo - _scanOverlap.inMilliseconds
+          : scanStart
+                .subtract(const Duration(days: _backfillDays))
+                .millisecondsSinceEpoch;
     }
     // Range end is inclusive: include the whole end day.
     final untilMillis = range == null
@@ -307,6 +320,9 @@ class SmsImportService {
     final messages = queryResult.messages;
 
     final parsed = <ParsedTxn>[];
+    // Read again only for the overlap: kept out of this run's counts unless
+    // they import, so the result reads as it did before the overlap.
+    final reread = <ParsedTxn>[];
     final misses = <ImportMiss>[];
     var scanned = 0;
     var newestMillis = sinceMillis;
@@ -315,7 +331,8 @@ class SmsImportService {
     for (final msg in messages) {
       final millis = msg.date.millisecondsSinceEpoch;
       if (untilMillis != null && millis >= untilMillis) continue;
-      scanned++;
+      final again = rereadUpTo != null && millis <= rereadUpTo;
+      if (!again) scanned++;
       final upTo = millis > scanStartMillis ? scanStartMillis : millis;
       if (upTo > newestMillis) newestMillis = upTo;
       final txn = SmsTxnParser.parse(
@@ -326,8 +343,12 @@ class SmsImportService {
         spamSignals: spamSignals,
       );
       if (txn != null) {
-        parsed.add(txn);
-      } else {
+        (again ? reread : parsed).add(txn);
+      } else if (!again) {
+        // A message read again for the overlap was noted by the scan that
+        // first read it. Noted again, after the bank's list was trimmed it
+        // would come back with a new time and could bring back a warning
+        // the user dismissed.
         _noteMiss(
           misses,
           msg.sender,
@@ -375,7 +396,18 @@ class SmsImportService {
       }
     }
 
-    final (imported, spamDropped, counted) = await finance.addImported(parsed);
+    // The re-read messages first, so the main batch meets any that import.
+    // Only those that import count: a message written late into the
+    // overlap is new to this run.
+    final (rereadImported, _, rereadCounted) = reread.isEmpty
+        ? (0, 0, 0)
+        : await finance.addImported(reread);
+    scanned += rereadImported;
+    final (mainImported, spamDropped, mainCounted) = await finance.addImported(
+      parsed,
+    );
+    final imported = mainImported + rereadImported;
+    final counted = mainCounted + rereadCounted;
     await _recordMisses(misses);
     if (!finance.persistFailed) await notifications.ack(batch);
     // Advance the marker only when this scan is authoritative up to
@@ -406,7 +438,7 @@ class SmsImportService {
 
     return SmsImportResult(
       scanned: scanned,
-      matched: parsed.length,
+      matched: parsed.length + rereadImported,
       imported: imported,
       spamDropped: spamDropped,
       counted: counted,

@@ -213,6 +213,10 @@ class BackupService {
     // Tx.rewardPickedAt); empty when nothing was picked.
     'rewardGroup',
     'rewardPickedAt',
+    // When an imported alert reached the phone, epoch milliseconds
+    // (Tx.receivedAt); empty on manual rows and older imports. A rescan
+    // recognises the alert by it, so a restore must keep it.
+    'receivedMs',
   ];
 
   /// A split's people as one CSV cell:
@@ -432,6 +436,7 @@ class BackupService {
                 ? ''
                 : t.rewardPickedAt?.toIso8601String() ?? '',
           ),
+          t.receivedAt?.millisecondsSinceEpoch.toString() ?? '',
         ].join(','),
       );
     }
@@ -614,6 +619,9 @@ class BackupService {
     final smsMerchantCol = col('smsmerchant');
     final rewardGroupCol = col('rewardgroup');
     final rewardPickedAtCol = col('rewardpickedat');
+    // Older files lack it; their imported rows are recognised on a rescan
+    // by their date, as before.
+    final receivedMsCol = col('receivedms');
     final kinds = <String, String>{};
 
     String cell(List<String> r, int? c) {
@@ -744,6 +752,15 @@ class BackupService {
         rewardPickedAt: cell(r, rewardGroupCol).isEmpty
             ? null
             : DateTime.tryParse(cell(r, rewardPickedAtCol)),
+        // Only an imported row has an alert arrival, as Tx keeps it; a value
+        // that is not a whole number in DateTime's range reads as absent.
+        receivedAt: switch (int.tryParse(cell(r, receivedMsCol))) {
+          final ms?
+              when cell(r, sourceCol) == TxSource.sms.name &&
+                  ms.abs() <= 8640000000000000 =>
+            DateTime.fromMillisecondsSinceEpoch(ms),
+          _ => null,
+        },
       );
       final kind = cell(r, acctKindCol).toLowerCase();
       if (acctKey.isNotEmpty &&

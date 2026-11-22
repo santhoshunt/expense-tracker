@@ -23,6 +23,13 @@ import 'upcoming_items.dart';
 ///   `reminder_due_fired_<reminderId>_<yyyy-MM-dd>`
 /// A marker ending in a bare `yyyy-MM` (the older form) covers every due
 /// date in that month until the sweep drops it.
+///
+/// A marker holds true while its alert may be in the shade, and false once
+/// [check] withdrew it because the item was settled (paid, deleted, arrived,
+/// moved out of the window). False means only "withdrawn, do not cancel
+/// again": an occurrence back among the checks with a false marker (Paid
+/// tapped by mistake and undone, the paying row deleted) is owed again, so
+/// it is posted again and its marker returns to true.
 class UpcomingMonitor {
   /// Card bills notify when due within this many days — the same window
   /// that turns the dashboard row red.
@@ -119,6 +126,64 @@ class UpcomingMonitor {
     return null;
   }
 
+  /// How long past its due date an unpaid item stays tracked, and so would
+  /// still be posted: the card bill, reminder and repeat grace windows are
+  /// all 7 days. Past it the monitor stops tracking the item whether paid
+  /// or not, so an older marker says nothing about settlement and its
+  /// alert is left alone.
+  static const _trackedOverdueDays = kCardOverdueDays;
+
+  /// Each marker kind and the notification id its item posts under.
+  static const _markerKinds = <({String prefix, int Function(String) id})>[
+    (prefix: 'card_due_fired_', id: NotificationIds.cardBill),
+    (prefix: 'recurring_due_fired_', id: NotificationIds.recurring),
+    (prefix: 'reminder_due_fired_', id: NotificationIds.reminder),
+  ];
+
+  /// Withdraws each alert still marked up (true) whose occurrence is no
+  /// longer among [checks]: a card bill paid or cleared, a recurring
+  /// payment that arrived or was marked paid, hidden or taken over by a
+  /// reminder, a reminder marked paid, deleted, moved or set to add itself.
+  /// Only occurrences inside the tracked window qualify, and the
+  /// marker turns false, so the next run does not cancel it again. No
+  /// platform call happens without such a marker.
+  ///
+  /// A run cannot both post and withdraw one occurrence: this looks only at
+  /// keys outside [checks], and posting only at keys inside them, both from
+  /// the one list built per run. Across runs it flips only when the ledger
+  /// does.
+  Future<void> _withdrawSettled(
+    SharedPreferences prefs,
+    List<({String key, int id, String title, String body})> checks,
+    DateTime today,
+  ) async {
+    final current = {for (final c in checks) c.key};
+    // An item's newer occurrence already posted under the same id replaced
+    // the old alert in the shade: cancelling that id would remove a live one.
+    final live = {
+      for (final c in checks)
+        if (prefs.getBool(c.key) ?? false) c.id,
+    };
+    for (final k in prefs.getKeys().toList()) {
+      if (current.contains(k)) continue;
+      final kind = _markerKinds.where((m) => k.startsWith(m.prefix));
+      if (kind.isEmpty || prefs.getBool(k) != true) continue;
+      final cut = k.lastIndexOf('_');
+      final suffix = k.substring(cut + 1);
+      // Only the day-keyed form names one occurrence; the older month form
+      // cannot say which one it covered, so it is left to the sweep.
+      if (suffix.length != 10) continue;
+      final due = DateTime.tryParse(suffix);
+      if (due == null ||
+          calendarDaysBetween(due, today) > _trackedOverdueDays) {
+        continue;
+      }
+      final id = kind.first.id(k.substring(kind.first.prefix.length, cut));
+      if (!live.contains(id)) await notifications.cancelId(id);
+      await prefs.setBool(k, false);
+    }
+  }
+
   /// [now] defaults to the clock; tests pass a fixed date.
   Future<void> check(
     FinanceProvider finance,
@@ -147,7 +212,7 @@ class UpcomingMonitor {
               k.startsWith('reminder_due_fired_');
           if (!isOurs) continue;
           final due = _markerDue(k.substring(k.lastIndexOf('_') + 1));
-          if (due != null && today.difference(due).inDays > markerKeepDays) {
+          if (due != null && calendarDaysBetween(due, today) > markerKeepDays) {
             await prefs.remove(k);
           }
         }
@@ -220,7 +285,14 @@ class UpcomingMonitor {
         ));
       }
 
+      // A ledger that failed to load cannot show that a bill was settled.
+      if (finance.loadWarnings.isEmpty) {
+        await _withdrawSettled(prefs, checks, today);
+      }
+
       for (final c in checks) {
+        // True: announced and still up. False: withdrawn, and now owed
+        // again, so it posts again.
         if ((prefs.getBool(c.key) ?? false) ||
             (prefs.getBool(_monthFormOf(c.key)) ?? false)) {
           continue;

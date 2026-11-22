@@ -340,13 +340,29 @@ class AppNav {
 }
 
 /// Pops pushed routes down to Home, stopping early at one that refuses a
-/// pop: the add sheet's PopScope keeps typed input behind a Discard prompt,
-/// which popUntil would skip, so its input would be lost unasked. What the
+/// pop because it holds unsaved input: the add sheet's PopScope keeps typed
+/// input behind a Discard prompt, which popUntil would skip, so its input
+/// would be lost unasked. A route that reported a check
+/// ([reportUnsavedInput]) stops it only while that check says so. What the
 /// caller opens next lands under that route.
 void closePagesAboveGuard(BuildContext context) => Navigator.of(context)
     .popUntil(
-      (r) => r.isFirst || r.popDisposition == RoutePopDisposition.doNotPop,
+      (r) =>
+          r.isFirst ||
+          (r.popDisposition == RoutePopDisposition.doNotPop &&
+              (_unsavedInput[r]?.call() ?? true)),
     );
+
+/// Each reporting route's unsaved-input check. An Expando, so a route that
+/// goes takes its entry with it.
+final Expando<bool Function()> _unsavedInput = Expando('unsaved input');
+
+/// Lets [closePagesAboveGuard] ask [route] whether it holds unsaved input.
+/// For a route whose PopScope refuses every pop and decides in its callback
+/// (the add sheet): without this, the guard would stop at it even with
+/// nothing typed, and a link would switch the tab unseen behind it.
+void reportUnsavedInput(Route<dynamic> route, bool Function() unsaved) =>
+    _unsavedInput[route] = unsaved;
 
 /// A page that appears at once, under the page pushed right after it, so
 /// only that page's transition shows. Back from it still animates.

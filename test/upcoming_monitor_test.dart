@@ -81,8 +81,11 @@ class FakeNotifications implements NotificationService {
   @override
   Future<List<int>> activeImportChecks() async => const [];
 
+  /// Each id withdrawn through [cancelId], in order.
+  final cancelled = <int>[];
+
   @override
-  Future<void> cancelId(int id) async {}
+  Future<void> cancelId(int id) async => cancelled.add(id);
 }
 
 void main() {

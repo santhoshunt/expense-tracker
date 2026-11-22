@@ -56,9 +56,8 @@ DateTime? reminderOnceDate(Reminder r) {
 bool reminderFinished(Reminder r, DateTime now) {
   final once = reminderOnceDate(r);
   if (once == null) return false;
-  final today = DateTime(now.year, now.month, now.day);
   return reminderOccurrenceDone(r, once) ||
-      today.difference(once).inDays > kReminderGraceDays;
+      calendarDaysBetween(once, now) > kReminderGraceDays;
 }
 
 /// Months counted from year 0, so cycles line up across year ends.
@@ -113,11 +112,11 @@ DateTime reminderNextDue(Reminder r, DateTime now) {
   final current = _alignedAtOrBefore(r, _index(today.year, today.month));
   final previous = _occurrence(r, current - r.cycle.months);
   if (!_paid(r, previous) &&
-      today.difference(previous).inDays <= kReminderGraceDays) {
+      calendarDaysBetween(previous, today) <= kReminderGraceDays) {
     return previous;
   }
   final due = _occurrence(r, current);
-  final daysPast = today.difference(due).inDays;
+  final daysPast = calendarDaysBetween(due, today);
   if (!_paid(r, due) && daysPast <= kReminderGraceDays) return due;
   // The next period (also when this one is paid or long gone); one already
   // marked paid in advance moves one more step.
@@ -171,7 +170,7 @@ DateTime _occurrenceInView(Reminder r, DateTime now) {
   final today = DateTime(now.year, now.month, now.day);
   final current = _alignedAtOrBefore(r, _index(today.year, today.month));
   final previous = _occurrence(r, current - r.cycle.months);
-  final inGrace = today.difference(previous).inDays <= kReminderGraceDays;
+  final inGrace = calendarDaysBetween(previous, today) <= kReminderGraceDays;
   if (inGrace &&
       !_beforeCreated(r, previous) &&
       !_beforeAutoSince(r, previous)) {
@@ -181,10 +180,8 @@ DateTime _occurrenceInView(Reminder r, DateTime now) {
 }
 
 /// Calendar days from [now] to the next due; negative = overdue.
-int reminderDaysUntil(Reminder r, DateTime now) {
-  final today = DateTime(now.year, now.month, now.day);
-  return reminderNextDue(r, now).difference(today).inDays;
-}
+int reminderDaysUntil(Reminder r, DateTime now) =>
+    calendarDaysBetween(now, reminderNextDue(r, now));
 
 /// Every occurrence of [r] on a date from [from] through [to] (calendar
 /// dates, both ends included), oldest first, at most [kMaxReminderCatchUp].

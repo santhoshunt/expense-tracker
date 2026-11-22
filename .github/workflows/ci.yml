@@ -24,6 +24,7 @@ jobs:
           flutter-version: '3.44.1'
           channel: stable
           cache: true
-      - run: flutter pub get
+      # Fails if pubspec.lock would change or a package's hash differs from it.
+      - run: flutter pub get --enforce-lockfile
       - run: flutter analyze
       - run: flutter test

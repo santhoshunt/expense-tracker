@@ -37,7 +37,7 @@ double avgMonthlyNet(
       .reduce((a, b) => a.isBefore(b) ? a : b);
   final span = daysCovered(oldest, now).clamp(0, windowDays);
   if (span < kMinDaysOfData) return 0;
-  final start = now.subtract(Duration(days: span));
+  final start = addCalendarDays(now, -span);
   var sum = 0.0;
   for (final t in accountTxs) {
     if (t.date.isAfter(start) && !t.date.isAfter(now)) {
@@ -59,5 +59,5 @@ DateTime? projectedGoalDate({
   final remaining = goal - balance;
   if (remaining <= 0 || avgMonthlyNet <= 0) return null;
   final days = (remaining / avgMonthlyNet * 30.44).ceil();
-  return now.add(Duration(days: days));
+  return addCalendarDays(now, days);
 }

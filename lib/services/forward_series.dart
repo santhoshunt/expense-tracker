@@ -1,6 +1,7 @@
 import '../models/dashboard_layout.dart' show kAheadDays;
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
+import '../utils/dates.dart';
 import 'month_forecast.dart';
 import 'recurring_detector.dart';
 import 'reminder_schedule.dart';
@@ -121,7 +122,7 @@ ForwardSeries buildForwardSeries(
   DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
   final today = day(now);
   final end = day(to);
-  final from = today.subtract(const Duration(days: kReminderGraceDays));
+  final from = addCalendarDays(today, -kReminderGraceDays);
   final monthEnd = DateTime(now.year, now.month + 1, 0);
   final byKey = <String, RecurringHit>{
     for (final h in patterns) h.key: h,

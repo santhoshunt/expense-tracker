@@ -662,7 +662,7 @@ void main() {
       final back = await refund(p);
       await p.linkRefund(back, buy);
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 35);
+      expect(data['version'], 36);
       final rows = (data['transactions'] as List).cast<Map>();
       expect(rows.firstWhere((m) => m['id'] == back)['refundOf'], buy);
       expect(

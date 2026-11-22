@@ -66,16 +66,40 @@ class UnusualSpendMonitor {
         }
       }
 
-      // Already alerted this month: skipped before any history is built.
-      final found = unusualCategories(
-        finance,
-        now: now,
-        skip: {
-          for (final e in finance.expenseByCategory(month))
-            if (prefs.getBool(firedKey(e.key.id, month)) ?? false) e.key.id,
-        },
-      );
+      // A marker holds true while its alert may be in the shade and false
+      // once withdrawn; either way the month's alert was sent. Withdrawn
+      // ones are skipped before any history is built, so a category that
+      // turns unusual again this month stays quiet: the alert says spending
+      // crossed a line, which the user heard about this month, and a row
+      // deleted and put back would otherwise sound twice. Since a withdrawn
+      // category is never evaluated again, no run can post and withdraw it
+      // in turn. Ones still up are evaluated again, to learn whether they
+      // still apply.
+      final up = <String>{};
+      final skip = <String>{};
+      for (final e in finance.expenseByCategory(month)) {
+        final fired = prefs.getBool(firedKey(e.key.id, month));
+        if (fired == true) up.add(e.key.id);
+        if (fired == false) skip.add(e.key.id);
+      }
+      final found = unusualCategories(finance, now: now, skip: skip);
+      final still = {for (final c in found) c.id};
+      // This month's alerts whose category is no longer unusual (a row
+      // deleted, moved to another category or now guessed, or the category
+      // gone) are withdrawn. A ledger that failed to load proves nothing.
+      // Past months' alerts name their month and stay.
+      if (finance.loadWarnings.isEmpty) {
+        final ym = monthKey(month);
+        for (final k in prefs.getKeys().toList()) {
+          if (!k.startsWith(markerPrefix) || !k.endsWith('_$ym')) continue;
+          final id = k.substring(markerPrefix.length, k.length - ym.length - 1);
+          if (still.contains(id) || prefs.getBool(k) != true) continue;
+          await notifications.cancelId(notificationId(id));
+          await prefs.setBool(k, false);
+        }
+      }
       for (final c in found) {
+        if (up.contains(c.id)) continue;
         // No permission: a show() is silently dropped. Bail WITHOUT the
         // marker, so the alert still fires once it is granted.
         if (!await notifications.areEnabled) return;

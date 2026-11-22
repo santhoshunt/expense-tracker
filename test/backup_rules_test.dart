@@ -111,7 +111,7 @@ void main() {
       tags: ['Office', 'Tea'],
     );
     final data = jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
-    expect(data['version'], 35);
+    expect(data['version'], 36);
     final exported = (data['rules'] as List).cast<Map<String, dynamic>>();
     final full = exported.firstWhere((r) => r['pattern'] == 'quillfern');
     expect(full['payee'], 'Quillfern Teas');

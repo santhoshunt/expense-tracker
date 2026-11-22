@@ -285,7 +285,7 @@ void main() {
         csv.split('\r\n').first,
         endsWith(
           ',unseen,refundOf,payee,acctKind,smsAt,splitId,guessed,noCashback,'
-          'smsMerchant,rewardGroup,rewardPickedAt',
+          'smsMerchant,rewardGroup,rewardPickedAt,receivedMs',
         ),
       );
       final back = {for (final t in BackupService.txsFromCsv(csv)) t.id: t};
@@ -295,19 +295,19 @@ void main() {
 
     test('an older file without the column still imports', () {
       final csv = BackupService.buildCsvOf([refund()]);
-      // Drops the last ten columns: refundOf and the later payee,
+      // Drops the last eleven columns: refundOf and the later payee,
       // acctKind, smsAt, splitId, guessed, noCashback, smsMerchant,
-      // rewardGroup and rewardPickedAt.
-      String dropLast10(String line) {
+      // rewardGroup, rewardPickedAt and receivedMs.
+      String dropLast11(String line) {
         var end = line.length;
-        for (var i = 0; i < 10; i++) {
+        for (var i = 0; i < 11; i++) {
           end = line.lastIndexOf(',', end - 1);
         }
         return line.substring(0, end);
       }
 
       final old = [
-        for (final line in csv.split('\r\n')) dropLast10(line),
+        for (final line in csv.split('\r\n')) dropLast11(line),
       ].join('\r\n');
       expect(old.split('\r\n').first, endsWith(',unseen'));
       final t = BackupService.txsFromCsv(old).single;

@@ -136,10 +136,8 @@ List<DueBill> billsDue(
       final day = DateTime(t.date.year, t.date.month, t.date.day);
       if ((t.amount - r.expectedAmount!).abs() >= 1 ||
           (t.source == TxSource.manual && t.categoryId != r.categoryId) ||
-          due.isBefore(
-            day.subtract(const Duration(days: kReminderGraceDays)),
-          ) ||
-          due.isAfter(day.add(const Duration(days: kReminderEarlyPayDays)))) {
+          due.isBefore(addCalendarDays(day, -kReminderGraceDays)) ||
+          due.isAfter(addCalendarDays(day, kReminderEarlyPayDays))) {
         continue;
       }
       pendingPaid.removeAt(i);
@@ -250,7 +248,7 @@ SafeToSpend? computeSafeToSpend(
     finance,
     patterns: patterns,
     hidden: hidden,
-    from: today.subtract(const Duration(days: 7)),
+    from: addCalendarDays(today, -7),
     to: DateTime(now.year, now.month, last),
     now: now,
   );

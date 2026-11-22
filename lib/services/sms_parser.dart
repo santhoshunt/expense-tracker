@@ -37,6 +37,18 @@ class ParsedTxn {
   /// a new key then makes a Debit card account.
   final bool isDebitCard;
 
+  /// When the alert reached the phone: the inbox's or the notification's own
+  /// time, as handed to [SmsTxnParser.parse]. The import recognises a
+  /// message again by it, whatever [date] the parser works out from the
+  /// text. Null on a transaction built some other way.
+  final DateTime? arrivedAt;
+
+  /// [date] as v2.3.3 and earlier worked it out
+  /// ([SmsTxnParser.resolveDateTimeV233]). Rows those versions stored carry
+  /// that date and no arrival time, so a rescan finds them by it. Null where
+  /// [date] stands in for it.
+  final DateTime? legacyDate;
+
   const ParsedTxn({
     required this.type,
     required this.amount,
@@ -51,6 +63,8 @@ class ParsedTxn {
     this.balanceAfter,
     this.isCard = false,
     this.isDebitCard = false,
+    this.arrivedAt,
+    this.legacyDate,
   });
 }
 
@@ -905,6 +919,8 @@ class SmsTxnParser {
       balanceAfter: balanceAfterOf(body),
       isCard: isCard,
       isDebitCard: isDebitCard,
+      arrivedAt: smsDate,
+      legacyDate: resolveDateTimeV233(message, smsDate),
     );
   }
 
@@ -1078,13 +1094,13 @@ class SmsTxnParser {
         : '';
 
     // Read from the message as it arrived, as [parse] reads the date.
-    final bodyTime = _bodyTimeOfDay(
-      message,
-      near: _dateRe.firstMatch(message)?.end,
-    );
+    final dateMatch = _bodyDateMatch(message, smsDate);
+    final bodyTime = dateMatch == null
+        ? null
+        : _bodyTimeOfDay(message, dateMatch);
     final timeSource = bodyTime != null
         ? 'from the message'
-        : (_dateRe.hasMatch(message)
+        : (dateMatch != null
               ? 'date from the message, time of arrival'
               : 'time of arrival');
 
@@ -1311,15 +1327,267 @@ class SmsTxnParser {
     return null;
   }
 
-  /// Time-of-day stated in the body, or null when none is present.
-  ///
-  /// When [near] is given, a time starting within 20 characters after that
-  /// offset wins — that is the "06-07-2026 03:41:52 pm" shape, where the clock
-  /// time belongs to the date just matched. Otherwise the first time-looking
-  /// token in the body is used.
-  static Duration? _bodyTimeOfDay(String body, {int? near}) {
-    Match? pick;
+  /// How far after the end of the chosen body date a clock time may start
+  /// and still be that date's time ("06-07-2026 03:41:52 pm", "on 05-07-26
+  /// at 18:45").
+  static const int _timeAfterDateReach = 20;
+
+  /// How far before the start of the chosen body date a clock time may end
+  /// and still be that date's time ("at 14:05 on 05-07-26", "14:05:22 IST
+  /// on 05-07-26").
+  static const int _timeBeforeDateReach = 6;
+
+  /// Time-of-day the body states for the date [date] matched: a clock time
+  /// starting inside the date or at most [_timeAfterDateReach] characters
+  /// after it, else one ending at most [_timeBeforeDateReach] characters
+  /// before it. Null when no clock time sits next to the date. A time
+  /// anywhere else, such as a helpline's "(9:30 am-6:30 pm)" footer, says
+  /// nothing about when the payment happened.
+  static Duration? _bodyTimeOfDay(String body, Match date) {
+    Match? before;
     for (final m in _timeRe.allMatches(body)) {
+      if (m.start >= date.start) {
+        // Inside the date match too: "06-07-2026 03:41:52" is one match.
+        if (m.start - date.end <= _timeAfterDateReach) return _clockOf(m);
+        break;
+      }
+      if (m.end <= date.start && date.start - m.end <= _timeBeforeDateReach) {
+        before = m;
+      }
+    }
+    return before == null ? null : _clockOf(before);
+  }
+
+  /// The time of day [m], a [_timeRe] match, names; null when out of range.
+  static Duration? _clockOf(Match m) {
+    var hour = int.tryParse(m.group(1)!);
+    final minute = int.tryParse(m.group(2)!);
+    final second = int.tryParse(m.group(3) ?? '') ?? 0;
+    if (hour == null || minute == null) return null;
+    final suffix = m.group(4)?.toLowerCase().replaceAll('.', '');
+    if (suffix == 'pm' && hour < 12) hour += 12;
+    if (suffix == 'am' && hour == 12) hour = 0;
+    if (hour > 23 || minute > 59 || second > 59) return null;
+    return Duration(hours: hour, minutes: minute, seconds: second);
+  }
+
+  /// A body date at most this far before the arrival day counts as near it:
+  /// among several, the nearest is the day the money moved.
+  static const int _bodyDateNearDays = 7;
+
+  /// Whole days since the epoch of [d]'s calendar date, for comparing
+  /// calendar days without daylight-saving effects.
+  static int _dayNumber(DateTime d) =>
+      DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch ~/
+      Duration.millisecondsPerDay;
+
+  /// The body date [resolveDateTime] goes by, or null when it goes by the
+  /// arrival time alone.
+  ///
+  /// A transaction alert can only describe something that already happened.
+  /// A body date materially after the arrival time is a *due* date ("EMI
+  /// debited … next due on 05-09-26"), and stamping the row forward would
+  /// let it out-rank every newer bank figure, and any manually set balance,
+  /// for weeks. One day of slack covers midnight-edge and clock-skew cases.
+  ///
+  /// A body can name more than one date: "Refund … for your transaction on
+  /// 12-05-26 … is credited … on 05-07-26" credits on the second. Among the
+  /// dates no later than that slack, the one nearest the arrival day wins
+  /// when it lies within [_bodyDateNearDays]; a tie goes to the date not
+  /// after the arrival day, then to the earlier one in the text. A date
+  /// after the arrival day (within the slack) wins only when no date on or
+  /// before it lies that near: "received on 03-07-26 … Next auto debit on
+  /// 06-07-26" arriving on the 5th is the 3rd. With none that near, the
+  /// first date stands as before, or the arrival when the first date is
+  /// unreadable or ahead.
+  static Match? _bodyDateMatch(String body, DateTime smsDate) {
+    final arrivalDay = _dayNumber(smsDate);
+    final slackEnd = smsDate.add(const Duration(days: 1));
+    Match? first;
+    var firstUsable = false;
+    // The nearest date on or before the arrival day, and after it.
+    Match? past;
+    var pastDistance = 0;
+    Match? ahead;
+    var isFirst = true;
+    for (final m in _dateRe.allMatches(body)) {
+      final date = _parseDate(m.group(1) ?? m.group(2)!);
+      final usable =
+          date != null &&
+          !DateTime(date.year, date.month, date.day).isAfter(slackEnd);
+      if (isFirst) {
+        first = m;
+        firstUsable = usable;
+        isFirst = false;
+      }
+      if (!usable) continue;
+      final day = _dayNumber(date);
+      if (day > arrivalDay) {
+        // The slack allows one day ahead, so every such date is as near.
+        ahead ??= m;
+        continue;
+      }
+      final distance = arrivalDay - day;
+      if (distance > _bodyDateNearDays) continue;
+      if (past == null || distance < pastDistance) {
+        past = m;
+        pastDistance = distance;
+      }
+    }
+    return past ?? ahead ?? (firstUsable ? first : null);
+  }
+
+  /// How long after the end of its body day an alert may arrive and still
+  /// be stamped at the very end of that day ([resolveDateTime] rule 3): a
+  /// payment made just before midnight whose alert lands just after it.
+  /// An alert later than that was held up for some other reason, says
+  /// nothing about the hour, and keeps the older rule (the body date with
+  /// the arrival's clock time).
+  static const Duration _endOfDayReach = Duration(hours: 2);
+
+  /// The timestamp to record for an alert. Precedence:
+  ///
+  /// 1. date **and** clock time from the body, the most precise thing we
+  ///    have;
+  /// 2. body date + the arrival time-of-day, when the alert names a day but
+  ///    no clock time: the moment it arrived is the closest approximation;
+  /// 3. body date at the very end of that day ([isEndOfDayStamp]), when the
+  ///    alert names the day before it arrived and no clock time, and
+  ///    arrived within [_endOfDayReach] after that day ended;
+  /// 4. the arrival timestamp verbatim, when the body names no usable date
+  ///    ([_bodyDateMatch]).
+  ///
+  /// Rule 2 matters: a body-dated alert used to collapse to midnight, which
+  /// made same-day ordering arbitrary and made the ref-less duplicate check
+  /// (same type + amount + sender within 3 minutes) swallow genuinely distinct
+  /// transactions from the same day.
+  ///
+  /// Rule 3: an alert for a payment at 23:55 on the 5th that arrives at 00:05
+  /// on the 6th would otherwise be stamped the 5th at 00:05, before every
+  /// other row of that day, and an older balance figure from that day would
+  /// outrank its own. An alert held up for longer is no evidence of a late
+  /// payment, and stamping it last would let its figure outrank the day's
+  /// later ones, so it keeps rule 2. The import's duplicate checks compare
+  /// two copies of one alert by arrival time while either carries the stamp
+  /// (FinanceProvider.addImported).
+  static DateTime resolveDateTime(String body, DateTime smsDate) {
+    final m = _bodyDateMatch(body, smsDate);
+    if (m == null) return smsDate;
+    final date = _parseDate(m.group(1) ?? m.group(2)!)!;
+    final tod = _bodyTimeOfDay(body, m);
+    if (tod != null) return DateTime(date.year, date.month, date.day).add(tod);
+    if (_dayNumber(date) < _dayNumber(smsDate) &&
+        smsDate.isBefore(
+          DateTime(date.year, date.month, date.day + 1).add(_endOfDayReach),
+        )) {
+      return DateTime(date.year, date.month, date.day, 23, 59, 59, 999);
+    }
+    return DateTime(
+      date.year,
+      date.month,
+      date.day,
+      smsDate.hour,
+      smsDate.minute,
+      smsDate.second,
+    );
+  }
+
+  /// Whether [d] is rule 3's end-of-day stamp ([resolveDateTime]): a body
+  /// date with no clock time, for an alert that arrived just after that day
+  /// ended. No
+  /// clock time read from a body or reported by the phone carries 999
+  /// milliseconds at 23:59:59 by design, so the stamp tells itself apart.
+  static bool isEndOfDayStamp(DateTime d) =>
+      d.hour == 23 &&
+      d.minute == 59 &&
+      d.second == 59 &&
+      d.millisecond == 999 &&
+      d.microsecond == 0;
+
+  /// Re-stamps a stored transaction date with the clock time its original SMS
+  /// body carried, or null when the body states none. Used to backfill history
+  /// imported before timestamps were recorded — the SMS arrival time is not
+  /// stored anywhere, but a body time can still be recovered. Reads the body
+  /// as v2.3.3 did, the rule that one-time backfill was written against.
+  static DateTime? dateWithBodyTime(DateTime date, String body) {
+    final m = _dateReV233.firstMatch(body);
+    final tod = _bodyTimeOfDayV233(body, near: m?.end);
+    if (tod == null) return null;
+    return DateTime(date.year, date.month, date.day).add(tod);
+  }
+
+  /// [resolveDateTime] exactly as v2.3.3 worked it out, from frozen copies
+  /// of every pattern and helper it read. Kept ONLY to recognise alerts that
+  /// v2.3.3 and earlier imported: their rows carry this date and no arrival
+  /// time ([Tx.receivedAt]), so a rescan finds them by it
+  /// ([ParsedTxn.legacyDate], FinanceProvider.addImported). Never change
+  /// these copies.
+  static DateTime resolveDateTimeV233(String body, DateTime smsDate) {
+    final m = _dateReV233.firstMatch(body);
+    final raw = m == null ? null : (m.group(1) ?? m.group(2));
+    final date = raw == null ? null : _parseDateV233(raw);
+    if (date == null) return smsDate;
+    if (DateTime(
+      date.year,
+      date.month,
+      date.day,
+    ).isAfter(smsDate.add(const Duration(days: 1)))) {
+      return smsDate;
+    }
+    final tod = _bodyTimeOfDayV233(body, near: m!.end);
+    if (tod != null) return DateTime(date.year, date.month, date.day).add(tod);
+    return DateTime(
+      date.year,
+      date.month,
+      date.day,
+      smsDate.hour,
+      smsDate.minute,
+      smsDate.second,
+    );
+  }
+
+  static final List<DateFormat> _dateFormatsV233 = [
+    DateFormat('dd-MM-yy'),
+    DateFormat('dd-MM-yyyy'),
+    DateFormat('dd/MM/yy'),
+    DateFormat('dd/MM/yyyy'),
+    DateFormat('dd-MMM-yy'),
+    DateFormat('dd-MMM-yyyy'),
+    DateFormat('ddMMMyy'),
+  ];
+
+  static final RegExp _dateReV233 = RegExp(
+    r'\bon\s+(\d{1,2}[-/][A-Za-z0-9]{1,3}[-/]\d{2,4}|\d{1,2}[A-Za-z]{3}\d{2,4})'
+    r'|\s(\d{2}[-/]\d{2}[-/]\d{4})\s+\d{1,2}:\d{2}:\d{2}',
+    caseSensitive: false,
+  );
+
+  static final RegExp _timeReV233 = RegExp(
+    r'\b(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(a\.?m\.?|p\.?m\.?|hrs?)?',
+    caseSensitive: false,
+  );
+
+  static String _padDayMonthV233(String raw) => raw.replaceFirstMapped(
+    RegExp(r'^(\d{1,2})([-/])(\d{1,2})([-/])'),
+    (m) => '${m[1]!.padLeft(2, '0')}${m[2]}${m[3]!.padLeft(2, '0')}${m[4]}',
+  );
+
+  static DateTime? _parseDateV233(String raw) {
+    final padded = _padDayMonthV233(raw);
+    for (final f in _dateFormatsV233) {
+      try {
+        final d = f.parseLoose(padded);
+        if (d.year > 2000 && d.year < 2100) return d;
+      } catch (_) {
+        // try next format
+      }
+    }
+    return null;
+  }
+
+  static Duration? _bodyTimeOfDayV233(String body, {int? near}) {
+    Match? pick;
+    for (final m in _timeReV233.allMatches(body)) {
       if (near != null && m.start >= near && m.start - near <= 20) {
         pick = m;
         break;
@@ -1336,57 +1604,5 @@ class SmsTxnParser {
     if (suffix == 'am' && hour == 12) hour = 0;
     if (hour > 23 || minute > 59 || second > 59) return null;
     return Duration(hours: hour, minutes: minute, seconds: second);
-  }
-
-  /// The timestamp to record for an alert. Precedence:
-  ///
-  /// 1. date **and** clock time from the body — the most precise thing we have;
-  /// 2. body date + the arrival time-of-day — the alert names a day but no
-  ///    clock time, and the moment it arrived is the closest approximation;
-  /// 3. the arrival timestamp verbatim, when the body names no date.
-  ///
-  /// Rule 2 matters: a body-dated alert used to collapse to midnight, which
-  /// made same-day ordering arbitrary and made the ref-less duplicate check
-  /// (same type + amount + sender within 3 minutes) swallow genuinely distinct
-  /// transactions from the same day.
-  static DateTime resolveDateTime(String body, DateTime smsDate) {
-    final m = _dateRe.firstMatch(body);
-    final raw = m == null ? null : (m.group(1) ?? m.group(2));
-    final date = raw == null ? null : _parseDate(raw);
-    if (date == null) return smsDate;
-    // A transaction alert can only describe something that already happened.
-    // A body date materially after the arrival time is a *due* date ("EMI
-    // debited … next due on 05-09-26"), and stamping the row forward would
-    // let it out-rank every newer bank figure — and any manually set balance
-    // — for weeks. Trust the arrival timestamp instead. One day of slack
-    // covers midnight-edge and clock-skew cases.
-    if (DateTime(
-      date.year,
-      date.month,
-      date.day,
-    ).isAfter(smsDate.add(const Duration(days: 1)))) {
-      return smsDate;
-    }
-    final tod = _bodyTimeOfDay(body, near: m!.end);
-    if (tod != null) return DateTime(date.year, date.month, date.day).add(tod);
-    return DateTime(
-      date.year,
-      date.month,
-      date.day,
-      smsDate.hour,
-      smsDate.minute,
-      smsDate.second,
-    );
-  }
-
-  /// Re-stamps a stored transaction date with the clock time its original SMS
-  /// body carried, or null when the body states none. Used to backfill history
-  /// imported before timestamps were recorded — the SMS arrival time is not
-  /// stored anywhere, but a body time can still be recovered.
-  static DateTime? dateWithBodyTime(DateTime date, String body) {
-    final m = _dateRe.firstMatch(body);
-    final tod = _bodyTimeOfDay(body, near: m?.end);
-    if (tod == null) return null;
-    return DateTime(date.year, date.month, date.day).add(tod);
   }
 }

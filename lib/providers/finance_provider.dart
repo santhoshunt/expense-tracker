@@ -107,7 +107,29 @@ typedef DeletedGroup = ({
 
 /// One alert in the import's fuzzy duplicate lookup: when it was dated, its
 /// account key, and the balance it stated when it came from the inbox.
-typedef _FuzzyEntry = ({DateTime date, String? acct, double? bal});
+/// One alert in [FinanceProvider.addImported]'s duplicate buckets: its date,
+/// when it reached the phone (null when not known), and whether it is a row
+/// stored before arrival times were kept, dated by the old rule.
+typedef _FuzzyEntry = ({
+  DateTime date,
+  DateTime? arrived,
+  bool legacy,
+  String? acct,
+  double? bal,
+});
+
+/// One stored or incoming alert carrying a bank reference, for the
+/// reference check in [FinanceProvider.addImported].
+typedef _RefEntry = ({DateTime date, bool legacy, double? bal});
+
+/// How far apart two alerts with the same bank reference and direction may
+/// be dated and still be one alert. Copies of one alert reach the phone
+/// minutes apart (the inbox and a notification), an SMS held up by the
+/// network can arrive a day or two late, and a rescan reads each message
+/// with its own date again. A payment that reuses its reference (a loan's
+/// monthly EMI) recurs a week or more apart at the shortest, so a later
+/// one imports, held for review as a possible duplicate.
+const Duration kRefDuplicateWindow = Duration(days: 3);
 
 /// Income / expense / savings totals for one month, plus the per-category
 /// expense breakdown and the transfer flows — all produced in a single pass.
@@ -342,6 +364,7 @@ class _Batch {
   bool reminders = false;
   bool marks = false;
   bool discards = false;
+  bool accountsFirst = false;
 }
 
 /// The refund links that hold, from one pass over the confirmed rows.
@@ -548,6 +571,7 @@ class FinanceProvider extends ChangeNotifier {
           reminders: batch.reminders,
           marks: batch.marks,
           discards: batch.discards,
+          accountsFirst: batch.accountsFirst,
         );
       }
     }
@@ -667,6 +691,11 @@ class FinanceProvider extends ChangeNotifier {
   /// and the moment it arrived. A discarded row records the first that
   /// applies ([_discardKeysOf]); an incoming alert is checked against all
   /// three, so a row restored without its text still matches its alert.
+  ///
+  /// [received] says [arrived] is the moment the alert reached the phone
+  /// ([Tx.receivedAt]); otherwise it is the row's date as v2.3.3 and
+  /// earlier worked it out ([Tx.smsArrivedAt], [ParsedTxn.legacyDate]). The
+  /// two kinds of key never equal each other, so each only meets its own.
   static List<String> _alertKeys({
     required String sender,
     required DateTime arrived,
@@ -675,8 +704,11 @@ class FinanceProvider extends ChangeNotifier {
     required String body,
     required String? ref,
     bool all = false,
+    bool received = false,
   }) {
-    final at = '$sender|${arrived.millisecondsSinceEpoch}';
+    final at = received
+        ? '$sender|@${arrived.millisecondsSinceEpoch}'
+        : '$sender|${arrived.millisecondsSinceEpoch}';
     final keys = <String>[
       if (body.isNotEmpty) stableHash('m|$at|$body'),
       if (ref != null && (all || body.isEmpty))
@@ -691,42 +723,76 @@ class FinanceProvider extends ChangeNotifier {
   /// inbox twin has another sender, time and often a ref, so no
   /// [_alertKeys] key matches it; the duplicate check would have dropped
   /// the twin within 3 minutes, and [_nearDiscardedCopy] does the same.
-  static String _copyKey(String bank, TxType type, double amount, int minute) =>
-      stableHash('n|$bank|${type.name}|${(amount * 100).round()}|$minute');
+  /// [received] as in [_alertKeys]. A received key also names the calendar
+  /// day of the row's date ([day]): two alerts arriving minutes apart are
+  /// one alert only when they name one day, and a late alert of yesterday
+  /// is not today's payment of the same amount.
+  static String _copyKey(
+    String bank,
+    TxType type,
+    double amount,
+    int minute, {
+    bool received = false,
+    DateTime? day,
+  }) => stableHash(
+    received
+        ? 'N|$bank|${type.name}|${(amount * 100).round()}|$minute|'
+              '${_dayKey(day!)}'
+        : 'n|$bank|${type.name}|${(amount * 100).round()}|$minute',
+  );
 
   static int _minuteOf(DateTime d) =>
       d.millisecondsSinceEpoch ~/ Duration.millisecondsPerMinute;
 
-  static List<String> _discardKeysOf(Tx t) => [
-    ..._alertKeys(
-      sender: t.sender,
-      arrived: t.smsArrivedAt,
-      type: t.type,
-      amount: t.amount,
-      body: t.smsBody,
-      ref: t.externalRef,
-    ),
-    if (t.sender.isNotEmpty && !SmsTxnParser.isDltSender(t.sender))
-      _copyKey(
-        SmsTxnParser.dedupBankOf(t.sender),
-        t.type,
-        t.amount,
-        _minuteOf(t.smsArrivedAt),
+  /// A row imported since v2.3.4 is known by when its alert reached the
+  /// phone; an older one by its date as the old rule worked it out.
+  static List<String> _discardKeysOf(Tx t) {
+    final received = t.receivedAt != null;
+    final at = t.receivedAt ?? t.smsArrivedAt;
+    return [
+      ..._alertKeys(
+        sender: t.sender,
+        arrived: at,
+        type: t.type,
+        amount: t.amount,
+        body: t.smsBody,
+        ref: t.externalRef,
+        received: received,
       ),
-  ];
+      if (t.sender.isNotEmpty && !SmsTxnParser.isDltSender(t.sender))
+        _copyKey(
+          SmsTxnParser.dedupBankOf(t.sender),
+          t.type,
+          t.amount,
+          _minuteOf(at),
+          received: received,
+          day: t.smsArrivedAt,
+        ),
+    ];
+  }
 
   /// Whether a discarded notification copy of the same bank, direction and
-  /// amount arrived within about 3 minutes of [p].
+  /// amount arrived within about 3 minutes of [p]: by arrival time and the
+  /// day of the date against rows imported since v2.3.4, by the old rule's
+  /// date against older ones.
   bool _nearDiscardedCopy(ParsedTxn p) {
     final bank = SmsTxnParser.dedupBankOf(p.sender);
     if (bank.isEmpty) return false;
-    final minute = _minuteOf(p.date);
-    for (var m = minute - 3; m <= minute + 3; m++) {
-      if (_discardedImports.contains(_copyKey(bank, p.type, p.amount, m))) {
-        return true;
+    bool near(DateTime at, bool received) {
+      final minute = _minuteOf(at);
+      for (var m = minute - 3; m <= minute + 3; m++) {
+        if (_discardedImports.contains(
+          _copyKey(bank, p.type, p.amount, m, received: received, day: p.date),
+        )) {
+          return true;
+        }
       }
+      return false;
     }
-    return false;
+
+    final arrived = p.arrivedAt;
+    return (arrived != null && near(arrived, true)) ||
+        near(p.legacyDate ?? p.date, false);
   }
 
   /// Records the SMS rows among [rows] as discarded. True when the set
@@ -1156,7 +1222,7 @@ class FinanceProvider extends ChangeNotifier {
     final start = DateTime(first.year, first.month, first.day);
     final now = DateTime.now();
     final end = DateTime(now.year, now.month, now.day);
-    final days = end.difference(start).inDays + 1;
+    final days = calendarDaysBetween(start, end) + 1;
     // Occurrences of each weekday in [start, end]: every weekday appears
     // days ~/ 7 times, plus one for each weekday in the leftover span.
     final counts = List<int>.filled(7, days ~/ 7);
@@ -1541,6 +1607,8 @@ class FinanceProvider extends ChangeNotifier {
       // All or nothing, unlike the ledger: with an account left out, the
       // passes that check links would unlink reminders, cards and filters
       // from it for good, and they skip only on the 'accounts' warning.
+      // Loading entry by entry would also need every later save to keep the
+      // unreadable entries, or the first save would make the loss final.
       await _guardedLoad(
         'accounts',
         () async {
@@ -2183,7 +2251,7 @@ class FinanceProvider extends ChangeNotifier {
           ledgerWhole &&
           remindersWhole &&
           !_loadWarnings.contains('rules') &&
-          !_loadWarnings.contains('accounts')) {
+          _loadedWhole('accounts')) {
         final counted = _countSurePendingImports();
         if (counted.rows > 0) {
           await _persist(
@@ -2204,7 +2272,7 @@ class FinanceProvider extends ChangeNotifier {
     await step(() async {
       if (!(prefs.getBool(_debitCardsDetectedKey) ?? false) &&
           ledgerWhole &&
-          !_loadWarnings.contains('accounts')) {
+          _loadedWhole('accounts')) {
         if (_detectDebitCards()) await _persist(accounts: true);
         // A save that failed leaves the change in memory only: try again on
         // the next launch.
@@ -2233,7 +2301,7 @@ class FinanceProvider extends ChangeNotifier {
       if (!(prefs.getBool(_refundsLinkedKey) ?? false) &&
           registryIntact &&
           ledgerWhole &&
-          !_loadWarnings.contains('accounts')) {
+          _loadedWhole('accounts')) {
         final reviewBefore = _refundReviewIds.length;
         if (_linkPastRefunds() > 0) await _persist(tx: true);
         if (_refundReviewIds.length != reviewBefore) {
@@ -2294,9 +2362,7 @@ class FinanceProvider extends ChangeNotifier {
     // Card bills paid by a transfer the app saw: their cycle is paid, not
     // overdue. Not when the ledger or the accounts failed to load.
     await step(() async {
-      if (ledgerWhole &&
-          !_loadWarnings.contains('accounts') &&
-          _markCardCyclesPaid()) {
+      if (ledgerWhole && _loadedWhole('accounts') && _markCardCyclesPaid()) {
         await _persist(accounts: true);
       }
     });
@@ -2392,12 +2458,14 @@ class FinanceProvider extends ChangeNotifier {
     bool reminders = false,
     bool marks = false,
     bool discards = false,
+    bool accountsFirst = false,
   }) async {
     // Inside a [_batch], the save waits for the action's end and covers
     // every collection the action's mutations asked for.
     final batch = _openBatch;
     if (batch != null) {
       batch.saves = true;
+      batch.accountsFirst |= accountsFirst;
       batch.tx |= tx;
       batch.rules |= rules;
       batch.accounts |= accounts;
@@ -2426,6 +2494,7 @@ class FinanceProvider extends ChangeNotifier {
         reminders: reminders,
         marks: marks,
         discards: discards,
+        accountsFirst: accountsFirst,
       );
       if (_persistFailed) {
         _persistFailed = false;
@@ -2452,6 +2521,13 @@ class FinanceProvider extends ChangeNotifier {
     bool reminders = false,
     bool marks = false,
     bool discards = false,
+    // A hand assignment gives an account the key a row then points to
+    // ([_assignInPlace]). Written ledger first, an app killed between the
+    // two writes leaves the row on a key no account holds, silently
+    // unassigned; accounts first, it leaves at worst a key no row uses yet.
+    // Deletes keep the ledger first: there the row going matters more than
+    // the key it leaves behind.
+    bool accountsFirst = false,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     // The plugin reports a write it could not make (Android's commit()
@@ -2461,6 +2537,13 @@ class FinanceProvider extends ChangeNotifier {
       if (!await write) throw StateError('A storage write failed');
     }
 
+    Future<void> writeAccounts() => saved(
+      prefs.setString(
+        _accountsKey,
+        jsonEncode(_accounts.map((a) => a.toJson()).toList()),
+      ),
+    );
+    if (accounts && accountsFirst) await writeAccounts();
     if (tx) {
       // Ordering guard: two rapid mutations both persist, and with the
       // isolate codec the OLDER encode can finish LAST — writing it would
@@ -2491,14 +2574,7 @@ class FinanceProvider extends ChangeNotifier {
         ),
       );
     }
-    if (accounts) {
-      await saved(
-        prefs.setString(
-          _accountsKey,
-          jsonEncode(_accounts.map((a) => a.toJson()).toList()),
-        ),
-      );
-    }
+    if (accounts && !accountsFirst) await writeAccounts();
     if (importRules) {
       await saved(
         prefs.setString(
@@ -2807,9 +2883,64 @@ class FinanceProvider extends ChangeNotifier {
     final reminders = _unmarkRemindersPaidBy([id]);
     // A deleted import stays gone on a rescan.
     final discards = _rememberDiscarded([victim]);
+    final accounts = _dropManualKeys([victim]);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders, discards: discards);
+    await _persist(
+      tx: true,
+      reminders: reminders,
+      discards: discards,
+      accounts: accounts,
+    );
     return partner;
+  }
+
+  /// The account each hand-assigned row deleted in this session sat on, by
+  /// row id, so an Undo puts its key back ([_restoreManualKeys]). An Undo
+  /// does not outlive the session, so neither does this.
+  final Map<String, String> _manualKeyOwners = {};
+
+  /// Takes each of [rows]' hand-assignment key (`manual:<row id>`, see
+  /// [_assignInPlace]) off the account holding it: the row is gone, and a
+  /// key left behind would stay in that account's key set for good.
+  /// Returns whether an account changed; the caller notifies and persists.
+  bool _dropManualKeys(Iterable<Tx> rows) {
+    var changed = false;
+    for (final t in rows) {
+      final key = t.acctKey;
+      if (key == null || key != 'manual:${t.id}') continue;
+      final ai = _accounts.indexWhere((a) => a.keys.contains(key));
+      if (ai == -1) continue;
+      _manualKeyOwners[t.id] = _accounts[ai].id;
+      _accounts[ai] = _accounts[ai].copyWith(
+        keys: {..._accounts[ai].keys}..remove(key),
+      );
+      _keyIndex.remove(key);
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// The undo half of [_dropManualKeys]: each of [rows]' hand-assignment key
+  /// goes back on the account it was taken from, while that account exists
+  /// and no other account holds the key. Returns whether an account
+  /// changed; the caller notifies and persists.
+  bool _restoreManualKeys(Iterable<Tx> rows) {
+    var changed = false;
+    for (final t in rows) {
+      final key = t.acctKey;
+      final owner = _manualKeyOwners.remove(t.id);
+      if (key == null || owner == null || _keyIndex.containsKey(key)) {
+        continue;
+      }
+      final ai = _accounts.indexWhere((a) => a.id == owner);
+      if (ai == -1) continue;
+      _accounts[ai] = _accounts[ai].copyWith(
+        keys: {..._accounts[ai].keys, key},
+      );
+      _keyIndex[key] = owner;
+      changed = true;
+    }
+    return changed;
   }
 
   /// Bulk delete for the selection bar: removes every row whose id is in
@@ -2834,8 +2965,14 @@ class FinanceProvider extends ChangeNotifier {
     _clearOrphanPairs();
     final reminders = _unmarkRemindersPaidBy(gone);
     final discards = _rememberDiscarded(_atSplitTotals(removed, removed));
+    final accounts = _dropManualKeys(removed);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders, discards: discards);
+    await _persist(
+      tx: true,
+      reminders: reminders,
+      discards: discards,
+      accounts: accounts,
+    );
     return removed;
   }
 
@@ -3261,8 +3398,14 @@ class FinanceProvider extends ChangeNotifier {
     _transactions.add(_sanitizeSplit(tx));
     final reminders = _remarkRemindersPaidBy([tx]);
     final discards = _forgetDiscarded(_atSplitTotals([tx], _transactions));
+    final accounts = _restoreManualKeys([tx]);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders, discards: discards);
+    await _persist(
+      tx: true,
+      reminders: reminders,
+      discards: discards,
+      accounts: accounts,
+    );
   }
 
   /// Batch [restoreTransaction]: the undo half of [deleteTransactions] and
@@ -3280,8 +3423,14 @@ class FinanceProvider extends ChangeNotifier {
     _clearOrphanPairs();
     final reminders = _remarkRemindersPaidBy(back);
     final discards = _forgetDiscarded(_atSplitTotals(back, _transactions));
+    final accounts = _restoreManualKeys(back);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders, discards: discards);
+    await _persist(
+      tx: true,
+      reminders: reminders,
+      discards: discards,
+      accounts: accounts,
+    );
   }
 
   /// The undo half of edits that only rewrite row fields (bulk category,
@@ -3646,12 +3795,14 @@ class FinanceProvider extends ChangeNotifier {
     if (rows.isNotEmpty) {
       final keysWithConfirmed = _keysWithConfirmedRows();
       Map<int, List<Tx>>? byPaise;
+      Map<String, int>? byRef;
       for (final t in rows) {
         final reason =
             _holdReasonOf(
               t,
               keysWithConfirmed: keysWithConfirmed,
               pairPool: () => byPaise ??= _rowsByPaise(_transactions),
+              refPool: () => byRef ??= _rowsByRef(_transactions),
             ) ??
             HoldReason.other;
         (held[reason] ??= []).add(t);
@@ -4973,7 +5124,12 @@ class FinanceProvider extends ChangeNotifier {
       _reminders[i] = r.copyWith(lastPaidMonth: key);
     }
     notifyListeners();
-    await _persist(tx: true, accounts: accounts, reminders: true);
+    await _persist(
+      tx: true,
+      accounts: accounts,
+      reminders: true,
+      accountsFirst: true,
+    );
     return txId;
   }
 
@@ -5028,7 +5184,7 @@ class FinanceProvider extends ChangeNotifier {
       // A wallet too: its rows count only when turned on, so bills added
       // there would go quietly missing from spend.
       if (account != null &&
-          !_loadWarnings.contains('accounts') &&
+          _loadedWhole('accounts') &&
           !_accounts.any((a) => a.id == account && !a.isWallet)) {
         r = r.copyWith(clearAccountId: true);
       }
@@ -5093,7 +5249,12 @@ class FinanceProvider extends ChangeNotifier {
     }
     if (added.isEmpty) return added;
     notifyListeners();
-    await _persist(tx: true, accounts: accountsTouched, reminders: true);
+    await _persist(
+      tx: true,
+      accounts: accountsTouched,
+      reminders: true,
+      accountsFirst: true,
+    );
     return added;
   }
 
@@ -5153,7 +5314,7 @@ class FinanceProvider extends ChangeNotifier {
       var bestGap = 0;
       DateTime? bestDue;
       var paidAlready = false;
-      final earlyFrom = day.add(const Duration(days: 3));
+      final earlyFrom = addCalendarDays(day, 3);
       for (var i = 0; i < _reminders.length; i++) {
         final r = _reminders[i];
         final expected = r.expectedAmount;
@@ -5170,8 +5331,8 @@ class FinanceProvider extends ChangeNotifier {
         final was = r.lastPaidMonth;
         for (final due in reminderDueDatesBetween(
           r,
-          day.subtract(const Duration(days: kReminderGraceDays)),
-          day.add(const Duration(days: kReminderEarlyPayDays)),
+          addCalendarDays(day, -kReminderGraceDays),
+          addCalendarDays(day, kReminderEarlyPayDays),
         )) {
           if (was != null && monthKey(due).compareTo(was) <= 0) {
             paidAlready = true;
@@ -5189,13 +5350,13 @@ class FinanceProvider extends ChangeNotifier {
             final before = reminderDueDatesBetween(
               r,
               DateTime(due.year, due.month - r.cycle.months),
-              due.subtract(const Duration(days: 1)),
+              addCalendarDays(due, -1),
             );
             if (before.isNotEmpty && !reminderOccurrenceDone(r, before.last)) {
               continue;
             }
           }
-          final gap = day.difference(due).inDays.abs();
+          final gap = calendarDaysBetween(due, day).abs();
           if (best == -1 ||
               (bestEarly && !early) ||
               (bestEarly == early && gap < bestGap)) {
@@ -6687,12 +6848,18 @@ class FinanceProvider extends ChangeNotifier {
   /// or hand-edited backup). The caller notifies and persists.
   bool _sanitizeAccountLinks() {
     final ids = {for (final a in _accounts) a.id};
+    // A link to an account missing while the stored accounts failed to load
+    // stays: that account only looks deleted (a merge import adds accounts
+    // to the ones that did not load).
+    final whole = _loadedWhole('accounts');
     var changed = false;
     for (var j = 0; j < _accounts.length; j++) {
       final a = _accounts[j];
       final link = a.linkedAccountId;
       if (link == null) continue;
-      if (a.isDebitCard && link != a.id && ids.contains(link)) continue;
+      if (a.isDebitCard && link != a.id && (ids.contains(link) || !whole)) {
+        continue;
+      }
       _accounts[j] = a.copyWith(clearLinkedAccountId: true);
       changed = true;
     }
@@ -7127,7 +7294,7 @@ class FinanceProvider extends ChangeNotifier {
     }
     if (!changed) return;
     notifyListeners();
-    await _persist(tx: true, accounts: true);
+    await _persist(tx: true, accounts: true, accountsFirst: true);
   }
 
   /// [ids] plus every other part of the split payments they name, read
@@ -7257,7 +7424,7 @@ class FinanceProvider extends ChangeNotifier {
     }
     if (changed > 0) {
       notifyListeners();
-      await _persist(tx: true, accounts: true);
+      await _persist(tx: true, accounts: true, accountsFirst: true);
     }
     return changed;
   }
@@ -7836,11 +8003,10 @@ class FinanceProvider extends ChangeNotifier {
   /// card payment or an existing repayment, so linking can't break a pair.
   List<Tx> repaymentCandidates({required double near, DateTime? now}) {
     final today = now ?? DateTime.now();
-    final from = DateTime(
-      today.year,
-      today.month,
-      today.day,
-    ).subtract(const Duration(days: 90));
+    final from = addCalendarDays(
+      DateTime(today.year, today.month, today.day),
+      -90,
+    );
     final rows = [
       for (final t in _transactions)
         if (_canBeRepayment(t) && !t.date.isBefore(from)) t,
@@ -8089,8 +8255,10 @@ class FinanceProvider extends ChangeNotifier {
   /// any spam suspicion (an explicit user rule outranks the heuristic) —
   /// income rules only apply to income, expense rules to expenses.
   ///
-  /// Duplicate rules: same bank reference id + same direction always wins;
-  /// without a ref, same type + amount with a date within 3 minutes is
+  /// Duplicate rules: same bank reference id + same direction, on a row
+  /// dated within [kRefDuplicateWindow], drops the alert; further apart it
+  /// imports and waits in review as a possible duplicate ([_holdReasonOf]).
+  /// Without a ref, same type + amount with a date within 3 minutes is
   /// treated as the same bank alert sent twice, unless both are inbox alerts
   /// stating different balances after them. Fuzzy matching is only used to
   /// *skip* an import, never to touch existing user data.
@@ -8130,7 +8298,18 @@ class FinanceProvider extends ChangeNotifier {
     // of a credit-card bill payment (bank-side debit, issuer-side credit)
     // often quote the same reference — they are two different transactions,
     // not duplicates. A transaction without a ref is never a ref-match, so
-    // it won't block a genuinely new message from the same bank.
+    // it won't block a genuinely new message from the same bank. A match
+    // counts only against a row dated within [kRefDuplicateWindow]: a loan
+    // or standing instruction can quote one reference every month, and
+    // each later month is a new payment. Dates are the rows' own, so a
+    // rescan's message meets its own row, which has its own date.
+    //
+    // Dates and arrival times: a row stored since v2.3.4 carries when its
+    // alert reached the phone ([Tx.receivedAt]) and its date by today's
+    // rule; an older row carries only its date, worked out by the v2.3.3
+    // rule. Against an older row the incoming alert is compared by the date
+    // that rule gives it ([ParsedTxn.legacyDate]), so every older row is
+    // recognised exactly as v2.3.3 recognised it.
     //
     // The fuzzy bucket (same type + amount + bank, dates compared within
     // the bucket) treats a matching alert within 3 minutes as the same bank
@@ -8153,7 +8332,64 @@ class FinanceProvider extends ChangeNotifier {
     // different ones, are two payments: a second withdrawal of the same
     // amount minutes later. Only inbox alerts: a notification's cut-off
     // text can leave a partial balance figure.
-    final refKeys = <String>{};
+    final refKeys = <String, List<_RefEntry>>{};
+    // [bal] is the balance an inbox alert states ([inboxBalance] below).
+    void rememberRef(
+      TxType type,
+      String? ref,
+      DateTime date,
+      bool legacy,
+      double? bal,
+    ) {
+      if (ref == null) return;
+      (refKeys['${type.name}|$ref'] ??= []).add((
+        date: date,
+        legacy: legacy,
+        bal: bal,
+      ));
+    }
+
+    // The incoming alert's date to compare with a stored entry's.
+    DateTime dateFor(ParsedTxn p, bool legacy) =>
+        legacy ? (p.legacyDate ?? p.date) : p.date;
+    // A row stored before arrival times were kept matches on the reference
+    // alone, as v2.3.3 matched it: its date may be one the user picked
+    // before the original was kept ([Tx.smsAt]), weeks from the alert's.
+    // Against a newer row, within [kRefDuplicateWindow], and two inbox
+    // alerts stating different balances after them are two payments (a
+    // mandate's reference on two daily debits), as in the fuzzy check.
+    bool refSeen(ParsedTxn p, double? bal) =>
+        refKeys['${p.type.name}|${p.ref}']?.any(
+          (e) =>
+              e.legacy ||
+              (p.date.difference(e.date).abs() <= kRefDuplicateWindow &&
+                  (bal == null || e.bal == null || e.bal == bal)),
+        ) ??
+        false;
+    // Whether stored entry [r] and [p] are within 3 minutes. When either
+    // date is the end-of-day stamp of an alert that arrived just after its
+    // day ended ([SmsTxnParser.isEndOfDayStamp]), both dates fall on the
+    // same calendar day and both arrival times are known, the arrival times
+    // decide: the stamp says nothing about the hour of the payment, and the
+    // same alert by two routes names the same day. Dates on different days
+    // are compared as they are, so a late alert of the 5th and a payment
+    // early on the 6th stay two payments.
+    bool within3Minutes(_FuzzyEntry r, ParsedTxn p) {
+      const window = Duration(minutes: 3);
+      final at = dateFor(p, r.legacy);
+      final rArrived = r.arrived;
+      final pArrived = p.arrivedAt;
+      if (!r.legacy &&
+          rArrived != null &&
+          pArrived != null &&
+          (SmsTxnParser.isEndOfDayStamp(r.date) ||
+              SmsTxnParser.isEndOfDayStamp(at)) &&
+          calendarDaysBetween(r.date, at) == 0) {
+        return rArrived.difference(pArrived).abs() <= window;
+      }
+      return r.date.difference(at).abs() <= window;
+    }
+
     final fuzzyDates = <String, List<_FuzzyEntry>>{};
     final fuzzyDatesNoRef = <String, List<_FuzzyEntry>>{};
     final bankOf = <String, String>{};
@@ -8194,13 +8430,13 @@ class FinanceProvider extends ChangeNotifier {
         balance != null && SmsTxnParser.isDltSender(sender) ? balance : null;
     int nearIndex(
       List<_FuzzyEntry>? rows,
-      DateTime at,
+      ParsedTxn p,
       String? acct,
       double? bal,
     ) =>
         rows?.indexWhere(
           (r) =>
-              r.date.difference(at).abs() <= const Duration(minutes: 3) &&
+              within3Minutes(r, p) &&
               (acct == null || r.acct == null || sameAccount(r.acct!, acct)) &&
               (bal == null || r.bal == null || r.bal == bal),
         ) ??
@@ -8212,11 +8448,15 @@ class FinanceProvider extends ChangeNotifier {
       String? ref,
       DateTime date,
       String? acct,
-      double? balance,
-    ) {
+      double? balance, {
+      required DateTime? arrived,
+      bool legacy = false,
+    }) {
       final key = fuzzyKeyOf(type, amount, sender);
-      final entry = (
+      final _FuzzyEntry entry = (
         date: date,
+        arrived: arrived,
+        legacy: legacy,
         acct: acct,
         bal: inboxBalance(sender, balance),
       );
@@ -8229,22 +8469,83 @@ class FinanceProvider extends ChangeNotifier {
     // The very same message again (a rescan): same sender, text and time.
     // It must drop even when a newer parser reads another ref or direction
     // from it than the stored row has. Rows already on record only, so two
-    // identical ref-less swipes in one batch both import. The time is when
-    // the alert arrived ([Tx.smsArrivedAt]), so a re-dated row still
-    // matches; the fuzzy bucket below uses it for the same reason.
+    // identical ref-less swipes in one batch both import.
+    //
+    // The time is when the alert reached the phone ([Tx.receivedAt],
+    // [ParsedTxn.arrivedAt]): an instant no date rule, re-dating or time
+    // zone moves. A row stored before that was kept is found by its date
+    // as the old rule worked it out ([Tx.smsArrivedAt], so a re-dated row
+    // still matches) against the incoming alert's old-rule date
+    // ([ParsedTxn.legacyDate]), exactly as v2.3.3 found it.
     String sameMessage(String sender, DateTime date, String body) =>
         '$sender|${date.millisecondsSinceEpoch}|$body';
-    final seenMessages = <String>{
-      for (final t in _transactions)
-        if (t.source == TxSource.sms && t.smsText.isNotEmpty)
-          sameMessage(t.sender, t.smsArrivedAt, t.smsText),
-    };
+    final seenArrivals = <String>{};
+    final seenLegacy = <String>{};
+    // Older rows by sender and text, for the time-zone case below.
+    final legacyByText = <String, List<DateTime>>{};
+    for (final t in _transactions) {
+      if (t.source != TxSource.sms || t.smsText.isEmpty) continue;
+      final received = t.receivedAt;
+      if (received != null) {
+        seenArrivals.add(sameMessage(t.sender, received, t.smsText));
+      } else {
+        seenLegacy.add(sameMessage(t.sender, t.smsArrivedAt, t.smsText));
+        (legacyByText['${t.sender}|${t.smsText}'] ??= []).add(t.smsArrivedAt);
+      }
+    }
+    // An older row's date is local wall time with no zone, so after the
+    // phone's time zone changes it reads back off by the change of offset,
+    // a whole number of quarter hours. Only for an alert the old rule dated
+    // by its arrival alone (no usable date in the text): that date keeps
+    // the arrival's milliseconds, and the same sender and text arriving a
+    // whole number of quarter hours apart to the millisecond, within a
+    // day's span of offsets, is the same message. A date read from the
+    // text has no milliseconds and is left to the plain test above.
+    const zoneSpan = Duration(hours: 26);
+    const quarterHour = Duration.millisecondsPerMinute * 15;
+    bool seenAcrossZones(ParsedTxn p) {
+      final legacy = p.legacyDate;
+      if (legacy == null || legacy.millisecond == 0) return false;
+      if (p.arrivedAt == null || !legacy.isAtSameMomentAs(p.arrivedAt!)) {
+        return false;
+      }
+      for (final d
+          in legacyByText['${p.sender}|${p.rawBody}'] ?? const <DateTime>[]) {
+        final gap = d.difference(legacy);
+        if (gap == Duration.zero || gap.abs() > zoneSpan) continue;
+        if (gap.inMilliseconds % quarterHour == 0) return true;
+      }
+      return false;
+    }
+
+    bool seenMessage(ParsedTxn p) {
+      if (p.rawBody.isEmpty) return false;
+      final arrived = p.arrivedAt;
+      if (arrived != null &&
+          seenArrivals.contains(sameMessage(p.sender, arrived, p.rawBody))) {
+        return true;
+      }
+      return seenLegacy.contains(
+            sameMessage(p.sender, p.legacyDate ?? p.date, p.rawBody),
+          ) ||
+          seenAcrossZones(p);
+    }
+
     // A split payment was one alert: it stands here once, at its total, as
     // the row holding the alert (its anchor); the other parts never were
     // alerts.
     final splits = _splitAnchorsAndTotals();
     for (final t in _transactions) {
-      if (t.externalRef != null) refKeys.add('${t.type.name}|${t.externalRef}');
+      final sms = t.source == TxSource.sms;
+      final date = sms ? t.smsArrivedAt : t.date;
+      final legacy = sms && t.receivedAt == null;
+      rememberRef(
+        t.type,
+        t.externalRef,
+        date,
+        legacy,
+        inboxBalance(t.sender, t.balanceAfter),
+      );
       var amount = t.amount;
       final split = splits[t.splitId];
       if (split != null) {
@@ -8256,9 +8557,11 @@ class FinanceProvider extends ChangeNotifier {
         amount,
         t.sender,
         t.externalRef,
-        t.source == TxSource.sms ? t.smsArrivedAt : t.date,
+        date,
         t.acctKey,
         t.balanceAfter,
+        arrived: t.receivedAt,
+        legacy: legacy,
       );
     }
     // Alerts the user deleted or discarded. Each still stands in the
@@ -8269,20 +8572,42 @@ class FinanceProvider extends ChangeNotifier {
     final discarded = <ParsedTxn>{};
     if (_discardedImports.isNotEmpty) {
       for (final p in parsed) {
-        final keys = _alertKeys(
-          sender: p.sender,
-          arrived: p.date,
-          type: p.type,
-          amount: p.amount,
-          body: p.rawBody,
-          ref: p.ref,
-          all: true,
-        );
+        // By arrival time against rows discarded since v2.3.4, by the old
+        // rule's date against older ones ([_discardKeysOf]).
+        final arrived = p.arrivedAt;
+        final keys = [
+          if (arrived != null)
+            ..._alertKeys(
+              sender: p.sender,
+              arrived: arrived,
+              type: p.type,
+              amount: p.amount,
+              body: p.rawBody,
+              ref: p.ref,
+              all: true,
+              received: true,
+            ),
+          ..._alertKeys(
+            sender: p.sender,
+            arrived: p.legacyDate ?? p.date,
+            type: p.type,
+            amount: p.amount,
+            body: p.rawBody,
+            ref: p.ref,
+            all: true,
+          ),
+        ];
         if (!keys.any(_discardedImports.contains) && !_nearDiscardedCopy(p)) {
           continue;
         }
         discarded.add(p);
-        if (p.ref != null) refKeys.add('${p.type.name}|${p.ref}');
+        rememberRef(
+          p.type,
+          p.ref,
+          p.date,
+          false,
+          inboxBalance(p.sender, p.balanceAfter),
+        );
         remember(
           p.type,
           p.amount,
@@ -8291,6 +8616,7 @@ class FinanceProvider extends ChangeNotifier {
           p.date,
           p.acctKey,
           p.balanceAfter,
+          arrived: p.arrivedAt,
         );
       }
     }
@@ -8302,10 +8628,7 @@ class FinanceProvider extends ChangeNotifier {
         continue;
       }
       if (discarded.contains(p)) continue;
-      if (p.rawBody.isNotEmpty &&
-          seenMessages.contains(sameMessage(p.sender, p.date, p.rawBody))) {
-        continue;
-      }
+      if (seenMessage(p)) continue;
 
       // A new debit card key: the bank it is about to draw from.
       final newCard = p.acctKey;
@@ -8326,15 +8649,15 @@ class FinanceProvider extends ChangeNotifier {
       final bal = inboxBalance(p.sender, p.balanceAfter);
       final bool isDuplicate;
       if (p.ref != null) {
-        if (refKeys.contains('${p.type.name}|${p.ref}')) {
+        if (refSeen(p, bal)) {
           isDuplicate = true;
         } else {
           final twins = fuzzyDatesNoRef[key];
-          final i = nearIndex(twins, p.date, p.acctKey, bal);
+          final i = nearIndex(twins, p, p.acctKey, bal);
           // Paired: that ref-less copy is spent, and the ref now known.
           if (i != -1) {
             twins!.removeAt(i);
-            refKeys.add('${p.type.name}|${p.ref}');
+            rememberRef(p.type, p.ref, p.date, false, bal);
             isDuplicate = true;
           } else {
             // The other alert for one spend on a linked debit card: the
@@ -8352,8 +8675,7 @@ class FinanceProvider extends ChangeNotifier {
                             r.acct != null &&
                             r.acct != at &&
                             sameAccount(r.acct!, at) &&
-                            r.date.difference(p.date).abs() <=
-                                const Duration(minutes: 3),
+                            within3Minutes(r, p),
                       ) ??
                       -1;
             if (j != -1) rows!.removeAt(j);
@@ -8361,7 +8683,7 @@ class FinanceProvider extends ChangeNotifier {
           }
         }
       } else {
-        isDuplicate = nearIndex(fuzzyDates[key], p.date, p.acctKey, bal) != -1;
+        isDuplicate = nearIndex(fuzzyDates[key], p, p.acctKey, bal) != -1;
       }
       if (isDuplicate) continue;
 
@@ -8402,6 +8724,7 @@ class FinanceProvider extends ChangeNotifier {
         suspectedSpam: suspectedSpam,
         acctKey: p.acctKey,
         balanceAfter: p.balanceAfter,
+        receivedAt: p.arrivedAt,
       );
       // An alert no rule placed: a guess from past payments, or To sort.
       if (rule?.categoryId != categoryId && isFallbackCategory(categoryId)) {
@@ -8423,7 +8746,7 @@ class FinanceProvider extends ChangeNotifier {
       }
       // The new row must block later duplicates in this same batch, exactly
       // as it would have when the old code rescanned _transactions each time.
-      if (p.ref != null) refKeys.add('${p.type.name}|${p.ref}');
+      rememberRef(p.type, p.ref, p.date, false, bal);
       remember(
         p.type,
         p.amount,
@@ -8432,6 +8755,7 @@ class FinanceProvider extends ChangeNotifier {
         p.date,
         p.acctKey,
         p.balanceAfter,
+        arrived: p.arrivedAt,
       );
       added++;
     }
@@ -8443,6 +8767,8 @@ class FinanceProvider extends ChangeNotifier {
       // later rows included, and neither leg of a transfer counts.
       Map<int, List<Tx>>? byPaise;
       Map<int, List<Tx>> pairPool() => byPaise ??= _rowsByPaise(_transactions);
+      Map<String, int>? byRef;
+      Map<String, int> refPool() => byRef ??= _rowsByRef(_transactions);
       // Earlier rows that counted at once but are the other leg of a new
       // row's possible transfer: they go back to review with it.
       final backToReview = <String>{};
@@ -8481,6 +8807,7 @@ class FinanceProvider extends ChangeNotifier {
           t,
           keysWithConfirmed: keysWithConfirmed,
           pairPool: pairPool,
+          refPool: refPool,
         );
         // An ATM withdrawal waits for the review sheet's question until the
         // person has answered Move once.
@@ -8562,11 +8889,13 @@ class FinanceProvider extends ChangeNotifier {
     Tx row, {
     required Set<String> keysWithConfirmed,
     required Map<int, List<Tx>> Function() pairPool,
+    required Map<String, int> Function() refPool,
   }) =>
       _holdReasonOf(
         row,
         keysWithConfirmed: keysWithConfirmed,
         pairPool: pairPool,
+        refPool: refPool,
       ) ==
       null;
 
@@ -8574,7 +8903,10 @@ class FinanceProvider extends ChangeNotifier {
   /// instead of counting at once; null when nothing holds it. The first of
   /// these that is true:
   ///  * [HoldReason.spam]: suspected spam;
-  ///  * [HoldReason.duplicate]: another row of the same direction and
+  ///  * [HoldReason.duplicate]: another row of the same direction carries
+  ///    the same bank reference, at any amount and date (the import drops
+  ///    such an alert only within [kRefDuplicateWindow]); or another row of
+  ///    the same direction and
   ///    amount, to the paisa, within a day, on the same account key, or
   ///    with no account key on either row. Both copies in one batch stay
   ///    pending. Two rows that both carry a bank reference
@@ -8595,16 +8927,21 @@ class FinanceProvider extends ChangeNotifier {
   /// A possible duplicate or transfer leg comes before the three reasons
   /// the review sheet confirms a whole group for, so "Confirm N" never
   /// takes one. The category itself does not matter otherwise: a guessed
-  /// or To sort row counts like a rule's. [pairPool] is built on first
-  /// use, once per pass.
+  /// or To sort row counts like a rule's. [pairPool] and [refPool]
+  /// ([_rowsByRef]) are built on first use, once per pass.
   HoldReason? _holdReasonOf(
     Tx row, {
     required Set<String> keysWithConfirmed,
     required Map<int, List<Tx>> Function() pairPool,
+    required Map<String, int> Function() refPool,
   }) {
     if (row.suspectedSpam) return HoldReason.spam;
     final key = row.acctKey;
     final ref = row.externalRef ?? '';
+    // The row itself is one of them.
+    if (ref.isNotEmpty && (refPool()['${row.type.name}|$ref'] ?? 0) > 1) {
+      return HoldReason.duplicate;
+    }
     var leg = false;
     for (final other in pairPool()[_inPaise(row.amount)] ?? const <Tx>[]) {
       if (other.id == row.id) continue;
@@ -8676,6 +9013,19 @@ class FinanceProvider extends ChangeNotifier {
   }
 
   static int _inPaise(double amount) => (amount * 100).round();
+
+  /// How many of [rows] carry each direction and bank reference, as
+  /// `'<type>|<ref>'`, for the reference check in [_holdReasonOf].
+  static Map<String, int> _rowsByRef(Iterable<Tx> rows) {
+    final map = <String, int>{};
+    for (final t in rows) {
+      final ref = t.externalRef;
+      if (ref == null || ref.isEmpty) continue;
+      final k = '${t.type.name}|$ref';
+      map[k] = (map[k] ?? 0) + 1;
+    }
+    return map;
+  }
 
   /// [rows] bucketed by amount in paise, for the pair and duplicate checks
   /// in [_holdReasonOf]. A split payment stands once, as its anchor at the
@@ -8757,12 +9107,14 @@ class FinanceProvider extends ChangeNotifier {
       placed++;
     }
     Map<int, List<Tx>>? byPaise;
+    Map<String, int>? byRef;
     final sure = [
       for (final i in waiting)
         if (_isSureImport(
           _transactions[i],
           keysWithConfirmed: keysWithConfirmed,
           pairPool: () => byPaise ??= _rowsByPaise(_transactions),
+          refPool: () => byRef ??= _rowsByRef(_transactions),
         ))
           i,
     ];
@@ -8843,6 +9195,7 @@ class FinanceProvider extends ChangeNotifier {
     _d = _Derived();
     final keysWithConfirmed = _keysWithConfirmedRows();
     Map<int, List<Tx>>? byPaise;
+    Map<String, int>? byRef;
     final sure = [
       for (final i in waiting)
         if (!isAtmCandidate(_transactions[i]) &&
@@ -8850,6 +9203,7 @@ class FinanceProvider extends ChangeNotifier {
               _transactions[i],
               keysWithConfirmed: keysWithConfirmed,
               pairPool: () => byPaise ??= _rowsByPaise(_transactions),
+              refPool: () => byRef ??= _rowsByRef(_transactions),
             ))
           i,
     ];
@@ -9273,6 +9627,8 @@ class FinanceProvider extends ChangeNotifier {
     // 'tagNames' (tags saved with no payments).
     // v34: rules may carry 'payee' and 'tags'; 'savedFilters'.
     // v35: card rewards may carry 'wholeHundreds'.
+    // v36: SMS transactions may carry 'receivedMs' (when the alert reached
+    // the phone, epoch milliseconds).
     'version': _backupVersion,
     'transactions': [for (final t in _transactions) _backupJsonOf(t)],
     'discardedImports': _discardedImports.toList(),
@@ -9324,7 +9680,7 @@ class FinanceProvider extends ChangeNotifier {
 
   /// The backup format [exportData] writes; see the history beside its
   /// 'version' entry. [importData] refuses a file from a newer format.
-  static const int _backupVersion = 35;
+  static const int _backupVersion = 36;
 
   /// Where in decoded JSON [node] the first number that is not finite sits,
   /// as `.accounts[2].manualBalance`, or null when every number is finite.
@@ -10252,8 +10608,14 @@ class FinanceProvider extends ChangeNotifier {
     _clearOrphanPairs();
     final reminders = _unmarkRemindersPaidBy(removed.map((t) => t.id));
     final discards = _rememberDiscarded(removed);
+    final accounts = _dropManualKeys(removed);
     notifyListeners();
-    await _persist(tx: true, reminders: reminders, discards: discards);
+    await _persist(
+      tx: true,
+      reminders: reminders,
+      discards: discards,
+      accounts: accounts,
+    );
     return removed;
   }
 }

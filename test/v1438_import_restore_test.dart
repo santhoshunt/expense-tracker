@@ -201,7 +201,7 @@ void main() {
         expect(json, isNot(contains('QUILLFERN')));
         expect(json, isNot(contains('XX3141')));
         final data = jsonDecode(json) as Map<String, dynamic>;
-        expect(data['version'], 35);
+        expect(data['version'], 36);
         expect(data['discardedImports'], hasLength(1));
 
         SharedPreferences.setMockInitialValues({});
@@ -309,7 +309,7 @@ void main() {
         csv.split('\r\n').first,
         endsWith(
           ',acctKind,smsAt,splitId,guessed,noCashback,smsMerchant,'
-          'rewardGroup,rewardPickedAt',
+          'rewardGroup,rewardPickedAt,receivedMs',
         ),
       );
       final (txs, kinds) = BackupService.csvImportOf(csv);
@@ -534,7 +534,7 @@ void main() {
       expect(await p.addSavedTag('Diwali', null), isTrue);
       final data =
           jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
-      expect(data['version'], 35);
+      expect(data['version'], 36);
 
       SharedPreferences.setMockInitialValues({});
       final phone = await fresh();
@@ -759,7 +759,7 @@ void main() {
       await p.saveFilter(trip('flt_1_0', 'Hill trip'));
       final data =
           jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
-      expect(data['version'], 35);
+      expect(data['version'], 36);
       expect(data['savedFilters'], [trip('flt_1_0', 'Hill trip').toJson()]);
 
       SharedPreferences.setMockInitialValues({});

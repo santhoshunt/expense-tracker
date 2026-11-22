@@ -31,6 +31,7 @@ import '../services/weekly_digest.dart';
 import '../services/update_downloader.dart';
 import '../services/update_installer.dart';
 import '../services/update_service.dart';
+import '../utils/dates.dart' show addCalendarDays;
 import '../utils/format.dart';
 import '../utils/haptics.dart';
 import '../widgets/editor_sheet.dart';
@@ -143,7 +144,7 @@ Future<({Duration? lookback, DateTimeRange? range})?> askImportRange(
                       initialDateRange:
                           range ??
                           DateTimeRange(
-                            start: now.subtract(const Duration(days: 30)),
+                            start: addCalendarDays(now, -30),
                             end: now,
                           ),
                     );
@@ -984,13 +985,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   /// An import's toast. When the import moved ATM withdrawals to Cash
   /// ([FinanceProvider.takeAtmMoves]) it says how many and offers Undo,
-  /// which moves them back.
+  /// which moves them back. It shows over a sheet left open on top
+  /// ([_visibleMessenger]).
   void _importToast(
-    ScaffoldMessengerState messenger,
+    ScaffoldMessengerState home,
     FinanceProvider finance,
     String message, {
     required AppToastTone tone,
   }) {
+    final messenger = _visibleMessenger(home);
     final moves = finance.takeAtmMoves();
     if (moves.isEmpty) {
       showAppToastOn(messenger, message, tone: tone, icon: Icons.sms_outlined);
@@ -1009,6 +1012,35 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       icon: Icons.local_atm,
       tone: tone,
     );
+  }
+
+  /// Where an import's result toast shows: [home], Home's messenger, unless
+  /// a sheet or dialog is open on top. Home's toast draws under it, so the
+  /// user would not see it; the route's own messenger ([ToastHost], the
+  /// review sheet's) draws on top instead. A page on top shares Home's
+  /// messenger and shows the toast already.
+  ScaffoldMessengerState _visibleMessenger(ScaffoldMessengerState home) {
+    if (!mounted) return home;
+    // popUntil stopping at once reads the top route without popping.
+    Route<dynamic>? top;
+    Navigator.of(context).popUntil((r) {
+      top = r;
+      return true;
+    });
+    final route = top;
+    if (route is! PopupRoute) return home;
+    ScaffoldMessengerState? found;
+    void visit(Element e) {
+      if (found != null) return;
+      if (e is StatefulElement && e.state is ScaffoldMessengerState) {
+        found = e.state as ScaffoldMessengerState;
+        return;
+      }
+      e.visitChildren(visit);
+    }
+
+    route.subtreeContext?.visitChildElements(visit);
+    return found ?? home;
   }
 
   /// Records the expenses Add it for me reminders owe up to today, with a
@@ -1150,7 +1182,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       debugPrint('Auto-import failed: $e');
       if (mounted) {
         showAppToastOn(
-          messenger,
+          _visibleMessenger(messenger),
           'Auto-import failed. It will retry on the next launch.',
           tone: AppToastTone.error,
         );
@@ -1185,7 +1217,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           if (mounted) await _showBlockedHelp();
         } else {
           showAppToastOn(
-            messenger,
+            _visibleMessenger(messenger),
             'SMS permission denied. Nothing imported.',
             tone: AppToastTone.error,
           );
@@ -1224,7 +1256,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       debugPrint('SMS import failed: $e');
       if (mounted) {
         showAppToastOn(
-          messenger,
+          _visibleMessenger(messenger),
           'Import failed. The app could not read the SMS inbox.',
           tone: AppToastTone.error,
         );

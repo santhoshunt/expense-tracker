@@ -11,15 +11,50 @@ int daysInMonth(int year, int month) => DateTime(year, month + 1, 0).day;
 /// span the data has not reached yet.
 const int kMinDaysOfData = 14;
 
+/// Whole calendar days from [from]'s date to [to]'s date, ignoring the clock
+/// time of both; negative when [to] is earlier.
+///
+/// Both dates are rebuilt at UTC midnight before subtracting. Two local
+/// midnights can be 23 or 25 hours apart across a daylight-saving change,
+/// and `.inDays` on 23 hours gives 0; UTC days are always 24 hours long.
+int calendarDaysBetween(DateTime from, DateTime to) => DateTime.utc(
+  to.year,
+  to.month,
+  to.day,
+).difference(DateTime.utc(from.year, from.month, from.day)).inDays;
+
+/// The same clock time [days] calendar days after [date] (before it when
+/// [days] is negative), keeping [date]'s `isUtc`.
+///
+/// Adding `Duration(days: n)` adds n times 24 hours, which lands an hour off
+/// across a daylight-saving change; moving the day field lets the calendar
+/// handle month ends and clock changes.
+DateTime addCalendarDays(DateTime date, int days) => date.isUtc
+    ? DateTime.utc(
+        date.year,
+        date.month,
+        date.day + days,
+        date.hour,
+        date.minute,
+        date.second,
+        date.millisecond,
+        date.microsecond,
+      )
+    : DateTime(
+        date.year,
+        date.month,
+        date.day + days,
+        date.hour,
+        date.minute,
+        date.second,
+        date.millisecond,
+        date.microsecond,
+      );
+
 /// Whole days from [start] up to [now], counting both ends (a row dated
 /// today covers 1 day).
 int daysCovered(DateTime start, DateTime now) =>
-    DateTime(
-      now.year,
-      now.month,
-      now.day,
-    ).difference(DateTime(start.year, start.month, start.day)).inDays +
-    1;
+    calendarDaysBetween(start, now) + 1;
 
 /// `yyyy-MM` — the month bucket used by reminder dedup markers and by
 /// "paid this month" bookkeeping. Sorts correctly as a string.

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/transaction.dart';
+import '../utils/dates.dart';
 import 'sms_parser.dart';
 
 /// Whether bank alerts are still importing, per bank: alerts that looked
@@ -363,13 +364,11 @@ List<BankSilence> detectSilentBanks(
     }.toList()..sort();
     final gaps = [
       for (var i = 1; i < days.length; i++)
-        days[i].difference(days[i - 1]).inDays,
+        calendarDaysBetween(days[i - 1], days[i]),
     ]..sort();
     if (gaps.isEmpty) continue;
     final median = gaps[gaps.length ~/ 2] < 1 ? 1 : gaps[gaps.length ~/ 2];
-    final quiet = today
-        .difference(DateTime(last.year, last.month, last.day))
-        .inDays;
+    final quiet = calendarDaysBetween(last, today);
     final threshold = median * 3 < 10 ? 10 : median * 3;
     if (quiet <= threshold || quiet > kSilenceGiveUpDays) continue;
     out.add(BankSilence(bank: e.key, lastAlert: last, usualGapDays: median));
