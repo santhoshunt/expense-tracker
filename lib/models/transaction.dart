@@ -1127,13 +1127,26 @@ class ClassifierRule {
   final String pattern;
   final String categoryId;
 
+  /// Paid to ([Tx.payee]) the rule fills on a matching row that has none,
+  /// as [normalizePayee] stores it. Empty: the rule sets no Paid to.
+  final String payee;
+
+  /// Tags the rule adds to a matching row, as [normalizeTags] stores them.
+  /// Empty: the rule adds none.
+  final List<String> tags;
+
   const ClassifierRule({
     required this.id,
     required this.pattern,
     required this.categoryId,
+    this.payee = '',
+    this.tags = const [],
   });
 
   bool get isSpamRule => categoryId == kSpamCategoryId;
+
+  /// Whether the rule sets Paid to or tags on top of the category.
+  bool get setsMore => payee.isNotEmpty || tags.isNotEmpty;
 
   /// Seeded from the built-in keyword defaults rather than created by the
   /// user. Built-ins categorise but never override the spam heuristic.
@@ -1152,23 +1165,42 @@ class ClassifierRule {
   /// per-alternative boundary rules.
   bool matches(String text) => patterns.any((p) => patternMatchesText(p, text));
 
-  ClassifierRule copyWith({String? pattern, String? categoryId}) =>
-      ClassifierRule(
-        id: id,
-        pattern: pattern ?? this.pattern,
-        categoryId: categoryId ?? this.categoryId,
-      );
+  /// An empty [payee] or empty [tags] clears that field; null keeps it.
+  ClassifierRule copyWith({
+    String? pattern,
+    String? categoryId,
+    String? payee,
+    List<String>? tags,
+  }) => ClassifierRule(
+    id: id,
+    pattern: pattern ?? this.pattern,
+    categoryId: categoryId ?? this.categoryId,
+    payee: payee == null ? this.payee : normalizePayee(payee),
+    tags: tags == null ? this.tags : normalizeTags(tags),
+  );
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'pattern': pattern,
     'categoryId': categoryId,
+    if (payee.isNotEmpty) 'payee': payee,
+    if (tags.isNotEmpty) 'tags': tags,
   };
 
+  /// A missing or wrongly typed `payee` or `tags` reads as empty, so a rule
+  /// saved before the fields existed, or a hand-edited backup, still loads.
   factory ClassifierRule.fromJson(Map<String, dynamic> json) => ClassifierRule(
     id: json['id'] as String,
     pattern: json['pattern'] as String,
     categoryId: json['categoryId'] as String,
+    payee: switch (json['payee']) {
+      final String p => normalizePayee(p),
+      _ => '',
+    },
+    tags: switch (json['tags']) {
+      final List<dynamic> list => normalizeTags(list.whereType<String>()),
+      _ => const [],
+    },
   );
 }
 

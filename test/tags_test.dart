@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart' show Color, StringCharacters;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/saved_filter.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/services/backup_service.dart';
@@ -212,6 +213,116 @@ void main() {
       expect(p.allTags.single.count, 2);
     });
 
+    test('a rename and a delete reach the tags rules add, and restoreRules '
+        'puts them back', () async {
+      final (p, a, _) = await seeded();
+      await p.addRule('quillfern', 'food', tags: ['goa trip', 'Work']);
+      await p.addRule('mapleworth', 'shopping', tags: ['Holiday']);
+      List<String> ruleTags(FinanceProvider f, String pattern) =>
+          f.rules.firstWhere((r) => r.pattern == pattern).tags;
+      Future<FinanceProvider> stored() async {
+        final f = FinanceProvider();
+        await f.load();
+        return f;
+      }
+
+      final rulesBefore = p.rules;
+      final rows = await p.renameTag('Goa trip', 'Holiday');
+      expect(ruleTags(p, 'quillfern'), ['Holiday', 'Work']);
+      expect(ruleTags(p, 'mapleworth'), ['Holiday']);
+      expect(ruleTags(await stored(), 'quillfern'), ['Holiday', 'Work']);
+
+      // Undo, as the tag editor does it: the rules, then the rows.
+      await p.restoreRules(rulesBefore, reapply: false);
+      await p.restoreEditedTransactions(rows);
+      expect(ruleTags(p, 'quillfern'), ['goa trip', 'Work']);
+      expect(p.transactions.firstWhere((t) => t.id == a).tags, ['Goa trip']);
+
+      // A tag only a rule carries: no row changes, the rule still does,
+      // with one notification and a write.
+      var notified = 0;
+      p.addListener(() => notified++);
+      expect(await p.deleteTag('WORK'), isEmpty);
+      expect(notified, 1);
+      expect(ruleTags(p, 'quillfern'), ['goa trip']);
+      expect(ruleTags(await stored(), 'quillfern'), ['goa trip']);
+
+      await p.deleteTag('Goa Trip');
+      expect(ruleTags(p, 'quillfern'), isEmpty);
+      expect(ruleTags(p, 'mapleworth'), ['Holiday'], reason: 'another tag');
+    });
+
+    // v2.3.0 review: a saved filter holds tags by key, so a rename or a
+    // delete has to reach it, or it keeps filtering on a tag that is gone.
+    test('a rename and a delete reach the tags saved filters hold, and '
+        'restoreSavedFilters puts them back', () async {
+      final (p, _, _) = await seeded();
+      await p.saveFilter(
+        const SavedFilter(id: 'flt_1_0', name: 'Trip', tags: ['goa trip']),
+      );
+      await p.saveFilter(
+        const SavedFilter(
+          id: 'flt_2_0',
+          name: 'Trip and more',
+          tags: ['goa trip', 'holiday', 'work'],
+        ),
+      );
+      await p.saveFilter(
+        const SavedFilter(id: 'flt_3_0', name: 'Food', categories: ['food']),
+      );
+      List<String> tagsOf(FinanceProvider f, String id) =>
+          f.savedFilters.firstWhere((x) => x.id == id).tags;
+      Future<FinanceProvider> stored() async {
+        final f = FinanceProvider();
+        await f.load();
+        return f;
+      }
+
+      // A new spelling of the same tag is the same key: nothing to rewrite.
+      final untouched = p.savedFilters;
+      await p.renameTag('Goa trip', 'GOA trip');
+      expect(p.savedFilters, untouched);
+
+      final filtersBefore = p.savedFilters;
+      final rows = await p.renameTag('GOA trip', 'Holiday');
+      expect(tagsOf(p, 'flt_1_0'), ['holiday']);
+      expect(tagsOf(p, 'flt_2_0'), ['holiday', 'work'], reason: 'once');
+      // A filter with no such tag is the same object as before.
+      expect(identical(p.savedFilters.last, filtersBefore.last), isTrue);
+      expect(tagsOf(await stored(), 'flt_1_0'), ['holiday']);
+
+      // Undo, as the tag editor does it: the rows, then the filters.
+      await p.restoreEditedTransactions(rows);
+      await p.restoreSavedFilters(filtersBefore);
+      expect(tagsOf(p, 'flt_1_0'), ['goa trip']);
+      expect(tagsOf(p, 'flt_2_0'), ['goa trip', 'holiday', 'work']);
+      expect(tagsOf(await stored(), 'flt_2_0'), [
+        'goa trip',
+        'holiday',
+        'work',
+      ]);
+
+      // A restore with nothing to put back changes nothing.
+      var notified = 0;
+      p.addListener(() => notified++);
+      await p.restoreSavedFilters(p.savedFilters);
+      expect(notified, 0);
+
+      // A tag only a filter holds: no row changes, the filter still does,
+      // with one notification and a write.
+      final beforeDelete = p.savedFilters;
+      expect(await p.deleteTag('WORK'), isEmpty);
+      expect(notified, 1);
+      expect(tagsOf(p, 'flt_2_0'), ['goa trip', 'holiday']);
+      expect(tagsOf(await stored(), 'flt_2_0'), ['goa trip', 'holiday']);
+      await p.restoreSavedFilters(beforeDelete);
+      expect(tagsOf(p, 'flt_2_0'), ['goa trip', 'holiday', 'work']);
+
+      await p.deleteTag('Goa Trip');
+      expect(tagsOf(p, 'flt_1_0'), isEmpty);
+      expect(tagsOf(p, 'flt_2_0'), ['holiday', 'work'], reason: 'the others');
+    });
+
     test('tags on pending imports stay out until confirmed', () async {
       final p = FinanceProvider();
       await p.load();
@@ -309,7 +420,7 @@ void main() {
       final p = await tagged();
       await p.setTagColor('Work', pink);
       final data = p.exportData();
-      expect(data['version'], 33);
+      expect(data['version'], 34);
       final fresh = FinanceProvider();
       await fresh.load();
       await fresh.importData(data, replace: true);

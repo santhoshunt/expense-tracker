@@ -472,6 +472,25 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/home_widget_owed_info"/>
         </receiver>
+        <!-- Cashbacks widget (HomeWidgets.kt): draws from the shared
+             snapshot. Its list scrolls, so the launcher asks
+             CashbacksWidgetService for the rows; BIND_REMOTEVIEWS lets only
+             the system bind to it. -->
+        <receiver
+            android:name=".CashbacksWidgetProvider"
+            android:exported="true"
+            android:label="@string/home_widget_cashbacks_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/home_widget_cashbacks_info"/>
+        </receiver>
+        <service
+            android:name=".CashbacksWidgetService"
+            android:exported="false"
+            android:permission="android.permission.BIND_REMOTEVIEWS"/>
         <!-- Keep on a Payments to check widget row, queued for
              ImportChecks.applyKept; not exported, so no other app can
              confirm a guess. -->

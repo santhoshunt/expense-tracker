@@ -260,26 +260,64 @@ void main() {
     );
   });
 
-  testWidgets('a review row reads merchant over amount · category, under '
-      'its day', (tester) async {
+  // v2.3.0: the rows sit in groups, not under day labels, so each row's
+  // second line carries its own day and time, straight after the amount:
+  // a cut line then loses the category, which the icon shows.
+  testWidgets('a review row reads merchant over amount · day and time · '
+      'category', (tester) async {
     final p = await queue();
+    // Midnight is "no time known": that row shows its day alone.
+    await p.restoreTransactions([
+      Tx(
+        id: 'q-late',
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 99,
+        note: 'Demo Diner',
+        date: DateTime(2026, 10, 12),
+        sender: 'VM-DEMOBK',
+        pending: true,
+      ),
+    ]);
     await tester.pumpWidget(sheetHost(p, await settings()));
     await openSheet(tester);
 
     final title = find.text('Tasty Corner');
     expect(title, findsOneWidget);
-    final line = find.text('−${fmtMoney(349)} · ${categoryById('food').label}');
+    final category = categoryById('food').label;
+    // Each part's words are held together and the dot holds to the part
+    // before it (joinFacts): the line breaks only after a dot, never
+    // inside the day and time.
+    final when = '${fmtDayHeading(food.date)} ${fmtTime(food.date)}';
+    final line = find.text(joinFacts(['−${fmtMoney(349)}', when, category]));
     expect(line, findsOneWidget);
-    // Time and sender stay in the edit sheet (the suggestion card above
-    // names its sides' senders, not the rows).
+    final shown = tester.widget<Text>(line).textSpan!.toPlainText();
+    expect(shown, contains(when.replaceAll(' ', '\u{00A0}')));
+    expect(shown, contains('\u{00A0}· '));
+    expect(shown, isNot(contains(' ·')));
+    expect(
+      find.text(
+        joinFacts([
+          '−${fmtMoney(99)}',
+          fmtDayHeading(DateTime(2026, 10, 12)),
+          category,
+        ]),
+      ),
+      findsOneWidget,
+    );
+    // The sender stays in the edit sheet (the suggestion card above names
+    // its sides' senders, not the rows).
     Finder inRows(Finder f) =>
         find.descendant(of: find.byType(ListTile), matching: f);
     expect(inRows(find.textContaining('VM-DEMOBK')), findsNothing);
-    expect(inRows(find.textContaining('12:02 PM')), findsNothing);
-    // The day label sits over the row.
-    final day = find.text(fmtDayHeading(food.date));
-    expect(day, findsOneWidget);
-    expect(tester.getTopLeft(day).dy, lessThan(tester.getTopLeft(title).dy));
+    // No day label of its own over the rows: their group's name is.
+    expect(find.text(fmtDayHeading(food.date)), findsNothing);
+    final heading = find.text('No account number · 2');
+    expect(heading, findsOneWidget);
+    expect(
+      tester.getTopLeft(heading).dy,
+      lessThan(tester.getTopLeft(title).dy),
+    );
     // The category's tile leads the row.
     expect(
       find.ancestor(of: title, matching: find.byType(ListTile)),
@@ -425,10 +463,21 @@ void main() {
     final other = categoryById('other_expense').label;
     expect(find.textContaining('· Payment'), findsNothing);
     // Both legs are titled by their category ("Other" either way), and
-    // line two is the amount alone.
+    // line two is the amount, then the day and time, with no category.
     expect(find.text(other), findsNWidgets(2));
-    expect(find.text('−${fmtMoney(5000)}'), findsOneWidget);
-    expect(find.text('+${fmtMoney(5000)}'), findsOneWidget);
+    final day = fmtDayHeading(outLeg.date);
+    expect(
+      find.text(
+        joinFacts(['−${fmtMoney(5000)}', '$day ${fmtTime(outLeg.date)}']),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.text(
+        joinFacts(['+${fmtMoney(5000)}', '$day ${fmtTime(inLeg.date)}']),
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('Not a transfer hides the suggestion, and Undo brings it back', (
@@ -478,11 +527,17 @@ void main() {
       return (span.children!.first as TextSpan).style?.color;
     }
 
-    // The spam row ends its line with its day: the fold has no day labels.
+    // The spam row carries its day, with no time: the fold has no day
+    // labels. In the other rows' order, the day before the category, so a
+    // cut line loses the category and not the day.
     final spamLine = find.descendant(
       of: find.ancestor(of: fold, matching: find.byType(Card)).first,
-      matching: find.textContaining(
-        ' · ${fmtDateCompact(DateUtils.dateOnly(spam.date))}',
+      matching: find.text(
+        joinFacts([
+          '+${fmtMoney(10000)}',
+          fmtDateCompact(DateUtils.dateOnly(spam.date)),
+          categoryById('other_income').label,
+        ]),
       ),
     );
     expect(spamLine, findsOneWidget);

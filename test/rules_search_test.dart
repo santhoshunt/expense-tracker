@@ -49,4 +49,32 @@ void main() {
     // not the Other-income fallback categoryById would return.
     expect(ruleMatchesQuery(spam, 'other'), isFalse);
   });
+
+  test('matches the Paid to and the tags a rule sets', () {
+    const extras = ClassifierRule(
+      id: 'r4',
+      pattern: 'quillfern',
+      categoryId: 'food',
+      payee: 'Maple Teas',
+      tags: ['Office', 'Goa trip'],
+    );
+    expect(ruleMatchesQuery(extras, 'maple'), isTrue);
+    expect(ruleMatchesQuery(extras, 'office'), isTrue);
+    expect(ruleMatchesQuery(extras, 'goa t'), isTrue);
+    expect(ruleMatchesQuery(extras, 'reimbursable'), isFalse);
+    // A rule that sets neither is found by its words and category only.
+    expect(ruleMatchesQuery(food, 'maple'), isFalse);
+  });
+
+  test('what a rule also sets, in words', () {
+    expect(ruleExtrasLabel('', const []), 'Nothing');
+    expect(ruleExtrasLabel('Maple Teas', const []), 'Paid to');
+    expect(ruleExtrasLabel('', const ['Office']), '1 tag');
+    expect(ruleExtrasLabel('', const ['Office', 'Tea']), '2 tags');
+    expect(ruleExtrasLabel('Maple Teas', const ['Office']), 'Paid to, 1 tag');
+    expect(
+      ruleExtrasLabel('Maple Teas', const ['Office', 'Tea', 'Team']),
+      'Paid to, 3 tags',
+    );
+  });
 }

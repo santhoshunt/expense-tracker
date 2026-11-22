@@ -12,6 +12,7 @@ import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/add_transaction_sheet.dart';
 import 'package:expense_tracker/services/notification_source.dart';
+import 'package:expense_tracker/services/review_queue.dart';
 import 'package:expense_tracker/services/sms_import_service.dart';
 import 'package:expense_tracker/services/sms_parser.dart';
 import 'package:expense_tracker/services/sms_source.dart';
@@ -38,7 +39,7 @@ void main() {
     TxType type = TxType.expense,
     double amount = 250,
     required DateTime date,
-    required String ref,
+    required String? ref,
     String categoryId = 'food',
     String rawBody = 'Rs.250 debited at SWIGGY',
     String? acctKey = bank,
@@ -374,21 +375,37 @@ void main() {
       await p.addImported([out(5000, DateTime(2026, 7, 5, 10), 'OUT')]);
       expect(byRef(p, 'OUT').pending, isFalse);
     });
+
+    // v2.3.0 review: the re-test after a confirm reads the confirmed leg
+    // too, so the leg still waiting does not count behind the user's back.
+    test('confirming one leg leaves the other waiting', () async {
+      final p = await twoAccounts();
+      await p.addImported([
+        out(5000, DateTime(2026, 7, 5, 10), 'OUT'),
+        inn(5000, DateTime(2026, 7, 5, 10, 2), 'IN'),
+      ]);
+      await p.confirmTransaction(byRef(p, 'OUT').id);
+      expect(p.takeReleased(), isEmpty);
+      expect(byRef(p, 'OUT').pending, isFalse);
+      expect(byRef(p, 'IN').pending, isTrue);
+    });
   });
 
   group('possible duplicates', () {
+    // v2.3.0: two different bank references are two payments, so a copy
+    // holds a row only when one of the two alerts carries none.
     test('two copies in one batch both wait', () async {
       final p = await withHistory();
       await p.addImported([
         alert(date: DateTime(2026, 7, 5, 13), ref: 'A'),
         alert(
           date: DateTime(2026, 7, 5, 20),
-          ref: 'B',
-          rawBody: 'Rs.250 debited at SWIGGY Ref B',
+          ref: null,
+          rawBody: 'Rs.250 debited at SWIGGY again',
         ),
       ]);
       expect(byRef(p, 'A').pending, isTrue);
-      expect(byRef(p, 'B').pending, isTrue);
+      expect(p.pendingCount, 2);
       expect(p.lastImportCounted, 0);
     });
 
@@ -399,17 +416,17 @@ void main() {
       await p.addImported([
         alert(
           date: DateTime(2026, 7, 6, 9),
-          ref: 'B',
-          rawBody: 'Rs.250 debited at SWIGGY Ref B',
+          ref: null,
+          rawBody: 'Rs.250 debited at SWIGGY again',
         ),
       ]);
-      expect(byRef(p, 'B').pending, isTrue);
+      expect(p.pendingTransactions.single.externalRef, isNull);
     });
 
     test('a copy with no account holds it too', () async {
       final p = await withHistory();
       await p.addImported([
-        alert(date: DateTime(2026, 7, 5, 13), ref: 'A', acctKey: null),
+        alert(date: DateTime(2026, 7, 5, 13), ref: null, acctKey: null),
       ]);
       await p.addImported([
         alert(
@@ -419,6 +436,105 @@ void main() {
         ),
       ]);
       expect(byRef(p, 'B').pending, isTrue);
+    });
+
+    test(
+      'two different bank references are two payments: both count',
+      () async {
+        final p = await withHistory();
+        await p.addImported([
+          alert(date: DateTime(2026, 7, 5, 13), ref: 'A'),
+          alert(
+            date: DateTime(2026, 7, 5, 20),
+            ref: 'B',
+            rawBody: 'Rs.250 debited at SWIGGY Ref B',
+          ),
+        ]);
+        expect(byRef(p, 'A').pending, isFalse);
+        expect(byRef(p, 'B').pending, isFalse);
+        expect(p.lastImportCounted, 2);
+
+        // A third alert with no reference could be either one again: it waits.
+        await p.addImported([
+          alert(
+            date: DateTime(2026, 7, 6, 8),
+            ref: null,
+            rawBody: 'Rs.250 debited at SWIGGY again',
+          ),
+        ]);
+        expect(p.pendingTransactions.single.externalRef, isNull);
+        expect(p.reviewQueue(const {}).held.keys, [HoldReason.duplicate]);
+      },
+    );
+
+    // v2.3.0 review: a notification copy whose text was cut inside the
+    // reference carries a shorter one, and is still the same payment.
+    test('a reference that starts with the other is a copy cut short: both '
+        'wait', () async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(date: DateTime(2026, 7, 5, 13), ref: 'TXN48213'),
+        alert(
+          date: DateTime(2026, 7, 5, 20),
+          ref: 'TXN48',
+          rawBody: 'Rs.250 debited at SWIGGY Ref TXN48',
+        ),
+      ]);
+      expect(byRef(p, 'TXN48213').pending, isTrue);
+      expect(byRef(p, 'TXN48').pending, isTrue);
+      expect(p.lastImportCounted, 0);
+      expect(p.reviewQueue(const {}).held.keys, [HoldReason.duplicate]);
+
+      // The longer one arriving second waits as well.
+      SharedPreferences.setMockInitialValues({});
+      final q = await withHistory();
+      await q.addImported([
+        alert(date: DateTime(2026, 7, 5, 13), ref: 'TXN48'),
+      ]);
+      expect(byRef(q, 'TXN48').pending, isFalse);
+      await q.addImported([
+        alert(
+          date: DateTime(2026, 7, 5, 20),
+          ref: 'TXN48213',
+          rawBody: 'Rs.250 debited at SWIGGY Ref TXN48213',
+        ),
+      ]);
+      expect(byRef(q, 'TXN48213').pending, isTrue);
+    });
+
+    test('two references alike only at the start are two payments: both '
+        'count', () async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(date: DateTime(2026, 7, 5, 13), ref: 'TXN48213'),
+        alert(
+          date: DateTime(2026, 7, 5, 20),
+          ref: 'TXN48377',
+          rawBody: 'Rs.250 debited at SWIGGY Ref TXN48377',
+        ),
+      ]);
+      expect(byRef(p, 'TXN48213').pending, isFalse);
+      expect(byRef(p, 'TXN48377').pending, isFalse);
+      expect(p.lastImportCounted, 2);
+    });
+
+    // v2.3.0 review: the re-test after a confirm reads the confirmed copy
+    // too, so the copy still waiting does not count behind the user's back.
+    test('confirming one of two possible duplicates leaves the other '
+        'waiting', () async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(date: DateTime(2026, 7, 5, 13), ref: 'A'),
+        alert(
+          date: DateTime(2026, 7, 5, 20),
+          ref: null,
+          rawBody: 'Rs.250 debited at SWIGGY again',
+        ),
+      ]);
+      await p.confirmTransaction(byRef(p, 'A').id);
+      expect(p.takeReleased(), isEmpty);
+      expect(p.pendingTransactions.single.externalRef, isNull);
+      expect(p.reviewQueue(const {}).held.keys, [HoldReason.duplicate]);
     });
 
     test('the same amount on another account, or a day and more apart, '
@@ -440,6 +556,427 @@ void main() {
       expect(byRef(p, 'A').pending, isTrue); // a new account
       expect(byRef(p, 'B').pending, isFalse);
       expect(byRef(p, 'C').pending, isFalse);
+    });
+  });
+
+  // v2.3.0: the review queue says why each listed row waits.
+  group('hold reasons', () {
+    /// The bank references waiting under each reason.
+    Map<HoldReason, List<String?>> held(
+      FinanceProvider p, [
+      Set<String> dismissed = const {},
+    ]) => {
+      for (final e in p.reviewQueue(dismissed).held.entries)
+        e.key: [for (final t in e.value) t.externalRef],
+    };
+
+    test('no account number, a new account and a transfer category', () async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(date: DateTime(2026, 7, 5, 13), ref: 'NONE', acctKey: null),
+        alert(
+          amount: 300,
+          date: DateTime(2026, 7, 6, 13),
+          ref: 'NEW1',
+          rawBody: 'Rs.300 debited at SWIGGY',
+          acctKey: 'ICICI:9999',
+        ),
+        alert(
+          amount: 310,
+          date: DateTime(2026, 7, 7, 13),
+          ref: 'NEW2',
+          rawBody: 'Rs.310 debited at SWIGGY',
+          acctKey: 'ICICI:9999',
+        ),
+        alert(
+          amount: 320,
+          date: DateTime(2026, 7, 8, 13),
+          ref: 'MOVE',
+          categoryId: 'transfer_out',
+          rawBody: 'Rs.320 debited at PEBBLE MART',
+        ),
+        alert(
+          amount: 330,
+          date: DateTime(2026, 7, 9, 13),
+          ref: 'SPAM',
+          rawBody: 'Rs.330 debited at SWIGGY',
+          spamSuspect: true,
+        ),
+      ]);
+      // Newest first in each list; the spam suspect has its own list.
+      expect(held(p), {
+        HoldReason.noAccount: ['NONE'],
+        HoldReason.newAccount: ['NEW2', 'NEW1'],
+        HoldReason.transfer: ['MOVE'],
+      });
+      final q = p.reviewQueue(const {});
+      expect(q.spam.single.externalRef, 'SPAM');
+      expect(q.rows, hasLength(4));
+    });
+
+    // v2.3.0 review: a possible duplicate comes before the reasons whose
+    // groups have "Confirm N", so that button never confirms one.
+    test('the first reason wins: no account before a transfer category, a '
+        'possible duplicate before a new account, no account number and a '
+        'transfer category', () async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          date: DateTime(2026, 7, 5, 13),
+          ref: 'NONE',
+          categoryId: 'transfer_out',
+          rawBody: 'Rs.250 debited at PEBBLE MART',
+          acctKey: null,
+        ),
+        alert(
+          amount: 300,
+          date: DateTime(2026, 7, 6, 13),
+          ref: 'NEW1',
+          rawBody: 'Rs.300 debited at SWIGGY',
+          acctKey: 'ICICI:9999',
+        ),
+        alert(
+          amount: 300,
+          date: DateTime(2026, 7, 6, 19),
+          ref: null,
+          rawBody: 'Rs.300 debited at SWIGGY again',
+          acctKey: 'ICICI:9999',
+        ),
+        // No account number on one copy, a known account on the other.
+        alert(
+          amount: 410,
+          date: DateTime(2026, 7, 8, 13),
+          ref: 'BARE',
+          rawBody: 'Rs.410 debited at SWIGGY',
+          acctKey: null,
+        ),
+        alert(
+          amount: 410,
+          date: DateTime(2026, 7, 8, 15),
+          ref: null,
+          rawBody: 'Rs.410 debited at SWIGGY again',
+        ),
+        // Two copies of one transfer.
+        alert(
+          amount: 520,
+          date: DateTime(2026, 7, 9, 13),
+          ref: 'MOVE',
+          categoryId: 'transfer_out',
+          rawBody: 'Rs.520 debited at PEBBLE MART',
+        ),
+        alert(
+          amount: 520,
+          date: DateTime(2026, 7, 9, 15),
+          ref: null,
+          categoryId: 'transfer_out',
+          rawBody: 'Rs.520 debited at PEBBLE MART again',
+        ),
+      ]);
+      expect(held(p), {
+        HoldReason.noAccount: ['NONE'],
+        HoldReason.duplicate: [null, 'MOVE', null, 'BARE', null, 'NEW1'],
+      });
+    });
+
+    test('a possible transfer leg comes before a new account', () async {
+      final p = await withHistory();
+      await p.addRule('Acme Payroll', 'salary');
+      await p.addImported([
+        alert(
+          amount: 5000,
+          date: DateTime(2026, 7, 5, 10),
+          ref: 'OUT',
+          rawBody: 'Rs.5000 debited at SWIGGY',
+        ),
+        alert(
+          type: TxType.income,
+          amount: 5000,
+          date: DateTime(2026, 7, 5, 10, 2),
+          ref: 'IN',
+          categoryId: 'salary',
+          rawBody: 'Rs.5000 credited from ACME PAYROLL',
+          acctKey: savings,
+        ),
+      ]);
+      final offered = p.reviewQueue(const {});
+      expect(offered.pairs, hasLength(1));
+      // The incoming leg's account has no confirmed row, and the leg still
+      // sits with its partner, not under New account.
+      expect(held(p, {offered.pairs.single.key}), {
+        HoldReason.transferLeg: ['IN', 'OUT'],
+      });
+    });
+
+    test('a possible duplicate', () async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(date: DateTime(2026, 7, 5, 13), ref: 'A'),
+        alert(
+          date: DateTime(2026, 7, 5, 20),
+          ref: null,
+          rawBody: 'Rs.250 debited at SWIGGY again',
+        ),
+      ]);
+      expect(held(p), {
+        HoldReason.duplicate: [null, 'A'],
+      });
+    });
+
+    test('a refund that may pay back a purchase, once its suggestion is '
+        'dismissed', () async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          type: TxType.income,
+          amount: 200,
+          date: DateTime(2026, 7, 5, 13),
+          ref: 'BACK',
+          categoryId: 'other_income',
+          rawBody: 'Refund of Rs.200 credited to a/c XX1234',
+        ),
+      ]);
+      expect(byRef(p, 'BACK').pending, isTrue);
+      // The suggestion card shows the row, so the list does not.
+      final offered = p.reviewQueue(const {});
+      expect(offered.refunds.single.refund.externalRef, 'BACK');
+      expect(offered.held, isEmpty);
+      expect(held(p, {offered.refunds.single.key}), {
+        HoldReason.refund: ['BACK'],
+      });
+    });
+
+    test('a transfer leg, once its suggestion is dismissed', () async {
+      final p = await withHistory();
+      await p.addRule('Acme Payroll', 'salary');
+      await p.addImported([
+        alert(
+          type: TxType.income,
+          amount: 100,
+          date: DateTime(2026, 7, 1, 10),
+          ref: 'SEED2',
+          categoryId: 'salary',
+          rawBody: 'Rs.100 credited from ACME PAYROLL',
+          acctKey: savings,
+        ),
+      ]);
+      await p.confirmAllPending();
+      await p.addImported([
+        alert(
+          amount: 5000,
+          date: DateTime(2026, 7, 5, 10),
+          ref: 'OUT',
+          rawBody: 'Rs.5000 debited at SWIGGY',
+        ),
+        alert(
+          type: TxType.income,
+          amount: 5000,
+          date: DateTime(2026, 7, 5, 10, 2),
+          ref: 'IN',
+          categoryId: 'salary',
+          rawBody: 'Rs.5000 credited from ACME PAYROLL',
+          acctKey: savings,
+        ),
+      ]);
+      final offered = p.reviewQueue(const {});
+      expect(offered.pairs, hasLength(1));
+      expect(offered.held, isEmpty);
+      expect(held(p, {offered.pairs.single.key}), {
+        HoldReason.transferLeg: ['IN', 'OUT'],
+      });
+    });
+
+    test('a row sent back to review that nothing holds is "other"', () async {
+      final p = await withHistory();
+      await p.addImported([alert(date: DateTime(2026, 7, 5, 13), ref: 'A')]);
+      final counted = byRef(p, 'A');
+      expect(counted.pending, isFalse);
+      await p.restoreEditedTransactions([
+        counted.copyWith(pending: true, unseen: false),
+      ]);
+      expect(held(p), {
+        HoldReason.other: ['A'],
+      });
+    });
+  });
+
+  // v2.3.0: a confirm re-tests the rows still waiting.
+  group('the re-test after a confirm', () {
+    List<String?> refs(Iterable<Tx> rows) => [
+      for (final t in rows) t.externalRef,
+    ];
+
+    /// Two rows on a new account and one with no account, all waiting.
+    Future<FinanceProvider> waiting() async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(date: DateTime(2026, 7, 5, 13), ref: 'A', acctKey: 'ICICI:9999'),
+        alert(
+          amount: 300,
+          date: DateTime(2026, 7, 6, 13),
+          ref: 'B',
+          rawBody: 'Rs.300 debited at SWIGGY',
+          acctKey: 'ICICI:9999',
+        ),
+        alert(
+          amount: 350,
+          date: DateTime(2026, 7, 7, 13),
+          ref: 'C',
+          rawBody: 'Rs.350 debited at SWIGGY',
+          acctKey: null,
+        ),
+      ]);
+      expect(p.pendingCount, 3);
+      return p;
+    }
+
+    test('confirming an account\'s first row lets its other rows count, '
+        'marked new, and Undo puts them all back', () async {
+      final p = await waiting();
+      final a = byRef(p, 'A');
+      await p.confirmTransaction(a.id);
+      expect(byRef(p, 'A').pending, isFalse);
+      expect(byRef(p, 'A').unseen, isFalse);
+      final b = byRef(p, 'B');
+      expect(b.pending, isFalse);
+      expect(b.unseen, isTrue);
+      // No account number: still nothing to go on.
+      expect(byRef(p, 'C').pending, isTrue);
+
+      // The rows as they were, handed out once.
+      final released = p.takeReleased();
+      expect(refs(released), ['B']);
+      expect(released.single.pending, isTrue);
+      expect(p.takeReleased(), isEmpty);
+
+      await p.restoreEditedTransactions([a, ...released]);
+      expect(p.pendingCount, 3);
+      expect(byRef(p, 'B').unseen, isFalse);
+      expect(p.unseenCount, 0);
+
+      // Persisted both ways.
+      final again = await loaded();
+      expect(again.pendingCount, 3);
+    });
+
+    test('a confirm that frees nothing releases nothing', () async {
+      final p = await waiting();
+      await p.confirmTransaction(byRef(p, 'C').id);
+      expect(p.takeReleased(), isEmpty);
+      expect(byRef(p, 'A').pending, isTrue);
+      expect(byRef(p, 'B').pending, isTrue);
+    });
+
+    test('a later confirm drops the rows an earlier one released', () async {
+      final p = await waiting();
+      await p.confirmTransaction(byRef(p, 'A').id);
+      await p.confirmTransaction(byRef(p, 'C').id);
+      expect(p.takeReleased(), isEmpty);
+    });
+
+    test('a cash withdrawal and a spam suspect keep waiting', () async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          amount: 2000,
+          date: DateTime(2026, 7, 5, 13),
+          ref: 'CASH',
+          categoryId: 'other_expense',
+          rawBody: 'Rs.2000 withdrawn at ATM',
+        ),
+        alert(
+          amount: 300,
+          date: DateTime(2026, 7, 6, 13),
+          ref: 'SPAM',
+          rawBody: 'Rs.300 debited at SWIGGY',
+          spamSuspect: true,
+        ),
+        alert(
+          amount: 350,
+          date: DateTime(2026, 7, 7, 13),
+          ref: 'C',
+          rawBody: 'Rs.350 debited at SWIGGY',
+          acctKey: null,
+        ),
+      ]);
+      expect(p.isAtmCandidate(byRef(p, 'CASH')), isTrue);
+      expect(p.pendingCount, 3);
+      // Nothing but the review sheet's question holds the withdrawal.
+      expect(p.reviewQueue(const {}).atm.single.externalRef, 'CASH');
+
+      await p.confirmTransaction(byRef(p, 'C').id);
+      expect(p.takeReleased(), isEmpty);
+      expect(byRef(p, 'CASH').pending, isTrue);
+      expect(byRef(p, 'SPAM').pending, isTrue);
+    });
+
+    test(
+      'a row sent back to review counts again on the next confirm',
+      () async {
+        final p = await waiting();
+        await p.addImported([
+          alert(
+            amount: 410,
+            date: DateTime(2026, 7, 8, 13),
+            ref: 'D',
+            rawBody: 'Rs.410 debited at SWIGGY',
+          ),
+        ]);
+        final counted = byRef(p, 'D');
+        expect(counted.pending, isFalse);
+        await p.restoreEditedTransactions([
+          counted.copyWith(pending: true, unseen: false),
+        ]);
+        await p.confirmTransaction(byRef(p, 'C').id);
+        expect(refs(p.takeReleased()), ['D']);
+        expect(byRef(p, 'D').pending, isFalse);
+        expect(byRef(p, 'D').unseen, isTrue);
+      },
+    );
+
+    test('a saved edit that confirms a row re-tests too', () async {
+      final p = await waiting();
+      await p.updateTransaction(byRef(p, 'A').copyWith(pending: false));
+      expect(refs(p.takeReleased()), ['B']);
+      expect(byRef(p, 'B').pending, isFalse);
+
+      // An edit that confirms nothing leaves the waiting rows alone.
+      await p.updateTransaction(byRef(p, 'B').copyWith(note: 'lunch'));
+      expect(p.takeReleased(), isEmpty);
+      expect(byRef(p, 'C').pending, isTrue);
+    });
+
+    test('confirmTransactions confirms the waiting rows it is given in one '
+        'change, and re-tests the rest', () async {
+      final p = await waiting();
+      final a = byRef(p, 'A');
+      final seed = byRef(p, 'SEED1');
+      var changes = 0;
+      p.addListener(() => changes++);
+      // An unknown id and a row already counted are passed over.
+      final before = await p.confirmTransactions([
+        a.id,
+        byRef(p, 'C').id,
+        seed.id,
+        'missing',
+      ]);
+      expect(changes, 1);
+      expect(refs(before), ['A', 'C']);
+      expect(before.every((t) => t.pending), isTrue);
+      expect(byRef(p, 'A').pending, isFalse);
+      expect(byRef(p, 'A').unseen, isFalse);
+      expect(byRef(p, 'C').pending, isFalse);
+      final released = p.takeReleased();
+      expect(refs(released), ['B']);
+      expect(byRef(p, 'B').unseen, isTrue);
+      expect(p.pendingCount, 0);
+
+      // Nothing waiting among the ids: nothing changes.
+      expect(await p.confirmTransactions([a.id, 'missing']), isEmpty);
+      expect(changes, 1);
+
+      await p.restoreEditedTransactions([...before, ...released]);
+      expect(p.pendingCount, 3);
+      expect(p.unseenCount, 0);
     });
   });
 

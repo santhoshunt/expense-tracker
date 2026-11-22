@@ -26,12 +26,14 @@ import '../widgets/dialog_expander.dart';
 import '../widgets/dispose_scope.dart';
 import '../widgets/editor_sheet.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/facts_text.dart';
 import '../widgets/glossy.dart';
 import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/motion.dart';
 import '../widgets/row_chevron.dart';
 import '../widgets/section_header.dart';
+import '../widgets/tag_input.dart';
 import '../widgets/budget_dialog.dart';
 import '../widgets/reminder_editor_dialog.dart';
 import '../widgets/undo_snackbar.dart';
@@ -511,8 +513,116 @@ class _CockpitGroupPageState extends State<CockpitGroupPage>
 bool ruleMatchesQuery(ClassifierRule rule, String query) {
   if (query.isEmpty) return true;
   if (rule.patterns.any((p) => p.toLowerCase().contains(query))) return true;
+  // What the rule also sets: its Paid to and its tags.
+  if (rule.payee.toLowerCase().contains(query)) return true;
+  if (rule.tags.any((t) => t.toLowerCase().contains(query))) return true;
   final label = rule.isSpamRule ? 'Spam' : categoryById(rule.categoryId).label;
   return label.toLowerCase().contains(query);
+}
+
+/// What a rule sets besides its category, in words: `Nothing`, `Paid to`,
+/// `1 tag`, `2 tags` or `Paid to, 1 tag`. The rule editor's Also set line
+/// reads it when closed, and a rule's row after "sets". [payeeWord] is
+/// what the Paid to goes by on that rule ([_rulePayeeWord]).
+String ruleExtrasLabel(
+  String payee,
+  List<String> tags, {
+  String payeeWord = 'Paid to',
+}) {
+  final parts = [
+    if (payee.isNotEmpty) payeeWord,
+    if (tags.isNotEmpty) tags.length == 1 ? '1 tag' : '${tags.length} tags',
+  ];
+  return parts.isEmpty ? 'Nothing' : parts.join(', ');
+}
+
+/// What a rule's Paid to goes by: Received from, as the Add sheet words it
+/// on income, for one rule in an income category [categoryId]. A pair
+/// ([otherCategoryId] set) fills both directions, so it stays Paid to.
+String _rulePayeeWord(String? categoryId, String? otherCategoryId) =>
+    otherCategoryId == null &&
+        categoryId != null &&
+        categoryId != kSpamCategoryId &&
+        categoryById(categoryId).type == TxType.income
+    ? 'Received from'
+    : 'Paid to';
+
+/// The Paid to a rule's sheet opens with: the rule's own, or its twin
+/// [sibling]'s where it has none. A pair saved from the sheet carries one
+/// Paid to and one set of tags, but a pair can also be two rules made
+/// apart, and its rule in a transfer category never has a Paid to. Read
+/// this way, a sheet saved untouched wipes neither rule's.
+String _pairPayee(ClassifierRule rule, ClassifierRule? sibling) =>
+    rule.payee.isNotEmpty ? rule.payee : sibling?.payee ?? '';
+
+/// The Paid to a rule's row says it sets, picked as [_pairPayee] is, with
+/// one stored on a rule in a transfer category left out: a transfer
+/// carries no Paid to, so that rule fills none. A category turned into a
+/// transfer after the rule was saved leaves the text stored on the rule.
+String _pairPayeeSet(ClassifierRule rule, ClassifierRule? sibling) {
+  String set(ClassifierRule? r) =>
+      r == null || isTransferCategory(r.categoryId) ? '' : r.payee;
+  final own = set(rule);
+  return own.isNotEmpty ? own : set(sibling);
+}
+
+/// The tags a rule's row and sheet show, picked as [_pairPayee] is.
+List<String> _pairTags(ClassifierRule rule, ClassifierRule? sibling) =>
+    rule.tags.isNotEmpty ? rule.tags : sibling?.tags ?? const [];
+
+/// What a rule save did to past rows, for its toast: rows moved to another
+/// category, rows changed only in Paid to or tags (in the changed rows,
+/// not in the reclassified count), and recent imports a spam rule dropped
+/// (rows waiting for review and rows still marked new, which already
+/// count).
+List<String> _ruleSaveOutcome(
+  ({
+    int reclassified,
+    int droppedPending,
+    List<Tx> dropped,
+    List<Tx> reclassifiedRows,
+  })
+  applied,
+) {
+  final updated = applied.reclassifiedRows.length - applied.reclassified;
+  return [
+    if (applied.reclassified > 0)
+      '${applied.reclassified} transaction'
+          '${applied.reclassified == 1 ? '' : 's'} reclassified',
+    if (updated > 0) '$updated transaction${updated == 1 ? '' : 's'} updated',
+    if (applied.droppedPending > 0)
+      '${applied.droppedPending} recent import'
+          '${applied.droppedPending == 1 ? '' : 's'} dropped as spam',
+  ];
+}
+
+/// A rule whose latest match is more than this many days old reads as
+/// quiet: the "6 months" of a rule's row and of the Built-in rules card.
+const int kRuleQuietDays = 183;
+
+/// Whether [last], the day of a rule's latest match, is more than
+/// [kRuleQuietDays] calendar days before [now].
+bool _ruleQuiet(DateTime last, DateTime now) => DateTime(
+  last.year,
+  last.month,
+  last.day,
+).isBefore(DateTime(now.year, now.month, now.day - kRuleQuietDays));
+
+/// What [rule]'s row reports from [FinanceProvider.ruleUses]: the rule's
+/// own use, or for a rule pair both rules' as one, counts added and the
+/// later match. No match at all is a count of 0.
+RuleUse _ruleUseOf(
+  Map<String, RuleUse> uses,
+  ClassifierRule rule,
+  ClassifierRule? sibling,
+) {
+  final a = uses[rule.id];
+  final b = sibling == null ? null : uses[sibling.id];
+  if (a == null || b == null) return a ?? b ?? (count: 0, last: null);
+  return (
+    count: a.count + b.count,
+    last: a.last!.isAfter(b.last!) ? a.last : b.last,
+  );
 }
 
 class _RulesTab extends StatefulWidget {
@@ -623,20 +733,9 @@ class _RulesTabState extends State<_RulesTab> {
     final applied = await finance.mergeRules(Set.of(_selected));
     if (!mounted) return;
     setState(_selected.clear);
-    final parts = <String>[
-      'Merged $n rules',
-      if (applied.reclassified > 0)
-        '${applied.reclassified} transaction'
-            '${applied.reclassified == 1 ? '' : 's'} reclassified',
-      // Recent: rows waiting for review and rows still marked new, which
-      // already count.
-      if (applied.droppedPending > 0)
-        '${applied.droppedPending} recent import'
-            '${applied.droppedPending == 1 ? '' : 's'} dropped as spam',
-    ];
     showAppToastOn(
       messenger,
-      parts.join(' · '),
+      ['Merged $n rules', ..._ruleSaveOutcome(applied)].join(' · '),
       tone: AppToastTone.change,
       icon: Icons.call_merge,
       duration: const Duration(seconds: 5),
@@ -663,7 +762,8 @@ class _RulesTabState extends State<_RulesTab> {
 
   @override
   Widget build(BuildContext context) {
-    final rules = context.watch<FinanceProvider>().rules;
+    final finance = context.watch<FinanceProvider>();
+    final rules = finance.rules;
     if (rules.isEmpty) {
       // Scrollable so the three paragraphs and the button survive a short
       // viewport or a large font scale.
@@ -706,6 +806,25 @@ class _RulesTabState extends State<_RulesTab> {
     final builtinRules = visible.where((r) => r.isBuiltIn).toList();
     // A search shows the matching built-ins whatever the fold.
     final builtinsShown = _builtinOpen || q.isNotEmpty;
+    // Read once per build and handed to each row: the map costs one rule
+    // match per SMS row. One clock too, for the rows and the card's count.
+    final uses = finance.ruleUses;
+    final now = DateTime.now();
+    // The built-in rows that read "No payments yet" or "No match in 6
+    // months", over the whole list. A twin under another rule's row is
+    // part of that row. Not counted during a search, when the card's title
+    // counts only the rules found, nor while no rule has any match: with
+    // no alert history, or after a restore (restored rows carry no alert
+    // text), every built-in rule would count and the number says nothing.
+    final quietBuiltins = q.isNotEmpty || uses.isEmpty
+        ? 0
+        : rules.where((r) {
+            if (!r.isBuiltIn || r.isSpamRule || absorbed.contains(r.id)) {
+              return false;
+            }
+            final last = _ruleUseOf(uses, r, siblingOf[r.id]).last;
+            return last == null || _ruleQuiet(last, now);
+          }).length;
 
     // Drop selections that no longer exist, were re-filtered away or sit
     // in the closed fold, so the bar count never lies (transactions-screen
@@ -747,6 +866,8 @@ class _RulesTabState extends State<_RulesTab> {
         key: ValueKey(r.id),
         rule: r,
         sibling: sibling,
+        use: uses.isEmpty ? null : _ruleUseOf(uses, r, sibling),
+        now: now,
         selectionMode: _selecting,
         selected: _selected.contains(r.id),
         // A pair selects as one unit (both ids), so the count stays honest
@@ -797,9 +918,13 @@ class _RulesTabState extends State<_RulesTab> {
                     child: Icon(Icons.format_list_bulleted, size: 20),
                   ),
                   title: Text('Built-in rules · ${builtinRules.length}'),
-                  subtitle: const Text(
-                    'Common words such as restaurant, petrol and pharmacy. '
-                    'Checked after yours.',
+                  subtitle: Text(
+                    [
+                      'Common words such as restaurant, petrol and pharmacy. '
+                          'Checked after yours.',
+                      if (quietBuiltins > 0)
+                        '$quietBuiltins matched nothing in 6 months.',
+                    ].join(' '),
                   ),
                   trailing: AnimatedRotation(
                     turns: builtinsShown ? 0 : 0.5,
@@ -970,6 +1095,15 @@ class _RuleTile extends StatelessWidget {
   /// The opposite-direction twin (see [directionSiblingOf]); the tile then
   /// reads as one rule pair and edits/deletes both.
   final ClassifierRule? sibling;
+
+  /// What the rule reaches ([_ruleUseOf], a pair's two rules as one), and
+  /// the clock its age is told against. Handed in, never read here: the
+  /// provider's map costs one rule match per SMS row. Null while no rule
+  /// has any match, with no alert history or after a restore (restored
+  /// rows carry no alert text): every row would read "No payments yet",
+  /// so the row leaves the line out.
+  final RuleUse? use;
+  final DateTime now;
   final bool selectionMode;
   final bool selected;
   final VoidCallback onToggleSelect;
@@ -978,6 +1112,8 @@ class _RuleTile extends StatelessWidget {
     super.key,
     required this.rule,
     this.sibling,
+    required this.use,
+    required this.now,
     required this.selectionMode,
     required this.selected,
     required this.onToggleSelect,
@@ -995,6 +1131,11 @@ class _RuleTile extends StatelessWidget {
     final cat = isSpam ? null : categoryById(rule.categoryId);
     final sib = sibling;
     final sibCat = sib == null ? null : categoryById(sib.categoryId);
+    // What the row says it sets: a pair's two rules read as one.
+    final payee = _pairPayeeSet(rule, sib);
+    final tags = _pairTags(rule, sib);
+    final use = this.use;
+    final last = use?.last;
     final selectMotion = motionDuration(
       context,
       const Duration(milliseconds: 160),
@@ -1066,25 +1207,71 @@ class _RuleTile extends StatelessWidget {
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
-      subtitle: Text(
-        [
-          if (rule.patterns.length > 1)
-            'or ${rule.patterns.length - 1} more condition'
-                '${rule.patterns.length == 2 ? '' : 's'}',
-          if (isSpam)
-            'Spam, never imported'
-          else if (sibCat != null)
-            // Expense side first, whichever rule owns the tile.
-            [
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Where the line wraps it breaks after a dot, each part whole
+          // ([FactsText]): "sets Paid to, 2 tags" is not split at "2".
+          FactsText([
+            if (rule.patterns.length > 1)
+              'or ${rule.patterns.length - 1} more condition'
+                  '${rule.patterns.length == 2 ? '' : 's'}',
+            if (isSpam)
+              'Spam, never imported'
+            else if (sibCat != null) ...[
+              // Expense side first, whichever rule owns the tile.
               for (final c in [cat!, sibCat])
                 if (c.type == TxType.expense) _arrowLabel(c),
               for (final c in [cat, sibCat])
                 if (c.type == TxType.income) _arrowLabel(c),
-            ].join(' · ')
-          else
-            '→ ${cat!.label} '
-                '(${cat.type == TxType.income ? 'income' : 'expense'})',
-        ].join(' · '),
+            ] else
+              '→ ${cat!.label} '
+                  '(${cat.type == TxType.income ? 'income' : 'expense'})',
+            // The Paid to and tags it also sets; on a pair, either
+            // rule's. One income rule calls its Paid to Received from, as
+            // its editor does.
+            if (!isSpam && (payee.isNotEmpty || tags.isNotEmpty))
+              'sets ${ruleExtrasLabel(payee, tags, payeeWord: _rulePayeeWord(rule.categoryId, sib?.categoryId))}',
+          ]),
+          // What the rule reaches, in the subtitle's own style. Not on a
+          // spam rule: the alerts it matches are never kept. Not while no
+          // rule has any match either ([use]).
+          if (!isSpam && use != null)
+            if (last == null)
+              const Text('No payments yet')
+            else if (_ruleQuiet(last, now))
+              // The marker carries the colour, the words stay plain, and
+              // the words alone are read out.
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ExcludeSemantics(
+                    // The empty text is one line tall: the marker sits
+                    // mid-line on the first line however the words wrap.
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        const Text(''),
+                        Icon(
+                          Icons.error_outline,
+                          size: 14,
+                          color: AppColors.of(context).orange,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Flexible(child: Text('No match in 6 months')),
+                ],
+              )
+            else
+              FactsText([
+                '${use.count} payment${use.count == 1 ? '' : 's'}',
+                'latest ${fmtAgo(last, now: now)}',
+              ]),
+        ],
       ),
       // Tap edits, and Delete lives in the editor. No chevron while
       // selecting, where a tap ticks the row, or at large text, where the
@@ -2409,6 +2596,32 @@ Future<void> showRuleDialog(
   // The other-direction expander starts open on a pair, so its second
   // category is in view.
   var otherOpen = twin != null;
+  // Also set: the Paid to and tags the rule puts on a matching row. Both
+  // rules of a pair carry the same ones, read from whichever rule has them
+  // ([_pairPayee]). Text typed in the tag field but not yet added is saved
+  // too (pendingTagsOf). A spam rule sets neither.
+  final payeeCtrl = TextEditingController(
+    text: existing == null ? '' : _pairPayee(existing, twin),
+  );
+  final tagCtrl = TextEditingController();
+  var tags = <String>[if (existing != null) ..._pairTags(existing, twin)];
+  // A transfer carries no Paid to (its edit sheet has no such field), so a
+  // rule in a transfer category sets none, and the field shows only while
+  // a category that takes one is picked. On a pair each rule follows its
+  // own category ([payeeFor]).
+  bool takesPayee(String? id) =>
+      id != null && id != kSpamCategoryId && !isTransferCategory(id);
+  String payeeNow() => takesPayee(categoryId) || takesPayee(otherCategoryId)
+      ? normalizePayee(payeeCtrl.text)
+      : '';
+  String payeeFor(String id) => takesPayee(id) ? payeeNow() : '';
+  List<String> tagsNow() =>
+      categoryId == kSpamCategoryId ? const [] : pendingTagsOf(tags, tagCtrl);
+  // Received from for one rule in an income category, on the field, the
+  // closed line and the preview ([_rulePayeeWord]).
+  String payeeLabel() => _rulePayeeWord(categoryId, otherCategoryId);
+  // The Also set expander starts open on a rule that already sets more.
+  var extrasOpen = payeeNow().isNotEmpty || tags.isNotEmpty;
   // Delete pops the editor first; the caller's row then deletes the rule,
   // and its twin, with Undo.
   var deleteRequested = false;
@@ -2417,12 +2630,16 @@ Future<void> showRuleDialog(
     conditions: List.of(conditions),
     categoryId: categoryId,
     otherCategoryId: otherCategoryId,
+    payee: payeeNow(),
+    tags: tagsNow(),
   );
   bool dirty() =>
       addCtrl.text.trim().isNotEmpty ||
       categoryId != openedWith.categoryId ||
       otherCategoryId != openedWith.otherCategoryId ||
-      !listEquals(conditions, openedWith.conditions);
+      !listEquals(conditions, openedWith.conditions) ||
+      payeeNow() != openedWith.payee ||
+      !listEquals(tagsNow(), openedWith.tags);
 
   // What the rule matches, in one line above the button: a pair stays
   // readable while its expander is closed. Empty until a category is
@@ -2474,12 +2691,17 @@ Future<void> showRuleDialog(
   // direction or the words moves the header at once. No target while a
   // rule above it would still claim a message with the new words
   // ([shadow]): merging in place keeps the target's position, so the words
-  // go into a new rule at the top instead.
+  // go into a new rule at the top instead. No target either once the new
+  // rule sets a Paid to or tags: a merge keeps the target's own, so the
+  // new ones would be lost, and the words are saved as a new rule.
   ({ClassifierRule? target, ClassifierRule? shadow}) merge(
     FinanceProvider finance,
   ) {
     final id = categoryId;
     if (existing != null || id == null) return (target: null, shadow: null);
+    if (payeeNow().isNotEmpty || tagsNow().isNotEmpty) {
+      return (target: null, shadow: null);
+    }
     final rules = finance.rules;
     final target = ruleMergeTargetOf(rules, id, otherCategoryId);
     if (target == null) return (target: null, shadow: null);
@@ -2516,23 +2738,10 @@ Future<void> showRuleDialog(
     return null;
   }
 
-  // What saving did to past rows, for the toast.
-  List<String> outcome(
-    ({
-      int reclassified,
-      int droppedPending,
-      List<Tx> dropped,
-      List<Tx> reclassifiedRows,
-    })
-    applied,
-  ) => [
-    if (applied.reclassified > 0)
-      '${applied.reclassified} transaction'
-          '${applied.reclassified == 1 ? '' : 's'} reclassified',
-    if (applied.droppedPending > 0)
-      '${applied.droppedPending} recent import'
-          '${applied.droppedPending == 1 ? '' : 's'} dropped as spam',
-  ];
+  // Merging: the rule keeps its own conditions, in order, and gains the
+  // new ones after them. The preview counts with the same pattern.
+  String mergedPattern(ClassifierRule target, List<String> fresh) =>
+      [...target.patterns, ...fresh].join(' | ');
 
   // Runs only once footerReason() is null, so a category is picked.
   Future<void> save(BuildContext ctx) async {
@@ -2541,17 +2750,13 @@ Future<void> showRuleDialog(
     final pattern = all.join(' | ');
     final finance = ctx.read<FinanceProvider>();
     final messenger = ScaffoldMessenger.of(context);
-    // Merging: the rule keeps its own conditions, in order, and gains the
-    // new ones after them.
     final target = merge(finance).target;
     final fresh = [
       if (target != null)
         for (final c in all)
           if (!inRule(target, c)) c,
     ];
-    final written = target == null
-        ? pattern
-        : [...target.patterns, ...fresh].join(' | ');
+    final written = target == null ? pattern : mergedPattern(target, fresh);
     // Warn BEFORE touching the queue: spam rules delete matching pending
     // imports, and incremental scans never bring them back.
     final wouldDrop = finance.pendingSpamDropsFor(
@@ -2618,7 +2823,7 @@ Future<void> showRuleDialog(
           fresh.length == 1
               ? 'Added "${fresh.single}" to your $label rule'
               : 'Added ${fresh.length} conditions to your $label rule',
-          ...outcome(applied),
+          ..._ruleSaveOutcome(applied),
         ].join(' · '),
         tone: AppToastTone.change,
         icon: Icons.rule,
@@ -2639,10 +2844,25 @@ Future<void> showRuleDialog(
       );
       return;
     }
+    // What the rule also sets, the same on both rules of a pair, except
+    // that its rule in a transfer category takes no Paid to (payeeFor).
+    final ruleTags = tagsNow();
+    // For Undo: the whole list, as the merge above takes it.
+    final before = List.of(finance.rules);
     var applied = existing == null
-        ? await finance.addRule(pattern, picked)
+        ? await finance.addRule(
+            pattern,
+            picked,
+            payee: payeeFor(picked),
+            tags: ruleTags,
+          )
         : await finance.updateRule(
-            existing.copyWith(pattern: pattern, categoryId: picked),
+            existing.copyWith(
+              pattern: pattern,
+              categoryId: picked,
+              payee: payeeFor(picked),
+              tags: ruleTags,
+            ),
           );
     // The opposite-direction twin: create, repoint or
     // drop it to match the second slot. Deleting never
@@ -2651,9 +2871,19 @@ Future<void> showRuleDialog(
     final other = otherCategoryId;
     if (other != null) {
       final twinApplied = twin == null
-          ? await finance.addRule(pattern, other)
+          ? await finance.addRule(
+              pattern,
+              other,
+              payee: payeeFor(other),
+              tags: ruleTags,
+            )
           : await finance.updateRule(
-              twin.copyWith(pattern: pattern, categoryId: other),
+              twin.copyWith(
+                pattern: pattern,
+                categoryId: other,
+                payee: payeeFor(other),
+                tags: ruleTags,
+              ),
             );
       applied = (
         reclassified: applied.reclassified + twinApplied.reclassified,
@@ -2670,9 +2900,43 @@ Future<void> showRuleDialog(
     // Rules re-apply to history immediately: say what that did. A broad
     // spam rule silently emptying the review queue was the worst case, so
     // dropped imports get a Restore action (the rule itself stays in
-    // force).
-    final parts = outcome(applied);
-    if (parts.isNotEmpty) {
+    // force). A rule that sets a Paid to or tags offers Undo instead,
+    // which takes back the rule and what it did to past rows. So does any
+    // save that changed a past row's Paid to or tags: they may be another
+    // rule's, which a row the re-sort moved to that rule's category takes.
+    final parts = _ruleSaveOutcome(applied);
+    final setsMore = payeeNow().isNotEmpty || ruleTags.isNotEmpty;
+    final rowNow = {
+      for (final t in finance.transactions) t.id: t,
+      for (final t in finance.pendingTransactions) t.id: t,
+    };
+    final setFields = applied.reclassifiedRows.any((was) {
+      final t = rowNow[was.id];
+      return t != null &&
+          (t.payee != was.payee || !listEquals(t.tags, was.tags));
+    });
+    if (parts.isNotEmpty && (setsMore || setFields)) {
+      final changed = applied;
+      showAppToastOn(
+        messenger,
+        parts.join(' · '),
+        tone: AppToastTone.change,
+        icon: Icons.rule,
+        duration: const Duration(seconds: 5),
+        actionLabel: 'Undo',
+        onAction: () {
+          // As the merge's Undo: no re-sort, the changed rows back.
+          finance.restoreRules(before, reapply: false);
+          finance.restoreEditedTransactions(changed.reclassifiedRows);
+          if (changed.dropped.isNotEmpty) {
+            finance.restoreEditedTransactions(
+              changed.dropped,
+              reAddMissing: true,
+            );
+          }
+        },
+      );
+    } else if (parts.isNotEmpty) {
       final dropped = applied.dropped;
       showAppToastOn(
         messenger,
@@ -2691,15 +2955,103 @@ Future<void> showRuleDialog(
     }
   }
 
+  // The line under the Also set fields: how many past rows a save would
+  // change in Paid to or tags, both rules of a pair counted. While the
+  // words go into [target], the save writes that rule and its twin, so
+  // they are what is counted. The count is a pass over the ledger, so it
+  // is worked out again only when what it depends on changes, not on every
+  // rebuild: the rules as the save would write them, and the ledger and
+  // rule list they run against ([FinanceProvider.revision]). The Paid to
+  // text is part of that, not only whether one is set: a fill is skipped
+  // where the text would rename the merchant a row goes by.
+  String? previewKey;
+  Object? previewRevision;
+  var previewCount = 0;
+  String extrasPreview(
+    FinanceProvider finance,
+    ClassifierRule? target,
+    ClassifierRule? targetTwin,
+  ) {
+    final id = categoryId;
+    if (id == null) return '';
+    final other = otherCategoryId;
+    final ClassifierRule first;
+    final ClassifierRule? second;
+    if (target != null) {
+      final written = mergedPattern(target, [
+        for (final c in words())
+          if (!inRule(target, c)) c,
+      ]);
+      first = target.copyWith(pattern: written);
+      second = targetTwin?.copyWith(pattern: written);
+    } else {
+      final pattern = words().join(' | ');
+      final ruleTags = tagsNow();
+      ClassifierRule candidate(String ruleId, String categoryId) =>
+          ClassifierRule(
+            id: ruleId,
+            pattern: pattern,
+            categoryId: categoryId,
+            payee: payeeFor(categoryId),
+            tags: ruleTags,
+          );
+      first = candidate(existing?.id ?? '_dry_run_', id);
+      second = other == null
+          ? null
+          : candidate(twin?.id ?? '_dry_run_twin_', other);
+    }
+    final key = [
+      for (final r in [first, ?second]) ...[
+        r.id,
+        r.pattern,
+        r.categoryId,
+        r.payee,
+        ...r.tags,
+      ],
+    ].join('\n');
+    if (key != previewKey || !identical(previewRevision, finance.revision)) {
+      // A rule that is being edited or merged into is replaced where it
+      // stands; a new one goes first.
+      final edits = target != null || existing != null;
+      previewCount = finance.ruleExtrasChangeCount(
+        first,
+        replacingRuleId: edits ? first.id : null,
+        twin: second,
+        replacingTwinId: target != null || twin != null ? second?.id : null,
+      );
+      previewKey = key;
+      previewRevision = finance.revision;
+    }
+    final n = previewCount;
+    final fills = first.payee.isNotEmpty || (second?.payee.isNotEmpty ?? false);
+    return '${fills ? 'Fills ${payeeLabel()} where you typed none. ' : ''}'
+        '${n == 0
+            ? 'No past payments change.'
+            : n == 1
+            ? '1 past payment changes.'
+            : '$n past payments change.'}';
+  }
+
+  // Text typed in the tag field counts as a tag before it is added, so
+  // the sheet rebuilds as it changes: the closed line, the preview and the
+  // Discard guard all read it. TagInput reports only added tags.
+  StateSetter? rebuild;
+  tagCtrl.addListener(() => rebuild?.call(() {}));
+
   await showEditorSheet<void>(
     context,
     builder: (ctx) => DisposeScope(
-      disposables: [addCtrl, addFocus],
+      disposables: [addCtrl, addFocus, payeeCtrl, tagCtrl],
       child: StatefulBuilder(
         builder: (ctx, setState) {
+          rebuild = setState;
           final theme = Theme.of(ctx);
           final id = categoryId;
-          final (:target, :shadow) = merge(ctx.read<FinanceProvider>());
+          final finance = ctx.read<FinanceProvider>();
+          final (:target, :shadow) = merge(finance);
+          final targetTwin = target == null
+              ? null
+              : directionSiblingOf(target, finance.rules);
           // While merging, a condition the rule already has shows once,
           // as the rule's own plain chip.
           bool shown(String c) => target == null || !inRule(target, c);
@@ -2941,6 +3293,84 @@ Future<void> showRuleDialog(
                                 'the pair as one row, and editing or deleting '
                                 'it changes both. Not for this direction '
                                 'removes the second rule.',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // What a matching row gets besides the category. Most
+                // rules set nothing more, so it waits behind an expander
+                // too; a spam rule's messages are never imported, so it
+                // has none.
+                GroupedSurface(
+                  first: true,
+                  last: true,
+                  child: DialogExpander(
+                    key: const ValueKey('rule-extras'),
+                    title: 'Also set',
+                    // While the words go into a rule, that rule's own:
+                    // the rows the new words reach take them. Typing here
+                    // makes the save a new rule instead (merge()).
+                    value: target != null
+                        ? ruleExtrasLabel(
+                            _pairPayeeSet(target, targetTwin),
+                            _pairTags(target, targetTwin),
+                            payeeWord: _rulePayeeWord(
+                              target.categoryId,
+                              targetTwin?.categoryId,
+                            ),
+                          )
+                        : ruleExtrasLabel(
+                            payeeNow(),
+                            tagsNow(),
+                            payeeWord: payeeLabel(),
+                          ),
+                    keepClosed: false,
+                    open: extrasOpen,
+                    onToggle: () => setState(() => extrasOpen = !extrasOpen),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          // Not for a transfer, which carries no Paid to.
+                          if (takesPayee(id) ||
+                              takesPayee(otherCategoryId)) ...[
+                            TextField(
+                              key: const ValueKey('rule-payee'),
+                              controller: payeeCtrl,
+                              textCapitalization: TextCapitalization.words,
+                              textInputAction: TextInputAction.next,
+                              decoration: InputDecoration(
+                                labelText: payeeLabel(),
+                                hintText: payeeLabel() == 'Paid to'
+                                    ? 'Shop, person or service'
+                                    : 'Person, employer or service',
+                                prefixIcon: const Icon(
+                                  Icons.storefront_outlined,
+                                ),
+                              ),
+                              onChanged: (_) => setState(() {}),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
+                          TagInput(
+                            tags: tags,
+                            controller: tagCtrl,
+                            suggestions: finance.tagSuggestions,
+                            colorOf: finance.tagColor,
+                            onChanged: (t) => setState(() => tags = t),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            extrasPreview(finance, target, targetTwin),
+                            key: const ValueKey('rule-extras-preview'),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
                           ),
                         ],
                       ),

@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/account.dart';
+import 'package:expense_tracker/models/saved_filter.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -13,6 +15,7 @@ import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/utils/money_colors.dart';
 import 'package:expense_tracker/widgets/glossy.dart';
+import 'package:expense_tracker/widgets/info_tip.dart';
 
 /// v1.38.0 Transactions feedback: the plain "Search" hint, lakh amounts in
 /// search, the Amount chip, rows under a day header showing their time,
@@ -527,6 +530,949 @@ void main() {
       moneyColor(context, type: TxType.income),
       isNot(moneyColor(context, type: TxType.expense)),
     );
+  });
+
+  group('saved filters', () {
+    final saveCurrent = find.text('Save current');
+    final nameField = find.widgetWithText(TextField, 'Name');
+    final save = find.widgetWithText(FilledButton, 'Save');
+    final actions = find.byTooltip('Saved filter actions');
+    const nothingSaved = 'No saved filters yet.';
+    const nothingSet = 'Set some filters, then save them here.';
+
+    Future<FinanceProvider> spends() => withRows([
+      (TxType.expense, 'food', 100, 'tea', DateTime(2026, 7, 1, 9)),
+      (TxType.expense, 'food', 1000, 'dinner', DateTime(2026, 7, 2, 9)),
+      (TxType.income, 'salary', 5000, 'pay', DateTime(2026, 7, 3, 9)),
+    ]);
+
+    // Expenses of 500 and up: of the rows above, the dinner alone.
+    const bigSpends = SavedFilter(
+      id: 'flt_1_0',
+      name: 'Big spends',
+      tab: 'expense',
+      min: 500,
+    );
+
+    Future<void> open(WidgetTester tester, FinanceProvider p) async {
+      await tester.pumpWidget(screen(p));
+      await tester.pumpAndSettle();
+      await tester.tap(tune);
+      await tester.pumpAndSettle();
+    }
+
+    // With a filter on the page the count badge sits over the button's
+    // centre; the tap lands on the button all the same.
+    Future<void> openFiltered(WidgetTester tester) async {
+      await tester.tap(tune, warnIfMissed: false);
+      await tester.pumpAndSettle();
+    }
+
+    bool saveEnabled(WidgetTester tester) =>
+        tester.widget<FilledButton>(save).onPressed != null;
+
+    testWidgets('the rail starts with Saved, which says nothing is saved '
+        'and shows Save current once a filter is set', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await open(tester, p);
+
+      // No saved filter: the sheet opens on Date, as before.
+      expect(find.text('All time'), findsOneWidget);
+      expect(
+        tester.getTopLeft(railRow('saved')).dy,
+        lessThan(tester.getTopLeft(railRow('date')).dy),
+      );
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      expect(find.text(nothingSaved), findsOneWidget);
+      expect(find.text(nothingSet), findsOneWidget);
+      expect(saveCurrent, findsNothing);
+      // Nothing to search here.
+      expect(find.widgetWithText(TextField, 'Search filters…'), findsNothing);
+
+      await tester.tap(railRow('amount'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.widgetWithText(TextField, 'Min'), '500');
+      await tester.pumpAndSettle();
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      expect(find.text(nothingSaved), findsOneWidget);
+      expect(find.text(nothingSet), findsNothing);
+      expect(saveCurrent, findsOneWidget);
+      // The Saved row never counts picks.
+      expect(
+        find.descendant(of: railRow('saved'), matching: find.text('Saved')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('Save current names the draft: a taken name is refused and '
+        'the new row appears', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await p.saveFilter(bigSpends);
+      await open(tester, p);
+
+      await tester.tap(railRow('amount'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.widgetWithText(TextField, 'Max'), '200');
+      await tester.pumpAndSettle();
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      await tester.tap(saveCurrent);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Save filters'), findsOneWidget);
+      // What is being saved, in a few words.
+      expect(find.text('Amount up to ₹200'), findsOneWidget);
+      final tip = tester.widget<InfoTip>(find.byType(InfoTip));
+      expect(tip.message, contains('the type tab'));
+      expect(tip.message, contains('"This month"'));
+      expect(tip.message, contains('Search and sort are not saved'));
+      expect(saveEnabled(tester), isFalse);
+
+      await tester.enterText(nameField, 'big SPENDS ');
+      await tester.pumpAndSettle();
+      expect(find.text('That name is taken'), findsOneWidget);
+      expect(saveEnabled(tester), isFalse);
+
+      await tester.enterText(nameField, ' Small ones ');
+      await tester.pumpAndSettle();
+      expect(find.text('That name is taken'), findsNothing);
+      expect(saveEnabled(tester), isTrue);
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+
+      // The row in the list is the feedback: no toast behind the sheet.
+      expect(find.text('Small ones'), findsOneWidget);
+      expect(find.byType(SnackBar), findsNothing);
+      expect(
+        [for (final f in p.savedFilters) f.name],
+        ['Big spends', 'Small ones'],
+      );
+      final saved = p.savedFilters.last;
+      expect(saved.id, startsWith('flt_'));
+      expect(saved.tab, 'all');
+      expect(saved.max, 200);
+      expect(saved.min, isNull);
+      expect(saved.thisMonth, isFalse);
+    });
+
+    testWidgets('a tap on a saved row loads the draft, and Show applies it '
+        'with its type tab', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await p.saveFilter(bigSpends);
+      await open(tester, p);
+
+      expect(find.widgetWithText(FilledButton, 'Show 3'), findsOneWidget);
+      await tester.tap(find.text('Big spends'));
+      await tester.pumpAndSettle();
+      // The count follows the saved tab too: the pay is 500 and up, but
+      // it is not an expense.
+      expect(find.widgetWithText(FilledButton, 'Show 1'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: railRow('amount'),
+          matching: find.text('Amount · 1'),
+        ),
+        findsOneWidget,
+      );
+      // Clear all puts the page's tab back in the draft with the rest:
+      // all three rows, not the two expenses.
+      await tester.tap(find.widgetWithText(TextButton, 'Clear all'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Show 3'), findsOneWidget);
+      await tester.tap(find.text('Big spends'));
+      await tester.pumpAndSettle();
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+
+      expect(find.text('dinner'), findsOneWidget);
+      expect(find.text('tea'), findsNothing);
+      expect(find.text('pay'), findsNothing);
+      expect(find.text('Amount from ₹500'), findsOneWidget);
+      final tabs = tester.widget(
+        find.byWidgetPredicate((w) => w is UnderlineTabs),
+      );
+      expect('${(tabs as dynamic).selected}', endsWith('.expense'));
+    });
+
+    testWidgets('the sheet opens on Saved when a filter is saved and no '
+        'chip is on the page, and on Date once one is', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await p.saveFilter(bigSpends);
+      await open(tester, p);
+
+      expect(find.text('Big spends'), findsOneWidget);
+      expect(find.text('All time'), findsNothing);
+      expect(find.text(nothingSaved), findsNothing);
+      // The tab is All and nothing is set: nothing to save yet.
+      expect(find.text(nothingSet), findsOneWidget);
+
+      await tester.tap(find.text('Big spends'));
+      await tester.pumpAndSettle();
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      await openFiltered(tester);
+      expect(find.text('All time'), findsOneWidget);
+      expect(find.text('Big spends'), findsNothing);
+    });
+
+    testWidgets('saving while the current month is picked stores This '
+        'month, not the month', (tester) async {
+      phone(tester);
+      final p = await spends();
+      final now = DateTime.now();
+      final thisMonth = DateTime(now.year, now.month);
+      await tester.pumpWidget(screen(p));
+      await tester.pumpAndSettle();
+      // The month arrives as a dashboard tap sets it.
+      await tester.pumpWidget(
+        providers(
+          p,
+          Scaffold(
+            body: TransactionsScreen(
+              request: TxFilterRequest(month: thisMonth),
+              filterToken: 1,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await openFiltered(tester);
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      await tester.tap(saveCurrent);
+      await tester.pumpAndSettle();
+      expect(find.text('This month'), findsOneWidget);
+      await tester.enterText(nameField, 'Month so far');
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+
+      final saved = p.savedFilters.single;
+      expect(saved.thisMonth, isTrue);
+      expect(saved.month, isNull);
+      // Nothing stored ties it to the month it was saved in.
+      expect(saved.toJson(), {
+        'id': saved.id,
+        'name': 'Month so far',
+        'tab': 'all',
+        'thisMonth': true,
+      });
+    });
+
+    testWidgets('a This month filter loads the month it is now, a fixed '
+        'month the one saved', (tester) async {
+      phone(tester);
+      final p = await spends();
+      final now = DateTime.now();
+      final thisMonth = DateTime(now.year, now.month);
+      final fixed = DateTime(2026, 7);
+      // As a filter saved in any earlier month reads from storage.
+      await p.saveFilter(
+        SavedFilter.fromJson({
+          'id': 'flt_1_0',
+          'name': 'Month so far',
+          'thisMonth': true,
+        })!,
+      );
+      await p.saveFilter(
+        SavedFilter(id: 'flt_2_0', name: 'That July', month: fixed),
+      );
+      await open(tester, p);
+
+      await tester.tap(find.text('Month so far'));
+      await tester.pumpAndSettle();
+      await tester.tap(railRow('date'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ChoiceChip, fmtMonth(thisMonth)), findsOne);
+
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('That July'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Show 3'), findsOneWidget);
+      await tester.tap(railRow('date'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ChoiceChip, fmtMonth(fixed)), findsOne);
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.text('Month · ${fmtMonth(fixed)}'), findsOneWidget);
+    });
+
+    testWidgets('a saved range keeps its year name and counted dates '
+        'through a load', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await p.saveFilter(
+        SavedFilter(
+          id: 'flt_1_0',
+          name: 'That year',
+          rangeStart: DateTime(2026, 4, 1),
+          rangeEnd: DateTime(2027, 3, 31),
+          rangeCounted: true,
+          rangeLabel: 'FY 2026-27',
+        ),
+      );
+      await open(tester, p);
+      await tester.tap(find.text('That year'));
+      await tester.pumpAndSettle();
+      await tester.tap(railRow('date'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ChoiceChip, 'FY 2026-27'), findsOne);
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      // The page's chip carries the name, as a dashboard year does.
+      expect(find.text('FY 2026-27'), findsOneWidget);
+
+      // Saved again from the applied page, the flavour is still there.
+      await openFiltered(tester);
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      await tester.tap(saveCurrent);
+      await tester.pumpAndSettle();
+      await tester.enterText(nameField, 'Copy');
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      final copy = p.savedFilters.last;
+      expect(copy.rangeStart, DateTime(2026, 4, 1));
+      expect(copy.rangeEnd, DateTime(2027, 3, 31));
+      expect(copy.rangeCounted, isTrue);
+      expect(copy.rangeLabel, 'FY 2026-27');
+    });
+
+    testWidgets('Rename keeps the filter under a new name; Delete asks '
+        'first', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await p.saveFilter(bigSpends);
+      await p.saveFilter(const SavedFilter(id: 'flt_2_0', name: 'Rent'));
+      await open(tester, p);
+
+      await tester.tap(actions.first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Rename'));
+      await tester.pumpAndSettle();
+      // Its own title: nothing is being saved for the first time.
+      expect(find.text('Rename saved filter'), findsOneWidget);
+      expect(find.text('Save filters'), findsNothing);
+      expect(find.text('Expenses · Amount from ₹500'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(nameField).controller?.text,
+        'Big spends',
+      );
+      // Unchanged: nothing to save.
+      expect(saveEnabled(tester), isFalse);
+      await tester.enterText(nameField, 'rent');
+      await tester.pumpAndSettle();
+      expect(find.text('That name is taken'), findsOneWidget);
+      await tester.enterText(nameField, '  ');
+      await tester.pumpAndSettle();
+      expect(find.text('Enter a name'), findsOneWidget);
+      expect(saveEnabled(tester), isFalse);
+      await tester.enterText(nameField, 'Large');
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Large'), findsOneWidget);
+      expect(find.text('Big spends'), findsNothing);
+      expect(p.savedFilters.first.toJson(), {
+        ...bigSpends.toJson(),
+        'name': 'Large',
+      });
+
+      await tester.tap(actions.last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Delete saved filter'), findsOneWidget);
+      expect(find.textContaining('"Rent"'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      expect(p.savedFilters, hasLength(2));
+
+      await tester.tap(actions.last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Delete'));
+      await tester.pumpAndSettle();
+      expect(find.text('Rent'), findsNothing);
+      expect(find.text('Large'), findsOneWidget);
+      expect([for (final f in p.savedFilters) f.name], ['Large']);
+      expect(find.byType(SnackBar), findsNothing);
+    });
+
+    /// The page's type tab by name: all, income, expense or transfers.
+    String pageTab(WidgetTester tester) {
+      final tabs = tester.widget(
+        find.byWidgetPredicate((w) => w is UnderlineTabs),
+      );
+      return '${(tabs as dynamic).selected}'.split('.').last;
+    }
+
+    /// The page as a deep link lands on it, set to [request].
+    Future<void> openWith(
+      WidgetTester tester,
+      FinanceProvider p,
+      TxFilterRequest request,
+    ) async {
+      await tester.pumpWidget(screen(p));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        providers(
+          p,
+          Scaffold(body: TransactionsScreen(request: request, filterToken: 1)),
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    Finder railLabel(String id, String label) =>
+        find.descendant(of: railRow(id), matching: find.text(label));
+
+    Future<void> pickCategory(WidgetTester tester, String id) async {
+      await tester.tap(railRow('categories'));
+      await tester.pumpAndSettle();
+      final chip = find.widgetWithText(FilterChip, categoryById(id).label);
+      await tester.ensureVisible(chip);
+      await tester.pumpAndSettle();
+      await tester.tap(chip);
+      await tester.pumpAndSettle();
+    }
+
+    // v2.3.0 review: the sheet has no control for the type tab, so a
+    // loaded filter's tab holds only while the draft is still that filter.
+    testWidgets('a loaded filter changed by hand leaves the page on its own '
+        'tab', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await p.saveFilter(bigSpends);
+      await open(tester, p);
+      await tester.tap(find.text('Big spends'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Show 1'), findsOneWidget);
+
+      await tester.tap(railRow('amount'));
+      await tester.pumpAndSettle();
+      final min = find.widgetWithText(TextField, 'Min');
+      await tester.enterText(min, '');
+      await tester.pumpAndSettle();
+      // No longer the saved filter: counted on the page's tab, All.
+      expect(find.widgetWithText(FilledButton, 'Show 3'), findsOneWidget);
+      // Typed back, it is that filter again, tab and all.
+      await tester.enterText(min, '500');
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Show 1'), findsOneWidget);
+
+      await tester.enterText(min, '');
+      await tester.pumpAndSettle();
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(pageTab(tester), 'all');
+      expect(find.text('tea'), findsOneWidget);
+      expect(find.text('pay'), findsOneWidget);
+    });
+
+    // v2.3.0 review: a saved filter applied as saved replaces what the
+    // page showed; one changed by hand is an edit of the page's filters.
+    testWidgets('a saved filter shown as saved clears the To check ids, and '
+        'one changed by hand keeps them', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await p.saveFilter(bigSpends);
+      String idOf(String note) =>
+          p.transactions.firstWhere((t) => t.note == note).id;
+      await openWith(
+        tester,
+        p,
+        TxFilterRequest(ids: {idOf('tea'), idOf('pay')}),
+      );
+      expect(find.text('To check · 2'), findsOneWidget);
+      expect(find.text('dinner'), findsNothing);
+
+      await openFiltered(tester);
+      // The sheet does not edit the ids: they narrow its count.
+      expect(find.widgetWithText(FilledButton, 'Show 2'), findsOneWidget);
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Big spends'));
+      await tester.pumpAndSettle();
+      // Counted as Show will list it: the dinner, which is not in the ids.
+      expect(find.widgetWithText(FilledButton, 'Show 1'), findsOneWidget);
+      // Changed by hand, the ids count again: the pay alone is 500 and up.
+      await tester.tap(railRow('amount'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.widgetWithText(TextField, 'Max'), '9000');
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Show 1'), findsOneWidget);
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.text('To check · 2'), findsOneWidget);
+      expect(find.text('pay'), findsOneWidget);
+      expect(find.text('dinner'), findsNothing);
+      expect(pageTab(tester), 'all');
+
+      // Loaded again and shown as it is.
+      await openFiltered(tester);
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Big spends'));
+      await tester.pumpAndSettle();
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.text('To check · 2'), findsNothing);
+      expect(find.text('dinner'), findsOneWidget);
+      expect(find.text('pay'), findsNothing);
+      expect(pageTab(tester), 'expense');
+    });
+
+    // v2.3.0 review: the page drops ids whose target is gone once Show
+    // applies them, so the sheet drops them as the filter loads.
+    testWidgets('a saved filter loads without its deleted category and '
+        'account, so Show counts what it lists', (tester) async {
+      phone(tester);
+      final p = await spends();
+      final account = await p.addAccount(
+        name: 'Spare Bank',
+        type: AccountType.bank,
+      );
+      final category = await p.addCategory(
+        label: 'Street food',
+        type: TxType.expense,
+        icon: Icons.fastfood,
+        color: Colors.teal,
+      );
+      await p.saveFilter(
+        SavedFilter(
+          id: 'flt_1_0',
+          name: 'Meals',
+          categories: ['food', category],
+          accountId: account,
+        ),
+      );
+      await p.deleteCategory(category);
+      await p.deleteAccount(account);
+      await open(tester, p);
+
+      await tester.tap(find.text('Meals'));
+      await tester.pumpAndSettle();
+      expect(railLabel('categories', 'Categories · 1'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Show 2'), findsOneWidget);
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.text('tea'), findsOneWidget);
+      expect(find.text('dinner'), findsOneWidget);
+      expect(find.text('pay'), findsNothing);
+      // The stored filter is left as it was saved.
+      expect(p.savedFilters.single.accountId, account);
+    });
+
+    // v2.3.0 review: a category deleted into another one (a merge) left
+    // the saved filter naming the dead id, so it loaded with no category
+    // and listed everything.
+    testWidgets('a saved filter follows its category into the one it is '
+        'merged with, and Undo puts the filter back', (tester) async {
+      phone(tester);
+      final p = await spends();
+      Future<String> category(String label) => p.addCategory(
+        label: label,
+        type: TxType.expense,
+        icon: Icons.fastfood,
+        color: Colors.teal,
+      );
+      final street = await category('Street food');
+      final bakery = await category('Bakery');
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: street,
+        amount: 60,
+        note: 'chaat',
+        date: DateTime(2026, 7, 4, 9),
+      );
+      // Sorted, as the sheet saves them.
+      SavedFilter on(String id, String name, List<String> categories) =>
+          SavedFilter(id: id, name: name, categories: categories..sort());
+      await p.saveFilter(on('flt_1_0', 'Snacks', [street]));
+      // Already on the target too: the merge must not list it twice.
+      await p.saveFilter(on('flt_2_0', 'Meals', ['food', street]));
+      await p.saveFilter(on('flt_3_0', 'Bread', [bakery]));
+      final before = p.savedFilters;
+      List<String> categoriesOf(FinanceProvider f, String id) =>
+          f.savedFilters.firstWhere((x) => x.id == id).categories;
+
+      final deleted = await p.deleteCategory(street, moveTo: 'food');
+      expect(categoriesOf(p, 'flt_1_0'), ['food']);
+      expect(categoriesOf(p, 'flt_2_0'), ['food']);
+      // A filter on another category is the same object as before.
+      expect(identical(p.savedFilters.last, before.last), isTrue);
+      // Written, not only held in memory.
+      final again = FinanceProvider();
+      await again.load();
+      expect(categoriesOf(again, 'flt_1_0'), ['food']);
+
+      // Loaded, the filter lists the merged category's rows, the moved one
+      // among them, and not the pay.
+      await open(tester, p);
+      await tester.tap(find.text('Snacks'));
+      await tester.pumpAndSettle();
+      expect(railLabel('categories', 'Categories · 1'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Show 3'), findsOneWidget);
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.text('chaat'), findsOneWidget);
+      expect(find.text('tea'), findsOneWidget);
+      expect(find.text('pay'), findsNothing);
+
+      await p.restoreCategory(deleted);
+      expect(categoriesOf(p, 'flt_1_0'), [street]);
+      expect(categoriesOf(p, 'flt_2_0'), ['food', street]..sort());
+      expect(categoriesOf(p, 'flt_3_0'), [bakery]);
+      final undone = FinanceProvider();
+      await undone.load();
+      expect(categoriesOf(undone, 'flt_1_0'), [street]);
+    });
+
+    test('a category deleted with nowhere to move leaves saved filters as '
+        'they were', () async {
+      final p = await spends();
+      final street = await p.addCategory(
+        label: 'Street food',
+        type: TxType.expense,
+        icon: Icons.fastfood,
+        color: Colors.teal,
+      );
+      await p.saveFilter(
+        SavedFilter(id: 'flt_1_0', name: 'Snacks', categories: [street]),
+      );
+      final saved = p.savedFilters.single;
+
+      final deleted = await p.deleteCategory(street);
+      expect(identical(p.savedFilters.single, saved), isTrue);
+      expect(deleted.filtersBefore, isEmpty);
+      await p.restoreCategory(deleted);
+      expect(identical(p.savedFilters.single, saved), isTrue);
+    });
+
+    testWidgets('loading a saved filter replaces the picks made in the sheet '
+        'before it', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await p.saveFilter(bigSpends);
+      await open(tester, p);
+
+      await tester.tap(railRow('amount'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.widgetWithText(TextField, 'Max'), '200');
+      await tester.pumpAndSettle();
+      await pickCategory(tester, 'salary');
+      expect(railLabel('categories', 'Categories · 1'), findsOneWidget);
+      expect(railLabel('amount', 'Amount · 1'), findsOneWidget);
+
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Big spends'));
+      await tester.pumpAndSettle();
+      expect(railLabel('categories', 'Categories'), findsOneWidget);
+      expect(railLabel('amount', 'Amount · 1'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Show 1'), findsOneWidget);
+      await tester.tap(railRow('amount'));
+      await tester.pumpAndSettle();
+      String? textOf(String field) => tester
+          .widget<TextField>(find.widgetWithText(TextField, field))
+          .controller
+          ?.text;
+      expect(textOf('Min'), '500');
+      expect(textOf('Max'), '');
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.text('Amount from ₹500'), findsOneWidget);
+      expect(find.text('dinner'), findsOneWidget);
+      expect(find.text('pay'), findsNothing);
+    });
+
+    testWidgets('Save current on a page whose tab is not All stores that '
+        'tab', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await openWith(tester, p, const TxFilterRequest(type: TxType.expense));
+      expect(pageTab(tester), 'expense');
+      await openFiltered(tester);
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      // The tab alone is something to save.
+      expect(find.text(nothingSet), findsNothing);
+      await tester.tap(saveCurrent);
+      await tester.pumpAndSettle();
+      await tester.enterText(nameField, 'Spending');
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      final saved = p.savedFilters.single;
+      expect(saved.toJson(), {
+        'id': saved.id,
+        'name': 'Spending',
+        'tab': 'expense',
+      });
+    });
+
+    // v2.3.0 review: a dashboard year arrives as a range with counted
+    // dates and a name, and the sheet hands both back unless the range
+    // itself is picked again.
+    testWidgets('a dashboard year keeps its name through Show unchanged and '
+        'a category change, and a new custom range drops it', (tester) async {
+      // Wide: the range picker's own header needs the room in the test
+      // font, where every letter is a full square.
+      tester.view.physicalSize = const Size(900, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final p = await withRows([
+        (TxType.expense, 'food', 100, 'tea', DateTime(2025, 7, 1, 9)),
+        (TxType.income, 'salary', 5000, 'pay', DateTime(2025, 7, 3, 9)),
+      ]);
+      final year = DateTimeRange(
+        start: DateTime(2025, 4, 1),
+        end: DateTime(2026, 3, 31),
+      );
+      const name = 'FY 2025-26';
+      await openWith(
+        tester,
+        p,
+        TxFilterRequest(range: year, rangeCounted: true, rangeLabel: name),
+      );
+      expect(find.text(name), findsOneWidget);
+
+      // Opened and shown as it is.
+      await openFiltered(tester);
+      expect(find.widgetWithText(ChoiceChip, name), findsOne);
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.text(name), findsOneWidget);
+
+      // A category picked beside it.
+      await openFiltered(tester);
+      await pickCategory(tester, 'food');
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.text(name), findsOneWidget);
+      expect(find.text('tea'), findsOneWidget);
+      expect(find.text('pay'), findsNothing);
+
+      // The same days picked again in the range picker are a plain range.
+      await openFiltered(tester);
+      await tester.tap(find.widgetWithText(ChoiceChip, name));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(ChoiceChip, name), findsNothing);
+      expect(find.widgetWithText(ChoiceChip, fmtDateRange(year)), findsOne);
+      await tester.tap(show);
+      await tester.pumpAndSettle();
+      expect(find.text(name), findsNothing);
+      expect(find.text(fmtDateRange(year)), findsOneWidget);
+    });
+
+    testWidgets('a saved row and Save current read as buttons', (tester) async {
+      final semantics = tester.ensureSemantics();
+      phone(tester);
+      final p = await spends();
+      await p.saveFilter(bigSpends);
+      await open(tester, p);
+      expect(
+        tester.getSemantics(find.byKey(const ValueKey('saved-filter-flt_1_0'))),
+        isSemantics(isButton: true, hasTapAction: true),
+      );
+      await tester.tap(find.text('Big spends'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.getSemantics(find.byKey(const ValueKey('filters-save-current'))),
+        isSemantics(isButton: true, hasTapAction: true, label: 'Save current'),
+      );
+      semantics.dispose();
+    });
+
+    // v2.3.0 rendered-screen pass.
+    testWidgets('the empty line starts where a first saved row\'s name does, '
+        'names that wrap keep a gap between them, and Save current is the '
+        'pill at this size', (tester) async {
+      phone(tester);
+      final p = await spends();
+      await open(tester, p);
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      // The centre of its first line, 16dp tall: in the test font the
+      // words run to a second one.
+      final emptyLine = tester.getTopLeft(find.text(nothingSaved)).dy + 8;
+
+      await p.saveFilter(const SavedFilter(id: 'flt_1_0', name: 'Rent'));
+      for (final (i, name) in const [
+        'Household groceries and vegetables every week',
+        'Fuel and tolls on the long weekend drives',
+      ].indexed) {
+        await p.saveFilter(
+          SavedFilter(id: 'flt_${i + 2}_0', name: name, tab: 'expense'),
+        );
+      }
+      // Any tap in the sheet rebuilds it with the new rows.
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      expect(find.text(nothingSaved), findsNothing);
+      // A one-line name sits mid-row, level with where the empty line was.
+      expect(
+        tester.getCenter(find.text('Rent')).dy,
+        moreOrLessEquals(emptyLine, epsilon: 0.5),
+      );
+      expect(
+        tester
+            .getSize(find.byKey(const ValueKey('saved-filter-flt_1_0')))
+            .height,
+        48,
+      );
+      // Two names of two lines each do not run into one block.
+      final household = find.textContaining('Household');
+      final first = tester.getRect(household);
+      final second = tester.getRect(find.textContaining('Fuel and tolls'));
+      expect(tester.widget<Text>(household).maxLines, 2);
+      expect(
+        first.height,
+        greaterThan(tester.getSize(find.text('Rent')).height),
+      );
+      expect(second.top - first.bottom, greaterThanOrEqualTo(12));
+      // Beside the name, the menu.
+      expect(
+        tester.getRect(actions.first).left,
+        greaterThanOrEqualTo(tester.getRect(find.text('Rent')).right),
+      );
+
+      await tester.tap(find.text('Rent'));
+      await tester.pumpAndSettle();
+      // Rent holds no filter and the page is on All: nothing to save yet.
+      await tester.tap(railRow('amount'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.widgetWithText(TextField, 'Min'), '500');
+      await tester.pumpAndSettle();
+      await tester.tap(railRow('saved'));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('filters-save-current')),
+          matching: find.widgetWithText(OutlinedPill, 'Save current'),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('at 320dp and 2x text the Saved section, its menu and its '
+        'dialogs fit', (tester) async {
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      final p = await spends();
+      await p.saveFilter(bigSpends);
+      await p.saveFilter(
+        const SavedFilter(
+          id: 'flt_2_0',
+          name: 'Household groceries and vegetables every week',
+          tab: 'expense',
+          categories: ['food'],
+        ),
+      );
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: p),
+            ChangeNotifierProvider(create: (_) => SettingsProvider()..load()),
+          ],
+          child: MaterialApp(
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: const TextScaler.linear(2)),
+              child: child!,
+            ),
+            home: const Scaffold(body: TransactionsScreen()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(tune);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text(nothingSet), findsOneWidget);
+
+      // At this size a saved row's name has the pane's width, up to three
+      // lines, with its menu on a line of its own under it, at the end.
+      // Beside the menu the name broke inside words.
+      final pane = tester.getRect(
+        find.byKey(const ValueKey('saved-filter-flt_1_0')),
+      );
+      final name = tester.getRect(find.text('Big spends'));
+      // The button with its 48dp tap target, not the 40dp circle inside.
+      final menu = tester.getRect(
+        find.byWidgetPredicate((w) => w is PopupMenuButton).first,
+      );
+      expect(tester.widget<Text>(find.text('Big spends')).maxLines, 3);
+      expect(name.width, pane.width);
+      expect(menu.top, greaterThanOrEqualTo(name.bottom));
+      expect(menu.right, pane.right);
+      expect(menu.height, greaterThanOrEqualTo(48));
+
+      // Loaded, the draft can be saved, inside the sheet.
+      await tester.tap(find.text('Big spends'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.ensureVisible(saveCurrent);
+      await tester.pumpAndSettle();
+      expect(tester.getRect(saveCurrent).right, lessThanOrEqualTo(320 - 20));
+      // A text button across the pane, its words at the size of the text
+      // around them and free to wrap: the pill, scaled down to fit here,
+      // was drawn at half that size.
+      final target = find.byKey(const ValueKey('filters-save-current'));
+      expect(tester.getSize(target).height, greaterThanOrEqualTo(48));
+      expect(tester.getSize(target).width, pane.width);
+      expect(
+        find.descendant(of: target, matching: find.byType(OutlinedPill)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: target, matching: find.byType(FittedBox)),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: target,
+          matching: find.byIcon(Icons.bookmark_add_outlined),
+        ),
+        findsOneWidget,
+      );
+      // A tap at the target's edge, away from the words, saves.
+      final top = tester.getRect(target).topRight + const Offset(-3, 3);
+      await tester.tapAt(top);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('Save filters'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+
+      await tester.ensureVisible(actions.first);
+      await tester.pumpAndSettle();
+      await tester.tap(actions.first);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('Delete saved filter'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
   });
 
   group('add sheet', () {

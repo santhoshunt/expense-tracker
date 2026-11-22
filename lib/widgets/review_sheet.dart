@@ -7,6 +7,7 @@ import '../providers/settings_provider.dart';
 import '../screens/add_transaction_sheet.dart';
 import '../screens/app_nav.dart';
 import '../services/refund_matching.dart';
+import '../services/review_queue.dart';
 import '../services/transfer_pairing.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
@@ -15,6 +16,7 @@ import '../utils/text_scale.dart';
 import 'animated_fold.dart';
 import 'category_tile_icon.dart';
 import 'empty_state.dart';
+import 'facts_text.dart';
 import 'info_tip.dart';
 import 'section_label.dart';
 import 'undo_snackbar.dart';
@@ -23,9 +25,10 @@ import 'undo_snackbar.dart';
 /// twice, the icon and a launch action together) does nothing.
 bool _reviewSheetOpen = false;
 
-/// The review sheet: imports waiting for review grouped by day, the
-/// transfer and refund suggestions over them, and suspected spam folded at
-/// the bottom. Opened from the message icon on Transactions, the review
+/// The review sheet: imports waiting for review grouped by why they wait
+/// ([HoldReason]), each group under its name and count with its transfer,
+/// refund or ATM suggestions first, and suspected spam folded at the
+/// bottom. Opened from the message icon on Transactions, the review
 /// notification, the This week widget's review count and the weekly digest.
 Future<void> showReviewSheet(BuildContext context) async {
   if (_reviewSheetOpen) return;
@@ -168,6 +171,24 @@ class _ReviewSheetState extends State<_ReviewSheet> {
     );
   }
 
+  // A group's "Confirm N": no dialog. Undo puts its rows back in review,
+  // with the imports that counted once they were confirmed.
+  Future<void> _confirmGroup(List<Tx> group) async {
+    final confirming = _finance.confirmTransactions([
+      for (final t in group) t.id,
+    ]);
+    // Taken before the save is awaited: the next confirm replaces them.
+    final released = _finance.takeReleased();
+    final rows = await confirming;
+    if (rows.isEmpty) return;
+    _offerUndo(
+      'Confirmed ${rows.length} import${rows.length == 1 ? '' : 's'}',
+      () => _finance.restoreEditedTransactions([...rows, ...released]),
+      icon: Icons.done_all,
+      tone: AppToastTone.success,
+    );
+  }
+
   Future<void> _discardAll(int count) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -302,40 +323,70 @@ class _ReviewSheetState extends State<_ReviewSheet> {
         ),
       );
     } else {
-      final labelled =
-          (q.atm.isNotEmpty || q.pairs.isNotEmpty || q.refunds.isNotEmpty) &&
-          q.rows.isNotEmpty;
-      DateTime? lastDay;
+      // The rows waiting for one reason, newest first.
+      List<Widget> rows(HoldReason reason) => [
+        for (final tx in q.held[reason] ?? const <Tx>[])
+          _ReviewRow(tx: tx, offerUndo: _offerUndo),
+      ];
+      // A group under its name and count; nothing when it is empty.
+      // [confirm] names the rows its "Confirm N" confirms.
+      List<Widget> group(
+        String name,
+        List<Widget> items, {
+        HoldReason? confirm,
+      }) => [
+        if (items.isNotEmpty) ...[
+          _GroupHeader(
+            name: name,
+            count: items.length,
+            onConfirm: confirm == null
+                ? null
+                : () => _confirmGroup(q.held[confirm] ?? const []),
+          ),
+          ...items,
+        ],
+      ];
       body = ListView(
         padding: EdgeInsets.only(bottom: 16 + navInset),
         children: [
-          if (labelled)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: SectionLabel('Suggestions'),
-            ),
           // Cash taken out of an ATM is a move to cash in hand, not spend.
-          for (final t in q.atm)
-            _AtmSuggestionRow(tx: t, offerUndo: _offerUndo),
+          ...group('Cash withdrawals', [
+            for (final t in q.atm)
+              _AtmSuggestionRow(tx: t, offerUndo: _offerUndo),
+          ]),
           // Two legs of one own-account move arrive as an expense and an
           // income; pairing books both as transfers so neither inflates
-          // Spent or Income.
-          for (final s in q.pairs)
-            _TransferSuggestionRow(suggestion: s, offerUndo: _offerUndo),
+          // Spent or Income. A leg whose suggestion was dismissed follows.
+          ...group('Possible transfer', [
+            for (final s in q.pairs)
+              _TransferSuggestionRow(suggestion: s, offerUndo: _offerUndo),
+            ...rows(HoldReason.transferLeg),
+          ]),
           // A refund linked to its purchase takes that spend down instead
           // of counting as income.
-          for (final s in q.refunds)
-            _RefundSuggestionRow(suggestion: s, offerUndo: _offerUndo),
-          if (labelled)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: SectionLabel('To review'),
-            ),
-          for (final tx in q.rows) ...[
-            if (DateUtils.dateOnly(tx.date) != lastDay)
-              _DayLabel(day: lastDay = DateUtils.dateOnly(tx.date)),
-            _ReviewRow(tx: tx, offerUndo: _offerUndo),
-          ],
+          ...group('Possible refund', [
+            for (final s in q.refunds)
+              _RefundSuggestionRow(suggestion: s, offerUndo: _offerUndo),
+            ...rows(HoldReason.refund),
+          ]),
+          ...group('Possible duplicates', rows(HoldReason.duplicate)),
+          ...group(
+            'New account',
+            rows(HoldReason.newAccount),
+            confirm: HoldReason.newAccount,
+          ),
+          ...group(
+            'No account number',
+            rows(HoldReason.noAccount),
+            confirm: HoldReason.noAccount,
+          ),
+          ...group(
+            'Transfers',
+            rows(HoldReason.transfer),
+            confirm: HoldReason.transfer,
+          ),
+          // Rows nothing holds any more: sent back to review by an Undo.
+          ...group('To review', rows(HoldReason.other)),
           if (q.spam.isNotEmpty)
             _SpamFold(
               suspects: q.spam,
@@ -403,25 +454,68 @@ class _ReviewSheetState extends State<_ReviewSheet> {
   }
 }
 
-/// "Today", "Yesterday" or "Thu 15 Oct" over a day's rows, in the ledger's
-/// day label style.
-class _DayLabel extends StatelessWidget {
-  final DateTime day;
+/// A group's name and how many items wait under it ("New account · 3"),
+/// with "Confirm N" at its end when the whole group can be confirmed at
+/// once. Above [kLargeTextScale] the button moves under the name, so the
+/// name keeps the row's width, and the name runs to a second line rather
+/// than lose its count to an ellipsis.
+class _GroupHeader extends StatelessWidget {
+  final String name;
+  final int count;
+  final VoidCallback? onConfirm;
 
-  const _DayLabel({required this.day});
+  const _GroupHeader({required this.name, required this.count, this.onConfirm});
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, AppSpace.gap, 20, 6),
-      child: Text(
-        fmtDayHeading(day),
-        style: theme.textTheme.bodySmall?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-          fontWeight: FontWeight.w600,
+    final large = isLargeTextScale(context);
+    // On two lines the count stays with the name's last word: the break
+    // falls inside the name ("No account / number · 1").
+    final label = large
+        ? SectionLabel('$name\u{00A0}·\u{00A0}$count', maxLines: 2)
+        : SectionLabel('$name · $count');
+    final onConfirm = this.onConfirm;
+    final Widget child;
+    if (onConfirm == null) {
+      child = label;
+    } else {
+      // Compact, with a 48dp tap target, as the suggestion cards' buttons.
+      final button = TextButton(
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.standard,
+          minimumSize: const Size(56, 32),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          tapTargetSize: MaterialTapTargetSize.padded,
         ),
-      ),
+        onPressed: onConfirm,
+        // Several groups can show one: a screen reader hears which group.
+        child: Text(
+          'Confirm $count',
+          semanticsLabel: 'Confirm $count in $name',
+        ),
+      );
+      child = large
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                label,
+                Align(alignment: AlignmentDirectional.centerEnd, child: button),
+              ],
+            )
+          // On one baseline: the name has more space above it than under
+          // it, so centred the button's words sat higher than the name.
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Expanded(child: label),
+                button,
+              ],
+            );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: child,
     );
   }
 }
@@ -566,9 +660,11 @@ class _AtmSuggestionRow extends StatelessWidget {
       onDismiss: () {
         final before = tx;
         finance.confirmTransaction(before.id);
+        // Imports that counted once this one was confirmed go back too.
+        final released = finance.takeReleased();
         offerUndo(
           'Kept as spending',
-          () => finance.restoreEditedTransactions([before]),
+          () => finance.restoreEditedTransactions([before, ...released]),
           icon: Icons.done_all,
           tone: AppToastTone.success,
         );
@@ -863,16 +959,16 @@ class _SpamFold extends StatelessWidget {
 }
 
 /// One import waiting for review: the merchant (or the category when the
-/// row names none) over the signed amount and the category, with Confirm
-/// and Discard. Above [kLargeTextScale] the two buttons move under the
-/// text, so the text keeps the row's width. Time and sender stay in the
-/// edit sheet.
+/// row names none) over the signed amount, its day and time, and the
+/// category, with Confirm and Discard. Above [kLargeTextScale] the two buttons
+/// move under the text, so the text keeps the row's width. The sender
+/// stays in the edit sheet.
 class _ReviewRow extends StatelessWidget {
   final Tx tx;
 
   /// A suspected spam row: its amount is plain text, not money green or
-  /// red, since it may be no money at all, and its day ends line two, as
-  /// the fold has no day labels.
+  /// red, since it may be no money at all, and line two gives its day
+  /// with no time.
   final bool spam;
   final _OfferUndo offerUndo;
 
@@ -892,6 +988,9 @@ class _ReviewRow extends StatelessWidget {
     final large = isLargeTextScale(context);
     final finance = context.read<FinanceProvider>();
     final title = finance.rowTitleFor(tx) ?? cat.label;
+    // Midnight is "no time known": the day alone.
+    final timed = tx.date.hour != 0 || tx.date.minute != 0;
+    final time = fmtTime(tx.date);
     final tile = ListTile(
       dense: true,
       contentPadding: EdgeInsetsDirectional.only(
@@ -910,32 +1009,31 @@ class _ReviewRow extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w600),
       ),
-      // The amount in its money colour, as on the ledger rows; plain on a
-      // spam suspect.
-      subtitle: Text.rich(
-        TextSpan(
-          children: [
-            TextSpan(
-              text: '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
-              style: TextStyle(
-                color: spam
-                    ? Theme.of(context).colorScheme.onSurface
-                    : moneyColor(
-                        context,
-                        type: tx.type,
-                        transfer: isTransferCategory(tx.categoryId),
-                      ),
-              ),
-            ),
-            if (title != cat.label) TextSpan(text: ' · ${cat.label}'),
-            if (spam)
-              TextSpan(
-                text: ' · ${fmtDateCompact(DateUtils.dateOnly(tx.date))}',
-              ),
-          ],
+      // The amount, the day, then the category. A line breaks only after a
+      // dot ([FactsText]), so none starts with a dot or holds "PM" alone.
+      // Up to three lines: beside the two buttons the amount and the day
+      // seldom share one, and at two the category was cut to a few
+      // letters. Past three the cut takes the category, which the icon
+      // already shows. The amount is in its money colour, as on the ledger
+      // rows; plain on a spam suspect.
+      subtitle: FactsText(
+        [
+          '${isIncome ? '+' : '−'}${fmtMoney(tx.amount)}',
+          spam
+              ? fmtDateCompact(DateUtils.dateOnly(tx.date))
+              : '${fmtDayHeading(tx.date)}${timed ? ' $time' : ''}',
+          if (title != cat.label) cat.label,
+        ],
+        firstStyle: TextStyle(
+          color: spam
+              ? Theme.of(context).colorScheme.onSurface
+              : moneyColor(
+                  context,
+                  type: tx.type,
+                  transfer: isTransferCategory(tx.categoryId),
+                ),
         ),
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
+        maxLines: 3,
       ),
       trailing: large ? null : _actions(context),
     );
@@ -965,14 +1063,16 @@ class _ReviewRow extends StatelessWidget {
           color: AppColors.of(context).green,
         ),
         // Symmetric with Discard below: Undo puts the captured pending copy
-        // back in review.
+        // back in review, with the imports that counted once it was
+        // confirmed.
         onPressed: () {
           final finance = context.read<FinanceProvider>();
           final confirmed = tx;
           finance.confirmTransaction(confirmed.id);
+          final released = finance.takeReleased();
           offerUndo(
             'Confirmed ${fmtMoney(confirmed.amount)} from $_from',
-            () => finance.restoreEditedTransactions([confirmed]),
+            () => finance.restoreEditedTransactions([confirmed, ...released]),
             icon: Icons.done_all,
             tone: AppToastTone.success,
           );

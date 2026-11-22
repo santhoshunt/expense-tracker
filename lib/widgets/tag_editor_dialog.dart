@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -161,6 +162,16 @@ Future<void> showTagEditor(
   final colours = finance.tagColorSnapshot;
   final savedBefore = finance.savedTags;
   final budgetsBefore = finance.budgets;
+  // Saved filters holding the tag are rewritten with it.
+  final filtersBefore = finance.savedFilters;
+  // Rules that add the tag are rewritten with it. Past rows are not
+  // re-sorted on Undo: the rows come back from their own snapshot.
+  final rulesBefore = finance.rules;
+  Future<void> restoreRuleTags() async {
+    if (listEquals(rulesBefore, finance.rules)) return;
+    await finance.restoreRules(rulesBefore, reapply: false);
+  }
+
   final name = result.name;
   if (name == null) {
     final before = await finance.deleteTag(tag);
@@ -184,6 +195,8 @@ Future<void> showTagEditor(
         await finance.restoreTagColors(colours);
         await finance.restoreSavedTags(savedBefore);
         await finance.restoreBudgets(budgetsBefore);
+        await finance.restoreSavedFilters(filtersBefore);
+        await restoreRuleTags();
         onEdited?.call(tag);
       },
       icon: Icons.delete_outline,
@@ -219,6 +232,8 @@ Future<void> showTagEditor(
       await finance.restoreTagColors(colours);
       await finance.restoreSavedTags(savedBefore);
       await finance.restoreBudgets(budgetsBefore);
+      await finance.restoreSavedFilters(filtersBefore);
+      await restoreRuleTags();
       onEdited?.call(tag);
     },
     icon: Icons.edit_outlined,

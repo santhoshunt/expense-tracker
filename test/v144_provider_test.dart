@@ -377,7 +377,9 @@ void main() {
           date: DateTime(2026, 7, 6, 13),
           ref: 'B',
           rawBody: 'Rs.310 debited at KETTLE NOOK',
-          acctKey: 'ICICI:9999',
+          // v2.3.0: its own new account. On A's, it would count by itself
+          // once A is confirmed, with nothing left for Confirm all.
+          acctKey: 'AXIS:7777',
         ),
       ]);
       expect(byRef(p, 'A').pending, isTrue);
@@ -1002,6 +1004,8 @@ void main() {
       }
     });
 
+    // v2.3.0: with no bank reference of its own. One that differs from the
+    // payment's is a second payment and counts.
     test('a second alert for the whole payment waits as a duplicate', () async {
       final (p, row) = await payment();
       await p.splitTransaction(row.id, three);
@@ -1009,12 +1013,11 @@ void main() {
         alert(
           amount: 5000,
           date: DateTime(2026, 7, 5, 18),
-          ref: 'PAY2',
           rawBody: 'Rs.5000 debited at PEBBLE MART counter 2',
         ),
       ]);
       expect(added, 1);
-      expect(byRef(p, 'PAY2').pending, isTrue);
+      expect(p.pendingTransactions.single.amount, 5000);
     });
 
     test('a merge moves a part\'s refund to the anchor; Undo moves it '

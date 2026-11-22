@@ -52,6 +52,35 @@ void main() {
         'Yesterday',
       );
     });
+
+    test('fmtAgo counts whole calendar days back from today', () {
+      final at = DateTime(2026, 10, 17, 10);
+      String ago(int days, [int hour = 12]) =>
+          fmtAgo(DateTime(2026, 10, 17 - days, hour), now: at);
+      expect(ago(0, 1), 'today');
+      expect(ago(0, 23), 'today');
+      // The calendar day decides, not the hours between.
+      expect(ago(1, 23), 'yesterday');
+      expect(ago(1, 0), 'yesterday');
+      expect(ago(2), '2 days ago');
+      expect(ago(30), '30 days ago');
+      // From 31 days, months of 30 days, rounded down.
+      expect(ago(31), '1 month ago');
+      expect(ago(59), '1 month ago');
+      expect(ago(60), '2 months ago');
+      expect(ago(183), '6 months ago');
+      expect(ago(364), '12 months ago');
+      expect(ago(365), 'over a year ago');
+      expect(ago(900), 'over a year ago');
+      // A day still to come reads today.
+      expect(ago(-1), 'today');
+      expect(ago(-40), 'today');
+      // Across a year end.
+      expect(
+        fmtAgo(DateTime(2026, 12, 31, 23), now: DateTime(2027, 1, 1, 0, 5)),
+        'yesterday',
+      );
+    });
   });
 
   group('payee', () {
@@ -142,7 +171,7 @@ void main() {
         final t = p.transactions.firstWhere((t) => t.id == id);
         expect(t.payee, 'Kappa Cafe');
         expect(p.rowTitleFor(t), 'Kappa Cafe');
-        expect(p.exportData()['version'], 33);
+        expect(p.exportData()['version'], 34);
         // The stored ledger keeps it across a restart.
         final again = await loaded();
         expect(

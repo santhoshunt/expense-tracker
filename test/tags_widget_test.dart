@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/saved_filter.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -243,6 +244,15 @@ void main() {
     tester,
   ) async {
     final p = await seeded();
+    // A rule that adds the tag loses it with the delete.
+    await p.addRule('quillfern', 'food', tags: ['goa trip', 'Work']);
+    List<String> ruleTags() =>
+        p.rules.firstWhere((r) => r.pattern == 'quillfern').tags;
+    // So does a saved filter that holds it (v2.3.0 review).
+    await p.saveFilter(
+      const SavedFilter(id: 'flt_1_0', name: 'Trip', tags: ['goa trip']),
+    );
+    List<String> filterTags() => p.savedFilters.single.tags;
     await tester.pumpWidget(
       withProviders(p, const ClassifiersScreen(initialTab: kCockpitTabTags)),
     );
@@ -259,11 +269,15 @@ void main() {
     await tester.tap(find.text('Delete'));
     await tester.pumpAndSettle();
     expect(row(p, 'beachshack').tags, isEmpty);
+    expect(ruleTags(), ['Work']);
+    expect(filterTags(), isEmpty);
     expect(find.textContaining('Add tags when'), findsOneWidget);
 
     await tester.tap(find.text('Undo'));
     await tester.pumpAndSettle();
     expect(row(p, 'beachshack').tags, ['Goa trip']);
+    expect(ruleTags(), ['goa trip', 'Work']);
+    expect(filterTags(), ['goa trip']);
   });
 
   testWidgets('New tag adds a tag with no payments, and a taken name cannot '
@@ -371,6 +385,15 @@ void main() {
       'tag, with Undo', (tester) async {
     final p = await seeded();
     await p.setTagsForMany({row(p, 'coffeerun').id}, add: {'Work'});
+    // A rule that adds the tag follows the rename.
+    await p.addRule('quillfern', 'food', tags: ['Goa trip']);
+    List<String> ruleTags() =>
+        p.rules.firstWhere((r) => r.pattern == 'quillfern').tags;
+    // So does a saved filter that holds it (v2.3.0 review).
+    await p.saveFilter(
+      const SavedFilter(id: 'flt_1_0', name: 'Trip', tags: ['goa trip']),
+    );
+    List<String> filterTags() => p.savedFilters.single.tags;
     await tester.pumpWidget(
       withProviders(p, const ClassifiersScreen(initialTab: kCockpitTabTags)),
     );
@@ -396,12 +419,16 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Save'));
     await tester.pumpAndSettle();
     expect(row(p, 'beachshack').tags, ['Holiday']);
+    expect(ruleTags(), ['Holiday']);
+    expect(filterTags(), ['holiday']);
     expect(p.tagColor('Holiday'), isNotNull);
     expect(find.text('Renamed "Goa trip" to "Holiday"'), findsOneWidget);
 
     await tester.tap(find.text('Undo'));
     await tester.pumpAndSettle();
     expect(row(p, 'beachshack').tags, ['Goa trip']);
+    expect(ruleTags(), ['Goa trip']);
+    expect(filterTags(), ['goa trip']);
     expect(p.tagColor('Goa trip'), isNull);
     expect(p.tagColor('Holiday'), isNull);
   });

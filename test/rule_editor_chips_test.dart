@@ -806,4 +806,640 @@ void main() {
       expect(find.text('New rule'), findsOneWidget);
     });
   });
+
+  group('Also set', () {
+    List<ClassifierRule> mine(FinanceProvider p) =>
+        p.rules.where((r) => !r.isBuiltIn).toList();
+
+    // A confirmed SMS row no rule has sorted yet.
+    Tx smsRow(
+      String id,
+      String body, {
+      String categoryId = 'other_expense',
+      String payee = '',
+    }) => Tx(
+      id: id,
+      type: TxType.expense,
+      categoryId: categoryId,
+      amount: 250,
+      note: '',
+      date: DateTime(2026, 9, 12, 13),
+      source: TxSource.sms,
+      smsBody: body,
+      sender: 'AD-DEMOBK',
+      payee: payee,
+    );
+    Tx row(FinanceProvider p, String id) =>
+        p.transactions.singleWhere((t) => t.id == id);
+
+    const fold = ValueKey('rule-extras');
+    final payeeField = find.byKey(const ValueKey('rule-payee'));
+    final tagField = find.widgetWithText(TextField, 'Tags');
+    Finder foldValue(String value) =>
+        find.descendant(of: find.byKey(fold), matching: find.text(value));
+    String preview(WidgetTester tester) => tester
+        .widget<Text>(find.byKey(const ValueKey('rule-extras-preview')))
+        .data!;
+
+    /// Opens, or closes, the Also set fold.
+    Future<void> toggleFold(WidgetTester tester) async {
+      await tester.ensureVisible(find.text('Also set'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Also set'));
+      await tester.pumpAndSettle();
+    }
+
+    Future<void> type(WidgetTester tester, Finder field, String text) async {
+      await tester.ensureVisible(field);
+      await tester.pumpAndSettle();
+      await tester.enterText(field, text);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('the fold waits for a category, is not there for spam, reads '
+        'Nothing when closed and opens under the other direction', (
+      tester,
+    ) async {
+      final p = FinanceProvider();
+      await p.load();
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(c, patternSuggestion: 'quillfern'),
+      );
+
+      expect(find.text('Also set'), findsNothing);
+      await classifyAs(tester, 'Spam: never import');
+      expect(find.text('Also set'), findsNothing);
+      await classifyAs(tester, 'Food & Dining');
+      expect(find.text('Also set'), findsOneWidget);
+      expect(foldValue('Nothing'), findsOneWidget);
+      expect(
+        tester.getTopLeft(find.text('Money in goes to another category')).dy,
+        lessThan(tester.getTopLeft(find.text('Also set')).dy),
+      );
+      // A closed fold builds nothing.
+      expect(payeeField, findsNothing);
+      expect(tagField, findsNothing);
+
+      await toggleFold(tester);
+      expect(payeeField, findsOneWidget);
+      expect(tagField, findsOneWidget);
+      expect(preview(tester), 'No past payments change.');
+      expect(
+        tester.getTopLeft(payeeField).dy,
+        lessThan(tester.getTopLeft(tagField).dy),
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the closed line and the preview follow what is typed', (
+      tester,
+    ) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.restoreTransactions([
+        smsRow('q1', 'Rs 250 paid to SAMPLE QUILLFERN'),
+        smsRow('q2', 'Rs 250 paid to SAMPLE QUILLFERN TEAS', payee: 'Meera'),
+        smsRow('m1', 'Rs 250 paid to SAMPLE MAPLEWORTH'),
+      ]);
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'quillfern',
+          categorySuggestion: 'food',
+        ),
+      );
+      await toggleFold(tester);
+
+      // Only the row with no Paid to of its own changes.
+      await type(tester, payeeField, 'Quillfern Teas');
+      expect(
+        preview(tester),
+        'Fills Paid to where you typed none. 1 past payment changes.',
+      );
+      // A tag reaches both matching rows. The comma adds it as a chip.
+      await type(tester, tagField, 'Office,');
+      expect(find.text('# Office'), findsOneWidget);
+      expect(
+        preview(tester),
+        'Fills Paid to where you typed none. 2 past payments change.',
+      );
+      expect(foldValue('Paid to, 1 tag'), findsOneWidget);
+      // Text still in the tag field counts as a tag.
+      await type(tester, tagField, 'Tea');
+      expect(foldValue('Paid to, 2 tags'), findsOneWidget);
+
+      await type(tester, payeeField, '');
+      expect(preview(tester), '2 past payments change.');
+      expect(foldValue('2 tags'), findsOneWidget);
+      await type(tester, tagField, '');
+      expect(foldValue('1 tag'), findsOneWidget);
+
+      // Closed, the line still says what is set.
+      await toggleFold(tester);
+      expect(payeeField, findsNothing);
+      expect(foldValue('1 tag'), findsOneWidget);
+      // Nothing was saved or touched by the preview.
+      expect(mine(p), isEmpty);
+      expect(row(p, 'q1').tags, isEmpty);
+    });
+
+    testWidgets('a new rule saves its Paid to and tags, fills past rows, and '
+        'Undo takes the rule and the rows back', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.restoreTransactions([
+        smsRow('q1', 'Rs 250 paid to SAMPLE QUILLFERN'),
+      ]);
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'quillfern',
+          categorySuggestion: 'food',
+        ),
+      );
+      await toggleFold(tester);
+      await type(tester, payeeField, '  Quillfern   Teas ');
+      await type(tester, tagField, 'Office,');
+      // Typed but not added: saved all the same.
+      await type(tester, tagField, 'Tea');
+      await tester.tap(button('Create'));
+      await tester.pumpAndSettle();
+
+      final saved = mine(p).single;
+      expect(saved.pattern, 'quillfern');
+      expect(saved.categoryId, 'food');
+      expect(saved.payee, 'Quillfern Teas');
+      expect(saved.tags, ['Office', 'Tea']);
+      expect(row(p, 'q1').categoryId, 'food');
+      expect(row(p, 'q1').payee, 'Quillfern Teas');
+      expect(row(p, 'q1').tags, ['Office', 'Tea']);
+      expect(find.text('1 transaction reclassified'), findsOneWidget);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(mine(p), isEmpty);
+      expect(row(p, 'q1').categoryId, 'other_expense');
+      expect(row(p, 'q1').payee, isEmpty);
+      expect(row(p, 'q1').tags, isEmpty);
+    });
+
+    testWidgets('an edit that only adds a Paid to updates past rows, says '
+        'so, and Undo puts the rule and the rows back', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.restoreTransactions([
+        smsRow('q1', 'Rs 250 paid to SAMPLE QUILLFERN', categoryId: 'food'),
+      ]);
+      await p.addRule('quillfern', 'food');
+      await open(tester, p, (c) => showRuleDialog(c, existing: mine(p).single));
+
+      // A rule that sets nothing more opens with the fold closed.
+      expect(foldValue('Nothing'), findsOneWidget);
+      expect(payeeField, findsNothing);
+      await toggleFold(tester);
+      await type(tester, payeeField, 'Quillfern Teas');
+      await tester.tap(button('Save'));
+      await tester.pumpAndSettle();
+
+      expect(mine(p).single.payee, 'Quillfern Teas');
+      expect(row(p, 'q1').payee, 'Quillfern Teas');
+      expect(find.text('1 transaction updated'), findsOneWidget);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(mine(p).single.setsMore, isFalse);
+      expect(row(p, 'q1').payee, isEmpty);
+    });
+
+    testWidgets('editing a rule that sets more opens the fold on its values, '
+        'and clearing them saves a rule that sets nothing', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule(
+        'quillfern',
+        'food',
+        payee: 'Quillfern Teas',
+        tags: ['Office'],
+      );
+      await open(tester, p, (c) => showRuleDialog(c, existing: mine(p).single));
+
+      expect(foldValue('Paid to, 1 tag'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(payeeField).controller!.text,
+        'Quillfern Teas',
+      );
+      expect(find.text('# Office'), findsOneWidget);
+
+      await type(tester, payeeField, 'Maple Teas');
+      await tester.tap(button('Save'));
+      await tester.pumpAndSettle();
+      expect(mine(p).single.payee, 'Maple Teas');
+      expect(mine(p).single.tags, ['Office']);
+
+      await open(tester, p, (c) => showRuleDialog(c, existing: mine(p).single));
+      await type(tester, payeeField, '');
+      await tester.ensureVisible(find.byTooltip('Remove tag Office'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Remove tag Office'));
+      await tester.pumpAndSettle();
+      expect(foldValue('Nothing'), findsOneWidget);
+      await tester.tap(button('Save'));
+      await tester.pumpAndSettle();
+      expect(mine(p).single.setsMore, isFalse);
+      expect(mine(p).single.toJson().keys, ['id', 'pattern', 'categoryId']);
+    });
+
+    testWidgets('a typed Paid to or tag makes the sheet ask before it '
+        'closes; an untouched rule closes at once', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule(
+        'quillfern',
+        'food',
+        payee: 'Quillfern Teas',
+        tags: ['Office'],
+      );
+      Future<void> dragDown() async {
+        await tester.drag(
+          find.byKey(const ValueKey('editor-sheet-handle')),
+          const Offset(0, 300),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      await open(tester, p, (c) => showRuleDialog(c, existing: mine(p).single));
+      await dragDown();
+      expect(find.text('Discard changes?'), findsNothing);
+      expect(find.byType(EditorSheetBody), findsNothing);
+
+      await open(tester, p, (c) => showRuleDialog(c, existing: mine(p).single));
+      await type(tester, payeeField, 'Maple Teas');
+      await dragDown();
+      expect(find.text('Discard changes?'), findsOneWidget);
+      await tester.tap(find.text('Keep editing'));
+      await tester.pumpAndSettle();
+      // Back as it opened: no question.
+      await type(tester, payeeField, 'Quillfern Teas');
+      // Text in the tag field alone counts.
+      await type(tester, tagField, 'Tea');
+      await dragDown();
+      expect(find.text('Discard changes?'), findsOneWidget);
+      await tester.tap(find.text('Discard'));
+      await tester.pumpAndSettle();
+      expect(mine(p).single.payee, 'Quillfern Teas');
+      expect(mine(p).single.tags, ['Office']);
+    });
+
+    testWidgets('a Paid to makes Add to rule a new rule; without one the '
+        'rule it joins keeps its own Paid to and tags', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule('swiggy', 'food', payee: 'Swiggy', tags: ['Delivery']);
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'zomato',
+          categorySuggestion: 'food',
+        ),
+      );
+      expect(find.text('Add to Food & Dining rule'), findsOneWidget);
+      // The closed line says what the rule it joins sets.
+      expect(foldValue('Paid to, 1 tag'), findsOneWidget);
+
+      await toggleFold(tester);
+      await type(tester, payeeField, 'Zomato');
+      expect(find.text('New rule'), findsOneWidget);
+      expect(find.text('Add to Food & Dining rule'), findsNothing);
+      expect(button('Create'), findsOneWidget);
+      // A new rule again: the line is its own.
+      expect(foldValue('Paid to, 1 tag'), findsNothing);
+
+      await type(tester, payeeField, '');
+      expect(find.text('Add to Food & Dining rule'), findsOneWidget);
+      expect(foldValue('Paid to, 1 tag'), findsOneWidget);
+      await tester.tap(button('Add to rule'));
+      await tester.pumpAndSettle();
+      final merged = mine(p).single;
+      expect(merged.pattern, 'swiggy | zomato');
+      expect(merged.payee, 'Swiggy');
+      expect(merged.tags, ['Delivery']);
+    });
+
+    testWidgets('words added to a rule that sets more: the fold and the '
+        'preview say what the rows they reach take', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule(
+        'quillfern',
+        'food',
+        payee: 'Quillfern Teas',
+        tags: ['Office'],
+      );
+      await p.restoreTransactions([
+        smsRow('m1', 'Rs 250 paid to SAMPLE MAPLEWORTH'),
+        smsRow('m2', 'Rs 250 paid to SAMPLE MAPLEWORTH DEPOT', payee: 'Meera'),
+        smsRow('z1', 'Rs 250 paid to SAMPLE ZEPHYRINE'),
+      ]);
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'mapleworth',
+          categorySuggestion: 'food',
+        ),
+      );
+      expect(find.text('Add to Food & Dining rule'), findsOneWidget);
+      expect(foldValue('Paid to, 1 tag'), findsOneWidget);
+      await toggleFold(tester);
+      // Both rows take the tag, and the one with no Paid to that too.
+      expect(
+        preview(tester),
+        'Fills Paid to where you typed none. 2 past payments change.',
+      );
+
+      await tester.tap(button('Add to rule'));
+      await tester.pumpAndSettle();
+      expect(mine(p).single.pattern, 'quillfern | mapleworth');
+      expect(row(p, 'm1').payee, 'Quillfern Teas');
+      expect(row(p, 'm1').tags, ['Office']);
+      expect(row(p, 'm2').payee, 'Meera');
+      expect(row(p, 'm2').tags, ['Office']);
+      expect(row(p, 'z1').tags, isEmpty);
+      expect(
+        find.textContaining('2 transactions reclassified'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('a rule that sets nothing still offers Undo when its save '
+        'gives a row another rule\'s tags', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule('quillfern', 'food', tags: ['Office']);
+      // Loaded after the rule, so no rule has sorted it yet.
+      await p.restoreTransactions([
+        smsRow('late', 'Rs 250 paid to SAMPLE QUILLFERN'),
+      ]);
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'mapleworth',
+          categorySuggestion: 'shopping',
+        ),
+      );
+      expect(find.text('New rule'), findsOneWidget);
+      await toggleFold(tester);
+      expect(preview(tester), '1 past payment changes.');
+      await tester.tap(button('Create'));
+      await tester.pumpAndSettle();
+
+      expect(mine(p), hasLength(2));
+      expect(row(p, 'late').categoryId, 'food');
+      expect(row(p, 'late').tags, ['Office']);
+      expect(find.text('1 transaction reclassified'), findsOneWidget);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(mine(p).single.pattern, 'quillfern');
+      expect(row(p, 'late').categoryId, 'other_expense');
+      expect(row(p, 'late').tags, isEmpty);
+    });
+
+    testWidgets('the preview follows a payment that arrives while the sheet '
+        'is open', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.restoreTransactions([
+        smsRow('q1', 'Rs 250 paid to SAMPLE QUILLFERN'),
+      ]);
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'quillfern',
+          categorySuggestion: 'food',
+        ),
+      );
+      await toggleFold(tester);
+      await type(tester, tagField, 'Office,');
+      expect(preview(tester), '1 past payment changes.');
+
+      await p.restoreTransactions([
+        smsRow('q2', 'Rs 250 paid to SAMPLE QUILLFERN TEAS'),
+      ]);
+      // The next rebuild, here the fold closing and opening, counts again.
+      await toggleFold(tester);
+      await toggleFold(tester);
+      expect(preview(tester), '2 past payments change.');
+    });
+
+    /// Picks [label] in Classify as, scrolling the list to it: the
+    /// transfers are its last section.
+    Future<void> classifyAsTransfer(WidgetTester tester, String label) async {
+      await tester.ensureVisible(find.text('Classify as'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Classify as'));
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text(label),
+        200,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(label).last);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a transfer carries no Paid to: the field goes when a '
+        'transfer category is picked, and the rule saves none', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule(
+        'quillfern',
+        'food',
+        payee: 'Quillfern Teas',
+        tags: ['Office'],
+      );
+      await open(tester, p, (c) => showRuleDialog(c, existing: mine(p).single));
+      expect(payeeField, findsOneWidget);
+
+      await classifyAsTransfer(tester, 'To savings');
+      expect(payeeField, findsNothing);
+      expect(tagField, findsOneWidget);
+      expect(foldValue('1 tag'), findsOneWidget);
+      expect(preview(tester), 'No past payments change.');
+
+      // Back on a spending category, what was typed is still there.
+      await classifyAs(tester, 'Food & Dining');
+      expect(
+        tester.widget<TextField>(payeeField).controller!.text,
+        'Quillfern Teas',
+      );
+      expect(foldValue('Paid to, 1 tag'), findsOneWidget);
+
+      await classifyAsTransfer(tester, 'To savings');
+      await tester.tap(button('Save'));
+      await tester.pumpAndSettle();
+      final saved = mine(p).single;
+      expect(saved.categoryId, kSavingsTransferCategoryId);
+      expect(saved.payee, isEmpty);
+      expect(saved.tags, ['Office']);
+    });
+
+    testWidgets('on a pair with a transfer side only the other rule takes '
+        'the Paid to, and the pair still opens on it', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule('amma', 'food');
+      await p.addRule('amma', kTransferInCategoryId);
+      ClassifierRule ruleIn(String categoryId) =>
+          mine(p).singleWhere((r) => r.categoryId == categoryId);
+
+      await open(tester, p, (c) => showRuleDialog(c, existing: ruleIn('food')));
+      expect(find.text('Edit rule pair'), findsOneWidget);
+      await toggleFold(tester);
+      await type(tester, payeeField, 'Amma');
+      await type(tester, tagField, 'Family,');
+      await tester.tap(button('Save'));
+      await tester.pumpAndSettle();
+      expect(ruleIn('food').payee, 'Amma');
+      expect(ruleIn('food').tags, ['Family']);
+      expect(ruleIn(kTransferInCategoryId).payee, isEmpty);
+      expect(ruleIn(kTransferInCategoryId).tags, ['Family']);
+
+      // Opened from the transfer rule, the sheet shows the other rule's
+      // Paid to, and an untouched save keeps it.
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(c, existing: ruleIn(kTransferInCategoryId)),
+      );
+      expect(foldValue('Paid to, 1 tag'), findsOneWidget);
+      expect(tester.widget<TextField>(payeeField).controller!.text, 'Amma');
+      await tester.tap(button('Save'));
+      await tester.pumpAndSettle();
+      expect(ruleIn('food').payee, 'Amma');
+      expect(ruleIn(kTransferInCategoryId).payee, isEmpty);
+      expect(ruleIn(kTransferInCategoryId).tags, ['Family']);
+    });
+
+    testWidgets('one income rule words the field and the preview Received '
+        'from; a pair keeps Paid to', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.restoreTransactions([
+        smsRow(
+          'in1',
+          'Rs 250 received from SAMPLE QUILLFERN',
+        ).copyWith(type: TxType.income, categoryId: 'other_income'),
+      ]);
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'quillfern',
+          categorySuggestion: 'salary',
+        ),
+      );
+      await toggleFold(tester);
+      expect(find.widgetWithText(TextField, 'Received from'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Paid to'), findsNothing);
+      await type(tester, payeeField, 'Quillfern Works');
+      expect(
+        preview(tester),
+        'Fills Received from where you typed none. 1 past payment changes.',
+      );
+      // The closed line names it as the field does.
+      await toggleFold(tester);
+      expect(foldValue('Received from'), findsOneWidget);
+      expect(foldValue('Paid to'), findsNothing);
+      await toggleFold(tester);
+
+      // With the other direction set, the rule fills both ways.
+      await tester.ensureVisible(
+        find.text('Money out goes to another category'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Money out goes to another category'));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Other direction'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Other direction'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Food & Dining').last);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(TextField, 'Paid to'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'Received from'), findsNothing);
+      expect(
+        preview(tester),
+        'Fills Paid to where you typed none. 1 past payment changes.',
+      );
+      await toggleFold(tester);
+      expect(foldValue('Paid to'), findsOneWidget);
+    });
+
+    // v2.3.0 review: a rule whose category became a transfer after it was
+    // saved keeps its stored Paid to, and fills none.
+    testWidgets('words added to a rule in a transfer category: the closed '
+        'line leaves out the Paid to that rule stores', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule(
+        'quillfern',
+        kSavingsTransferCategoryId,
+        payee: 'Quillfern Fund',
+        tags: ['Office'],
+      );
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(
+          c,
+          patternSuggestion: 'mapleworth',
+          categorySuggestion: kSavingsTransferCategoryId,
+        ),
+      );
+      expect(find.text('Add to To savings rule'), findsOneWidget);
+      expect(foldValue('1 tag'), findsOneWidget);
+      expect(foldValue('Paid to, 1 tag'), findsNothing);
+    });
+
+    testWidgets('at 320dp with 2x text the open fold fits', (tester) async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addRule(
+        'quillfern',
+        'food',
+        payee: 'Quillfern Teas and Savouries of the Old Town',
+        tags: ['Office', 'Reimbursable', 'Tea'],
+      );
+      await open(
+        tester,
+        p,
+        (c) => showRuleDialog(c, existing: mine(p).single),
+        size: const Size(320, 568),
+        textScale: 2,
+      );
+      expect(tester.takeException(), isNull);
+      expect(foldValue('Paid to, 3 tags'), findsOneWidget);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('rule-extras-preview')),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  });
 }

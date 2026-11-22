@@ -147,8 +147,9 @@ String fmtCountIn(DateTime d) {
 final DateFormat _weekdayDayMonth = DateFormat('EEE d MMM');
 final DateFormat _weekdayDayMonthYear = DateFormat('EEE d MMM yyyy');
 
-/// A review list's day label: Today, Yesterday, "Thu 15 Oct", with the year
-/// outside the current one.
+/// A day in words: Today, Yesterday, "Thu 15 Oct", with the year outside
+/// the current one. The day on a review row's second line, and the day a
+/// screen reader says for the comparison chart's day dial.
 String fmtDayHeading(DateTime day, {DateTime? now}) {
   final n = now ?? DateTime.now();
   final today = DateTime(n.year, n.month, n.day);
@@ -169,6 +170,25 @@ String fmtInDays(int days) => days == 0
     : days == 1
     ? 'tomorrow'
     : 'in $days days';
+
+/// How long ago [day] was, by whole calendar days: "today", "yesterday",
+/// "12 days ago" up to 30 days, "3 months ago" (a month being 30 days) up
+/// to 364, then "over a year ago". A day still to come reads "today".
+String fmtAgo(DateTime day, {DateTime? now}) {
+  final n = now ?? DateTime.now();
+  // Counted in UTC, where no clock change makes a day shorter than 24 hours.
+  final days = DateTime.utc(
+    n.year,
+    n.month,
+    n.day,
+  ).difference(DateTime.utc(day.year, day.month, day.day)).inDays;
+  if (days <= 0) return 'today';
+  if (days == 1) return 'yesterday';
+  if (days <= 30) return '$days days ago';
+  if (days >= 365) return 'over a year ago';
+  final months = days ~/ 30;
+  return months == 1 ? '1 month ago' : '$months months ago';
+}
 
 /// Inclusive day range, collapsing whatever the two ends share:
 /// "3 – 9 Aug 2026", "12 Jun – 3 Aug 2026", "20 Dec 2025 – 4 Jan 2026".

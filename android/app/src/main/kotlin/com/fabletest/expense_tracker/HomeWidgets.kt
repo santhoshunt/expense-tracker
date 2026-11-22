@@ -16,6 +16,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.View
@@ -32,7 +33,8 @@ import kotlin.math.abs
  * list, Recent, Quick actions, Big bills and This week widgets (the last
  * two in a 4x2 and a compact 4x1 size), Accounts, Payments to check,
  * Expected balance (4x2 and a compact 2x1), Card cycle, Search bar, Trip
- * budget, Cash in hand, Subscriptions and Who owes you.
+ * budget, Cash in hand, Subscriptions, Who owes you and Cashbacks (the one
+ * widget with a list that scrolls; [CashbacksWidgetService] draws its rows).
  * Pure display, like [BudgetWidgetProvider]: the Dart side writes the
  * snapshots (`flutter.home_widget_data_v1`, home_widgets_service.dart, and
  * the budget one for Budgets list) and this draws them. The snapshot
@@ -76,6 +78,10 @@ object HomeWidgets {
     /** The Card cycle widget with no card: the tap opens its card picker.
      * After the Keep slots (11 to 13). */
     const val PURPOSE_PICK_CARD = 14
+
+    /** The Cashbacks widget's rows: the template each row's tap fills in.
+     * The last purpose [requestCode] has room for. */
+    private const val PURPOSE_ROWS = 15
 
     /** Keep taps from the Payments to check widget not yet applied: a JSON
      * array of the rows' Keep payloads, written as a plain string so the
@@ -132,6 +138,7 @@ object HomeWidgets {
         CashInHandWidgetProvider::class.java,
         SubscriptionsWidgetProvider::class.java,
         WhoOwesYouWidgetProvider::class.java,
+        CashbacksWidgetProvider::class.java,
     )
 
     private fun today(): Long = LocalDate.now().toEpochDay()
@@ -201,6 +208,8 @@ object HomeWidgets {
                     ({ w, h, _ -> subscriptions(context, w, h, id, data, theme) })
                 WhoOwesYouWidgetProvider::class.java.name ->
                     ({ w, h, _ -> owed(context, w, h, id, data, theme) })
+                CashbacksWidgetProvider::class.java.name ->
+                    ({ _, _, _ -> cashbacks(context, id, data, theme) })
                 else -> return
             }
             // The fallbacks are the smallest a launcher gives: 4 columns of
@@ -219,6 +228,14 @@ object HomeWidgets {
                 provider == WhoOwesYouWidgetProvider::class.java.name
             ) 110 else 250
             WidgetKit.update(context, manager, id, fallbackW, if (oneRow) 48 else 110, build)
+            // The Cashbacks rows come from CashbacksWidgetService, which
+            // reads the snapshot again only when told it changed. The call
+            // is deprecated from Android 15 for a way to send the rows that
+            // needs Android 12; this app runs from Android 7.
+            if (provider == CashbacksWidgetProvider::class.java.name) {
+                @Suppress("DEPRECATION")
+                manager.notifyAppWidgetViewDataChanged(id, R.id.hw_list)
+            }
         } catch (_: Exception) {
             // Drawn again on the next data change or 30-minute redraw.
         }
@@ -2585,6 +2602,90 @@ object HomeWidgets {
         return views
     }
 
+    // --- Cashbacks ----------------------------------------------------------
+
+    /** The snapshot's Cashbacks rows in its order (the most rupees earned
+     * first); null without the block. */
+    fun cashbackRows(data: JSONObject?): List<JSONObject>? {
+        val rows = data?.optJSONArray("cashbacks") ?: return null
+        return (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+    }
+
+    /** " · till 20 Nov", the day a Cashbacks [row]'s statement cycle ends;
+     * null once that day has passed. The snapshot is then from the cycle
+     * before: the row shows its zero figure and stays out of the total
+     * until the app sends the new cycle's, as the Card cycle widget shows
+     * ₹0. */
+    fun cashbackTill(row: JSONObject): String? =
+        row.day("cycleEnd")?.takeIf { it >= today() }
+            ?.let { " · till ${LocalDate.ofEpochDay(it).format(dayMonth)}" }
+
+    /** What every credit card with rewards earned in its current cycle: the
+     * title and the total in the header, and under it a list of the cards
+     * that scrolls, so it needs no width or height to fit rows to
+     * ([CashbacksWidgetService] draws them). The total adds the rupee
+     * figures of the cards whose cycle still runs; a points card with no
+     * value per point has none, and with no such card the total hides. */
+    private fun cashbacks(
+        context: Context,
+        id: Int,
+        data: JSONObject?,
+        theme: WidgetTheme,
+    ): RemoteViews {
+        val views = base(
+            context, R.layout.home_widget_cashbacks, theme, id, QuickActions.OPEN_ACCOUNTS
+        )
+        views.setTextColor(R.id.hw_title, theme.text)
+        views.setTextColor(R.id.hw_right, theme.safe)
+        views.setTextColor(R.id.hw_empty, theme.textSecondary)
+        // The adapter and the template are set on every build, so both
+        // orientation copies WidgetKit.update sends carry them. The widget
+        // id in the data gives each widget its own rows factory: the system
+        // keeps one per distinct intent, and extras do not make one distinct.
+        // CashbacksWidgetService reads the id back from it, as the last path
+        // part, to find this widget's width.
+        // Deprecated from Android 15, as the data-changed call in render is.
+        @Suppress("DEPRECATION")
+        views.setRemoteAdapter(
+            R.id.hw_list,
+            Intent(context, CashbacksWidgetService::class.java)
+                .setData(Uri.parse("cashbacks://widget/$id"))
+        )
+        // A list takes the taps on its rows, so hw_root's tap never fires
+        // over it: each row fills in this template instead
+        // (setOnClickFillInIntent). From Android 12 a fill-in needs a
+        // mutable PendingIntent. The intent names the app's own launcher
+        // entry, which nothing a fill-in adds can change.
+        val mutable =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        views.setPendingIntentTemplate(
+            R.id.hw_list,
+            PendingIntent.getActivity(
+                context,
+                requestCode(id, PURPOSE_ROWS),
+                QuickActions.intent(context, QuickActions.OPEN_ACCOUNTS)
+                    ?: BudgetWidgetProvider.launchIntent(context),
+                PendingIntent.FLAG_UPDATE_CURRENT or mutable
+            )
+        )
+        val rows = cashbackRows(data)
+        val counted = rows.orEmpty().filter { cashbackTill(it) != null && !it.isNull("rupees") }
+        views.setViewVisibility(R.id.hw_right, if (counted.isEmpty()) View.GONE else View.VISIBLE)
+        views.setTextViewText(
+            R.id.hw_right,
+            "≈ ${WidgetKit.rupees(counted.sumOf { it.optDouble("rupees", 0.0) })}"
+        )
+        val empty = rows.isNullOrEmpty()
+        views.setViewVisibility(R.id.hw_list, if (empty) View.GONE else View.VISIBLE)
+        views.setViewVisibility(R.id.hw_empty, if (empty) View.VISIBLE else View.GONE)
+        views.setTextViewText(
+            R.id.hw_empty,
+            if (rows == null) context.getString(R.string.home_widget_empty)
+            else context.getString(R.string.home_widget_cashbacks_empty)
+        )
+        return views
+    }
+
     // --- Search bar ---------------------------------------------------------
 
     /** A search field that opens the search screen, and an Add button at its
@@ -2777,6 +2878,10 @@ class SubscriptionsWidgetProvider : HomeWidgetProviderBase()
 
 /** Who owes you (2x2): the total owed back and the people who owe most. */
 class WhoOwesYouWidgetProvider : HomeWidgetProviderBase()
+
+/** Cashbacks (4x2): what each credit card with rewards earned this cycle,
+ * in a list that scrolls, and their total. */
+class CashbacksWidgetProvider : HomeWidgetProviderBase()
 
 /** Keep on a Payments to check widget row. Queues the row's payload under
  * [HomeWidgets.KEPT_KEY], cancels its payment-to-check note and redraws the

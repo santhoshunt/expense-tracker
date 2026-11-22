@@ -155,6 +155,66 @@ void main() {
         [for (final r in before) (r.id, r.pattern)],
       );
     });
+
+    test('the survivor keeps its Paid to, or takes the first one among the '
+        'merged rules; tags are the union', () async {
+      final p = await loaded();
+      await p.addRule('c', 'food', payee: 'Third', tags: ['Tea']); // index 2
+      await p.addRule('b', 'food', payee: 'Second', tags: ['office', 'Team']);
+      await p.addRule('a', 'food', tags: ['Office']); // index 0, no Paid to
+      final ids = [for (final r in p.rules.take(3)) r.id];
+
+      await p.mergeRules(ids.toSet());
+      final merged = p.rules.singleWhere((r) => r.id == ids.first);
+      expect(merged.patterns, ['a', 'b', 'c']);
+      expect(merged.payee, 'Second', reason: 'the first rule that has one');
+      // In rule order, one spelling each.
+      expect(merged.tags, ['Office', 'Team', 'Tea']);
+
+      // A survivor with a Paid to of its own keeps it.
+      await p.addRule('d', 'food', payee: 'Fourth');
+      final top = p.rules.first.id;
+      await p.mergeRules({top, merged.id});
+      final again = p.rules.singleWhere((r) => r.id == top);
+      expect(again.payee, 'Fourth');
+      expect(again.tags, ['Office', 'Team', 'Tea']);
+    });
+
+    test('a merge fills past rows from the merged rule, and Undo puts the '
+        'rules and the rows back', () async {
+      final p = await loaded();
+      await p.addRule('mapleworth', 'food');
+      await p.addRule('quillfern', 'food', payee: 'Quillfern Teas');
+      // Loaded after the rules, so no rule has touched it.
+      await p.restoreTransactions([
+        Tx(
+          id: 'm1',
+          type: TxType.expense,
+          categoryId: 'food',
+          amount: 250,
+          note: '',
+          date: DateTime(2026, 9, 12, 13),
+          source: TxSource.sms,
+          smsBody: 'Rs 250 paid to MAPLEWORTH DEPOT',
+          sender: 'AD-DEMOBK',
+        ),
+      ]);
+      final before = List.of(p.rules);
+
+      final applied = await p.mergeRules({before[0].id, before[1].id});
+      Tx row() => p.transactions.singleWhere((t) => t.id == 'm1');
+      expect(row().payee, 'Quillfern Teas');
+      expect(applied.reclassified, 0);
+      expect(applied.reclassifiedRows.single.id, 'm1');
+
+      await p.restoreRules(before, reapply: false);
+      await p.restoreEditedTransactions(applied.reclassifiedRows);
+      expect(row().payee, isEmpty);
+      expect(
+        [for (final r in p.rules) (r.id, r.pattern, r.payee)],
+        [for (final r in before) (r.id, r.pattern, r.payee)],
+      );
+    });
   });
 
   group('account menu position', () {

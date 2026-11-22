@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -97,6 +99,72 @@ void main() {
       expect(p.importRules, isNotEmpty);
     },
   );
+
+  test('rules carry their Paid to and tags through a backup, a restore '
+      'and a reload', () async {
+    final p = await loaded();
+    await p.addRule('mapleworth', 'shopping');
+    await p.addRule(
+      'quillfern',
+      'food',
+      payee: 'Quillfern Teas',
+      tags: ['Office', 'Tea'],
+    );
+    final data = jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
+    expect(data['version'], 34);
+    final exported = (data['rules'] as List).cast<Map<String, dynamic>>();
+    final full = exported.firstWhere((r) => r['pattern'] == 'quillfern');
+    expect(full['payee'], 'Quillfern Teas');
+    expect(full['tags'], ['Office', 'Tea']);
+    // A rule that sets nothing more writes neither key.
+    final plain = exported.firstWhere((r) => r['pattern'] == 'mapleworth');
+    expect(plain.keys, ['id', 'pattern', 'categoryId']);
+
+    freshDevice();
+    final p2 = await loaded();
+    await p2.importData(data, replace: true);
+    ClassifierRule rule(FinanceProvider f, String pattern) =>
+        f.rules.firstWhere((r) => r.pattern == pattern);
+    expect(rule(p2, 'quillfern').payee, 'Quillfern Teas');
+    expect(rule(p2, 'quillfern').tags, ['Office', 'Tea']);
+    expect(rule(p2, 'mapleworth').setsMore, isFalse);
+
+    // And the stored rules read back the same.
+    final p3 = await loaded();
+    expect(rule(p3, 'quillfern').payee, 'Quillfern Teas');
+    expect(rule(p3, 'quillfern').tags, ['Office', 'Tea']);
+
+    // A merging restore adds a file-only rule with what it sets.
+    freshDevice();
+    final device = await loaded();
+    await device.addRule('on the device', 'transport');
+    await device.importData(data, replace: false);
+    expect(rule(device, 'quillfern').tags, ['Office', 'Tea']);
+    expect(rule(device, 'on the device').setsMore, isFalse);
+  });
+
+  test('rules from an older backup, or with broken values, restore and '
+      'set nothing more', () async {
+    final p = await loaded();
+    await p.importData({
+      'app': 'expense_tracker',
+      'version': 33,
+      'transactions': <dynamic>[],
+      'rules': [
+        {'id': 'u1', 'pattern': 'quillfern', 'categoryId': 'food'},
+        {
+          'id': 'u2',
+          'pattern': 'mapleworth',
+          'categoryId': 'shopping',
+          'payee': 12,
+          'tags': {'Office': true},
+        },
+      ],
+    }, replace: true);
+    expect(p.loadWarnings, isEmpty);
+    expect(p.rules.map((r) => r.id), containsAll(['u1', 'u2']));
+    expect(p.rules.any((r) => r.setsMore), isFalse);
+  });
 
   group('backups exclude SMS bodies', () {
     Map<String, dynamic> smsRow({

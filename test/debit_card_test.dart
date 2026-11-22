@@ -599,7 +599,7 @@ void main() {
       );
       await p.linkDebitCard(card, bank);
       final data = jsonDecode(jsonEncode(p.exportData()));
-      expect(data['version'], 33);
+      expect(data['version'], 34);
 
       SharedPreferences.setMockInitialValues({});
       final q = await loaded();

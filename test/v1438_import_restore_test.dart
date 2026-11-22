@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/account.dart';
+import 'package:expense_tracker/models/saved_filter.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -200,7 +201,7 @@ void main() {
         expect(json, isNot(contains('QUILLFERN')));
         expect(json, isNot(contains('XX3141')));
         final data = jsonDecode(json) as Map<String, dynamic>;
-        expect(data['version'], 33);
+        expect(data['version'], 34);
         expect(data['discardedImports'], hasLength(1));
 
         SharedPreferences.setMockInitialValues({});
@@ -333,7 +334,9 @@ void main() {
       alert(ref: 'S1', rawBody: 'Rs.640 debited from A/c XX3141 at SWIGGY'),
     ]);
     // Started while the first awaits its save: it resets the shared figure.
-    final waits = p.addImported([alert(ref: 'W1', date: daysAgo(4))]);
+    // With no bank reference it may be the first alert again, so it waits
+    // (v2.3.0: two different references would be two payments).
+    final waits = p.addImported([alert(date: daysAgo(4))]);
     final (_, _, counted) = await sure;
     final (_, _, waitsCounted) = await waits;
     expect(counted, 1);
@@ -528,7 +531,7 @@ void main() {
       expect(await p.addSavedTag('Diwali', null), isTrue);
       final data =
           jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
-      expect(data['version'], 33);
+      expect(data['version'], 34);
 
       SharedPreferences.setMockInitialValues({});
       final phone = await fresh();
@@ -541,6 +544,325 @@ void main() {
       expect(g.cap, 500);
       expect(phone.transactions.single.rewardGroup, 'gdine');
       expect(phone.savedTags, ['Diwali']);
+    });
+  });
+
+  group('saved filters', () {
+    SavedFilter trip(String id, String name) => SavedFilter(
+      id: id,
+      name: name,
+      tab: 'expense',
+      categories: const ['food', 'transport'],
+      tags: const ['hill trip'],
+      accountId: 'acct_1',
+      thisMonth: true,
+      min: 99.5,
+    );
+
+    List<String> names(FinanceProvider p) => [
+      for (final f in p.savedFilters) f.name,
+    ];
+
+    test('the model keeps every part through JSON, and leaves unset parts '
+        'out', () {
+      final ranged = SavedFilter(
+        id: 'flt_1_0',
+        name: 'Last year',
+        tab: 'income',
+        groups: const ['grp_1', '_ungrouped'],
+        budgets: const ['bud_1'],
+        rangeStart: DateTime(2025, 4, 1),
+        rangeEnd: DateTime(2026, 3, 31),
+        rangeCounted: true,
+        rangeLabel: 'FY 2025-26',
+        max: 2000,
+      );
+      final back = SavedFilter.fromJson(jsonDecode(jsonEncode(ranged)))!;
+      expect(back.toJson(), ranged.toJson());
+      expect(back.tab, 'income');
+      expect(back.groups, ['grp_1', '_ungrouped']);
+      expect(back.budgets, ['bud_1']);
+      expect(back.rangeStart, DateTime(2025, 4, 1));
+      expect(back.rangeEnd, DateTime(2026, 3, 31));
+      expect(back.rangeCounted, isTrue);
+      expect(back.rangeLabel, 'FY 2025-26');
+      expect(back.min, isNull);
+      expect(back.max, 2000);
+      expect(back.thisMonth, isFalse);
+      expect(back.month, isNull);
+
+      final moving = SavedFilter.fromJson(
+        jsonDecode(jsonEncode(trip('flt_2_0', 'Hill trip'))),
+      )!;
+      expect(moving.thisMonth, isTrue);
+      expect(moving.month, isNull);
+      expect(moving.categories, ['food', 'transport']);
+      expect(moving.tags, ['hill trip']);
+      expect(moving.accountId, 'acct_1');
+      expect(moving.min, 99.5);
+
+      final fixed = SavedFilter.fromJson(
+        jsonDecode(
+          jsonEncode(
+            SavedFilter(id: 'flt_3_0', name: 'July', month: DateTime(2026, 7)),
+          ),
+        ),
+      )!;
+      expect(fixed.month, DateTime(2026, 7));
+      expect(fixed.thisMonth, isFalse);
+
+      // Only what narrows is stored.
+      expect(const SavedFilter(id: 'flt_4_0', name: 'Bare').toJson(), {
+        'id': 'flt_4_0',
+        'name': 'Bare',
+        'tab': 'all',
+      });
+      final renamed = ranged.copyWith(name: 'Year before');
+      expect(renamed.name, 'Year before');
+      expect(renamed.toJson()..remove('name'), ranged.toJson()..remove('name'));
+    });
+
+    test('the model reads a damaged entry tolerantly', () {
+      expect(SavedFilter.fromJson('nope'), isNull);
+      expect(SavedFilter.fromJson({'name': 'No id'}), isNull);
+      expect(SavedFilter.fromJson({'id': 'flt_1_0'}), isNull);
+      expect(SavedFilter.fromJson({'id': 'flt_1_0', 'name': '  '}), isNull);
+      expect(SavedFilter.fromJson({'id': 7, 'name': 'Odd id'}), isNull);
+
+      final f = SavedFilter.fromJson({
+        'id': 'flt_1_0',
+        'name': ' Odd parts ',
+        'tab': 4,
+        'categories': ['food', 9, ''],
+        'groups': 'grp_1',
+        'tags': null,
+        'accountId': 12,
+        'thisMonth': 'yes',
+        'month': 'July',
+        'from': '2026-07-10',
+        'to': '2026-07-01',
+        'rangeCounted': true,
+        'rangeLabel': 'Backwards',
+        'min': '50',
+        'max': 80,
+      })!;
+      expect(f.name, 'Odd parts');
+      expect(f.tab, 'all');
+      expect(f.categories, ['food']);
+      expect(f.groups, isEmpty);
+      expect(f.tags, isEmpty);
+      expect(f.accountId, isNull);
+      expect(f.thisMonth, isFalse);
+      expect(f.month, isNull);
+      // A range that runs backwards is no range, and takes its flavour
+      // with it.
+      expect(f.rangeStart, isNull);
+      expect(f.rangeEnd, isNull);
+      expect(f.rangeCounted, isFalse);
+      expect(f.rangeLabel, isNull);
+      expect(f.min, isNull);
+      expect(f.max, 80);
+
+      // A range wins over a month, and a fixed month over This month.
+      final both = SavedFilter.fromJson({
+        'id': 'flt_2_0',
+        'name': 'Both',
+        'thisMonth': true,
+        'month': '2026-07',
+        'from': '2026-07-01',
+        'to': '2026-07-10',
+      })!;
+      expect(both.rangeStart, DateTime(2026, 7, 1));
+      expect(both.month, isNull);
+      expect(both.thisMonth, isFalse);
+      final monthAndMoving = SavedFilter.fromJson({
+        'id': 'flt_3_0',
+        'name': 'Month',
+        'thisMonth': true,
+        'month': '2026-07',
+      })!;
+      expect(monthAndMoving.month, DateTime(2026, 7));
+      expect(monthAndMoving.thisMonth, isFalse);
+    });
+
+    test('a saved filter persists, is replaced by id and deleted', () async {
+      final p = await fresh();
+      final first = p.newSavedFilterId();
+      final second = p.newSavedFilterId();
+      expect(first, startsWith('flt_'));
+      expect(second, isNot(first));
+      await p.saveFilter(trip(first, 'Hill trip'));
+      await p.saveFilter(trip(second, 'Groceries'));
+
+      final again = await fresh();
+      expect(names(again), ['Hill trip', 'Groceries']);
+      expect(
+        again.savedFilters.first.toJson(),
+        trip(first, 'Hill trip').toJson(),
+      );
+
+      // The same id replaces in place; the order holds.
+      await again.saveFilter(again.savedFilters.first.copyWith(name: 'Hills'));
+      expect(names(again), ['Hills', 'Groceries']);
+      await again.deleteSavedFilter(second);
+      await again.deleteSavedFilter('flt_none');
+      expect(names(again), ['Hills']);
+
+      final third = await fresh();
+      expect(names(third), ['Hills']);
+      expect(third.loadWarnings, isEmpty);
+    });
+
+    test('a stored entry with no id or name is skipped, and a second one '
+        'with a seen id', () async {
+      SharedPreferences.setMockInitialValues({
+        'saved_filters_v1': jsonEncode([
+          {'name': 'No id'},
+          trip('flt_1_0', 'Hill trip').toJson(),
+          {'id': 'flt_2_0'},
+          'not a filter',
+          trip('flt_1_0', 'Twin').toJson(),
+        ]),
+      });
+      final p = await fresh();
+      expect(names(p), ['Hill trip']);
+      expect(p.loadWarnings, isEmpty);
+    });
+
+    test('an unreadable stored list warns, stays as stored, and a replacing '
+        'restore that carries the key clears the warning', () async {
+      SharedPreferences.setMockInitialValues({'saved_filters_v1': '{broken'});
+      final p = await fresh();
+      expect(p.savedFilters, isEmpty);
+      expect(p.loadWarnings, ['saved filters']);
+      // Another marks save leaves the stored text alone.
+      await p.addSavedTag('Diwali', null);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('saved_filters_v1'), '{broken');
+
+      await p.importData({
+        ...p.exportData(),
+        'savedFilters': [trip('flt_1_0', 'Hill trip').toJson()],
+      }, replace: true);
+      expect(p.loadWarnings, isEmpty);
+      expect(names(p), ['Hill trip']);
+      expect(prefs.getString('saved_filters_v1'), contains('Hill trip'));
+    });
+
+    test('the backup carries saved filters: replace takes them, merge adds '
+        'the missing ids, an older backup keeps the device\'s, a factory '
+        'reset clears them', () async {
+      final p = await fresh();
+      await p.saveFilter(trip('flt_1_0', 'Hill trip'));
+      final data =
+          jsonDecode(jsonEncode(p.exportData())) as Map<String, dynamic>;
+      expect(data['version'], 34);
+      expect(data['savedFilters'], [trip('flt_1_0', 'Hill trip').toJson()]);
+
+      SharedPreferences.setMockInitialValues({});
+      final other = await fresh();
+      await other.saveFilter(trip('flt_9_0', 'Groceries'));
+      await other.importData(data, replace: true);
+      expect(names(other), ['Hill trip']);
+
+      // A merge keeps the device's copy of an id both sides hold, adds the
+      // rest, and skips a broken entry.
+      await other.saveFilter(trip('flt_9_0', 'Groceries'));
+      await other.importData({
+        ...data,
+        'savedFilters': [
+          trip('flt_1_0', 'Renamed elsewhere').toJson(),
+          {'id': 'flt_5_0'},
+          trip('flt_6_0', 'Rent').toJson(),
+        ],
+      }, replace: false);
+      expect(names(other), ['Hill trip', 'Groceries', 'Rent']);
+
+      // A backup from before saved filters keeps the device's, in both
+      // modes.
+      final older = {...data}..remove('savedFilters');
+      await other.importData(older, replace: true);
+      expect(names(other), ['Hill trip', 'Groceries', 'Rent']);
+      await other.importData(older, replace: false);
+      expect(names(other), ['Hill trip', 'Groceries', 'Rent']);
+
+      final reloaded = await fresh();
+      expect(names(reloaded), ['Hill trip', 'Groceries', 'Rent']);
+
+      await other.clearAll();
+      expect(other.savedFilters, hasLength(3));
+      await other.clearAll(includeConfig: true);
+      expect(other.savedFilters, isEmpty);
+      expect((await fresh()).savedFilters, isEmpty);
+    });
+
+    // v2.3.0 review: an account the backup holds under another id folds
+    // into the device's, and a filter on it follows, as reminders do.
+    test('a merging restore points a saved filter at the device account its '
+        'own folded into', () async {
+      final p = await fresh();
+      final device = await p.addAccount(
+        name: 'Lantern Bank',
+        type: AccountType.bank,
+      );
+      expect(await p.addAccountKey(device, 'LANTERN:4321'), isTrue);
+      SavedFilter on(String id, String name, String accountId) =>
+          SavedFilter(id: id, name: name, accountId: accountId);
+
+      await p.importData({
+        ...p.exportData(),
+        'accounts': [
+          ...p.accounts.map((a) => a.toJson()),
+          Account(
+            id: 'acct_elsewhere',
+            name: 'Lantern 4321',
+            type: AccountType.bank,
+            keys: {'LANTERN:4321'},
+          ).toJson(),
+          Account(
+            id: 'acct_new',
+            name: 'Pebble Card',
+            type: AccountType.creditCard,
+            keys: {'PEBBLE:7788'},
+          ).toJson(),
+        ],
+        'savedFilters': [
+          on('flt_1_0', 'Lantern rows', 'acct_elsewhere').toJson(),
+          on('flt_2_0', 'Card rows', 'acct_new').toJson(),
+        ],
+      }, replace: false);
+
+      expect(p.accountById('acct_elsewhere'), isNull);
+      SavedFilter saved(FinanceProvider f, String id) =>
+          f.savedFilters.firstWhere((x) => x.id == id);
+      expect(saved(p, 'flt_1_0').accountId, device);
+      // An account that came in as its own keeps its id.
+      expect(saved(p, 'flt_2_0').accountId, 'acct_new');
+      expect(saved(await fresh(), 'flt_1_0').accountId, device);
+    });
+
+    // v2.3.0 review: merging two accounts removes the source's id.
+    test('merging accounts moves a saved filter from the source to the '
+        'target', () async {
+      final p = await fresh();
+      final a = await p.addAccount(name: 'First', type: AccountType.bank);
+      final b = await p.addAccount(name: 'Second', type: AccountType.bank);
+      final c = await p.addAccount(name: 'Third', type: AccountType.bank);
+      await p.saveFilter(
+        SavedFilter(id: 'flt_1_0', name: 'On B', accountId: b),
+      );
+      await p.saveFilter(
+        SavedFilter(id: 'flt_2_0', name: 'On C', accountId: c),
+      );
+      final onC = p.savedFilters.last;
+
+      await p.mergeAccounts(b, a);
+      expect(p.savedFilters.first.accountId, a);
+      expect(p.savedFilters.first.name, 'On B');
+      expect(identical(p.savedFilters.last, onC), isTrue);
+      final again = await fresh();
+      expect(again.savedFilters.first.accountId, a);
+      expect(again.savedFilters.last.accountId, c);
     });
   });
 }

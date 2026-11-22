@@ -581,6 +581,137 @@ void main() {
           )
           as Map<String, dynamic>;
 
+  test('the snapshot lists what each card with rewards earned this cycle, '
+      'the most rupees first', () async {
+    FinanceProvider.figuresClock = () => now;
+    addTearDown(() => FinanceProvider.figuresClock = DateTime.now);
+    final p = FinanceProvider();
+    await p.load();
+    final s = SettingsProvider();
+    await s.load();
+    // A card, its rewards and one payment on it inside the current cycle.
+    Future<String> card(
+      String name, {
+      CardRewards? rewards,
+      double spend = 0,
+      int? statementDay,
+    }) async {
+      final id = await p.addAccount(name: name, type: AccountType.creditCard);
+      if (statementDay != null) {
+        await p.setCardCycle(id, statementDay: statementDay);
+      }
+      if (rewards != null) await p.setCardRewards(id, rewards);
+      if (spend > 0) {
+        final buy = await p.addTransaction(
+          type: TxType.expense,
+          categoryId: 'shopping',
+          amount: spend,
+          note: 'Test store',
+          date: DateTime(2026, 7, 10, 11),
+        );
+        await p.assignAccount(buy, id);
+      }
+      return id;
+    }
+
+    const points = RewardUnit.points;
+    // 1% of ₹2,000.
+    await card(
+      'Shopping card',
+      rewards: const CardRewards(baseRate: 1),
+      spend: 2000,
+      statementDay: 25,
+    );
+    // 5% of ₹1,000.
+    await card(
+      'Travel card',
+      rewards: const CardRewards(baseRate: 5),
+      spend: 1000,
+    );
+    // 2 points per ₹100 on ₹6,000, each worth ₹0.25.
+    await card(
+      'Miles card',
+      rewards: const CardRewards(unit: points, baseRate: 2, pointValue: 0.25),
+      spend: 6000,
+    );
+    // Points with no value: 40, then 200.
+    await card(
+      'Dining card',
+      rewards: const CardRewards(unit: points, baseRate: 4),
+      spend: 1000,
+    );
+    await card(
+      'Fuel card',
+      rewards: const CardRewards(unit: points, baseRate: 4),
+      spend: 5000,
+    );
+    // 40 points with no value again: level with Dining card on points, so
+    // the two go by name, though this one was added later.
+    await card(
+      'Cab card',
+      rewards: const CardRewards(unit: points, baseRate: 4),
+      spend: 1000,
+    );
+    // Nothing earned yet on either: a tie, which goes by name.
+    await card('Zero card B', rewards: const CardRewards(baseRate: 1));
+    await card('Zero card A', rewards: const CardRewards(baseRate: 1));
+    // Left out: no rewards set up, a closed card, and a bank account.
+    await card('Plain card', spend: 3000);
+    final closed = await card(
+      'Closed card',
+      rewards: const CardRewards(baseRate: 1),
+      spend: 4000,
+    );
+    await p.closeAccount(closed);
+    await p.addAccount(name: 'Test bank', type: AccountType.bank);
+
+    final rows = (snapshotOf(p, s)['cashbacks'] as List)
+        .cast<Map<String, dynamic>>();
+    expect(
+      [for (final r in rows) r['name']],
+      [
+        'Travel card',
+        'Miles card',
+        'Shopping card',
+        'Zero card A',
+        'Zero card B',
+        'Fuel card',
+        'Cab card',
+        'Dining card',
+      ],
+    );
+    Map<String, dynamic> row(String name) =>
+        rows.singleWhere((r) => r['name'] == name);
+
+    final shopping = row('Shopping card');
+    expect(shopping['figure'], '₹20');
+    expect(shopping['zero'], '₹0');
+    expect(shopping['rupees'], 20);
+    // The statement day; without one the cycle is the calendar month.
+    expect(shopping['cycleEnd'], epochDay(DateTime(2026, 7, 25)));
+    expect(row('Travel card')['figure'], '₹50');
+    expect(row('Travel card')['rupees'], 50);
+    expect(row('Travel card')['cycleEnd'], epochDay(DateTime(2026, 7, 31)));
+
+    // A points card shows points; its rupee worth feeds the total.
+    final miles = row('Miles card');
+    expect(miles['figure'], '120 points');
+    expect(miles['zero'], '0 points');
+    expect(miles['rupees'], 30);
+    // With no value per point it has no rupee figure, so the widget keeps
+    // it out of the total.
+    final fuel = row('Fuel card');
+    expect(fuel['figure'], '200 points');
+    expect(fuel.containsKey('rupees'), isTrue);
+    expect(fuel['rupees'], isNull);
+    expect(row('Dining card')['figure'], '40 points');
+    expect(row('Cab card')['figure'], '40 points');
+    expect(row('Cab card')['rupees'], isNull);
+
+    expect(row('Zero card A')['figure'], '₹0');
+    expect(row('Zero card A')['rupees'], 0);
+  });
+
   test(
     'the snapshot lists running then upcoming trips with their days',
     () async {

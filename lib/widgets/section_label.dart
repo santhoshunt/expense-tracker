@@ -14,7 +14,16 @@ class SectionLabel extends StatelessWidget {
   /// A figure at the row's right end, such as the Monthly budget's cap.
   final String? trailing;
 
-  const SectionLabel(this.text, {super.key, this.tip, this.trailing});
+  /// One line, cut with an ellipsis, unless a caller gives the name more.
+  final int maxLines;
+
+  const SectionLabel(
+    this.text, {
+    super.key,
+    this.tip,
+    this.trailing,
+    this.maxLines = 1,
+  });
 
   /// The label's text style, for a header that builds its own row (the
   /// Upcoming fold) to match.
@@ -29,7 +38,7 @@ class SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     final label = Text(
       text,
-      maxLines: 1,
+      maxLines: maxLines,
       overflow: TextOverflow.ellipsis,
       style: style(context),
     );

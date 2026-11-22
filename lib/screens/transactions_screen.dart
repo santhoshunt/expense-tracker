@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 
 import '../models/account.dart';
+import '../models/saved_filter.dart';
 import '../models/spend_budget.dart';
 import '../models/subscription_cycle.dart';
 import '../models/transaction.dart';
@@ -25,8 +26,10 @@ import '../widgets/dispose_scope.dart';
 import '../widgets/editor_sheet.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/glossy.dart';
+import '../widgets/info_tip.dart';
 import '../widgets/month_picker_sheet.dart';
 import '../widgets/motion.dart';
+import '../widgets/one_field_dialog.dart';
 import '../widgets/picker_sheet.dart';
 import '../widgets/status_dot.dart';
 import '../widgets/tag_input.dart';
@@ -625,12 +628,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   );
 
   /// [filters] is the filters sheet's draft when it counts "Show N"; the
-  /// list itself passes none and reads the screen's.
+  /// list itself passes none and reads the screen's. With [ids] false the
+  /// id filter is left out: the count for a saved filter, which replaces
+  /// it.
   List<Tx> _applyFilters(
     List<Tx> all,
     FinanceProvider finance,
     _Filter f, [
     _Filters? filters,
+    bool ids = true,
   ]) {
     final v = filters ?? _currentFilters;
     final q = normalizeSearchText(_search);
@@ -642,7 +648,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final min = v.min;
     final max = v.max;
     return all.where((t) {
-      if (_idFilter != null && !_idFilter!.contains(t.id)) return false;
+      if (ids && _idFilter != null && !_idFilter!.contains(t.id)) return false;
       // A bank lists its linked debit cards' rows too, the rows its balance
       // runs over; a card lists its own.
       if (accountId != null) {
@@ -2096,6 +2102,16 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     var accountId = _accountId;
     var month = _monthFilter;
     var range = _rangeFilter;
+    // The range that keeps its year flavour (counted dates, a name): the
+    // one the sheet opened with, or one a saved filter loaded.
+    var yearRange = _rangeFilter;
+    var yearCounted = _rangeCounted;
+    var yearLabel = _rangeLabel;
+    // The type tab a saved filter loaded, and the draft as it stood right
+    // after that load (null until one loads). The tab holds only while the
+    // draft is still that filter: see tabNow.
+    var tab = _filter;
+    SavedFilter? loaded;
     // Live query narrowing the chip sections — the category list alone can
     // hold dozens of chips.
     var filterQuery = '';
@@ -2114,12 +2130,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       text: _maxAmount == null ? '' : fmtFieldNumber(_maxAmount!),
     );
     final filterSearchCtrl = TextEditingController();
-    // The rail's chosen section; the sheet opens on Date.
-    var section = 'date';
+    // The rail's chosen section; the sheet opens on Date, or on Saved when
+    // there is a saved filter to pick and the page shows no filter chip.
+    final filtering =
+        _idFilter != null ||
+        _categoryFilter.isNotEmpty ||
+        _groupFilter.isNotEmpty ||
+        _budgetFilter.isNotEmpty ||
+        _tagFilter.isNotEmpty ||
+        _accountId != null ||
+        _monthFilter != null ||
+        _rangeFilter != null ||
+        _minAmount != null ||
+        _maxAmount != null;
+    var section = finance.savedFilters.isNotEmpty && !filtering
+        ? 'saved'
+        : 'date';
 
     // The sheet's choices as the list would read them once applied. The
-    // range keeps its year flavour only while it is the one the sheet
-    // opened with, as apply() does.
+    // range keeps its year flavour only while it is [yearRange], as
+    // apply() does.
     _Filters draft() => (
       categories: selected,
       groups: selectedGroups,
@@ -2128,14 +2158,90 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       accountId: accountId,
       month: month,
       range: range,
-      rangeCounted: identical(range, _rangeFilter) && _rangeCounted,
+      rangeCounted: identical(range, yearRange) && yearCounted,
       min: parseAmount(minCtrl.text),
       max: parseAmount(maxCtrl.text),
     );
 
+    // The draft as a saved filter on the tab [on]. The current month is
+    // kept as "This month", so the filter moves on each month.
+    SavedFilter savedOn(_Filter on, String id, String name) {
+      final now = DateTime.now();
+      final m = month;
+      final r = range;
+      final current = m != null && m.year == now.year && m.month == now.month;
+      final year = identical(r, yearRange);
+      return SavedFilter(
+        id: id,
+        name: name,
+        tab: on.name,
+        categories: selected.toList()..sort(),
+        groups: selectedGroups.toList()..sort(),
+        budgets: selectedBudgets.toList()..sort(),
+        tags: selectedTags.toList()..sort(),
+        accountId: accountId,
+        thisMonth: current,
+        month: current ? null : m,
+        rangeStart: r?.start,
+        rangeEnd: r?.end,
+        rangeCounted: year && yearCounted,
+        rangeLabel: year ? yearLabel : null,
+        min: parseAmount(minCtrl.text),
+        max: parseAmount(maxCtrl.text),
+      );
+    }
+
+    // Whether the draft is still the saved filter that was loaded, with
+    // nothing changed by hand since.
+    bool isLoaded() => loaded?.sameFilterAs(savedOn(tab, '', '')) ?? false;
+
+    // The type tab "Show N" counts on, Show applies and Save current
+    // stores: a loaded saved filter's own while the draft is still that
+    // filter, else the page's. The sheet has no control for the tab, so a
+    // loaded one must not outlive the filter it came with.
+    _Filter tabNow() => isLoaded() ? tab : _filter;
+
+    // The draft as Save current stores it.
+    SavedFilter savedDraft(String id, String name) =>
+        savedOn(tabNow(), id, name);
+
+    // A saved filter in a few words, for the name dialog.
+    String summaryOf(SavedFilter f) {
+      String count(int n, String one, String many) =>
+          n == 1 ? '1 $one' : '$n $many';
+      return [
+        for (final a in accounts)
+          if (a.id == f.accountId) a.displayName,
+        if (f.thisMonth) 'This month',
+        if (f.month != null) fmtMonth(f.month!),
+        if (f.rangeStart != null && f.rangeEnd != null)
+          f.rangeLabel ??
+              fmtDateRange(
+                DateTimeRange(start: f.rangeStart!, end: f.rangeEnd!),
+              ),
+        // The tabs' own names.
+        ?const {
+          'income': 'Income',
+          'expense': 'Expenses',
+          'transfers': 'Transfers',
+        }[f.tab],
+        if (f.categories.isNotEmpty)
+          count(f.categories.length, 'category', 'categories'),
+        if (f.groups.isNotEmpty) count(f.groups.length, 'group', 'groups'),
+        if (f.tags.isNotEmpty) count(f.tags.length, 'tag', 'tags'),
+        if (f.budgets.isNotEmpty) count(f.budgets.length, 'budget', 'budgets'),
+        if (f.min != null || f.max != null) _amountChipLabel(f.min, f.max),
+      ].join(' · ');
+    }
+
     // Apply commits the sheet's choices.
     void apply() {
+      final fromSaved = isLoaded();
+      final showTab = tabNow();
       setState(() {
+        // A saved filter applied as it was saved replaces what the page
+        // showed, the "To check" ids with it.
+        if (fromSaved) _idFilter = null;
         _categoryFilter
           ..clear()
           ..addAll(selected);
@@ -2154,15 +2260,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         _maxAmount = parseAmount(maxCtrl.text);
         _accountId = accountId;
         _monthFilter = month;
-        // The range the sheet opened with keeps its year flavour; any new
-        // pick (or none) is a plain range.
-        if (!identical(range, _rangeFilter)) _setRange(range);
+        // The range the sheet opened with keeps its year flavour, and a
+        // saved filter's brings its own; any new pick (or none) is a plain
+        // range.
+        if (!identical(range, _rangeFilter)) {
+          _setRange(range);
+          if (identical(range, yearRange)) {
+            _rangeCounted = yearCounted;
+            _rangeLabel = yearLabel;
+          }
+        }
       });
+      // Its own setState, and the slide to that tab's page.
+      _setFilter(showTab);
     }
 
     // The rail's sections in the pick's order. Each shows when the sheet
     // has something for it; a search that empties one keeps its row.
     final sections = <(String, String)>[
+      // Always: this is where the first filter gets saved.
+      ('saved', 'Saved'),
       ('date', 'Date'),
       ('amount', 'Amount'),
       ('categories', 'Categories'),
@@ -2195,11 +2312,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             final theme = Theme.of(ctx);
             final scheme = theme.colorScheme;
             final d = draft();
+            // As apply() would leave the page: a saved filter still as it
+            // loaded brings its tab and drops the "To check" ids.
+            final fromSaved = isLoaded();
             final shown = _applyFilters(
               finance.transactions,
               finance,
-              _filter,
+              fromSaved ? tab : _filter,
               d,
+              !fromSaved,
             ).length;
             // How many picks each section holds, for its rail row.
             int picks(String s) => switch (s) {
@@ -2212,7 +2333,165 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
               'budgets' => selectedBudgets.length,
               _ => 0,
             };
-            final chipSection = section != 'date' && section != 'amount';
+            final chipSection =
+                section != 'saved' && section != 'date' && section != 'amount';
+            // Read on every build: a save, rename or delete below rebuilds
+            // the sheet once it is done.
+            final savedFilters = finance.savedFilters;
+            // Nothing to save: no filter set and the tab on All.
+            final draftEmpty =
+                (fromSaved ? tab : _filter) == _Filter.all &&
+                selected.isEmpty &&
+                selectedGroups.isEmpty &&
+                selectedBudgets.isEmpty &&
+                selectedTags.isEmpty &&
+                accountId == null &&
+                month == null &&
+                range == null &&
+                d.min == null &&
+                d.max == null;
+
+            // Puts a saved filter into the draft, in place of what was
+            // there. "This month" becomes the month it is now. Ids whose
+            // category, group, budget, tag or account is gone are left
+            // out, as the page drops them (_pageDataFor), so "Show N"
+            // counts what Show lists.
+            void loadSaved(SavedFilter f) {
+              final now = DateTime.now();
+              final start = f.rangeStart;
+              final end = f.rangeEnd;
+              final liveTags = {for (final u in finance.allTags) tagKey(u.tag)};
+              final account = f.accountId;
+              minCtrl.text = f.min == null ? '' : fmtFieldNumber(f.min!);
+              maxCtrl.text = f.max == null ? '' : fmtFieldNumber(f.max!);
+              filterSearchCtrl.clear();
+              setSheetState(() {
+                filterQuery = '';
+                selected
+                  ..clear()
+                  ..addAll(
+                    f.categories.where(
+                      (id) => allCategories.any((c) => c.id == id),
+                    ),
+                  );
+                selectedGroups
+                  ..clear()
+                  ..addAll(
+                    f.groups.where(
+                      (id) =>
+                          id == kUngroupedFilterKey ||
+                          finance.groups.any((g) => g.id == id),
+                    ),
+                  );
+                selectedBudgets
+                  ..clear()
+                  ..addAll(
+                    f.budgets.where(
+                      (id) => finance.budgets.any((b) => b.id == id),
+                    ),
+                  );
+                selectedTags
+                  ..clear()
+                  ..addAll(f.tags.where(liveTags.contains));
+                accountId =
+                    account != null && finance.accountById(account) != null
+                    ? account
+                    : null;
+                month = f.thisMonth ? DateTime(now.year, now.month) : f.month;
+                range = start != null && end != null
+                    ? DateTimeRange(start: start, end: end)
+                    : null;
+                yearRange = range;
+                yearCounted = range != null && f.rangeCounted;
+                yearLabel = range == null ? null : f.rangeLabel;
+                tab = _Filter.values.asNameMap()[f.tab] ?? _Filter.all;
+                // The draft as it stands now: what isLoaded compares with.
+                loaded = savedOn(tab, '', '');
+              });
+            }
+
+            // The name dialog for [f] under [title]: a new filter's name
+            // starts empty, a saved one's as it is. Null when cancelled.
+            Future<String?> askName(
+              SavedFilter f, {
+              String title = 'Save filters',
+            }) async {
+              final summary = summaryOf(f);
+              final text = await showOneFieldDialog(
+                ctx,
+                title: title,
+                nowLine: summary.isEmpty ? null : summary,
+                label: 'Name',
+                tip: const InfoTip(
+                  title: 'Name',
+                  message:
+                      'Saves what is set in this sheet and the type tab. The '
+                      'current month is saved as "This month" and moves on '
+                      'each month. Search and sort are not saved.',
+                ),
+                keyboard: TextInputType.text,
+                capitalization: TextCapitalization.sentences,
+                initial: f.name,
+                problem: (t) {
+                  final name = t.trim().toLowerCase();
+                  if (name.isEmpty) return 'Enter a name';
+                  return finance.savedFilters.any(
+                        (o) => o.id != f.id && o.name.toLowerCase() == name,
+                      )
+                      ? 'That name is taken'
+                      : null;
+                },
+              );
+              return text?.trim();
+            }
+
+            // No toast after these three: it would draw behind the sheet.
+            // The list changing is the feedback.
+            Future<void> saveCurrent() async {
+              final name = await askName(savedDraft('', ''));
+              if (name == null) return;
+              await finance.saveFilter(
+                savedDraft(finance.newSavedFilterId(), name),
+              );
+              if (ctx.mounted) setSheetState(() {});
+            }
+
+            Future<void> renameSaved(SavedFilter f) async {
+              final name = await askName(f, title: 'Rename saved filter');
+              if (name == null) return;
+              await finance.saveFilter(f.copyWith(name: name));
+              if (ctx.mounted) setSheetState(() {});
+            }
+
+            Future<void> deleteSaved(SavedFilter f) async {
+              final ok = await showDialog<bool>(
+                context: ctx,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Delete saved filter'),
+                  content: Text(
+                    'Removes "${f.name}" from Saved. No payment changes.',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Theme.of(ctx).colorScheme.error,
+                        foregroundColor: Theme.of(ctx).colorScheme.onError,
+                      ),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('Delete'),
+                    ),
+                  ],
+                ),
+              );
+              if (ok != true) return;
+              await finance.deleteSavedFilter(f.id);
+              if (ctx.mounted) setSheetState(() {});
+            }
+
             // The rail is as wide as its longest word ("Categories"), so
             // no label breaks inside a word: from 104dp up to half the
             // row. Past half, its labels shrink until that word fits.
@@ -2294,6 +2573,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               accountId = null;
                               month = null;
                               range = null;
+                              // Back to the page's tab: a saved filter
+                              // may have loaded its own.
+                              tab = _filter;
+                              loaded = null;
                             });
                           },
                           child: const Text('Clear all'),
@@ -2400,6 +2683,116 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                 'budgets' => visBudgets.isEmpty,
                                 _ => false,
                               };
+                              final large = isLargeTextScale(ctx);
+                              // A saved filter: a tap loads it, the menu
+                              // renames or deletes it. The name's own
+                              // padding keeps two wrapped names apart.
+                              // Above [kLargeTextScale] the name takes
+                              // the pane's width, up to three lines, and
+                              // the menu sits under it: beside the menu
+                              // at 320dp and 2x text it broke inside
+                              // words.
+                              Widget savedRow(SavedFilter f) {
+                                final name = Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 6,
+                                  ),
+                                  child: Text(
+                                    f.name,
+                                    maxLines: large ? 3 : 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: theme.textTheme.bodyLarge,
+                                  ),
+                                );
+                                final menu = PopupMenuButton<VoidCallback>(
+                                  tooltip: 'Saved filter actions',
+                                  icon: const Icon(Icons.more_vert),
+                                  onSelected: (run) => run(),
+                                  itemBuilder: (_) => [
+                                    PopupMenuItem(
+                                      value: () => renameSaved(f),
+                                      child: const Text('Rename'),
+                                    ),
+                                    PopupMenuItem(
+                                      value: () => deleteSaved(f),
+                                      child: const Text('Delete'),
+                                    ),
+                                  ],
+                                );
+                                return Semantics(
+                                  button: true,
+                                  child: InkWell(
+                                    key: ValueKey('saved-filter-${f.id}'),
+                                    onTap: () => loadSaved(f),
+                                    child: ConstrainedBox(
+                                      constraints: const BoxConstraints(
+                                        minHeight: 48,
+                                      ),
+                                      child: large
+                                          ? Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.stretch,
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                name,
+                                                Align(
+                                                  alignment:
+                                                      AlignmentDirectional
+                                                          .centerEnd,
+                                                  child: menu,
+                                                ),
+                                              ],
+                                            )
+                                          : Row(
+                                              children: [
+                                                Expanded(child: name),
+                                                menu,
+                                              ],
+                                            ),
+                                    ),
+                                  ),
+                                );
+                              }
+
+                              // Save current: the pill, its drawing scaled
+                              // down where the pane is narrower than it.
+                              // Above [kLargeTextScale] that left it at
+                              // half the size of the text around it, so
+                              // it is a text button there, its words
+                              // free to wrap.
+                              final saveCurrentLabel = large
+                                  ? Row(
+                                      children: [
+                                        Icon(
+                                          Icons.bookmark_add_outlined,
+                                          size: 18,
+                                          color: accentTextColor(ctx),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Flexible(
+                                          child: Text(
+                                            'Save current',
+                                            style: theme.textTheme.labelLarge
+                                                ?.copyWith(
+                                                  color: accentTextColor(ctx),
+                                                ),
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      alignment:
+                                          AlignmentDirectional.centerStart,
+                                      child: OutlinedPill(
+                                        leading: Icon(
+                                          Icons.bookmark_add_outlined,
+                                          size: 16,
+                                          color: scheme.onSurfaceVariant,
+                                        ),
+                                        label: 'Save current',
+                                      ),
+                                    );
                               return SingleChildScrollView(
                                 // The top inset keeps Min's floating label inside
                                 // the scroll view.
@@ -2418,6 +2811,53 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                           ctx,
                                         ).textTheme.bodySmall,
                                       ),
+                                    // A tap on a row loads it into the
+                                    // draft; Show then applies it.
+                                    if (section == 'saved') ...[
+                                      if (savedFilters.isEmpty)
+                                        // Starts where a first saved row's
+                                        // name would: 16dp down, a 16dp
+                                        // line centred in a 48dp row.
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 16,
+                                          ),
+                                          child: Text(
+                                            'No saved filters yet.',
+                                            style: theme.textTheme.bodySmall,
+                                          ),
+                                        ),
+                                      for (final f in savedFilters) savedRow(f),
+                                      const SizedBox(height: 8),
+                                      if (draftEmpty)
+                                        Text(
+                                          'Set some filters, then save them '
+                                          'here.',
+                                          style: theme.textTheme.bodySmall,
+                                        )
+                                      else
+                                        // A 48dp tap target across the
+                                        // pane.
+                                        Semantics(
+                                          button: true,
+                                          child: InkWell(
+                                            key: const ValueKey(
+                                              'filters-save-current',
+                                            ),
+                                            onTap: saveCurrent,
+                                            child: ConstrainedBox(
+                                              constraints: const BoxConstraints(
+                                                minHeight: 48,
+                                              ),
+                                              child: Align(
+                                                alignment: AlignmentDirectional
+                                                    .centerStart,
+                                                child: saveCurrentLabel,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                    ],
                                     // Not narrowed by the filter query: three fixed
                                     // choices, and the one that is active must stay
                                     // reachable.
@@ -2470,10 +2910,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                                   ? 'Custom range…'
                                                   : identical(
                                                           range,
-                                                          _rangeFilter,
+                                                          yearRange,
                                                         ) &&
-                                                        _rangeLabel != null
-                                                  ? _rangeLabel!
+                                                        yearLabel != null
+                                                  ? yearLabel!
                                                   : fmtDateRange(range!),
                                             ),
                                             avatar: const Icon(

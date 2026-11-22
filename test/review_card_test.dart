@@ -9,6 +9,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
+import 'package:expense_tracker/services/sms_parser.dart';
 import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/review_sheet.dart';
 
@@ -120,10 +121,12 @@ void main() {
 
     expect(find.text('Imported from SMS'), findsOneWidget);
     expect(find.text('2 to review'), findsOneWidget);
-    // Suggestions and rows both wait: each part has its label.
+    // v2.3.0: each group has its name and count, the refund's over its
+    // card and the food row's over the row.
     double top(Finder f) => tester.getTopLeft(f).dy;
-    expect(top(find.text('Suggestions')), lessThan(top(card)));
-    expect(top(card), lessThan(top(find.text('To review'))));
+    expect(top(find.text('Possible refund · 1')), lessThan(top(card)));
+    expect(top(card), lessThan(top(find.text('No account number · 1'))));
+    expect(find.text('Suggestions'), findsNothing);
     expect(find.text('Looks like a refund'), findsOneWidget);
     expect(card, findsOneWidget);
     Finder inCard(Finder f) => find.descendant(of: card, matching: f);
@@ -194,8 +197,8 @@ void main() {
 
     expect(find.text('1 to review'), findsOneWidget);
     expect(find.text('Looks like a refund'), findsOneWidget);
-    // One part only: no section labels, and no batch bar.
-    expect(find.text('Suggestions'), findsNothing);
+    // One group under its name, and no batch bar.
+    expect(find.text('Possible refund · 1'), findsOneWidget);
     expect(find.text('Confirm all'), findsNothing);
     expect(find.byTooltip('Confirm'), findsNothing);
 
@@ -238,6 +241,467 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  // v2.3.0: rows grouped by why they wait, "Confirm N" on a group, and
+  // every confirm's Undo taking back the imports it let count.
+  group('groups', () {
+    const bank = 'SAMPLEBK:1234';
+    const fresh = 'SAMPLEBK:5678';
+
+    ParsedTxn alert({
+      TxType type = TxType.expense,
+      required double amount,
+      required DateTime date,
+      required String? ref,
+      String categoryId = 'food',
+      String? rawBody,
+      String? acctKey = bank,
+      bool spamSuspect = false,
+    }) => ParsedTxn(
+      type: type,
+      amount: amount,
+      merchant: '',
+      date: date,
+      ref: ref,
+      categoryId: categoryId,
+      sender: 'VM-SAMPLE',
+      rawBody: rawBody ?? 'Rs.$amount debited at LANTERN CAFE',
+      acctKey: acctKey,
+      spamSuspect: spamSuspect,
+    );
+
+    /// [bank] with one confirmed row, so its later alerts can count.
+    Future<FinanceProvider> withHistory() async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addImported([
+        alert(amount: 450, date: DateTime(2026, 10, 1, 9), ref: 'SEED'),
+      ]);
+      await p.confirmAllPending();
+      return p;
+    }
+
+    Tx byRef(FinanceProvider p, String ref) => [
+      ...p.transactions,
+      ...p.pendingTransactions,
+    ].firstWhere((t) => t.externalRef == ref);
+
+    /// Imports an alert that counts at once, then sends it back to review:
+    /// a waiting row nothing holds.
+    Future<void> addSentBack(FinanceProvider p) async {
+      await p.addImported([
+        alert(amount: 410, date: DateTime(2026, 10, 6, 17), ref: 'O1'),
+      ]);
+      final counted = byRef(p, 'O1');
+      expect(counted.pending, isFalse);
+      await p.restoreEditedTransactions([
+        counted.copyWith(pending: true, unseen: false),
+      ]);
+    }
+
+    Future<void> open(WidgetTester tester, FinanceProvider p) async {
+      tester.view.physicalSize = const Size(800, 6000);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(screen(p, await settings(), home: sheetOpener));
+      await openSheet(tester);
+    }
+
+    /// The Confirm button of the review row showing [amount].
+    Finder confirmOf(double amount) => find.descendant(
+      of: find.ancestor(
+        of: find.textContaining('−${fmtMoney(amount)}'),
+        matching: find.byType(ListTile),
+      ),
+      matching: find.byTooltip('Confirm'),
+    );
+
+    testWidgets('each group sits under its name and count, in order; a group '
+        'with nothing in it has no name', (tester) async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          amount: 2000,
+          date: DateTime(2026, 10, 6, 9),
+          ref: 'W1',
+          categoryId: 'other_expense',
+          rawBody: 'Rs.2000 withdrawn at ATM',
+        ),
+        alert(
+          amount: 5000,
+          date: DateTime(2026, 10, 6, 10),
+          ref: 'T1',
+          categoryId: 'other_expense',
+          rawBody: 'Rs.5000 debited from a/c XX1234',
+        ),
+        alert(
+          type: TxType.income,
+          amount: 5000,
+          date: DateTime(2026, 10, 6, 10, 2),
+          ref: 'T2',
+          categoryId: 'other_income',
+          rawBody: 'Rs.5000 credited to a/c XX5678',
+          acctKey: fresh,
+        ),
+        alert(
+          type: TxType.income,
+          amount: 200,
+          date: DateTime(2026, 10, 6, 11),
+          ref: 'R1',
+          categoryId: 'other_income',
+          rawBody: 'Refund of Rs.200 credited to a/c XX1234',
+        ),
+        alert(amount: 250, date: DateTime(2026, 10, 6, 12), ref: 'D1'),
+        alert(
+          amount: 250,
+          date: DateTime(2026, 10, 6, 19),
+          ref: null,
+          rawBody: 'Rs.250 debited at LANTERN CAFE again',
+        ),
+        alert(
+          amount: 300,
+          date: DateTime(2026, 10, 6, 13),
+          ref: 'N1',
+          acctKey: 'SAMPLEBK:9999',
+        ),
+        alert(
+          amount: 350,
+          date: DateTime(2026, 10, 6, 14),
+          ref: 'X1',
+          acctKey: null,
+        ),
+        alert(
+          amount: 320,
+          date: DateTime(2026, 10, 6, 15),
+          ref: 'M1',
+          categoryId: 'transfer_out',
+        ),
+        alert(
+          amount: 330,
+          date: DateTime(2026, 10, 6, 16),
+          ref: 'S1',
+          spamSuspect: true,
+        ),
+      ]);
+      await open(tester, p);
+      expect(tester.takeException(), isNull);
+
+      final names = [
+        'Cash withdrawals · 1',
+        'Possible transfer · 1',
+        'Possible refund · 1',
+        'Possible duplicates · 2',
+        'New account · 1',
+        'No account number · 1',
+        'Transfers · 1',
+        'Suspected spam · 1',
+      ];
+      var last = double.negativeInfinity;
+      for (final name in names) {
+        expect(find.text(name), findsOneWidget, reason: name);
+        final top = tester.getTopLeft(find.text(name)).dy;
+        expect(top, greaterThan(last), reason: name);
+        last = top;
+      }
+      // Nothing was sent back to review, and the old two labels are gone.
+      expect(find.textContaining('To review ·'), findsNothing);
+      expect(find.text('Suggestions'), findsNothing);
+      // The three cards sit in the first three groups.
+      expect(card, findsNWidgets(3));
+      expect(
+        tester.getTopLeft(find.textContaining('ATM withdrawal')).dy,
+        lessThan(tester.getTopLeft(find.text(names[1])).dy),
+      );
+      expect(
+        tester.getTopLeft(find.text('Looks like a refund')).dy,
+        lessThan(tester.getTopLeft(find.text(names[3])).dy),
+      );
+      // "Confirm N" on the three groups a look at the name settles.
+      expect(find.widgetWithText(TextButton, 'Confirm 1'), findsNWidgets(3));
+      expect(find.widgetWithText(TextButton, 'Confirm 2'), findsNothing);
+      for (final name in names.sublist(4, 7)) {
+        final button = find.descendant(
+          of: find.ancestor(
+            of: find.text(name),
+            matching: find.byWidgetPredicate(
+              (w) => w.runtimeType.toString() == '_GroupHeader',
+            ),
+          ),
+          matching: find.widgetWithText(TextButton, 'Confirm 1'),
+        );
+        expect(button, findsOneWidget, reason: name);
+        expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
+      }
+    });
+
+    testWidgets('a group header fits 320dp at 2x text, its button under the '
+        'name', (tester) async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          amount: 350,
+          date: DateTime(2026, 10, 6, 14),
+          ref: 'X1',
+          acctKey: null,
+        ),
+      ]);
+      tester.view.physicalSize = const Size(640, 3200);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        screen(p, await settings(), textScale: 2, home: sheetOpener),
+      );
+      await openSheet(tester);
+
+      expect(tester.takeException(), isNull);
+      // At this size the name runs to a second line rather than lose its
+      // count to an ellipsis, and no-break spaces keep the count with the
+      // name's last word.
+      final name = find.text('No account number\u{00A0}·\u{00A0}1');
+      expect(tester.widget<Text>(name).maxLines, 2);
+      final button = find.widgetWithText(TextButton, 'Confirm 1');
+      expect(
+        tester.getTopLeft(button).dy,
+        greaterThanOrEqualTo(tester.getBottomLeft(name).dy),
+      );
+    });
+
+    // v2.3.0 review: under the large-text switch the button sits beside
+    // the name, and the two must share a 360dp row at 1.3x text.
+    testWidgets('a group header fits 360dp at 1.3x text, its button beside '
+        'the name', (tester) async {
+      final p = await withHistory();
+      await p.addImported([
+        for (var i = 0; i < 12; i++)
+          alert(
+            amount: 350.0 + i,
+            date: DateTime(2026, 10, 6, 14, i),
+            ref: 'X$i',
+            acctKey: null,
+          ),
+      ]);
+      tester.view.physicalSize = const Size(720, 3200);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        screen(p, await settings(), textScale: 1.3, home: sheetOpener),
+      );
+      await openSheet(tester);
+
+      expect(tester.takeException(), isNull);
+      final name = find.text('No account number · 12');
+      final button = find.widgetWithText(TextButton, 'Confirm 12');
+      expect(name, findsOneWidget);
+      expect(button, findsOneWidget);
+      // One row: the button starts after the name ends, inside the sheet.
+      expect(
+        tester.getTopLeft(button).dy,
+        lessThan(tester.getBottomLeft(name).dy),
+      );
+      expect(
+        tester.getTopLeft(button).dx,
+        greaterThanOrEqualTo(tester.getTopRight(name).dx),
+      );
+      expect(tester.getTopRight(button).dx, lessThanOrEqualTo(360));
+      expect(tester.getTopLeft(name).dx, greaterThanOrEqualTo(0));
+      expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
+      // Beside the name it stays on one line, and the two share a text
+      // baseline: both are one text size, so their words sit level.
+      expect(tester.widget<Text>(name).maxLines, 1);
+      final words = find.text('Confirm 12');
+      expect(tester.getSize(words).height, tester.getSize(name).height);
+      expect(
+        tester.getCenter(words).dy,
+        moreOrLessEquals(tester.getCenter(name).dy, epsilon: 0.5),
+      );
+    });
+
+    // v2.3.0 review: several groups can show a "Confirm N", and a screen
+    // reader heard the same words for each.
+    testWidgets('Confirm N is read out with its group name', (tester) async {
+      final semantics = tester.ensureSemantics();
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          amount: 300,
+          date: DateTime(2026, 10, 6, 13),
+          ref: 'N1',
+          acctKey: fresh,
+        ),
+        alert(
+          amount: 350,
+          date: DateTime(2026, 10, 6, 14),
+          ref: 'X1',
+          acctKey: null,
+        ),
+      ]);
+      await open(tester, p);
+
+      // The words on screen are the same for both.
+      final buttons = find.widgetWithText(TextButton, 'Confirm 1');
+      expect(buttons, findsNWidgets(2));
+      expect(
+        tester.getSemantics(buttons.first),
+        isSemantics(
+          isButton: true,
+          hasTapAction: true,
+          label: 'Confirm 1 in New account',
+        ),
+      );
+      expect(
+        tester.getSemantics(buttons.last),
+        isSemantics(
+          isButton: true,
+          hasTapAction: true,
+          label: 'Confirm 1 in No account number',
+        ),
+      );
+      semantics.dispose();
+    });
+
+    testWidgets('Confirm N confirms its group, and Undo puts the rows back '
+        'with the import they let count', (tester) async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          amount: 300,
+          date: DateTime(2026, 10, 6, 13),
+          ref: 'N1',
+          acctKey: fresh,
+        ),
+        alert(
+          amount: 310,
+          date: DateTime(2026, 10, 6, 13, 30),
+          ref: 'N2',
+          acctKey: fresh,
+        ),
+        alert(
+          amount: 350,
+          date: DateTime(2026, 10, 6, 14),
+          ref: 'X1',
+          acctKey: null,
+        ),
+      ]);
+      await addSentBack(p);
+      await open(tester, p);
+      expect(find.text('New account · 2'), findsOneWidget);
+      expect(find.text('No account number · 1'), findsOneWidget);
+      expect(find.text('To review · 1'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Confirm 1'));
+      await tester.pumpAndSettle();
+      expect(byRef(p, 'X1').pending, isFalse);
+      // The row sent back to review counts again, marked new.
+      expect(byRef(p, 'O1').pending, isFalse);
+      expect(byRef(p, 'O1').unseen, isTrue);
+      expect(p.pendingCount, 2);
+      expect(find.text('No account number · 1'), findsNothing);
+      expect(find.text('To review · 1'), findsNothing);
+      expect(find.text('Confirmed 1 import'), findsOneWidget);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(byRef(p, 'X1').pending, isTrue);
+      expect(byRef(p, 'O1').pending, isTrue);
+      expect(byRef(p, 'O1').unseen, isFalse);
+      expect(find.text('No account number · 1'), findsOneWidget);
+      expect(find.text('To review · 1'), findsOneWidget);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Confirm 2'));
+      await tester.pumpAndSettle();
+      expect(byRef(p, 'N1').pending, isFalse);
+      expect(byRef(p, 'N2').pending, isFalse);
+      expect(byRef(p, 'N1').unseen, isFalse);
+      expect(byRef(p, 'X1').pending, isTrue);
+      expect(find.text('New account · 2'), findsNothing);
+      expect(find.text('Confirmed 2 imports'), findsOneWidget);
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(p.pendingCount, 4);
+      expect(find.text('New account · 2'), findsOneWidget);
+    });
+
+    testWidgets('confirming a row lets the rest of its account count, and '
+        'Undo puts them all back in review', (tester) async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          amount: 300,
+          date: DateTime(2026, 10, 6, 13),
+          ref: 'N1',
+          acctKey: fresh,
+        ),
+        alert(
+          amount: 310,
+          date: DateTime(2026, 10, 6, 13, 30),
+          ref: 'N2',
+          acctKey: fresh,
+        ),
+        alert(
+          amount: 350,
+          date: DateTime(2026, 10, 6, 14),
+          ref: 'X1',
+          acctKey: null,
+        ),
+      ]);
+      await open(tester, p);
+      expect(find.text('New account · 2'), findsOneWidget);
+
+      await tester.tap(confirmOf(300));
+      await tester.pumpAndSettle();
+      expect(byRef(p, 'N1').pending, isFalse);
+      expect(byRef(p, 'N1').unseen, isFalse);
+      expect(byRef(p, 'N2').pending, isFalse);
+      expect(byRef(p, 'N2').unseen, isTrue);
+      expect(byRef(p, 'X1').pending, isTrue);
+      expect(find.textContaining('New account'), findsNothing);
+      expect(find.text('1 to review'), findsOneWidget);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(byRef(p, 'N1').pending, isTrue);
+      expect(byRef(p, 'N2').pending, isTrue);
+      expect(byRef(p, 'N2').unseen, isFalse);
+      expect(find.text('New account · 2'), findsOneWidget);
+    });
+
+    testWidgets('Keep as spending on a cash withdrawal: its Undo takes back '
+        'the import it let count too', (tester) async {
+      final p = await withHistory();
+      await p.addImported([
+        alert(
+          amount: 2000,
+          date: DateTime(2026, 10, 6, 9),
+          ref: 'W1',
+          categoryId: 'other_expense',
+          rawBody: 'Rs.2000 withdrawn at ATM',
+        ),
+        alert(
+          amount: 350,
+          date: DateTime(2026, 10, 6, 14),
+          ref: 'X1',
+          acctKey: null,
+        ),
+      ]);
+      await addSentBack(p);
+      await open(tester, p);
+      expect(find.text('Cash withdrawals · 1'), findsOneWidget);
+
+      await tester.tap(find.text('Keep as spending'));
+      await tester.pumpAndSettle();
+      expect(byRef(p, 'W1').pending, isFalse);
+      expect(byRef(p, 'O1').pending, isFalse);
+      expect(find.text('Cash withdrawals · 1'), findsNothing);
+      expect(find.text('Kept as spending'), findsOneWidget);
+
+      await tester.tap(find.text('Undo'));
+      await tester.pumpAndSettle();
+      expect(byRef(p, 'W1').pending, isTrue);
+      expect(byRef(p, 'O1').pending, isTrue);
+      expect(find.text('Cash withdrawals · 1'), findsOneWidget);
+      expect(find.text('To review · 1'), findsOneWidget);
+    });
   });
 
   testWidgets('the filter sheet Date chip keeps a dashboard year name', (

@@ -43,10 +43,10 @@ int epochDay(DateTime d) =>
 
 /// Feeds the Month pace, Upcoming, Today and Add, Spending split, Recent,
 /// Big bills, This week, Accounts, Payments to check, Expected balance,
-/// Card cycle, Trip budget, Cash in hand, Subscriptions and Who owes you
-/// widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart computes and
-/// native draws; the snapshot carries dates and a usual-by-day curve so the
-/// widgets stay right across midnight without the app running.
+/// Card cycle, Trip budget, Cash in hand, Subscriptions, Who owes you and
+/// Cashbacks widgets (HomeWidgets.kt). Like [BudgetWidgetService], Dart
+/// computes and native draws; the snapshot carries dates and a usual-by-day
+/// curve so the widgets stay right across midnight without the app running.
 class HomeWidgetsService {
   static const _dataKey = 'home_widget_data_v1';
   static const _themeKey = 'budget_widget_theme_v1';
@@ -242,6 +242,8 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       for (final a in finance.openAccounts)
         if (a.isCard) _cardRow(finance, a, now),
     ],
+    // The Cashbacks widget: what each card with rewards earned this cycle.
+    'cashbacks': _cashbacks(finance, now),
     // Running and upcoming trips with their dates as epoch days: Kotlin
     // picks the stage on the day it draws.
     'trip': _tripBlock(finance, settings, now, month),
@@ -394,6 +396,59 @@ Map<String, dynamic> _cardRow(
         : a.rewards?.unit == RewardUnit.points
         ? '≈ ${fmtPoints(rewards.earned)}'
         : '≈ ${fmtMoneyWhole(rewards.earned)}',
+  };
+}
+
+/// The Cashbacks widget's rows: every open credit card with rewards set up,
+/// the most rupees earned this cycle first. A points card with no value per
+/// point has no rupee figure: those follow, most points first. Ties go by
+/// name.
+List<Map<String, dynamic>> _cashbacks(FinanceProvider finance, DateTime now) {
+  final cards = [
+    for (final a in finance.openAccounts)
+      if (finance.cardRewardsFor(a) case final r?)
+        (
+          account: a,
+          earned: r.earned,
+          rupees: a.rewards?.unit == RewardUnit.points ? r.rupees : r.earned,
+        ),
+  ];
+  cards.sort((x, y) {
+    final xr = x.rupees, yr = y.rupees;
+    if (xr != null && yr != null) {
+      if (xr != yr) return yr.compareTo(xr);
+    } else if (xr != null || yr != null) {
+      return xr != null ? -1 : 1;
+    } else if (x.earned != y.earned) {
+      return y.earned.compareTo(x.earned);
+    }
+    return x.account.displayName.compareTo(y.account.displayName);
+  });
+  return [
+    for (final c in cards) _cashbackRow(c.account, c.earned, c.rupees, now),
+  ];
+}
+
+/// One Cashbacks row: the card's [earned] as the widget prints it (₹ for a
+/// cashback card, points for a points card), the same for nothing earned,
+/// its worth in [rupees] (null for points with no value) and the cycle's
+/// last day. Kotlin shows `zero` and leaves the card out of the total once
+/// that day has passed, as the Card cycle widget shows ₹0.
+Map<String, dynamic> _cashbackRow(
+  Account a,
+  double earned,
+  double? rupees,
+  DateTime now,
+) {
+  final label = a.rewards?.unit == RewardUnit.points
+      ? fmtPoints
+      : fmtMoneyWhole;
+  return {
+    'name': a.displayName,
+    'figure': label(earned),
+    'zero': label(0),
+    'rupees': rupees,
+    'cycleEnd': epochDay(cardCycleOf(a, now).end),
   };
 }
 

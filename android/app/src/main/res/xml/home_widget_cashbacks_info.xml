@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cashbacks (4x2). updatePeriodMillis: a 30-minute redraw from the
+     stored snapshot (Android's floor), so a card whose statement cycle
+     ended overnight drops to zero and leaves the total without the app
+     running. No configure step. The preview is a plain picture: the widget
+     itself fills a scrolling list (CashbacksWidgetService). -->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/home_widget_cashbacks_description"
+    android:initialLayout="@layout/home_widget_cashbacks"
+    android:minWidth="250dp"
+    android:minHeight="110dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:previewLayout="@layout/home_widget_cashbacks_preview"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

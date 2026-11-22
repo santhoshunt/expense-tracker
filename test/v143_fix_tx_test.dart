@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:expense_tracker/models/account.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
@@ -11,6 +12,7 @@ import 'package:expense_tracker/screens/add_transaction_sheet.dart';
 import 'package:expense_tracker/screens/home_screen.dart';
 import 'package:expense_tracker/screens/transactions_screen.dart';
 import 'package:expense_tracker/services/drive_backup_service.dart';
+import 'package:expense_tracker/services/sms_parser.dart';
 import 'package:expense_tracker/widgets/empty_state.dart';
 import 'package:expense_tracker/widgets/info_tip.dart';
 import 'package:expense_tracker/widgets/lock_gate.dart';
@@ -202,6 +204,206 @@ void main() {
       await tester.tap(save);
       await tester.pumpAndSettle();
       expect(hosted, [('Saved and confirmed', AppToastTone.success)]);
+    });
+
+    // v2.3.0: a confirming save lets the other imports on the row's account
+    // count (FinanceProvider.takeReleased), and its Undo takes them back.
+    testWidgets('a confirming save lets the rest of its account count, and '
+        'its Undo puts them all back in review', (tester) async {
+      tester.view.physicalSize = const Size(800, 1800);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.reset);
+      ParsedTxn alert(String ref, double amount, int hour) => ParsedTxn(
+        type: TxType.expense,
+        amount: amount,
+        merchant: '',
+        date: DateTime(2026, 10, 12, hour),
+        ref: ref,
+        categoryId: 'food',
+        sender: 'VM-SAMPLE',
+        rawBody: 'Rs.$amount debited at DEMO KIOSK',
+        acctKey: 'SAMPLEBK:5678',
+      );
+      final p = await withRows(const []);
+      await p.addImported([alert('N1', 120, 9), alert('N2', 80, 10)]);
+      expect(p.pendingCount, 2);
+      Tx byRef(String ref) => [
+        ...p.transactions,
+        ...p.pendingTransactions,
+      ].firstWhere((t) => t.externalRef == ref);
+      VoidCallback? undo;
+      await tester.pumpWidget(
+        page(
+          p,
+          Builder(
+            builder: (context) => TextButton(
+              onPressed: () => showAddTransactionSheet(
+                context,
+                existing: byRef('N1'),
+                onUndoable: (message, u, {required icon, required tone}) =>
+                    undo = u,
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      final save = find.widgetWithText(FilledButton, 'Save and confirm');
+      await tester.ensureVisible(save);
+      await tester.pumpAndSettle();
+      await tester.tap(save);
+      await tester.pumpAndSettle();
+      expect(byRef('N1').pending, isFalse);
+      // The account has a confirmed row now: its other import counts.
+      expect(byRef('N2').pending, isFalse);
+      expect(byRef('N2').unseen, isTrue);
+
+      expect(undo, isNotNull);
+      undo!();
+      await tester.pumpAndSettle();
+      expect(byRef('N1').pending, isTrue);
+      expect(byRef('N2').pending, isTrue);
+      expect(byRef('N2').unseen, isFalse);
+    });
+
+    // v2.3.0 review: a confirming save that also changes the account
+    // confirms after the move, so the re-test reads the account the row
+    // ends up on, not the one its alert named.
+    group('a confirming save that changes the account', () {
+      const own = 'SAMPLEBK:5678';
+      ParsedTxn alert(
+        String ref,
+        double amount,
+        int hour, {
+        String? on = own,
+      }) => ParsedTxn(
+        type: TxType.expense,
+        amount: amount,
+        merchant: '',
+        date: DateTime(2026, 10, 12, hour),
+        ref: ref,
+        categoryId: 'food',
+        sender: 'VM-SAMPLE',
+        rawBody: 'Rs.$amount debited at DEMO KIOSK',
+        acctKey: on,
+      );
+      Tx byRef(FinanceProvider p, String ref) => [
+        ...p.transactions,
+        ...p.pendingTransactions,
+      ].firstWhere((t) => t.externalRef == ref);
+
+      /// Opens the row [ref] in the edit sheet, picks the account named
+      /// [account] and taps Save and confirm. Returns the Undo the sheet
+      /// hands its host.
+      Future<VoidCallback> moveAndConfirm(
+        WidgetTester tester,
+        FinanceProvider p,
+        String ref,
+        String account,
+      ) async {
+        tester.view.physicalSize = const Size(800, 1800);
+        tester.view.devicePixelRatio = 2;
+        addTearDown(tester.view.reset);
+        VoidCallback? undo;
+        await tester.pumpWidget(
+          page(
+            p,
+            Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showAddTransactionSheet(
+                  context,
+                  existing: byRef(p, ref),
+                  onUndoable: (message, u, {required icon, required tone}) {
+                    expect(message, 'Saved and confirmed');
+                    undo = u;
+                  },
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+        final field = find.text('Account (optional)');
+        await tester.ensureVisible(field);
+        await tester.pumpAndSettle();
+        await tester.tap(field);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text(account).last);
+        await tester.pumpAndSettle();
+        final save = find.widgetWithText(FilledButton, 'Save and confirm');
+        await tester.ensureVisible(save);
+        await tester.pumpAndSettle();
+        await tester.tap(save);
+        await tester.pumpAndSettle();
+        expect(undo, isNotNull);
+        return undo!;
+      }
+
+      testWidgets('moved off a new account, the rows still on it keep '
+          'waiting, and Undo puts the row back there', (tester) async {
+        final p = await withRows(const []);
+        final spare = await p.addAccount(
+          name: 'Spare Bank',
+          type: AccountType.bank,
+        );
+        await p.addImported([
+          alert('N1', 120, 9),
+          alert('N2', 80, 10),
+          alert('N3', 60, 11),
+        ]);
+        expect(p.pendingCount, 3);
+        final first = p.accountForKey(own)!.id;
+
+        final undo = await moveAndConfirm(tester, p, 'N1', 'Spare Bank');
+        expect(byRef(p, 'N1').pending, isFalse);
+        expect(p.accountForKey(byRef(p, 'N1').acctKey)?.id, spare);
+        // Nothing confirmed is on the alerts' own account: its rows wait.
+        expect(byRef(p, 'N2').pending, isTrue);
+        expect(byRef(p, 'N3').pending, isTrue);
+
+        undo();
+        await tester.pumpAndSettle();
+        expect(byRef(p, 'N1').pending, isTrue);
+        expect(p.accountForKey(byRef(p, 'N1').acctKey)?.id, first);
+        expect(p.pendingCount, 3);
+      });
+
+      testWidgets('a row with no account number given a new account lets '
+          'that account\'s rows count, and Undo puts them all back', (
+        tester,
+      ) async {
+        final p = await withRows(const []);
+        await p.addImported([
+          alert('N1', 120, 9, on: null),
+          alert('N2', 80, 10),
+          alert('N3', 60, 11),
+        ]);
+        expect(p.pendingCount, 3);
+        final bank = p.accountForKey(own)!;
+
+        final undo = await moveAndConfirm(tester, p, 'N1', bank.displayName);
+        expect(byRef(p, 'N1').pending, isFalse);
+        expect(p.accountForKey(byRef(p, 'N1').acctKey)?.id, bank.id);
+        // The account has a confirmed row now: its imports count.
+        for (final ref in ['N2', 'N3']) {
+          expect(byRef(p, ref).pending, isFalse, reason: ref);
+          expect(byRef(p, ref).unseen, isTrue, reason: ref);
+        }
+
+        undo();
+        await tester.pumpAndSettle();
+        expect(p.pendingCount, 3);
+        expect(byRef(p, 'N1').acctKey, isNull);
+        for (final ref in ['N2', 'N3']) {
+          expect(byRef(p, ref).unseen, isFalse, reason: ref);
+        }
+      });
     });
 
     testWidgets('a delete from the review sheet keeps its removal tint', (

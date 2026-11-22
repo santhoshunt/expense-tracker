@@ -221,6 +221,56 @@ void main() {
     );
   });
 
+  // v2.3.0: the title is cached per row object. Keyed by id, the tile from
+  // before the edit asked again as the change was announced and its old
+  // title stood for the edited row until the next change.
+  testWidgets('a Paid to edit shows in the list row at once', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'food',
+      amount: 90,
+      payee: 'Sample Mess',
+      note: 'lunch with team',
+      date: date,
+    );
+    await p.addTransaction(
+      type: TxType.expense,
+      categoryId: 'shopping',
+      amount: 650,
+      payee: 'Sample Gifts',
+      note: '',
+      date: date.add(const Duration(hours: 9)),
+    );
+    await pump(
+      tester,
+      p,
+      // Rebuilds with the ledger's rows on every change, as the list does.
+      Consumer<FinanceProvider>(
+        builder: (_, f, _) => ListView(
+          children: [for (final t in f.transactions) TransactionTile(tx: t)],
+        ),
+      ),
+      size: const Size(400, 800),
+      textScale: 1,
+    );
+    expect(find.text('Sample Mess'), findsOneWidget);
+    expect(find.text('Sample Gifts'), findsOneWidget);
+
+    final row = p.transactions.firstWhere((t) => t.payee == 'Sample Mess');
+    await p.updateTransaction(row.copyWith(payee: 'Demo Canteen'));
+    await tester.pump();
+    expect(find.text('Demo Canteen'), findsOneWidget);
+    expect(find.text('Sample Mess'), findsNothing);
+    // The row beside it keeps its own title.
+    expect(find.text('Sample Gifts'), findsOneWidget);
+    expect(
+      p.rowTitleFor(p.transactions.firstWhere((t) => t.id == row.id)),
+      'Demo Canteen',
+    );
+  });
+
   testWidgets('a search reason stays whole when line two ellipsizes', (
     tester,
   ) async {

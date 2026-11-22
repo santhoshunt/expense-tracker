@@ -7,6 +7,7 @@ import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
 import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/screens/classifiers_screen.dart';
+import 'package:expense_tracker/utils/format.dart';
 import 'package:expense_tracker/widgets/editor_sheet.dart';
 
 Widget app(FinanceProvider p) => MultiProvider(
@@ -27,6 +28,15 @@ void main() {
     setCustomCategories(const []);
     setBuiltinOverrides(const {});
   });
+
+  /// A Food and Salary pair's second line, with what it [sets] when it
+  /// sets more. Each part's words are held together and the line breaks
+  /// only after a dot (joinFacts), as the row draws it at this width.
+  String pairLine([String? sets]) => joinFacts([
+    '↑ Food & Dining (expense)',
+    '↓ Salary (income)',
+    if (sets != null) 'sets $sets',
+  ]);
 
   /// Picks [label] in Classify as.
   Future<void> classifyAs(WidgetTester tester, String label) async {
@@ -93,10 +103,7 @@ void main() {
 
       // One tile for the pair, expense side first.
       expect(find.text('contains "amma"'), findsOneWidget);
-      expect(
-        find.text('↑ Food & Dining (expense) · ↓ Salary (income)'),
-        findsOneWidget,
-      );
+      expect(find.text(pairLine()), findsOneWidget);
       // The pair row shows its primary rule's category icon (one of the
       // pair's two), not a two-way arrow.
       expect(find.byIcon(Icons.swap_vert), findsNothing);
@@ -234,6 +241,316 @@ void main() {
     await tester.tap(find.text('Create'));
     await tester.pumpAndSettle();
     expect(p.rules.where((r) => !r.isBuiltIn).single.pattern, 'amma | appa');
+  });
+
+  /// Opens the sheet's Also set fold.
+  Future<void> openAlsoSet(WidgetTester tester) async {
+    await tester.ensureVisible(find.text('Also set'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Also set'));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> type(WidgetTester tester, Finder field, String text) async {
+    await tester.ensureVisible(field);
+    await tester.pumpAndSettle();
+    await tester.enterText(field, text);
+    await tester.pumpAndSettle();
+  }
+
+  final payeeField = find.byKey(const ValueKey('rule-payee'));
+  final tagField = find.widgetWithText(TextField, 'Tags');
+
+  // A confirmed SMS row no rule has sorted yet.
+  Tx smsRow(String id, TxType type, String body) => Tx(
+    id: id,
+    type: type,
+    categoryId: type == TxType.income ? 'other_income' : 'other_expense',
+    amount: 250,
+    note: '',
+    date: DateTime(2026, 9, 12, 13),
+    source: TxSource.sms,
+    smsBody: body,
+    sender: 'AD-DEMOBK',
+  );
+
+  testWidgets('a new rule pair saves the same Paid to and tags on both '
+      'rules, counts both directions, and the tile says what it sets', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.restoreTransactions([
+      smsRow('out', TxType.expense, 'Rs 250 sent to MEERAVALLI by UPI'),
+      smsRow('in', TxType.income, 'Rs 250 received from MEERAVALLI by UPI'),
+    ]);
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('New rule'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      inDialog(find.byType(TextField)).first,
+      'meeravalli',
+    );
+    await tester.pump();
+    await classifyAs(tester, 'Food & Dining');
+    await openAlsoSet(tester);
+    await type(tester, payeeField, 'Meera');
+    // One direction so far: only money out matches.
+    expect(
+      find.text('Fills Paid to where you typed none. 1 past payment changes.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Money in goes to another category'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Other direction'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Salary').last);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Fills Paid to where you typed none. 2 past payments change.'),
+      findsOneWidget,
+    );
+    await type(tester, tagField, 'Family,');
+    await tester.tap(find.text('Create'));
+    await tester.pumpAndSettle();
+
+    final mine = p.rules.where((r) => !r.isBuiltIn).toList();
+    expect(mine, hasLength(2));
+    expect(mine.map((r) => r.categoryId).toSet(), {'food', 'salary'});
+    for (final r in mine) {
+      expect(r.payee, 'Meera', reason: r.categoryId);
+      expect(r.tags, ['Family'], reason: r.categoryId);
+    }
+    for (final t in p.transactions) {
+      expect(t.payee, 'Meera', reason: t.id);
+      expect(t.tags, ['Family'], reason: t.id);
+    }
+    expect(find.text('2 transactions reclassified'), findsOneWidget);
+
+    // The title is as it was; the second line gains what the pair sets.
+    expect(find.text('contains "meeravalli"'), findsOneWidget);
+    expect(find.text(pairLine('Paid to, 1 tag')), findsOneWidget);
+
+    // Undo takes both rules and both rows back.
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(p.rules.where((r) => !r.isBuiltIn), isEmpty);
+    for (final t in p.transactions) {
+      expect(t.payee, isEmpty, reason: t.id);
+      expect(t.tags, isEmpty, reason: t.id);
+      expect(t.categoryId, startsWith('other_'), reason: t.id);
+    }
+  });
+
+  testWidgets('editing a rule pair writes a changed Paid to and tags to '
+      'both rules; a rule that sets nothing keeps its plain second line', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addRule('plainwords', 'transport');
+    await p.addRule('amma', 'food', tags: ['Family']);
+    await p.addRule('amma', 'salary', tags: ['Family']);
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    expect(find.text(pairLine('1 tag')), findsOneWidget);
+    expect(
+      find.text('→ ${categoryById('transport').label} (expense)'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('contains "amma"'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit rule pair'), findsOneWidget);
+    // A pair that sets more opens with the fold open.
+    expect(payeeField, findsOneWidget);
+    expect(find.text('# Family'), findsOneWidget);
+    await type(tester, payeeField, 'Amma');
+    await type(tester, tagField, 'Home');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+
+    final pair = p.rules.where((r) => r.pattern == 'amma').toList();
+    expect(pair, hasLength(2));
+    for (final r in pair) {
+      expect(r.payee, 'Amma', reason: r.categoryId);
+      expect(r.tags, ['Family', 'Home'], reason: r.categoryId);
+    }
+    expect(find.text(pairLine('Paid to, 2 tags')), findsOneWidget);
+  });
+
+  // v2.3.0 review: the row said "sets Paid to" for one income rule, whose
+  // editor calls the field Received from, and for a rule whose category
+  // had since become a transfer, which fills no Paid to.
+  testWidgets('a rule row says Received from for one income rule, and '
+      'leaves out the Paid to of a rule in a transfer category', (
+    tester,
+  ) async {
+    final p = FinanceProvider();
+    await p.load();
+    final fund = await p.addCategory(
+      label: 'Chit fund',
+      type: TxType.expense,
+      icon: Icons.fastfood,
+      color: Colors.teal,
+    );
+    await p.addRule('zephyrine', fund, payee: 'Zephyrine', tags: ['Home']);
+    await p.addRule('mapleworth', fund, payee: 'Mapleworth');
+    await p.addRule('quillfern', 'food', payee: 'Quillfern Teas');
+    await p.addRule(
+      'meeravalli',
+      'salary',
+      payee: 'Meeravalli Works',
+      tags: ['Office'],
+    );
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    Finder lineOf(String pattern, List<String> facts) => find.descendant(
+      of: find.ancestor(
+        of: find.text('contains "$pattern"'),
+        matching: find.byType(ListTile),
+      ),
+      matching: find.text(joinFacts(facts)),
+    );
+    expect(
+      lineOf('meeravalli', ['→ Salary (income)', 'sets Received from, 1 tag']),
+      findsOneWidget,
+    );
+    expect(
+      lineOf('quillfern', ['→ Food & Dining (expense)', 'sets Paid to']),
+      findsOneWidget,
+    );
+    const toFund = '→ Chit fund (expense)';
+    expect(
+      lineOf('zephyrine', [toFund, 'sets Paid to, 1 tag']),
+      findsOneWidget,
+    );
+    expect(lineOf('mapleworth', [toFund, 'sets Paid to']), findsOneWidget);
+
+    // The category becomes a transfer: its rules fill no Paid to now.
+    await p.updateCategory(
+      TxCategory(
+        id: fund,
+        label: 'Chit fund',
+        icon: Icons.fastfood,
+        color: Colors.teal,
+        type: TxType.expense,
+        isTransfer: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(lineOf('zephyrine', [toFund, 'sets 1 tag']), findsOneWidget);
+    // One part alone is shown as it is, with nothing after it.
+    expect(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('contains "mapleworth"'),
+          matching: find.byType(ListTile),
+        ),
+        matching: find.text(toFund),
+      ),
+      findsOneWidget,
+    );
+    // The Food rule's row alone still says it.
+    expect(find.textContaining(joinFacts(['sets Paid to'])), findsOneWidget);
+    // Display only: the rules keep what they stored.
+    String payeeOf(String pattern) =>
+        p.rules.firstWhere((r) => r.pattern == pattern).payee;
+    expect(payeeOf('zephyrine'), 'Zephyrine');
+    expect(payeeOf('mapleworth'), 'Mapleworth');
+  });
+
+  testWidgets('a pair of two rules made apart shows and opens on what '
+      'either rule sets, and saving writes it to both', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    // The older rule sets both; the newer one, which sets nothing, was
+    // made on its own later.
+    await p.addRule('amma', 'food', payee: 'Amma', tags: ['Family']);
+    await p.addRule('amma', 'salary');
+    // One field on each rule.
+    await p.addRule('meeravalli', 'salary', tags: ['Home']);
+    await p.addRule('meeravalli', 'food', payee: 'Meera');
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    final both = pairLine('Paid to, 1 tag');
+    expect(find.text(both), findsNWidgets(2));
+
+    Future<void> saveUntouched(String pattern) async {
+      await tester.tap(find.text('contains "$pattern"'));
+      await tester.pumpAndSettle();
+      expect(find.text('Edit rule pair'), findsOneWidget);
+      // A pair that sets more opens with the fold open.
+      expect(payeeField, findsOneWidget);
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+    }
+
+    await tester.tap(find.text('contains "amma"'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(payeeField).controller!.text, 'Amma');
+    expect(find.text('# Family'), findsOneWidget);
+    await closeSheet(tester);
+    // Nothing was typed, so the sheet closed without asking.
+    expect(find.byType(EditorSheetBody), findsNothing);
+
+    await saveUntouched('amma');
+    for (final r in p.rules.where((r) => r.pattern == 'amma')) {
+      expect(r.payee, 'Amma', reason: r.categoryId);
+      expect(r.tags, ['Family'], reason: r.categoryId);
+    }
+
+    await tester.tap(find.text('contains "meeravalli"'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<TextField>(payeeField).controller!.text, 'Meera');
+    expect(find.text('# Home'), findsOneWidget);
+    await closeSheet(tester);
+    await saveUntouched('meeravalli');
+    for (final r in p.rules.where((r) => r.pattern == 'meeravalli')) {
+      expect(r.payee, 'Meera', reason: r.categoryId);
+      expect(r.tags, ['Home'], reason: r.categoryId);
+    }
+    expect(find.text(both), findsNWidgets(2));
+  });
+
+  testWidgets('merging rules that change past rows only in their tags says '
+      'how many were updated, and Undo takes it back', (tester) async {
+    final p = FinanceProvider();
+    await p.load();
+    await p.addRule('mapleworth', 'food');
+    await p.addRule('quillfern', 'food', tags: ['Office']);
+    // Loaded after the rules and already in their category: no rule has
+    // touched it.
+    await p.restoreTransactions([
+      smsRow(
+        'm1',
+        TxType.expense,
+        'Rs 250 paid to MAPLEWORTH DEPOT',
+      ).copyWith(categoryId: 'food'),
+    ]);
+    await tester.pumpWidget(app(p));
+    await tester.pumpAndSettle();
+
+    await tester.longPress(find.text('contains "quillfern"'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('contains "mapleworth"'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Merge'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Merged 2 rules · 1 transaction updated'), findsOneWidget);
+    expect(p.rules.where((r) => !r.isBuiltIn), hasLength(1));
+    expect(p.transactions.single.tags, ['Office']);
+
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(p.rules.where((r) => !r.isBuiltIn), hasLength(2));
+    expect(p.transactions.single.tags, isEmpty);
   });
 
   testWidgets('clearing the second slot deletes the twin', (tester) async {

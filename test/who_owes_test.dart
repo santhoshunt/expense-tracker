@@ -639,7 +639,7 @@ void main() {
       final bill = await dinner(p);
       await repaid(p, 'Priya', 500);
       final data = p.exportData();
-      expect(data['version'], 33);
+      expect(data['version'], 34);
 
       final fresh = await loaded();
       await fresh.importData(

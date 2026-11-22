@@ -966,12 +966,18 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
         : normalizePayee(_payeeCtrl.text);
     // The tick is saved only where it shows; elsewhere the row keeps it.
     final earnsShown = _rewards(finance) != null;
+    // Imports a confirming save let count, as they were, for its Undo.
+    var released = const <Tx>[];
 
     try {
       if (isEditing) {
+        final moves = _accountId != null && _accountId != _initialAccountId;
         await finance.updateTransaction(
           widget.existing!.copyWith(
-            pending: confirms ? false : null,
+            // A row that also changes account confirms after the move
+            // below: the imports a confirm lets count are those waiting on
+            // the account the row ends up on.
+            pending: confirms && !moves ? false : null,
             // Saving a guessed row is looking at its category: the guess
             // stands as the user's, as Keep makes it. Not once Make rule
             // re-sorted it: that category is the rule's, and later rules
@@ -1014,9 +1020,11 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
             unseen: false,
           ),
         );
-        if (_accountId != null && _accountId != _initialAccountId) {
+        if (moves) {
           await finance.assignAccount(widget.existing!.id, _accountId!);
+          if (confirms) await finance.confirmTransaction(widget.existing!.id);
         }
+        if (confirms) released = finance.takeReleased();
       } else {
         final id = await finance.addTransaction(
           type: _type,
@@ -1054,7 +1062,7 @@ class _AddTransactionFormState extends State<_AddTransactionForm> {
       _offerUndo(
         'Saved and confirmed',
         () {
-          _undoEdit(finance, accountsBefore, [before]);
+          _undoEdit(finance, accountsBefore, [before, ...released]);
           if (subBefore != null) {
             _undoSubscription(finance, settings, subBefore);
           }
