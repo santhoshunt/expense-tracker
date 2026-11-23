@@ -237,7 +237,8 @@ void main() {
   group('accent text buttons', () {
     const accent = FigmaPalette.defaultAccent;
     final light = buildAppTheme(brightness: Brightness.light, accent: accent);
-    final dark = buildAppTheme(brightness: Brightness.dark, accent: accent);
+    // Dark mode's lightened text buttons are tested in
+    // v235_dark_accent_test.dart.
 
     Color textButton(ThemeData t) =>
         t.textButtonTheme.style!.foregroundColor!.resolve(const {})!;
@@ -268,11 +269,6 @@ void main() {
       // The default accent, deepened once for both.
       expect(hex(button), '#1E67BC');
       expect(action, button);
-    });
-
-    test('dark keeps the accent as it was', () {
-      expect(textButton(dark), accent);
-      expect(dark.snackBarTheme.actionTextColor, accent);
     });
 
     testWidgets("the toast's Undo uses the corrected colour", (tester) async {

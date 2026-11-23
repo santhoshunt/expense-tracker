@@ -209,12 +209,16 @@ class BudgetMonitor {
         // the user grants permission.
         if (!await notifications.areEnabled) return;
 
-        final text = budgetAlertText(
-          level: level,
-          spent: c.spent,
-          cap: c.cap,
-          money: fmtMoney,
-          name: c.name,
+        final text = notificationText(
+          NoteKind.budget,
+          budgetAlertText(
+            level: level,
+            spent: c.spent,
+            cap: c.cap,
+            money: fmtMoney,
+            name: c.name,
+          ),
+          hide: settings.hideNotificationDetails,
         );
         await notifications.show(
           id: c.id,

@@ -10,7 +10,8 @@ import '../utils/app_theme.dart';
 import 'glossy.dart';
 import 'info_tip.dart';
 
-/// The alert switches of Settings, Notifications: Budget alerts with its
+/// The alert switches of Settings, Notifications: Hide details in
+/// notifications, Budget alerts with its
 /// 80/90/overshoot levels, Unusual spending alerts, Weekly digest, Payments
 /// to check, Payment reminders and Subscription price rises, plus a warning
 /// when Android blocks notifications.
@@ -79,6 +80,22 @@ class _NotificationSwitchesState extends State<NotificationSwitches>
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
         child: Column(
           children: [
+            // Changes only what later notifications say, so it asks for no
+            // permission. Right inset = the info tip beside the switches
+            // below, so the switches share one column.
+            SwitchListTile(
+              contentPadding: const EdgeInsets.only(right: 32),
+              title: const Text('Hide details in notifications'),
+              subtitle: Text(
+                'No amounts, names or account digits. Open the app to see '
+                'them.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              value: settings.hideNotificationDetails,
+              onChanged: (on) => context
+                  .read<SettingsProvider>()
+                  .setHideNotificationDetails(on),
+            ),
             _SwitchWithTip(
               tip: const InfoTip(
                 title: 'Budget alerts',
@@ -257,9 +274,12 @@ class _NotificationSwitchesState extends State<NotificationSwitches>
                 message:
                     'When a background import counts a payment with a '
                     'guessed category or as To sort, a note shows it with '
-                    'Keep and Change. Keep confirms the guess the next time '
-                    "the app opens. The lock screen follows your phone's "
-                    'setting for sensitive content.',
+                    'Keep and Change. While Hide details in notifications is '
+                    'on, the note shows no details and no buttons: tap it to '
+                    'open the payment. Keep confirms the guess at once when '
+                    'the app is open, otherwise the next time it opens. The '
+                    "lock screen follows your phone's setting for sensitive "
+                    'content.',
               ),
               child: SwitchListTile(
                 contentPadding: EdgeInsets.zero,

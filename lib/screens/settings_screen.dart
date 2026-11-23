@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:convert' show utf8;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 // ScrollCacheExtent is not yet re-exported through material.dart.
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:intl/intl.dart' show NumberFormat;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -13,6 +15,7 @@ import '../providers/settings_provider.dart';
 import '../services/app_icon_service.dart';
 import '../services/app_lock_service.dart';
 import '../services/background_import.dart';
+import '../services/backup_crypto.dart';
 import '../services/backup_service.dart';
 import '../services/drive_backup_service.dart';
 import '../services/sms_import_service.dart';
@@ -22,7 +25,9 @@ import '../services/notification_source.dart';
 import '../services/sms_source.dart';
 import '../utils/app_palettes.dart';
 import '../utils/app_theme.dart';
+import '../utils/format.dart';
 import '../utils/text_scale.dart';
+import '../widgets/backup_passphrase_dialogs.dart';
 import '../widgets/editor_sheet.dart';
 import '../widgets/export_sheet.dart';
 import '../widgets/pdf_export_flow.dart';
@@ -32,6 +37,7 @@ import '../widgets/glossy.dart';
 import '../widgets/grouped_surface.dart';
 import '../widgets/info_tip.dart';
 import '../widgets/notification_switches.dart';
+import '../widgets/one_field_dialog.dart';
 import 'app_nav.dart';
 import 'card_rewards_page.dart';
 import 'classifiers_screen.dart';
@@ -53,10 +59,14 @@ EdgeInsets _settingsPadding(BuildContext context) => EdgeInsets.fromLTRB(
 /// "Last backup failed" while a failure is recorded. "Reconnect Google
 /// Drive" when the recorded failure is [kDriveReconnectMessage], the one
 /// DriveBackupService stores when access must be granted again (the Backup
-/// page's banner offers Reconnect for the same text). Null when nothing has
-/// been backed up and nothing failed: the row then says what the page holds.
+/// page's banner offers Reconnect for the same text). A skipped scheduled
+/// backup is not a failure: it reads "Waiting to back up this phone" or
+/// "Backups paused". Null when nothing has been backed up and nothing
+/// failed: the row then says what the page holds.
 String? backupStatusLine(DateTime? last, String? error, DateTime now) {
   if (error == kDriveReconnectMessage) return 'Reconnect Google Drive';
+  if (error == kDriveOtherPhoneMessage) return 'Waiting to back up this phone';
+  if (error == kDriveBackupsPausedMessage) return 'Backups paused';
   if (error != null) return 'Last backup failed';
   if (last == null) return null;
   final days = DateUtils.dateOnly(
@@ -345,12 +355,20 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
   String _freq = 'daily';
   DateTime? _lastBackup;
   String? _lastError;
+  String _backupName = '';
   bool _uploading = false;
+
+  /// Kept for [dispose], where the context can no longer be read.
+  late final DriveBackupService _svc;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // A restore from the Data section below clears the waiting message;
+    // reload so its banner goes at once.
+    _svc = context.read<DriveBackupService>()
+      ..restoredSignal.addListener(_load);
     // "Last backup: Just now" goes stale while Settings sits open — the
     // relative label is recomputed per build, but nothing was rebuilding.
     _clockTick = Timer.periodic(const Duration(minutes: 1), (_) {
@@ -362,6 +380,7 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
 
   @override
   void dispose() {
+    _svc.restoredSignal.removeListener(_load);
     _clockTick?.cancel();
     super.dispose();
   }
@@ -378,14 +397,46 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
     final freq = await svc.getFrequency();
     final last = await svc.lastBackupAt();
     final error = await svc.lastError();
+    final backupName = await svc.backupName();
     if (!mounted) return;
     setState(() {
       _email = email;
       _freq = freq;
       _lastBackup = last;
       _lastError = error;
+      _backupName = backupName;
       _loading = false;
     });
+  }
+
+  Future<void> _rename() async {
+    final svc = context.read<DriveBackupService>();
+    final text = await showOneFieldDialog(
+      context,
+      title: 'Backup name',
+      label: 'Name',
+      tip: const InfoTip(
+        title: 'Name',
+        message:
+            'Names this phone in the list a restore from Google Drive shows '
+            'on your other phones. Backups made from now on carry it.',
+      ),
+      keyboard: TextInputType.text,
+      capitalization: TextCapitalization.sentences,
+      initial: _backupName,
+      problem: (t) {
+        final name = t.trim();
+        if (name.isEmpty) return 'Enter a name';
+        // Drive refuses an upload whose name runs past its property limit,
+        // and backups would stop.
+        return utf8.encode(name).length > DriveBackupService.maxNameBytes
+            ? 'Use a shorter name'
+            : null;
+      },
+    );
+    if (text == null) return;
+    await svc.setBackupName(text.trim());
+    if (mounted) setState(() => _backupName = text.trim());
   }
 
   Future<void> _connect() async {
@@ -527,11 +578,16 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                     ),
                     const SizedBox(width: 8),
                     Expanded(
+                      // Nothing failed while backups wait for this phone's
+                      // first restore or Back up now: shown as it is.
                       child: Text(
-                        _lastError == kDriveReconnectMessage
+                        _lastError == kDriveReconnectMessage ||
+                                _lastError == kDriveOtherPhoneMessage
                             ? _lastError!
                             : 'The last Drive backup failed: $_lastError',
-                        maxLines: 3,
+                        // Six: the waiting message ends in what to do, and
+                        // at 1.3 times text on 360dp it takes five lines.
+                        maxLines: 6,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
@@ -630,6 +686,17 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
               ),
             ),
             ListTile(
+              key: const ValueKey('drive-backup-name'),
+              leading: const Icon(Icons.smartphone_outlined),
+              title: const Text('Backup name'),
+              subtitle: Text(
+                _backupName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: _rename,
+            ),
+            ListTile(
               leading: _uploading
                   ? const SizedBox(
                       width: 24,
@@ -644,8 +711,9 @@ class _DriveBackupSectionState extends State<_DriveBackupSection> {
                   title: 'Back up now',
                   message:
                       'Uploads right away, even when there are no '
-                      'transactions. Only 7 backups are kept, so repeated '
-                      'empty uploads can push out older good ones.',
+                      "transactions. Only this phone's 7 newest backups are "
+                      'kept, so repeated empty uploads can push out older '
+                      'good ones.',
                 ),
               ),
               enabled: !_uploading,
@@ -1102,6 +1170,101 @@ class _DataSection extends StatefulWidget {
 class _DataSectionState extends State<_DataSection> {
   final _smsImport = SmsImportService();
 
+  /// Whether backups are protected with a passphrase; null until read.
+  bool? _protected;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshProtected();
+  }
+
+  /// The switch follows what is stored, whatever happened before.
+  Future<void> _refreshProtected() async {
+    bool? on;
+    try {
+      on = await BackupPassphrase.isOn();
+    } catch (e) {
+      debugPrint('Reading backup protection failed: $e');
+    }
+    if (mounted && on != null) setState(() => _protected = on);
+  }
+
+  /// On asks for the passphrase first and stays off on Cancel; off needs
+  /// no dialog. A failure says so, and either way the switch is read back
+  /// from what is stored, so it never shows one state while backups do the
+  /// other.
+  Future<void> _setProtected(bool on) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (!on) {
+        await BackupPassphrase.turnOff();
+      } else {
+        final passphrase = await showSetPassphraseDialog(context);
+        if (passphrase == null || !mounted) return;
+        await _withBusy(
+          'Setting the passphrase…',
+          () => BackupPassphrase.turnOn(passphrase),
+        );
+      }
+    } catch (e) {
+      debugPrint('Changing backup protection failed: $e');
+      showAppToastOn(
+        messenger,
+        'Could not change backup protection.',
+        tone: AppToastTone.error,
+      );
+    } finally {
+      await _refreshProtected();
+    }
+  }
+
+  /// Runs [read] behind the spinner. A protected backup this phone holds
+  /// no key for asks for its passphrase, and [opened] wraps what it opens;
+  /// [UnlockedBackup] then comes along for [_adopt]. Null when the picker or
+  /// the passphrase dialog was cancelled. Nothing is imported until this
+  /// returns, so Replace never deletes first.
+  Future<({T value, UnlockedBackup? unlocked})?> _readBackup<T>(
+    String label,
+    Future<T?> Function() read,
+    T Function(Map<String, dynamic> data, PassphraseNeededException locked)
+    opened,
+  ) async {
+    try {
+      final value = await _withBusy(label, read);
+      return value == null ? null : (value: value, unlocked: null);
+    } on PassphraseNeededException catch (locked) {
+      if (!mounted) return null;
+      final unlocked = await showRestorePassphraseDialog<UnlockedBackup>(
+        context,
+        madeAt: locked.madeAt,
+        open: (passphrase) =>
+            _withBusy('Opening backup…', () => locked.open(passphrase)),
+      );
+      if (unlocked == null) return null;
+      return (value: opened(unlocked.data, locked), unlocked: unlocked);
+    }
+  }
+
+  /// After a restore that a typed passphrase opened: this phone keeps its
+  /// key when it has none ([UnlockedBackup.adopt]), and the switch shows
+  /// it. Returns the sentence the restore toast adds, or ''.
+  Future<String> _adopt(UnlockedBackup? unlocked) async {
+    if (unlocked == null) return '';
+    var adopted = false;
+    try {
+      adopted = await unlocked.adopt();
+    } catch (e) {
+      // The restore has landed; only the protection did not carry over.
+      debugPrint('Keeping the backup passphrase failed: $e');
+    }
+    await _refreshProtected();
+    return adopted
+        ? ' Backups from this phone are now protected with the same '
+              'passphrase.'
+        : '';
+  }
+
   /// Runs [work] behind a modal spinner so a full-ledger export/import isn't
   /// a frozen, feedback-free screen. The barrier also blocks a second tap
   /// while the first operation is still writing.
@@ -1200,20 +1363,28 @@ class _DataSectionState extends State<_DataSection> {
         case 'import_json':
           final settings = context.read<SettingsProvider>();
           final importBefore = settings.autoImport;
+          final read = await _readBackup(
+            'Importing backup…',
+            BackupService.readJson,
+            (data, _) => data,
+          );
+          if (read == null) return; // picker or passphrase cancelled
           final txAdded = await _withBusy(
             'Importing backup…',
-            () => BackupService.importJson(
+            () => BackupService.importBackup(
               finance,
+              read.value,
               replace: replace,
               settings: settings,
             ),
           );
-          if (txAdded == null) return; // picker cancelled
+          final adoptedLine = await _adopt(read.unlocked);
           showAppToastOn(
             messenger,
-            replace
-                ? 'Restored $txAdded transactions.'
-                : 'Imported $txAdded new transactions.',
+            (replace
+                    ? 'Restored $txAdded transactions.'
+                    : 'Imported $txAdded new transactions.') +
+                adoptedLine,
             tone: AppToastTone.success,
             icon: Icons.file_download_done,
           );
@@ -1243,14 +1414,35 @@ class _DataSectionState extends State<_DataSection> {
             await driveService.connect();
           }
           if (!mounted) return;
+          final groups = await _withBusy(
+            'Looking for backups…',
+            () => driveService.listBackups(interactive: true),
+          );
+          if (!mounted) return;
+          // One phone's backups need no choice; the restore takes its newest.
+          final group = groups.length == 1
+              ? groups.single
+              : await _pickDriveBackup(groups);
+          if (group == null || !mounted) return;
           final settingsProvider = context.read<SettingsProvider>();
           final driveBefore = settingsProvider.autoImport;
+          final read = await _readBackup(
+            'Restoring cloud backup…',
+            () => driveService.download(group, interactive: true),
+            (data, locked) => CloudBackup(
+              data: data,
+              createdAt: locked.madeAt ?? DateTime.now(),
+              name: locked.name ?? '',
+            ),
+          );
+          if (read == null || !mounted) return; // passphrase cancelled
+          final backup = read.value;
           final restored = await _withBusy('Restoring cloud backup…', () async {
-            final backup = await driveService.downloadLatest(interactive: true);
             final added = await finance.importData(
               backup.data,
               replace: replace,
             );
+            await driveService.markRestored();
             // Same rule as the file import: the preference block only
             // applies on replace — merge keeps the device's own settings.
             final block = backup.data['settings'];
@@ -1259,14 +1451,16 @@ class _DataSectionState extends State<_DataSection> {
             }
             return (backup: backup, added: added);
           });
+          final adoptedLine = await _adopt(read.unlocked);
           showAppToastOn(
             messenger,
-            replace
-                ? 'Restored ${restored.added} transactions from the '
-                      'cloud backup '
-                      '(${DriveBackupService.formatLastBackup(restored.backup.createdAt)}).'
-                : 'Imported ${restored.added} new transactions from the '
-                      'cloud backup.',
+            (replace
+                    ? 'Restored ${restored.added} transactions from the '
+                          'cloud backup '
+                          '(${DriveBackupService.formatLastBackup(restored.backup.createdAt)}).'
+                    : 'Imported ${restored.added} new transactions from the '
+                          'cloud backup.') +
+                adoptedLine,
             tone: AppToastTone.success,
             icon: Icons.cloud_download_outlined,
           );
@@ -1279,6 +1473,9 @@ class _DataSectionState extends State<_DataSection> {
           }
       }
     } on DriveAuthException catch (e) {
+      showAppToastOn(messenger, e.message, tone: AppToastTone.error);
+    } on NewerBackupFormatException catch (e) {
+      // A protected backup a later release made, from a file or Drive.
       showAppToastOn(messenger, e.message, tone: AppToastTone.error);
     } on FormatException catch (e) {
       showAppToastOn(
@@ -1404,6 +1601,78 @@ class _DataSectionState extends State<_DataSection> {
     await _handleBackupAction(picked.format, range: picked.range);
   }
 
+  /// Indian grouping, as amounts read across the app ("1,204", "1,25,000").
+  /// format.dart groups only money and points, each with its own sign or
+  /// word.
+  static final _countGrouping = NumberFormat.decimalPattern('en_IN');
+
+  /// Which phone's backups to restore: one row per phone with its newest
+  /// backup's date and count, as the new account sheet lists its types.
+  /// Null when the sheet is closed.
+  Future<DriveBackupGroup?> _pickDriveBackup(List<DriveBackupGroup> groups) {
+    // Another year's backup names its year, so it does not read as this
+    // year's.
+    final year = DateTime.now().year;
+    return showEditorSheet<DriveBackupGroup>(
+      context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 8, 8),
+              child: Text(
+                'Choose a backup',
+                style: Theme.of(ctx).textTheme.titleLarge,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final (i, g) in groups.indexed)
+                      GroupedSurface(
+                        first: i == 0,
+                        last: i == groups.length - 1,
+                        child: ListTile(
+                          title: Text(
+                            g.mine
+                                ? 'This phone'
+                                : g.installId == null
+                                ? 'Earlier backups'
+                                : g.name ?? 'Another phone',
+                          ),
+                          subtitle: Text(
+                            joinFacts([
+                              if (g.newestAt case final at?)
+                                at.year == year
+                                    ? dayMonthFormat.format(at)
+                                    : fmtDate(at),
+                              if (g.newestCount case final n?)
+                                '${_countGrouping.format(n)} '
+                                    '${n == 1 ? 'transaction' : 'transactions'}',
+                            ]),
+                          ),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => Navigator.pop(ctx, g),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -1422,7 +1691,9 @@ class _DataSectionState extends State<_DataSection> {
                     'Backup (JSON): everything needed to restore, without SMS '
                     'text. Transactions (CSV): confirmed and pending rows, for '
                     'spreadsheets. Report (PDF): confirmed rows only, and it '
-                    'shows income totals even with Hide income on.',
+                    'shows income totals even with Hide income on. With '
+                    'Protect with a passphrase on, the JSON backup is '
+                    'protected. CSV and PDF are not.',
               ),
             ),
             subtitle: Text(
@@ -1431,6 +1702,30 @@ class _DataSectionState extends State<_DataSection> {
             ),
             trailing: const Icon(Icons.chevron_right),
             onTap: _showExport,
+          ),
+          // Covers the backup file and the Google Drive copy, so it sits
+          // here rather than in the Drive section, which hides its rows
+          // until Drive is connected.
+          ListTile(
+            key: const ValueKey('backup-passphrase'),
+            enabled: _protected != null,
+            leading: const Icon(Icons.key_outlined),
+            title: const Text('Protect with a passphrase'),
+            subtitle: Text(
+              'Needed to restore. Cannot be recovered.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            // Named so the switch is not announced as an unlabelled toggle.
+            trailing: Semantics(
+              label: 'Protect with a passphrase',
+              child: Switch(
+                value: _protected ?? false,
+                onChanged: _protected == null ? null : _setProtected,
+              ),
+            ),
+            onTap: _protected == null
+                ? null
+                : () => _setProtected(!_protected!),
           ),
 
           ListTile(

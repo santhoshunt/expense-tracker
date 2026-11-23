@@ -60,6 +60,22 @@ void main() {
       );
     });
 
+    test('a skipped scheduled backup reads as waiting or paused, not as a '
+        'failure', () {
+      expect(
+        backupStatusLine(null, kDriveOtherPhoneMessage, now),
+        'Waiting to back up this phone',
+      );
+      expect(
+        backupStatusLine(
+          DateTime(2026, 10, 12, 8),
+          kDriveBackupsPausedMessage,
+          now,
+        ),
+        'Backups paused',
+      );
+    });
+
     test('nothing backed up and nothing failed: no line', () {
       expect(backupStatusLine(null, null, now), isNull);
     });

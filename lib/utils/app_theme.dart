@@ -287,8 +287,13 @@ ThemeData _buildAppTheme({
   // accent read at 3.3:1 on white and 2.8:1 on the light toast fill, under
   // the 4.5:1 text needs. Darkened against surface2, the toast fill, which
   // is darker than white, bg and cards, so it passes on those too. Dark
-  // mode keeps the accent, as accentTextFor does.
-  final accentText = dark ? accent : darkenForContrast(accent, surface2, 4.5);
+  // mode mirrors it: the default accent read 3.98:1 on the dark toast fill,
+  // so it is lightened against surface2, the lightest of the dark dialog
+  // surface and the toast fill, and passes on both. Everything else keeps
+  // the raw accent, as accentTextFor does.
+  final accentText = dark
+      ? lightenForContrast(accent, surface2, 4.5)
+      : darkenForContrast(accent, surface2, 4.5);
 
   // Cards carry a trace of the accent, echoing AmbientBackground's glow.
   final cardFill = cardFillFor(surface, accent, light: !dark);

@@ -220,6 +220,7 @@ class UpcomingMonitor {
 
       // Each entry: dedup key, notification id, title, body.
       final checks = <({String key, int id, String title, String body})>[];
+      final hide = settings.hideNotificationDetails;
 
       for (final a in finance.openAccounts) {
         // Only a billed, unpaid cycle notifies. Paid: due moves to next
@@ -231,17 +232,21 @@ class UpcomingMonitor {
         final out = finance.accountOutstanding(a);
         if (out == null || out <= 0) continue;
         if (s.daysUntil > cardWindowDays) continue;
-        checks.add((
-          key: cardDueKey(a.id, s.due),
-          // NotificationIds.cardBillStart to cardBillEnd; every range is
-          // listed in NotificationIds.
-          id: NotificationIds.cardBill(a.id),
+        final text = notificationText(NoteKind.cardBill, (
           title: s.daysUntil < 0
               ? '${a.name} bill overdue'
               : '${a.name} bill due ${fmtInDays(s.daysUntil)}',
           body: s.daysUntil < 0
               ? '${fmtMoney(out)} was due on ${fmtDate(s.due)}'
               : '${fmtMoney(out)} due on ${fmtDate(s.due)}',
+        ), hide: hide);
+        checks.add((
+          key: cardDueKey(a.id, s.due),
+          // NotificationIds.cardBillStart to cardBillEnd; every range is
+          // listed in NotificationIds.
+          id: NotificationIds.cardBill(a.id),
+          title: text.title,
+          body: text.body,
         ));
       }
 
@@ -255,15 +260,19 @@ class UpcomingMonitor {
         }
         final days = h.daysUntil(clock);
         if (days > recurringWindowDays) continue;
-        checks.add((
-          key: recurringDueKey(h.key, h.nextDue),
-          id: NotificationIds.recurring(h.key),
+        final text = notificationText(NoteKind.payment, (
           title: 'Upcoming payment: ${h.label}',
           body: days < 0
               ? '~${fmtMoney(h.expectedAmount)} was expected on '
                     '${fmtDate(h.nextDue)}'
               : '~${fmtMoney(h.expectedAmount)} expected ${fmtInDays(days)} '
                     '(${fmtDate(h.nextDue)})',
+        ), hide: hide);
+        checks.add((
+          key: recurringDueKey(h.key, h.nextDue),
+          id: NotificationIds.recurring(h.key),
+          title: text.title,
+          body: text.body,
         ));
       }
 
@@ -277,11 +286,15 @@ class UpcomingMonitor {
         final when = days < 0
             ? 'was due on ${fmtDate(due)}'
             : 'due ${fmtInDays(days)} (${fmtDate(due)})';
+        final text = notificationText(NoteKind.reminder, (
+          title: 'Reminder: ${r.name}',
+          body: amount == null ? when : '${fmtMoney(amount)} $when',
+        ), hide: hide);
         checks.add((
           key: reminderDueKey(r.id, due),
           id: NotificationIds.reminder(r.id),
-          title: 'Reminder: ${r.name}',
-          body: amount == null ? when : '${fmtMoney(amount)} $when',
+          title: text.title,
+          body: text.body,
         ));
       }
 

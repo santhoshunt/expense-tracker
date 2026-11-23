@@ -103,7 +103,11 @@ class UnusualSpendMonitor {
         // No permission: a show() is silently dropped. Bail WITHOUT the
         // marker, so the alert still fires once it is granted.
         if (!await notifications.areEnabled) return;
-        final text = unusualAlertText(c, month);
+        final text = notificationText(
+          NoteKind.unusual,
+          unusualAlertText(c, month),
+          hide: settings.hideNotificationDetails,
+        );
         await notifications.show(
           id: notificationId(c.id),
           title: text.title,

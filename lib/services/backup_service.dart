@@ -15,6 +15,7 @@ import '../providers/settings_provider.dart';
 import '../utils/dates.dart' show monthKey;
 import 'recurring_detector.dart' show alertMerchantOf;
 import '../utils/fiscal_year.dart';
+import 'backup_crypto.dart';
 
 /// Export (JSON backup / CSV / PDF report) and import (JSON / CSV) of the
 /// stored data. Files are saved via the platform's save dialog (browser
@@ -110,13 +111,7 @@ class BackupService {
     FinanceProvider finance, {
     SettingsProvider? settings,
   }) async {
-    final data = finance.exportData();
-    if (settings != null) data['settings'] = settings.toBackupMap();
-    final bytes = await compute(
-      _encodeBackupBytes,
-      data,
-      debugLabel: 'encodeBackup',
-    );
+    final bytes = await jsonBackupBytes(finance, settings: settings);
     return _save(
       'expense_tracker_backup_${_stamp()}',
       bytes,
@@ -125,18 +120,35 @@ class BackupService {
     );
   }
 
-  /// Lets the user pick a backup file and imports it.
-  /// Returns the number of transactions added, or null if cancelled.
-  /// The preference block is applied only on replace: merge means "existing
-  /// wins", and silently overwriting the device's cap/theme from a merged
-  /// file would contradict that.
-  static Future<int?> importJson(
+  /// The bytes [exportJson] saves: the backup, sealed with the backup
+  /// passphrase's key when one is set ([BackupPassphrase]).
+  @visibleForTesting
+  static Future<Uint8List> jsonBackupBytes(
     FinanceProvider finance, {
-    required bool replace,
     SettingsProvider? settings,
   }) async {
+    final data = finance.exportData();
+    if (settings != null) data['settings'] = settings.toBackupMap();
+    return compute(
+      _encodeBackupBytes,
+      await BackupPassphrase.sealIfOn(data),
+      debugLabel: 'encodeBackup',
+    );
+  }
+
+  /// Lets the user pick a backup file and reads it for [importBackup].
+  /// Null if cancelled. A protected file this phone holds no key for throws
+  /// [PassphraseNeededException], before anything is imported.
+  static Future<Map<String, dynamic>?> readJson() async {
     final bytes = await _pick(['json']);
     if (bytes == null) return null;
+    return decodeJsonBackup(bytes);
+  }
+
+  /// A backup file's bytes as the backup map, opened with the stored key
+  /// when it is protected ([BackupPassphrase.open]).
+  @visibleForTesting
+  static Future<Map<String, dynamic>> decodeJsonBackup(Uint8List bytes) async {
     final data = await compute(
       _decodeBackupBytes,
       bytes,
@@ -145,6 +157,20 @@ class BackupService {
     if (data is! Map<String, dynamic>) {
       throw const FormatException('Not an Expense Tracker backup file');
     }
+    return BackupPassphrase.open(data);
+  }
+
+  /// Imports a backup [readJson] read.
+  /// Returns the number of transactions added.
+  /// The preference block is applied only on replace: merge means "existing
+  /// wins", and silently overwriting the device's cap/theme from a merged
+  /// file would contradict that.
+  static Future<int> importBackup(
+    FinanceProvider finance,
+    Map<String, dynamic> data, {
+    required bool replace,
+    SettingsProvider? settings,
+  }) async {
     final added = await finance.importData(data, replace: replace);
     final block = data['settings'];
     if (replace && settings != null && block is Map<String, dynamic>) {

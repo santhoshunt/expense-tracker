@@ -97,8 +97,30 @@ class FakeDriveAuth implements DriveAuth {
   Future<void> signOut() async => signOuts++;
 }
 
-/// Drive v3, faked: about, folder lookup, file listing and upload. The
-/// first [uploads401] uploads answer 401, as for an expired token.
+/// A backup file as Drive lists it, made at [at] by [install] (none for a
+/// backup from before install ids), with [count] transactions.
+Map<String, Object?> fakeBackupFile(
+  String id,
+  DateTime at, {
+  String? install,
+  String? name,
+  int? count,
+}) => {
+  'id': id,
+  'name': 'expense_tracker_backup_$id.json.gz',
+  'createdTime': at.toUtc().toIso8601String(),
+  if (install != null)
+    'appProperties': {
+      'install': install,
+      'name': ?name,
+      if (count != null) 'count': '$count',
+    },
+};
+
+/// Drive v3, faked: about, folder lookup, and a folder of backup [files]
+/// that uploads add to, listings return newest first, deletes remove from
+/// and downloads read from [media]. The first [uploads401] uploads answer
+/// 401, as for an expired token.
 class FakeDrive {
   final String email;
   int uploads401;
@@ -107,11 +129,33 @@ class FakeDrive {
   bool offline;
   final requests = <http.Request>[];
 
+  /// The backups in the folder, as [fakeBackupFile] builds them.
+  final List<Map<String, Object?>> files;
+
+  /// Each file's content by id, for a restore to download.
+  final media = <String, List<int>>{};
+
+  /// Ids of the files deleted, in order.
+  final deleted = <String>[];
+
+  /// The metadata of each upload, as the app sent it.
+  final uploaded = <Map<String, dynamic>>[];
+
+  /// Run once while the next listing or upload is in flight, to land
+  /// something in the middle of it. The listing answers with the folder as
+  /// it was when asked.
+  Future<void> Function()? duringNextList;
+  Future<void> Function()? duringNextUpload;
+
   FakeDrive({
     this.email = 'me@example.com',
     this.uploads401 = 0,
     this.offline = false,
-  });
+    List<Map<String, Object?>>? files,
+  }) : files = files ?? [];
+
+  /// Uploads are newer than any file a test seeds, a minute apart.
+  static final _uploadsFrom = DateTime.utc(2026, 11, 23, 12);
 
   http.Response _json(Object body, [int status = 200]) => http.Response(
     jsonEncode(body),
@@ -146,20 +190,67 @@ class FakeDrive {
           },
         );
       }
-      return _json({'id': 'file1', 'name': 'backup'});
+      final hook = duringNextUpload;
+      duringNextUpload = null;
+      await hook?.call();
+      // The multipart body's first JSON line is the file's metadata.
+      final meta =
+          jsonDecode(
+                const LineSplitter()
+                    .convert(request.body)
+                    .firstWhere((l) => l.startsWith('{')),
+              )
+              as Map<String, dynamic>;
+      uploaded.add(meta);
+      final id = 'up${uploaded.length}';
+      files.add({
+        'id': id,
+        'name': meta['name'],
+        'createdTime': _uploadsFrom
+            .add(Duration(minutes: uploaded.length))
+            .toIso8601String(),
+        'appProperties': meta['appProperties'],
+      });
+      return _json({'id': id, 'name': meta['name']});
     }
     if (path.endsWith('/drive/v3/files') && request.method == 'GET') {
       final q = request.url.queryParameters['q'] ?? '';
-      return _json({
-        'files': q.contains('google-apps.folder')
-            ? [
-                {'id': 'folder1'},
-              ]
-            : <Object>[],
-      });
+      if (q.contains('google-apps.folder')) {
+        return _json({
+          'files': [
+            {'id': 'folder1'},
+          ],
+        });
+      }
+      // ISO times in UTC sort as text.
+      final newestFirst = [...files]
+        ..sort(
+          (a, b) => (b['createdTime'] as String).compareTo(
+            a['createdTime'] as String,
+          ),
+        );
+      final hook = duringNextList;
+      duringNextList = null;
+      await hook?.call();
+      return _json({'files': newestFirst});
     }
     if (path.contains('/drive/v3/files/')) {
-      return _json({'id': request.url.pathSegments.last, 'trashed': false});
+      final id = request.url.pathSegments.last;
+      if (request.method == 'DELETE') {
+        deleted.add(id);
+        files.removeWhere((f) => f['id'] == id);
+        return http.Response('', 204);
+      }
+      if (request.url.queryParameters['alt'] == 'media') {
+        final bytes = media[id];
+        if (bytes == null) return _json({'error': 'not found'}, 404);
+        return http.Response.bytes(
+          bytes,
+          200,
+          headers: {'content-type': 'application/gzip'},
+        );
+      }
+      return _json({'id': id, 'trashed': false});
     }
     return _json({'id': 'folder1'});
   });
@@ -634,6 +725,273 @@ void main() {
       final svc = DriveBackupService(auth: FakeDriveAuth());
       await expectLater(svc.uploadNow(p), throwsA(anything));
       expect(await svc.lastError(), isNotNull);
+    });
+  });
+
+  group('backups per phone', () {
+    setUp(() {
+      SharedPreferences.setMockInitialValues({
+        'drive_connected_email': 'me@example.com',
+        'drive_install_id': 'mine0001',
+      });
+      setCustomCategories(const []);
+      setBuiltinOverrides(const {});
+    });
+
+    DriveBackupService service(FakeDrive drive) => DriveBackupService(
+      auth: FakeDriveAuth(silent: ['tok-1']),
+      httpClient: () => drive.client,
+    );
+
+    Future<FinanceProvider> withRows() async {
+      final p = FinanceProvider();
+      await p.load();
+      await p.addTransaction(
+        type: TxType.expense,
+        categoryId: 'food',
+        amount: 120,
+        note: 'lunch',
+        date: DateTime(2026, 9, 1),
+      );
+      return p;
+    }
+
+    /// [n] backups a day apart, the newest on 20 Nov 2026.
+    List<Map<String, Object?>> seeded(
+      String prefix,
+      int n, {
+      String? install,
+    }) => [
+      for (var i = 0; i < n; i++)
+        fakeBackupFile(
+          '$prefix$i',
+          DateTime.utc(2026, 11, 20, 12).subtract(Duration(days: i)),
+          install: install,
+          name: install == null ? null : 'Demo Phone Two',
+          count: install == null ? null : 40,
+        ),
+    ];
+
+    int uploads(FakeDrive d) => d.requests
+        .where((r) => r.url.path.endsWith('/upload/drive/v3/files'))
+        .length;
+
+    test('an upload carries the install id, the default name and the '
+        'count', () async {
+      SharedPreferences.setMockInitialValues({
+        'drive_connected_email': 'me@example.com',
+      });
+      final drive = FakeDrive();
+      final svc = service(drive);
+      final rows = await withRows();
+      await svc.uploadNow(rows);
+      await svc.uploadNow(rows);
+      final prefs = await SharedPreferences.getInstance();
+      final id = prefs.getString('drive_install_id');
+      expect(id, matches(RegExp(r'^[0-9a-f]{16}$')));
+      for (final meta in drive.uploaded) {
+        final props = meta['appProperties'] as Map<String, dynamic>;
+        expect(props['install'], id, reason: 'made once, then kept');
+        expect(
+          props['name'],
+          matches(RegExp(r'^Phone set up \d+ \w{3} \d{4}$')),
+        );
+        expect(props['count'], '1');
+      }
+      expect(
+        await svc.backupName(),
+        drive.uploaded.first['appProperties']['name'],
+      );
+    });
+
+    test('a rename applies to the next upload', () async {
+      final drive = FakeDrive();
+      final svc = service(drive);
+      final rows = await withRows();
+      await svc.uploadNow(rows);
+      await svc.setBackupName('Demo Phone One');
+      await svc.uploadNow(rows);
+      final names = [
+        for (final m in drive.uploaded) m['appProperties']['name'] as String,
+      ];
+      expect(names.first, startsWith('Phone set up '));
+      expect(names.last, 'Demo Phone One');
+    });
+
+    test('a rename saved while the first upload runs is kept', () async {
+      final drive = FakeDrive();
+      final svc = service(drive);
+      drive.duringNextUpload = () => svc.setBackupName('Demo Phone Three');
+      await svc.uploadNow(await withRows());
+      expect(
+        drive.uploaded.single['appProperties']['name'],
+        startsWith('Phone set up '),
+        reason: 'the upload already under way carries the old name',
+      );
+      expect(await svc.backupName(), 'Demo Phone Three');
+    });
+
+    test('a Back up now that lands while the scheduled run lists the folder '
+        'is not followed by the waiting message', () async {
+      final drive = FakeDrive(files: seeded('o', 2, install: 'other002'));
+      final svc = service(drive);
+      final rows = await withRows();
+      // The scheduled run's listing answers with the folder as it was, after
+      // the upload has been recorded.
+      drive.duringNextList = () async {
+        await svc.uploadNow(rows);
+      };
+      await svc.checkAndRunScheduled(rows);
+      expect(uploads(drive), 1);
+      expect(await svc.lastBackupAt(), isNotNull);
+      expect(await svc.lastError(), isNull);
+    });
+
+    test("pruning keeps this phone's newest 7 and the earlier backups' "
+        "newest 7, and never deletes another phone's", () async {
+      final drive = FakeDrive(
+        files: [
+          ...seeded('m', 8, install: 'mine0001'),
+          ...seeded('o', 9, install: 'other002'),
+          ...seeded('e', 9),
+        ],
+      );
+      await service(drive).uploadNow(await withRows());
+      // This phone: 8 plus the upload, the 2 oldest go. Earlier: 9, the 2
+      // oldest go, as the whole folder used to be pruned.
+      expect(drive.deleted, ['m6', 'm7', 'e7', 'e8']);
+      expect(
+        drive.files.where((f) => '${f['id']}'.startsWith('o')),
+        hasLength(9),
+      );
+    });
+
+    test('a new install waits beside another phone\'s backups, says so '
+        'once, and a manual upload ends the wait', () async {
+      final store = _CountingStore({
+        'flutter.drive_connected_email': 'me@example.com',
+        'flutter.drive_install_id': 'mine0001',
+      });
+      SharedPreferencesStorePlatform.instance = store;
+      await (await SharedPreferences.getInstance()).reload();
+      final drive = FakeDrive(files: seeded('o', 3, install: 'other002'));
+      final svc = service(drive);
+      final rows = await withRows();
+
+      await svc.checkAndRunScheduled(rows);
+      expect(uploads(drive), 0);
+      expect(await svc.lastError(), kDriveOtherPhoneMessage);
+      expect(store.errorWrites, 1);
+
+      await svc.checkAndRunScheduled(rows);
+      expect(uploads(drive), 0);
+      expect(store.errorWrites, 1, reason: 'written once');
+
+      await svc.uploadNow(rows);
+      expect(await svc.lastError(), isNull);
+      // Due again: the scheduled run uploads and lists the folder only to
+      // prune, not to ask whether to wait.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('drive_last_backup_at', '2026-11-01T08:00:00.000');
+      drive.requests.clear();
+      await svc.checkAndRunScheduled(rows);
+      expect(uploads(drive), 1);
+      expect(
+        drive.requests.where(
+          (r) =>
+              r.method == 'GET' &&
+              r.url.path.endsWith('/drive/v3/files') &&
+              !(r.url.queryParameters['q'] ?? '').contains(
+                'google-apps.folder',
+              ),
+        ),
+        hasLength(1),
+      );
+    });
+
+    test('a restore ends the wait and clears its message', () async {
+      final drive = FakeDrive(files: seeded('o', 2, install: 'other002'));
+      final source = await withRows();
+      drive.media['o0'] = encodeBackupGz(source.exportData());
+      final svc = service(drive);
+      final rows = await withRows();
+      await svc.checkAndRunScheduled(rows);
+      expect(await svc.lastError(), kDriveOtherPhoneMessage);
+
+      final groups = await svc.listBackups();
+      final backup = await svc.download(groups.single);
+      expect((backup.data['transactions'] as List), hasLength(1));
+      await svc.markRestored();
+      expect(await svc.lastError(), isNull);
+
+      await svc.checkAndRunScheduled(rows);
+      expect(uploads(drive), 1);
+    });
+
+    test('an install updated from before install ids keeps backing up '
+        'beside its own earlier backups', () async {
+      SharedPreferences.setMockInitialValues({
+        'drive_connected_email': 'me@example.com',
+        'drive_last_backup_at': '2026-11-01T08:00:00.000',
+      });
+      final drive = FakeDrive(files: seeded('e', 7));
+      final svc = service(drive);
+      await svc.checkAndRunScheduled(await withRows());
+      expect(uploads(drive), 1);
+      expect(await svc.lastError(), isNull);
+    });
+
+    test('an empty folder does not wait', () async {
+      final drive = FakeDrive();
+      await service(drive).checkAndRunScheduled(await withRows());
+      expect(uploads(drive), 1);
+    });
+
+    test('the listing puts this phone first, then the others by their '
+        'newest backup', () async {
+      final drive = FakeDrive(
+        files: [
+          ...seeded('e', 2),
+          fakeBackupFile(
+            'o0',
+            DateTime.utc(2026, 11, 22, 12),
+            install: 'other002',
+            name: 'Demo Phone Two',
+            count: 1204,
+          ),
+          fakeBackupFile(
+            'm0',
+            DateTime.utc(2026, 11, 21, 12),
+            install: 'mine0001',
+            name: 'Demo Phone One',
+            count: 310,
+          ),
+        ],
+      );
+      final groups = await service(drive).listBackups();
+      expect(
+        [for (final g in groups) g.installId],
+        ['mine0001', 'other002', null],
+      );
+      expect(groups.first.mine, isTrue);
+      expect(groups[1].name, 'Demo Phone Two');
+      expect(groups[1].newestCount, 1204);
+      expect(groups[1].newestAt, DateTime.utc(2026, 11, 22, 12).toLocal());
+      expect(groups.last.newestCount, isNull);
+      expect([for (final f in groups.last.files) f.id], ['e0', 'e1']);
+    });
+
+    test('an empty folder still says no backup was found', () async {
+      await expectLater(
+        service(FakeDrive()).listBackups(),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('No cloud backup found'),
+          ),
+        ),
+      );
     });
   });
 

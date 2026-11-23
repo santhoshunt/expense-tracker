@@ -241,6 +241,7 @@ Future<BackgroundImportResult> runBackgroundImport(
         await ImportChecks.post(
           finance,
           checksBefore,
+          hideDetails: settings.hideNotificationDetails,
           notifications: notifications,
         );
       } catch (e) {

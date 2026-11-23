@@ -81,6 +81,7 @@ class SettingsProvider extends ChangeNotifier {
   static const _kWeeklyDigest = 'weekly_digest_v1';
   static const _kImportChecks = 'import_checks_v1';
   static const _kPriceRiseAlerts = 'price_rise_alerts_v1';
+  static const _kHideNotificationDetails = 'hide_notification_details_v1';
   static const _kUpcomingHidden = 'upcoming_hidden_v1';
   static const _kCollapsedSections = 'collapsed_sections_v1';
   static const _kExpandedAccounts = 'accounts_expanded_v1';
@@ -134,6 +135,7 @@ class SettingsProvider extends ChangeNotifier {
   bool _weeklyDigest = true;
   bool _importChecks = true;
   bool _priceRiseAlerts = true;
+  bool _hideNotificationDetails = false;
   Set<String> _upcomingHidden = {};
   Set<String> _collapsedSections = {};
   Set<String> _expandedAccounts = {};
@@ -192,6 +194,11 @@ class SettingsProvider extends ChangeNotifier {
   /// Notify when a subscription charges clearly more than its payment before
   /// (services/price_rise_monitor.dart).
   bool get priceRiseAlerts => _priceRiseAlerts;
+
+  /// Notifications posted from now on show a plain title for their kind
+  /// and no amount, name or account digits (notificationText in
+  /// services/notification_service.dart). Separate from the app lock.
+  bool get hideNotificationDetails => _hideNotificationDetails;
 
   /// Recurring-detection keys the user hid from the Upcoming card.
   Set<String> get hiddenUpcoming => Set.unmodifiable(_upcomingHidden);
@@ -306,6 +313,10 @@ class SettingsProvider extends ChangeNotifier {
     _priceRiseAlerts = tryRead(
       () => prefs.getBool(_kPriceRiseAlerts) ?? true,
       true,
+    );
+    _hideNotificationDetails = tryRead(
+      () => prefs.getBool(_kHideNotificationDetails) ?? false,
+      false,
     );
     _recentSearches = tryRead(
       () => List<String>.of(prefs.getStringList(_kRecentSearches) ?? const []),
@@ -648,6 +659,16 @@ class SettingsProvider extends ChangeNotifier {
     );
   }
 
+  Future<void> setHideNotificationDetails(bool enabled) async {
+    if (enabled == _hideNotificationDetails) return;
+    _hideNotificationDetails = enabled;
+    notifyListeners();
+    await _persistPref(
+      _kHideNotificationDetails,
+      (p) => p.setBool(_kHideNotificationDetails, enabled),
+    );
+  }
+
   /// Hides one detected recurring payment from the Upcoming card (and the
   /// reminder monitor). Keys come from RecurringHit.key.
   Future<void> hideUpcoming(String key) async {
@@ -893,6 +914,7 @@ class SettingsProvider extends ChangeNotifier {
     'weeklyDigest': _weeklyDigest,
     'importChecks': _importChecks,
     'priceRiseAlerts': _priceRiseAlerts,
+    'hideNotificationDetails': _hideNotificationDetails,
     'upcomingHidden': _upcomingHidden.toList(),
     'hideIncome': _hideIncome,
     'dismissedPairs': _dismissedPairs.toList(),
@@ -942,6 +964,9 @@ class SettingsProvider extends ChangeNotifier {
     if (map['priceRiseAlerts'] is bool) {
       _priceRiseAlerts = map['priceRiseAlerts'] as bool;
     }
+    if (map['hideNotificationDetails'] is bool) {
+      _hideNotificationDetails = map['hideNotificationDetails'] as bool;
+    }
     if (map['upcomingHidden'] is List) {
       _upcomingHidden = {
         for (final k in map['upcomingHidden'] as List)
@@ -989,6 +1014,7 @@ class SettingsProvider extends ChangeNotifier {
       await p.setBool(_kWeeklyDigest, _weeklyDigest);
       await p.setBool(_kImportChecks, _importChecks);
       await p.setBool(_kPriceRiseAlerts, _priceRiseAlerts);
+      await p.setBool(_kHideNotificationDetails, _hideNotificationDetails);
       await p.setStringList(_kUpcomingHidden, _upcomingHidden.toList());
       await p.setBool(_kHideIncome, _hideIncome);
       await p.setStringList(_kDismissedPairs, _dismissedPairs.toList());

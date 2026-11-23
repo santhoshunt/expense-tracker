@@ -73,6 +73,7 @@ class _Shade implements NotificationService {
     required String body,
     required String payload,
     String? keepLabel,
+    bool buttons = true,
   }) async {
     posted.add((id: id, title: title, body: body, keepLabel: keepLabel));
     if (!active.contains(id)) active.add(id);
@@ -209,7 +210,12 @@ void main() {
         row('before', ago: 4),
       ]);
       final shade = _Shade();
-      await ImportChecks.post(p, {'before'}, notifications: shade);
+      await ImportChecks.post(
+        p,
+        {'before'},
+        hideDetails: false,
+        notifications: shade,
+      );
       expect(shade.posted.map((n) => n.id), [
         NotificationIds.importCheck('new'),
         NotificationIds.importCheck('sort'),
@@ -228,7 +234,12 @@ void main() {
         for (var i = 0; i < 7; i++) row('r$i', ago: i + 1),
       ]);
       final shade = _Shade();
-      await ImportChecks.post(p, const {}, notifications: shade);
+      await ImportChecks.post(
+        p,
+        const {},
+        hideDetails: false,
+        notifications: shade,
+      );
       expect(shade.posted, hasLength(kMaxImportCheckNotes));
       expect(
         shade.posted.first.id,
@@ -240,7 +251,12 @@ void main() {
     test('a single note has no summary', () async {
       final p = await ledger([row('only')]);
       final shade = _Shade()..summary = 4;
-      await ImportChecks.post(p, const {}, notifications: shade);
+      await ImportChecks.post(
+        p,
+        const {},
+        hideDetails: false,
+        notifications: shade,
+      );
       expect(shade.posted, hasLength(1));
       expect(shade.summary, isNull);
     });
@@ -250,7 +266,12 @@ void main() {
       final p = await ledger([row('guess')]);
       expect(p.loadWarnings, isNotEmpty);
       final shade = _Shade();
-      await ImportChecks.post(p, const {}, notifications: shade);
+      await ImportChecks.post(
+        p,
+        const {},
+        hideDetails: false,
+        notifications: shade,
+      );
       expect(shade.posted, isEmpty);
     });
   });
@@ -378,7 +399,12 @@ void main() {
     test('is cancelled; the others stay', () async {
       final p = await ledger([row('a'), row('b'), row('c')]);
       final shade = _Shade();
-      await ImportChecks.post(p, const {}, notifications: shade);
+      await ImportChecks.post(
+        p,
+        const {},
+        hideDetails: false,
+        notifications: shade,
+      );
       expect(shade.summary, 3);
 
       await p.confirmGuesses([(txId: 'a', categoryId: 'food')]);
@@ -402,7 +428,12 @@ void main() {
     test('every note goes when the setting is off', () async {
       final p = await ledger([row('a'), row('b')]);
       final shade = _Shade();
-      await ImportChecks.post(p, const {}, notifications: shade);
+      await ImportChecks.post(
+        p,
+        const {},
+        hideDetails: false,
+        notifications: shade,
+      );
       await ImportChecks.sync(p, enabled: false, notifications: shade);
       expect(shade.active, isEmpty);
       expect(shade.summary, isNull);

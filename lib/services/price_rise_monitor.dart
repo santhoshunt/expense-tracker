@@ -80,7 +80,11 @@ class PriceRiseMonitor {
         // No permission: a show() is silently dropped. Bail WITHOUT the
         // marker, so the alert still fires once it is granted.
         if (!await notifications.areEnabled) return;
-        final text = priceRiseAlertText(item);
+        final text = notificationText(
+          NoteKind.priceRise,
+          priceRiseAlertText(item),
+          hide: settings.hideNotificationDetails,
+        );
         await notifications.show(
           id: NotificationIds.priceRise(item.hit.key),
           title: text.title,

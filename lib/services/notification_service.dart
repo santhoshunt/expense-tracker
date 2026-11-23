@@ -36,6 +36,32 @@ NotificationStatus notificationStatusFrom({
   return NotificationStatus.enabled;
 }
 
+/// The notifications that carry an amount, a name, account digits or a
+/// bill date, each with the plain title it shows while Hide details in
+/// notifications is on.
+enum NoteKind {
+  cardBill('A card bill needs paying'),
+  payment('A payment is expected'),
+  reminder('A reminder is due'),
+  budget('A budget alert'),
+  unusual('Unusual spending'),
+  priceRise('A price went up'),
+  importCheck('A payment needs a check');
+
+  const NoteKind(this.hiddenTitle);
+  final String hiddenTitle;
+}
+
+/// [text] as its caller built it, or with [hide] the plain pair for [kind],
+/// so the lock screen and the shade show nothing the user would want kept
+/// private. Top-level rather than on [NotificationService]: the test
+/// stand-ins implement that class and then see the text a note really gets.
+({String title, String body}) notificationText(
+  NoteKind kind,
+  ({String title, String body}) text, {
+  required bool hide,
+}) => hide ? (title: kind.hiddenTitle, body: 'Open the app to see it') : text;
+
 /// Thin wrapper over flutter_local_notifications for app-generated alerts
 /// (currently budget thresholds). Android-focused: on other platforms the
 /// methods are safe no-ops.
@@ -417,13 +443,15 @@ class NotificationService {
   /// Keep, which runs in the plugin's own engine without opening the app,
   /// and Change; without one (a To sort row) only Pick a category. Private
   /// visibility: the lock screen follows the phone's sensitive-content
-  /// setting.
+  /// setting. Without [buttons] it has none: a note with its details hidden
+  /// would have the user confirm a payment they cannot see.
   Future<void> showImportCheck({
     required int id,
     required String title,
     required String body,
     required String payload,
     String? keepLabel,
+    bool buttons = true,
   }) async {
     if (!_supported || defaultTargetPlatform != TargetPlatform.android) return;
     await init();
@@ -440,13 +468,14 @@ class NotificationService {
           visibility: NotificationVisibility.private,
           onlyAlertOnce: true,
           actions: [
-            if (keepLabel != null)
+            if (buttons && keepLabel != null)
               AndroidNotificationAction(kImportCheckKeepAction, keepLabel),
-            AndroidNotificationAction(
-              kImportCheckChangeAction,
-              keepLabel != null ? 'Change' : 'Pick a category',
-              showsUserInterface: true,
-            ),
+            if (buttons)
+              AndroidNotificationAction(
+                kImportCheckChangeAction,
+                keepLabel != null ? 'Change' : 'Pick a category',
+                showsUserInterface: true,
+              ),
           ],
         ),
       ),

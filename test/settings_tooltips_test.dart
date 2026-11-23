@@ -65,13 +65,16 @@ void main() {
     await openGroup(tester, 'Backup and data');
     await openTip(tester, 'Cloud backup');
     expect(
-      find.textContaining('The newest 7 backups are kept'),
+      find.textContaining('Each phone keeps its newest 7 backups'),
       findsOneWidget,
     );
 
     await tester.tap(find.text('Got it'));
     await pumpThrough(tester);
-    expect(find.textContaining('The newest 7 backups are kept'), findsNothing);
+    expect(
+      find.textContaining('Each phone keeps its newest 7 backups'),
+      findsNothing,
+    );
   });
 
   testWidgets('a heading is its own tip; an action row keeps its "i"', (
@@ -91,7 +94,7 @@ void main() {
     await tester.tap(find.text('Cloud backup'));
     await pumpThrough(tester);
     expect(
-      find.textContaining('The newest 7 backups are kept'),
+      find.textContaining('Each phone keeps its newest 7 backups'),
       findsOneWidget,
     );
     await tester.tap(find.text('Got it'));

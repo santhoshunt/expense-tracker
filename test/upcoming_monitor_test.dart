@@ -73,6 +73,7 @@ class FakeNotifications implements NotificationService {
     required String body,
     required String payload,
     String? keepLabel,
+    bool buttons = true,
   }) async {}
 
   @override

@@ -70,10 +70,14 @@ abstract final class ImportChecks {
   };
 
   /// Posts a note for each row needing a check that was not in [before]
-  /// (the [checkIds] taken before the import).
+  /// (the [checkIds] taken before the import). With [hideDetails] (Hide
+  /// details in notifications) a note shows the plain pair and no buttons,
+  /// since Keep would confirm a guess the user cannot see. Required, so no
+  /// caller can post without knowing the setting.
   static Future<void> post(
     FinanceProvider finance,
     Set<String> before, {
+    required bool hideDetails,
     NotificationService? notifications,
   }) async {
     if (finance.loadWarnings.isNotEmpty) return;
@@ -86,14 +90,19 @@ abstract final class ImportChecks {
     for (final t in fresh.take(kMaxImportCheckNotes)) {
       final guessed = t.categoryGuessed;
       final category = categoryById(t.categoryId).label;
-      await n.showImportCheck(
-        id: NotificationIds.importCheck(t.id),
+      final text = notificationText(NoteKind.importCheck, (
         title: _titleOf(finance, t),
         body: guessed
             ? 'Guessed $category. Already counted.'
             : 'To sort. Already counted.',
+      ), hide: hideDetails);
+      await n.showImportCheck(
+        id: NotificationIds.importCheck(t.id),
+        title: text.title,
+        body: text.body,
         payload: importCheckPayload(t.id, t.categoryId),
-        keepLabel: guessed ? 'Keep $category' : null,
+        keepLabel: guessed && !hideDetails ? 'Keep $category' : null,
+        buttons: !hideDetails,
       );
     }
     await syncSummary(n);

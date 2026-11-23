@@ -31,6 +31,24 @@ Color darkenForContrast(Color color, Color background, double minRatio) {
   return c;
 }
 
+/// The mirror of [darkenForContrast] for dark backgrounds: lightens
+/// [color] (keeping its hue) until it reads against [background] at
+/// [minRatio], and leaves it untouched when it already passes. Stops at
+/// lightness 0.95 when the ratio cannot be had, returning the best colour
+/// it reached, which on a light background is [color] itself.
+Color lightenForContrast(Color color, Color background, double minRatio) {
+  var best = color;
+  var hsl = HSLColor.fromColor(color);
+  while (contrastRatio(best, background) < minRatio && hsl.lightness < 0.95) {
+    hsl = hsl.withLightness(math.min(0.95, hsl.lightness + 0.04));
+    final c = hsl.toColor();
+    if (contrastRatio(c, background) > contrastRatio(best, background)) {
+      best = c;
+    }
+  }
+  return best;
+}
+
 /// The accent, darkened when needed so it reads as small TEXT on the light
 /// theme's near-white surfaces (section headers, month dividers). The
 /// theme keeps the accent hue unchanged between brightnesses, so the
@@ -45,7 +63,10 @@ Color accentTextColor(BuildContext context) {
 /// [brightness] (the home-screen widgets' theme is built from settings).
 Color accentTextFor(Color accent, Brightness brightness) {
   if (brightness == Brightness.dark) return accent;
-  // Worst case is a white card; passing there also passes the off-white bg.
+  // Measured against white, the easiest background for dark text: on the
+  // off-white background and the toast fill the result reads a little
+  // lower, which is why the theme's text buttons darken against the toast
+  // fill instead.
   return darkenForContrast(accent, Colors.white, 4.5);
 }
 

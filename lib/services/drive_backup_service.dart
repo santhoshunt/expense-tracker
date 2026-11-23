@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show Random;
 import 'dart:typed_data' show BytesBuilder;
 
 import 'package:flutter/foundation.dart';
@@ -11,6 +12,8 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../providers/finance_provider.dart';
+import '../utils/format.dart';
+import 'backup_crypto.dart';
 
 /// Gzips the backup map. Top-level so [compute] can ship it to a worker
 /// isolate — a full ledger is ~4 MB of JSON, ~10x smaller gzipped.
@@ -58,6 +61,40 @@ const kDriveReconnectMessage =
 const kDriveBackupsPausedMessage =
     'Backups are paused: some data did not load. Restore from a backup, or '
     'use Back up now.';
+
+/// Recorded when a scheduled backup was due on an install that has never
+/// uploaded, into a folder that already holds another phone's backups. A
+/// short new ledger would otherwise become the newest backup and push the
+/// old phone's toward pruning. A restore from Drive or Back up now clears it.
+const kDriveOtherPhoneMessage =
+    'Backups from another phone are in this Drive folder. Restore one from '
+    'Data, Import, From Google Drive, or use Back up now to start backing up '
+    'this phone.';
+
+/// One phone's backups in the Drive folder, newest first: this install's,
+/// another install's, or the earlier ones made before backups carried an
+/// install id ([installId] null).
+class DriveBackupGroup {
+  final String? installId;
+  final bool mine;
+  final List<drive.File> files;
+
+  const DriveBackupGroup({
+    required this.installId,
+    required this.mine,
+    required this.files,
+  });
+
+  /// The name the install gave its newest backup; a rename shows from the
+  /// next backup on.
+  String? get name => files.first.appProperties?['name'];
+
+  DateTime? get newestAt => files.first.createdTime?.toLocal();
+
+  /// Transactions in the newest backup; null for earlier backups.
+  int? get newestCount =>
+      int.tryParse(files.first.appProperties?['count'] ?? '');
+}
 
 /// Why Drive access could not be had. [message] is shown as is.
 class DriveAuthException implements Exception {
@@ -194,7 +231,8 @@ class GoogleDriveAuth implements DriveAuth {
 
 /// Google Drive backup: daily/weekly/monthly auto-upload of the JSON backup
 /// (gzipped) into a visible "Expense Tracker Backups" folder in My Drive,
-/// plus restore of the newest one.
+/// plus restore of a phone's newest one. Each file carries the install
+/// that made it, so each phone prunes only its own.
 ///
 /// Prerequisites (one-time, Google Cloud Console):
 ///  1. A project with the Drive API enabled and an OAuth consent screen
@@ -219,12 +257,23 @@ class DriveBackupService {
   static const _folderIdKey = 'drive_backup_folder_id';
   static const _lastErrorKey = 'drive_last_error';
   static const _emailKey = 'drive_connected_email';
+  // This install's own marks, kept out of backups so a restore on another
+  // phone never copies them.
+  static const _installIdKey = 'drive_install_id';
+  static const _nameKey = 'drive_backup_name';
+  static const _restoredKey = 'drive_restored_here';
 
   static const folderName = 'Expense Tracker Backups';
   static const _filePrefix = 'expense_tracker_backup_';
 
-  /// How many backups stay in Drive; older ones are pruned after each upload.
+  /// How many backups of each phone stay in Drive; older ones are pruned
+  /// after each upload.
   static const keepBackups = 7;
+
+  /// Drive holds at most 124 bytes per app property, key and value
+  /// together in UTF-8, and refuses the whole upload over it. The name's
+  /// key is 'name'.
+  static const maxNameBytes = 120;
 
   static const _scopes = [drive.DriveApi.driveFileScope];
 
@@ -310,6 +359,8 @@ class DriveBackupService {
     // never been backed up AND makes isDue skip that account's first cycle.
     await prefs.remove(_lastKey);
     await prefs.remove(_lastErrorKey);
+    // A restore ended the wait for this account's folder only.
+    await prefs.remove(_restoredKey);
   }
 
   /// The account behind [token], from Drive's own about.get (allowed under
@@ -420,6 +471,54 @@ class DriveBackupService {
     return prefs.getString(_lastErrorKey);
   }
 
+  /// This install's random id, made on first use and kept from then on.
+  Future<String> _installId() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(_installIdKey);
+    if (stored != null) return stored;
+    final random = Random.secure();
+    final id = [
+      for (var i = 0; i < 16; i++) random.nextInt(16).toRadixString(16),
+    ].join();
+    await prefs.setString(_installIdKey, id);
+    return id;
+  }
+
+  /// The name this install's backups carry. Until the first backup stores
+  /// it, the default it would get today.
+  Future<String> backupName() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_nameKey) ?? _defaultName(DateTime.now());
+  }
+
+  static String _defaultName(DateTime firstBackup) =>
+      'Phone set up ${fmtDate(firstBackup)}';
+
+  Future<void> setBackupName(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_nameKey, name);
+  }
+
+  /// Counts restores from Drive, so the Cloud backup section on the same
+  /// page reloads and drops the message [markRestored] cleared.
+  final restoredSignal = ValueNotifier<int>(0);
+
+  /// A restore from Drive ends the wait [checkAndRunScheduled] keeps on a
+  /// new install, and clears its message.
+  Future<void> markRestored() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_restoredKey, true);
+    if (prefs.getString(_lastErrorKey) == kDriveOtherPhoneMessage) {
+      await prefs.remove(_lastErrorKey);
+    }
+    restoredSignal.value++;
+  }
+
+  /// Whether this install has uploaded or restored, so it has nothing to
+  /// wait for.
+  static bool _started(SharedPreferences prefs) =>
+      prefs.getString(_lastKey) != null || prefs.getBool(_restoredKey) == true;
+
   // --- Folder -----------------------------------------------------------------
 
   /// Find-or-create the visible backups folder in My Drive. The id is cached
@@ -515,13 +614,19 @@ class DriveBackupService {
     // the provider; a replace-mode restore applies it back.
     if (settings != null) payload['settings'] = settings;
 
+    // Sealed with the backup passphrase's key when one is set. Gzip stays
+    // the outer layer, so a download still decodes before it opens.
+    final sealed = await BackupPassphrase.sealIfOn(payload);
     final bytes = await compute(
       encodeBackupGz,
-      payload,
+      sealed,
       debugLabel: 'encodeBackupGz',
     );
     final now = DateTime.now();
     final name = backupFileName(now);
+    final installId = await _installId();
+    final prefs = await SharedPreferences.getInstance();
+    final backupName = prefs.getString(_nameKey) ?? _defaultName(now);
 
     return _withDrive(interactive: interactive, (api) async {
       final folderId = await _folderId(api);
@@ -531,7 +636,13 @@ class DriveBackupService {
         drive.File()
           ..name = name
           ..mimeType = 'application/gzip'
-          ..parents = [folderId],
+          ..parents = [folderId]
+          // Private to the app and returned by files.list, so the restore
+          // list can name the phone and count without downloading.
+          ..appProperties = {
+            'install': installId,
+            'name': backupName,
+            'count': '${(payload['transactions'] as List).length}',          },
         uploadMedia: drive.Media(
           Stream.fromIterable([bytes]),
           bytes.length,
@@ -539,70 +650,116 @@ class DriveBackupService {
         ),
       );
 
-      final prefs = await SharedPreferences.getInstance();
+      // The default name keeps the date of this install's first backup.
+      // Read again: a rename saved while this upload ran must stand.
+      if (prefs.getString(_nameKey) == null) {
+        await prefs.setString(_nameKey, backupName);
+      }
       await prefs.setString(_lastKey, now.toIso8601String());
       await prefs.remove(_lastErrorKey);
-      await _prune(api, folderId);
+      await _prune(api, folderId, installId);
       return name;
     });
   }
 
-  /// Retention: newest [keepBackups] stay, older ones go. Best-effort — a
-  /// prune hiccup must not fail the successful upload.
-  Future<void> _prune(drive.DriveApi api, String folderId) async {
+  static String? _installOf(drive.File f) => f.appProperties?['install'];
+
+  /// Every backup in the folder, newest first. Paged: a folder that ever
+  /// exceeds one page (e.g. after repeated prune failures) must still be
+  /// seen in full, not just its first 100 entries.
+  Future<List<drive.File>> _listAll(drive.DriveApi api, String folderId) async {
+    final all = <drive.File>[];
+    String? pageToken;
+    do {
+      final listed = await api.files.list(
+        q:
+            "'$folderId' in parents and name contains '$_filePrefix' "
+            'and trashed = false',
+        orderBy: 'createdTime desc',
+        $fields: 'nextPageToken, files(id, name, createdTime, appProperties)',
+        pageSize: 100,
+        pageToken: pageToken,
+      );
+      all.addAll(listed.files ?? const <drive.File>[]);
+      pageToken = listed.nextPageToken;
+    } while (pageToken != null);
+    return all;
+  }
+
+  /// Retention: this install's newest [keepBackups] stay, older ones go.
+  /// Another install's backups are never touched; the earlier ones with no
+  /// install id are one group any install keeps to its newest
+  /// [keepBackups], as every install did before. Best-effort: a prune
+  /// hiccup must not fail the successful upload.
+  Future<void> _prune(
+    drive.DriveApi api,
+    String folderId,
+    String installId,
+  ) async {
     try {
-      // Paged: a folder that ever exceeds one page (e.g. after repeated
-      // prune failures) must still be pruned in full, not just its first
-      // 100 entries.
-      final all = <drive.File>[];
-      String? pageToken;
-      do {
-        final listed = await api.files.list(
-          q:
-              "'$folderId' in parents and name contains '$_filePrefix' "
-              'and trashed = false',
-          orderBy: 'createdTime desc',
-          $fields: 'nextPageToken, files(id, name, createdTime)',
-          pageSize: 100,
-          pageToken: pageToken,
-        );
-        all.addAll(listed.files ?? const <drive.File>[]);
-        pageToken = listed.nextPageToken;
-      } while (pageToken != null);
-      for (final f in all.skip(keepBackups)) {
-        final id = f.id;
-        if (id != null) await api.files.delete(id);
+      final all = await _listAll(api, folderId);
+      for (final owner in [installId, null]) {
+        final group = all.where((f) => _installOf(f) == owner);
+        for (final f in group.skip(keepBackups)) {
+          final id = f.id;
+          if (id != null) await api.files.delete(id);
+        }
       }
     } catch (e) {
       debugPrint('Drive prune failed (upload succeeded): $e');
     }
   }
 
-  /// Downloads the newest cloud backup, parsed and ready for
-  /// `FinanceProvider.importData`. Throws when none exists.
-  ///
-  /// Falls back through the next-newest files when the newest one is
-  /// corrupt (e.g. an upload aborted mid-create) — one bad file must not
-  /// make every older good backup unreachable.
-  Future<CloudBackup> downloadLatest({bool interactive = false}) =>
-      _withDrive(_downloadLatest, interactive: interactive);
-
-  Future<CloudBackup> _downloadLatest(drive.DriveApi api) async {
-    final folderId = await _folderId(api);
-    final listed = await api.files.list(
-      q:
-          "'$folderId' in parents and name contains '$_filePrefix' "
-          'and trashed = false',
-      orderBy: 'createdTime desc',
-      $fields: 'files(id, name, createdTime)',
-      pageSize: 5,
+  /// The folder's backups by phone: this install's first, then the others
+  /// by their newest backup. Throws when there are none.
+  Future<List<DriveBackupGroup>> listBackups({bool interactive = false}) async {
+    final installId = await _installId();
+    final files = await _withDrive(
+      interactive: interactive,
+      (api) async => _listAll(api, await _folderId(api)),
     );
-    final candidates = listed.files ?? const <drive.File>[];
-    if (candidates.isEmpty) {
+    if (files.isEmpty) {
       throw FormatException(
         'No cloud backup found in "$folderName" for this Google account.',
       );
     }
+    // Files come newest first, so each phone lands in the order of its
+    // newest backup.
+    final byInstall = <String?, List<drive.File>>{};
+    for (final f in files) {
+      (byInstall[_installOf(f)] ??= []).add(f);
+    }
+    final groups = [
+      for (final MapEntry(:key, :value) in byInstall.entries)
+        DriveBackupGroup(installId: key, mine: key == installId, files: value),
+    ];
+    return [...groups.where((g) => g.mine), ...groups.where((g) => !g.mine)];
+  }
+
+  /// Downloads [group]'s newest backup, parsed and ready for
+  /// `FinanceProvider.importData`.
+  ///
+  /// Falls back through the group's next-newest files when the newest one
+  /// is corrupt (e.g. an upload aborted mid-create): one bad file must not
+  /// make every older good backup unreachable.
+  ///
+  /// A protected file this phone holds no key for is not corrupt: it throws
+  /// [PassphraseNeededException] and no older file is tried, as an older
+  /// one would restore data the user did not choose. A protected file in a
+  /// form a later release made throws [NewerBackupFormatException], also
+  /// without falling back.
+  Future<CloudBackup> download(
+    DriveBackupGroup group, {
+    bool interactive = false,
+  }) => _withDrive(
+    (api) => _downloadNewest(api, group.files),
+    interactive: interactive,
+  );
+
+  Future<CloudBackup> _downloadNewest(
+    drive.DriveApi api,
+    List<drive.File> candidates,
+  ) async {
     Object? lastError;
     for (final f in candidates) {
       final id = f.id;
@@ -618,10 +775,19 @@ class DriveBackupService {
         await for (final chunk in media.stream) {
           builder.add(chunk);
         }
-        final data = await compute(
+        final decoded = await compute(
           decodeBackupGz,
           builder.takeBytes(),
           debugLabel: 'decodeBackupGz',
+        );
+        // A malformed envelope, or one the stored key matches but does not
+        // open, is a FormatException and falls back like any corrupt file.
+        // PassphraseNeededException and NewerBackupFormatException are not,
+        // so they stop here.
+        final data = await BackupPassphrase.open(
+          decoded,
+          madeAt: f.createdTime?.toLocal(),
+          name: f.name,
         );
         return CloudBackup(
           data: data,
@@ -671,6 +837,20 @@ class DriveBackupService {
         }
         return;
       }
+      // A new phone's first scan holds a few weeks of rows: uploaded on
+      // schedule beside an old phone's backups, it would become the newest
+      // backup, so this install waits for a restore or Back up now. Written
+      // once, as above.
+      if (await _waitsForUser()) {
+        final prefs = await SharedPreferences.getInstance();
+        // A Back up now or a restore may have finished while Drive was
+        // listed: the message must not follow its success.
+        if (_started(prefs)) return;
+        if (prefs.getString(_lastErrorKey) != kDriveOtherPhoneMessage) {
+          await prefs.setString(_lastErrorKey, kDriveOtherPhoneMessage);
+        }
+        return;
+      }
       await uploadNow(finance, settings: settings);
     } catch (e) {
       try {
@@ -680,6 +860,24 @@ class DriveBackupService {
         // Even recording the failure failed — nothing more to do silently.
       }
     }
+  }
+
+  /// Whether this install has neither uploaded nor restored while the
+  /// folder holds backups that are not its own. A last backup date or a
+  /// restore answers without asking Drive, so an install that has started
+  /// backing up lists nothing on launch. An install updated from before
+  /// install ids has a last backup date, so its own unmarked files never
+  /// make it wait.
+  Future<bool> _waitsForUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_started(prefs)) return false;
+    final installId = await _installId();
+    final files = await _withDrive(
+      (api) async => _listAll(api, await _folderId(api)),
+    );
+    // Its own file there (made before a disconnect cleared the date) means
+    // this install has backed up before.
+    return files.isNotEmpty && !files.any((f) => _installOf(f) == installId);
   }
 
   @visibleForTesting

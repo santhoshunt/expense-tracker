@@ -3,7 +3,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../utils/app_theme.dart';
-import '../utils/contrast.dart';
 import 'link_pill.dart';
 import 'motion.dart';
 
@@ -355,11 +354,10 @@ class _TipContent extends StatelessWidget {
           if (link case final link?) InfoLinkRow(link: link, host: host),
           Align(
             alignment: Alignment.centerRight,
+            // The theme's text button colour: it is tuned to read on
+            // surfaceContainerHigh, this bubble's fill, in both brightnesses.
             child: TextButton(
               onPressed: () => Navigator.pop(context),
-              style: TextButton.styleFrom(
-                foregroundColor: accentTextColor(context),
-              ),
               child: const Text('Got it'),
             ),
           ),

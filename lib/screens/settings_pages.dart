@@ -416,8 +416,9 @@ class _BackupDataPage extends StatelessWidget {
                 'folder in your Google Drive. It holds transactions, '
                 'accounts, rules, categories, budgets and most settings, '
                 'but not SMS text, app lock, the app icon, the tilt glow '
-                'or this schedule. The newest 7 backups are kept; older ones are '
-                'deleted. To restore, use Data, Import, From Google Drive.',
+                'or this schedule. Each phone keeps its newest 7 backups; '
+                'older ones are deleted. To restore, use Data, Import, From '
+                'Google Drive.',
           ),
         ),
         const SizedBox(height: 12),
