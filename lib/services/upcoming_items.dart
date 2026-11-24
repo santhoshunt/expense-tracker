@@ -60,7 +60,7 @@ class UpcomingItem {
 }
 
 /// Whether [h]'s next occurrence was marked paid by hand (its alert never
-/// came): then it is not due, here or in the bills safe to spend counts.
+/// came): then it is not due, here or in the monthly budget's bills.
 bool hitMarkedPaid(FinanceProvider finance, RecurringHit h) {
   final through = DateTime.tryParse(finance.patternPaidThrough(h.key) ?? '');
   if (through == null) return false;
@@ -143,7 +143,7 @@ List<UpcomingItem> buildUpcomingItems(
 }
 
 /// Whether reminder [r] already stands for the payment [h] was detected
-/// from, so the two show as one row (and count once in safe to spend):
+/// from, so the two show as one row (and count once in the monthly budget):
 /// - an Add it for me reminder whose name reads as the hit's payee: it
 ///   notes its own rows with its name, which the detector then groups;
 /// - any reminder in the hit's category expecting the same amount (to the

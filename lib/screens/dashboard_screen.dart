@@ -665,8 +665,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return [...bills, ...amountless]..sort((a, b) => a.due.compareTo(b.due));
   }
 
-  /// Every live pattern, not only the next fortnight's: safe to spend sets
-  /// aside the whole month's bills. Scans the ledger once per data change
+  /// Every live pattern, not only the next fortnight's: the monthly budget
+  /// sets aside the whole month's bills. Scans the ledger once per data change
   /// or day.
   Object? _patternsRev;
   int? _patternsDay;
@@ -1053,11 +1053,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   SafeToSpend? _planSafe;
   MonthForecast? _planForecast;
 
-  /// Safe to spend (with a cap, on the running month in Month view) and the
-  /// Month-end forecast (on the running month), worked out once per ledger,
-  /// cap, hidden bills, month and day: the budget slot, the forecast slot
-  /// and the Safe to spend row ask for them in the same frame. Callers
-  /// select the cap and the hidden bills themselves.
+  /// The month against the cap (with a cap, on the running month in Month
+  /// view) and the Month-end forecast (on the running month), worked out
+  /// once per ledger, cap, hidden bills, month and day: the budget slot and
+  /// the forecast slot ask for them in the same frame. Callers select the
+  /// cap and the hidden bills themselves.
   ({SafeToSpend? safe, MonthForecast? forecast}) _plan(
     FinanceProvider finance,
   ) {
@@ -1105,7 +1105,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// shows its own card. Each card sits under its section label.
   ///
   /// The budget uses the shown month's spend, so a past month shows its
-  /// usage too. Safe to spend and the forecast are about today, so only
+  /// usage too. The bills due and the forecast are about today, so only
   /// under this month's figures; the forecast shows without a cap too.
   Widget _monthPlanSlot(
     BuildContext context,
@@ -1462,39 +1462,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: AppSpace.gap),
         ],
-        // Safe to spend today, once, at the top: with a cap, on the running
-        // month in Month view, while the Monthly budget section shows. A tap
-        // scrolls to the budget card, which holds the working.
-        Builder(
-          key: const ValueKey('presence-safe-today'),
-          builder: (context) {
-            context.select<SettingsProvider, double>((s) => s.monthlyBudget);
-            context.select<SettingsProvider, String>(
-              (s) => hiddenListKey(s.hiddenUpcoming),
-            );
-            final settings = context.read<SettingsProvider>();
-            final safe = _plan(finance).safe;
-            final showing =
-                safe != null &&
-                !settings
-                    .dashboardLayout(DashboardPage.overview)
-                    .hidden
-                    .contains(DashboardSection.monthlyBudget);
-            return AnimatedPresence(
-              visible: showing,
-              child: showing
-                  ? Padding(
-                      padding: const EdgeInsets.only(bottom: AppSpace.gap),
-                      child: _SafeTodayRow(
-                        safe: safe,
-                        onTap: () =>
-                            _showSection(DashboardSection.monthlyBudget),
-                      ),
-                    )
-                  : const SizedBox.shrink(),
-            );
-          },
-        ),
         // The balance, with the picked month's (or year's) totals as
         // columns inside it: three cards in a strip scrolled sideways and
         // cut Saved off at phone width.
@@ -3037,7 +3004,7 @@ class _BigBillsCard extends StatelessWidget {
         'Quarterly, half-yearly and yearly bills, from your '
         'reminders with an amount and the subscriptions you '
         'marked. The monthly figure is each bill\'s yearly cost '
-        'spread over 12 months. Safe to spend and the forecast '
+        'spread over 12 months. The monthly budget and the forecast '
         'still count a bill in full in the month it falls due.',
   );
 
@@ -3999,7 +3966,8 @@ class _StatColumn extends StatelessWidget {
 
 /// The monthly cap, one verdict: a bar stacking confirmed spending, rows
 /// waiting for review and (this month) the bills still due against the
-/// cap's line, a legend with each part, then what is left or over. Its
+/// cap's line, a legend with each part when there is more than one, then
+/// what is left or over. Its
 /// label sits above it ([SectionLabel]); [tip] is that label's tip.
 class _BudgetCard extends StatelessWidget {
   /// Confirmed spending in the shown month.
@@ -4010,8 +3978,8 @@ class _BudgetCard extends StatelessWidget {
   final int waitingCount;
   final double cap;
 
-  /// This month's safe to spend today, which holds the bills due; null
-  /// under any other month.
+  /// This month's figures against the cap ([computeSafeToSpend]), which
+  /// hold the bills due; null under any other month.
   final SafeToSpend? safe;
 
   /// The month-end forecast whose bills the legend's Due row opens, even
@@ -4045,25 +4013,17 @@ class _BudgetCard extends StatelessWidget {
         'Spending against the monthly cap set in Cockpit, Budgets and bills, '
         'Budgets. The bar adds confirmed spending, imports still waiting for '
         'review and the bills due this month, not card bills or transfers. '
-        'The line marks the cap. Safe to spend today, at the top of the Overview, sets those '
-        'bills aside and spreads the rest over the days left.',
+        'The line marks the cap. The figure under the bar is the cap less '
+        'this month\'s spending, imports waiting for review included, less '
+        'the bills still due this month.',
     example: () {
-      final line =
-          '${fmtMoney(confirmed)} spent + ${fmtMoney(waiting)} waiting + '
-          '${fmtMoney(bills)} due = '
-          '${fmtMoney(safe?.committed ?? confirmed + waiting + bills)} '
-          'of ${fmtMoney(cap)}';
-      final s = safe;
-      if (s == null || confirmed > cap || s.overCap) return line;
-      final left = cap - s.spentBeforeToday - s.billsDue;
-      return '$line\n\nSafe to spend today: '
-          '${fmtMoney(cap)} − '
-          '${fmtMoney(s.spentBeforeToday)} spent − '
-          '${fmtMoney(s.billsDue)} bills due = '
-          '${fmtMoney(left)} over ${s.daysLeft} '
-          '${s.daysLeft == 1 ? 'day' : 'days'} = '
-          '${fmtMoney(s.dailyAllowance)} a day'
-          '${s.spentToday > 0 ? ', less ${fmtMoney(s.spentToday)} spent today' : ''}.';
+      final committed = safe?.committed ?? confirmed + waiting + bills;
+      final left = cap - committed;
+      return '${fmtMoney(confirmed)} spent + ${fmtMoney(waiting)} waiting + '
+          '${fmtMoney(bills)} due = ${fmtMoney(committed)} of '
+          '${fmtMoney(cap)}\n\n'
+          '${fmtMoney(cap)} − ${fmtMoney(committed)} = '
+          '${fmtMoney(left.abs())} ${left < 0 ? 'over' : 'left'}';
     },
     link: const InfoLink(
       prompt: 'Want a different cap?',
@@ -4080,9 +4040,9 @@ class _BudgetCard extends StatelessWidget {
     final bills = s?.billsDue ?? 0.0;
     final committed = s?.committed ?? confirmed + waiting;
     final color = budgetColor(context, cap <= 0 ? 0 : committed / cap);
-    // One verdict, from unrounded figures. This month it is what safe to
-    // spend leaves once the bills are paid; another month, what was spent
-    // and is waiting against the cap.
+    // One verdict, from unrounded figures. This month it is what the cap
+    // leaves once the bills are paid; another month, what was spent and is
+    // waiting against the cap.
     final String verdict;
     final bool over;
     if (s != null) {
@@ -4118,35 +4078,46 @@ class _BudgetCard extends StatelessWidget {
               color: color,
             ),
             const SizedBox(height: 8),
-            _BudgetLegendRow(
-              swatch: _BudgetSwatch(color: color, style: _SwatchStyle.solid),
-              label: 'Spent, confirmed',
-              amount: confirmed,
+            // A legend only when the bar has more than one part: with spend
+            // alone the bar and the verdict say it all.
+            if (waiting > 0 || (s != null && bills > 0)) ...[
+              _BudgetLegendRow(
+                swatch: _BudgetSwatch(color: color, style: _SwatchStyle.solid),
+                label: 'Spent, confirmed',
+                amount: confirmed,
+              ),
+              if (waiting > 0)
+                _BudgetLegendRow(
+                  swatch: _BudgetSwatch(
+                    color: color,
+                    style: _SwatchStyle.striped,
+                  ),
+                  label: 'Waiting for review ($waitingCount)',
+                  amount: waiting,
+                ),
+              if (s != null && bills > 0)
+                _BudgetLegendRow(
+                  swatch: _BudgetSwatch(
+                    color: scheme.onSurfaceVariant,
+                    style: _SwatchStyle.ring,
+                  ),
+                  label: 'Due this month (${s.billsCount})',
+                  amount: bills,
+                  onTap: bf == null
+                      ? null
+                      : () => _showForecastBills(context, bf),
+                ),
+              const SizedBox(height: 8),
+            ],
+            // The one verdict, a plain line: red once over; otherwise the
+            // bar's own green or orange.
+            Text(
+              verdict,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: over ? scheme.error : color,
+              ),
             ),
-            if (waiting > 0)
-              _BudgetLegendRow(
-                swatch: _BudgetSwatch(
-                  color: color,
-                  style: _SwatchStyle.striped,
-                ),
-                label: 'Waiting for review ($waitingCount)',
-                amount: waiting,
-              ),
-            if (s != null && bills > 0)
-              _BudgetLegendRow(
-                swatch: _BudgetSwatch(
-                  color: scheme.onSurfaceVariant,
-                  style: _SwatchStyle.ring,
-                ),
-                label: 'Due this month (${s.billsCount})',
-                amount: bills,
-                onTap: bf == null
-                    ? null
-                    : () => _showForecastBills(context, bf),
-              ),
-            const SizedBox(height: 8),
-            // Red once over; otherwise the bar's own green or orange.
-            _BudgetVerdict(text: verdict, tone: over ? scheme.error : color),
             if (f != null) ...[
               const SizedBox(height: 12),
               Divider(height: 1, color: scheme.outlineVariant),
@@ -4434,92 +4405,6 @@ class _BudgetLegendRow extends StatelessWidget {
       borderRadius: BorderRadius.circular(AppRadius.control),
       onTap: onTap,
       child: row,
-    );
-  }
-}
-
-/// The budget's one verdict in its tone: green, orange as it nears the cap,
-/// red over.
-class _BudgetVerdict extends StatelessWidget {
-  final String text;
-
-  /// Green, orange or red: the outline, the dot and the words.
-  final Color tone;
-
-  const _BudgetVerdict({required this.text, required this.tone});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
-      decoration: BoxDecoration(
-        border: Border.all(color: tone),
-        borderRadius: BorderRadius.circular(AppRadius.control),
-      ),
-      child: Row(
-        children: [
-          StatusDot(color: tone),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              text,
-              style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w700,
-                color: tone,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Safe to spend today, as a slim row at the top of the Overview: a dot,
-/// the figure, and a chevron to the budget card that works it out.
-class _SafeTodayRow extends StatelessWidget {
-  final SafeToSpend safe;
-  final VoidCallback onTap;
-
-  const _SafeTodayRow({required this.safe, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final ok = safe.leftToday >= 1;
-    final tone = ok ? AppColors.of(context).green : scheme.error;
-    return Card(
-      margin: EdgeInsets.zero,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppRadius.card),
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 48),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpace.card,
-              vertical: 8,
-            ),
-            child: Row(
-              children: [
-                StatusDot(color: tone),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    ok
-                        ? '${fmtMoneyWhole(safe.leftToday)} safe to spend today'
-                        : 'Nothing safe to spend today',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.titleSmall?.copyWith(color: tone),
-                  ),
-                ),
-                Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

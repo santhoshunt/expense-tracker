@@ -319,12 +319,12 @@ void main() {
           await spend(p, 'food', 3000, DateTime(now.year, now.month, 1));
         },
       );
-      // The label above the card; the card holds the budget bar's legend
-      // and, under a hairline, the forecast.
+      // The label above the card; the card holds the budget's verdict and,
+      // under a hairline, the forecast.
       expect(find.text('Monthly budget'), findsOneWidget);
       final card = find
           .ancestor(
-            of: find.text('Spent, confirmed'),
+            of: find.text('${fmtMoneyWhole(17000)} left'),
             matching: find.byType(FrostedPanel),
           )
           .first;

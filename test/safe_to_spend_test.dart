@@ -1,19 +1,14 @@
-import 'dart:convert';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
-import 'package:expense_tracker/providers/settings_provider.dart';
-import 'package:expense_tracker/services/home_widgets_service.dart';
 import 'package:expense_tracker/services/recurring_detector.dart';
 import 'package:expense_tracker/services/safe_to_spend.dart';
 import 'package:expense_tracker/services/sms_parser.dart';
 
-/// Safe to spend today: (cap - spent before today - bills due) / days left,
-/// less today's spend.
+/// The month against the cap: cap - spent this month - bills due.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -94,26 +89,18 @@ void main() {
   final rent = bill('Rent', 5000, 30);
   final phone = bill('Phone', 1000, 25);
 
-  test('the worked example: 958 a day', () async {
+  test('the worked example: 11,500 left after the bills', () async {
     final s = safe(await ledger(reminders: [rent, phone]));
     expect(s.billsDue, 6000);
-    expect(s.daysLeft, 12);
     expect(s.spentBeforeToday, 22500);
-    expect(s.dailyAllowance, closeTo(11500 / 12, 1e-9));
-    expect(s.leftToday, closeTo(958.33, 0.01));
+    expect(s.remainingAfterToday, 11500);
     expect(s.over, isFalse);
   });
 
-  test("today's spend comes off today only", () async {
+  test("today's spend comes off what is left", () async {
     final s = safe(await ledger(today: 400, reminders: [rent, phone]));
-    expect(s.dailyAllowance, closeTo(11500 / 12, 1e-9));
-    expect(s.leftToday, closeTo(11500 / 12 - 400, 1e-9));
+    expect(s.spentToday, 400);
     expect(s.remainingAfterToday, 11100);
-    // Tomorrow spreads what is left over 11 days.
-    expect(s.allowanceOn(20), closeTo(11100 / 11, 1e-9));
-    expect(s.allowanceOn(30), 11100);
-    expect(s.allowanceOn(19), isNull);
-    expect(s.allowanceOn(31), isNull);
   });
 
   test('paid, transfer and next-month reminders are not bills', () async {
@@ -233,7 +220,7 @@ void main() {
     ]);
     final s = safe(p);
     expect(s.spentToday, 2000);
-    expect(s.leftToday, closeTo((40000 - 22500 - 5000) / 12 - 2000, 1e-9));
+    expect(s.remainingAfterToday, 40000 - 22500 - 2000 - 5000);
     // The budget card's parts: the waiting row, the one bill, and all of it
     // together.
     expect(s.pendingSpent, 2000);
@@ -328,48 +315,5 @@ void main() {
     expect(bills.overCap, isFalse);
     final spend = safe(await ledger(), cap: 20000);
     expect(spend.overCap, isTrue);
-  });
-
-  group('the Today and Add widget', () {
-    Future<Map<String, dynamic>> snapshot(double cap) async {
-      final finance = await ledger(reminders: [rent, phone]);
-      final settings = SettingsProvider();
-      await settings.load();
-      await settings.setMonthlyBudget(cap);
-      return jsonDecode(
-            jsonEncode(
-              buildHomeWidgetSnapshot(finance, settings, now, const []),
-            ),
-          )
-          as Map<String, dynamic>;
-    }
-
-    test('carries today and one label per later day of the month', () async {
-      final data = await snapshot(40000);
-      final safe = data['safe'] as Map<String, dynamic>;
-      expect(safe['day'], epochDay(now));
-      expect(safe['label'], isA<String>());
-      // 20..30 September.
-      expect(safe['next'], hasLength(11));
-    });
-
-    test('no budget, no row', () async {
-      final data = await snapshot(0);
-      expect(data.containsKey('safe'), isFalse);
-    });
-
-    test(
-      'over budget reads so; bills that eat the rest read as zero',
-      () async {
-        final over = (await snapshot(20000))['safe'] as Map<String, dynamic>;
-        expect(over['label'], 'Over budget');
-        expect((over['next'] as List).toSet(), {'Over budget'});
-        // A fresh ledger: the first one's rows are saved in the mock store.
-        SharedPreferences.setMockInitialValues({});
-        final tight = (await snapshot(25000))['safe'] as Map<String, dynamic>;
-        expect(tight['label'], isNot('Over budget'));
-        expect(tight['label'], contains('0'));
-      },
-    );
   });
 }

@@ -9,9 +9,9 @@ import 'safe_to_spend.dart';
 import 'subscriptions.dart';
 import 'upcoming_items.dart' show hitMarkedPaid, reminderCoversHit;
 
-/// The days ahead, one by one: the bills safe to spend and the Month-end
-/// forecast count, the savings subscriptions, the money expected in, and
-/// the balance each day leaves. The Ahead projection reads it, and the This
+/// The days ahead, one by one: the bills the monthly budget and the
+/// Month-end forecast count, the savings subscriptions, the money expected
+/// in, and the balance each day leaves. The Ahead projection reads it, and the This
 /// month vs chart reads its bills.
 
 /// What an item does to the balance.
@@ -159,7 +159,7 @@ ForwardSeries buildForwardSeries(
     }
   }
 
-  // The bills safe to spend and the forecast count, then their repeats.
+  // The bills the monthly budget and the forecast count, then their repeats.
   final listed = <String>{};
   for (final b in billsDue(
     finance,

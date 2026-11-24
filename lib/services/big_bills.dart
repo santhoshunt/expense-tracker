@@ -68,7 +68,7 @@ class BigBillsPlan {
 /// Whether reminder [r] is a big bill: repeating every 3, 6 or 12 months,
 /// with an amount, and not a move between your own accounts. A one-time
 /// reminder (stored as yearly) and a monthly one never are; an amount-less
-/// one is left out as safe to spend leaves it out.
+/// one is left out as the monthly budget's bills leave it out.
 bool reminderIsBigBill(Reminder r) =>
     !r.isOnce &&
     r.cycle != SubscriptionCycle.monthly &&

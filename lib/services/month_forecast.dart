@@ -17,8 +17,8 @@ import 'spend_comparison.dart';
 ///
 /// Everyday spending leaves bill payments out ([isBillRow]), so a bill is
 /// counted once: as spend once paid, as due until then. Spent so far is the
-/// figure safe to spend uses (rows waiting for review included), and the
-/// bills are the same [billsDue] window.
+/// figure the monthly budget uses (rows waiting for review included), and
+/// the bills are the same [billsDue] window.
 
 /// Where the everyday figure came from.
 enum EverydayBasis {

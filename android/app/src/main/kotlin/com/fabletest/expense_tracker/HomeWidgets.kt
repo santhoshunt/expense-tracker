@@ -552,7 +552,8 @@ object HomeWidgets {
         val showTitle = twoLines <= heightDp - 8
         views.setViewVisibility(R.id.hw_title, if (showTitle) View.VISIBLE else View.GONE)
 
-        // Line two: the day's spend, then safe to spend.
+        // Line two: the day's spend. An older snapshot's "safe" block is
+        // not read.
         val line = WidgetKit.Line()
         if (t == null) {
             line.add("Open the app once to start", theme.textSecondary)
@@ -560,8 +561,7 @@ object HomeWidgets {
             val spent = if (fresh) t.optDouble("spent", 0.0) else 0.0
             // Today's running total, not one payment: plain, in the text colour.
             line.add(if (spent >= 0.5) t.optString("spentLabel") else "₹0", theme.text, bold = true)
-            // With the first line hidden, the review count moves here,
-            // ahead of safe to spend, so an ellipsis cuts that first.
+            // With the first line hidden, the review count moves here.
             if (!showTitle && pending > 0) {
                 line.add(" · ", theme.textSecondary)
                 line.add(
@@ -569,21 +569,6 @@ object HomeWidgets {
                     theme.accentText,
                     bold = true
                 )
-            }
-            val safe = data?.optJSONObject("safe")
-            val safeLabel = safeLabel(safe)
-            if (safeLabel != null) {
-                line.add(" · ", theme.textSecondary)
-                // Over the cap every label reads "Over budget" (older
-                // snapshots carry no overCap flag).
-                if (safe?.optBoolean("overCap", false) == true ||
-                    safeLabel == "Over budget"
-                ) {
-                    line.add("Over budget", theme.over)
-                } else {
-                    line.add(safeLabel, theme.text, bold = true)
-                    line.add(" safe to spend", theme.textSecondary)
-                }
             }
         }
         views.setTextViewText(R.id.hw_amount, line.build())
@@ -596,26 +581,6 @@ object HomeWidgets {
             openApp(context, id, QuickActions.ADD_EXPENSE, PURPOSE_ADD)
         )
         return views
-    }
-
-    /** Safe to spend: today's figure, or the one worked out for a later day
-     * of the same month. Null without a budget and past the month's end,
-     * until the app writes a new snapshot. */
-    private fun safeLabel(safe: JSONObject?): String? = safe?.let { s ->
-        if (!s.has("day")) return@let null
-        val offset = today() - s.optLong("day")
-        when {
-            offset == 0L -> s.optString("label")
-            offset > 0L -> {
-                val next = s.optJSONArray("next")
-                if (next != null && offset <= next.length()) {
-                    next.optString((offset - 1).toInt())
-                } else {
-                    null
-                }
-            }
-            else -> null
-        }?.ifEmpty { null }
     }
 
     // --- Spending split -----------------------------------------------------

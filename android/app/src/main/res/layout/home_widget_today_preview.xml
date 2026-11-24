@@ -36,28 +36,14 @@
                 android:textColor="#B4C0C8"
                 android:textSize="12sp" />
 
-            <LinearLayout
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:maxLines="1"
-                    android:text="₹1,240"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:maxLines="1"
-                    android:text=" · ₹860 safe to spend"
-                    android:textColor="#B4C0C8"
-                    android:textSize="14sp" />
-            </LinearLayout>
+                android:maxLines="1"
+                android:text="₹1,240"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <FrameLayout

@@ -25,7 +25,6 @@ import 'import_checks.dart';
 import 'launch_actions.dart';
 import 'notification_ids.dart';
 import 'recurring_detector.dart';
-import 'safe_to_spend.dart';
 import 'spend_comparison.dart';
 import 'subscriptions.dart';
 import 'upcoming_items.dart';
@@ -65,8 +64,8 @@ class HomeWidgetsService {
     if (!identical(_hitsRev, finance.revision) || _hitsDay != day) {
       _hitsRev = finance.revision;
       _hitsDay = day;
-      // The whole month's, for safe to spend's bills; Upcoming's window of
-      // them is what detectRecurring would keep.
+      // Every live pattern, for Big bills and Expected balance; Upcoming's
+      // window of them is what detectRecurring would keep.
       _patterns = detectRecurringPatterns(
         finance.countedTransactions,
         now: now,
@@ -138,8 +137,8 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
     hidden: settings.hiddenUpcoming,
     now: now,
   );
-  // Every live pattern: safe to spend sets aside the whole month's bills,
-  // and Big bills spreads the quarterly, half-yearly and yearly ones.
+  // Every live pattern: Big bills spreads the quarterly, half-yearly and
+  // yearly ones, and Expected balance counts each bill on its day.
   final allPatterns =
       patterns ??
       detectRecurringPatterns(
@@ -148,13 +147,6 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
         alias: finance.merchantAlias,
         pinned: finance.subscriptionPins,
       );
-  final safe = computeSafeToSpend(
-    finance,
-    cap: cap,
-    patterns: allPatterns,
-    hidden: settings.hiddenUpcoming,
-    now: now,
-  );
   final bigBills = buildBigBillsPlan(
     finance,
     patterns: allPatterns,
@@ -205,20 +197,6 @@ Map<String, dynamic> buildHomeWidgetSnapshot(
       'spentLabel': fmtMoneyTidy(today.spent),
       'count': today.count,
     },
-    // Today's figure plus one per later day of this month (what each would
-    // allow if nothing more is spent), so the widget moves on after
-    // midnight without the app; past the month's end it hides the row.
-    if (safe != null)
-      'safe': {
-        'day': epochDay(now),
-        // Every label is then "Over budget", which the widget prints alone.
-        'overCap': safe.overCap,
-        'label': _safeLabel(safe, safe.leftToday),
-        'next': [
-          for (var d = safe.today + 1; d < safe.today + safe.daysLeft; d++)
-            _safeLabel(safe, safe.allowanceOn(d) ?? 0),
-        ],
-      },
     // Left out with no big bills: the widget shows its empty line.
     if (!bigBills.isEmpty) 'bigBills': _bigBills(bigBills, month),
     'week': _week(finance, now, toReview, reviewAmountLabel),
@@ -773,9 +751,4 @@ Map<String, dynamic> _split(FinanceProvider finance, DateTime month) {
         },
     ],
   };
-}
-
-String _safeLabel(SafeToSpend safe, double amount) {
-  if (safe.overCap) return 'Over budget';
-  return amount < 1 ? fmtMoneyTidy(0) : fmtMoneyTidy(amount);
 }

@@ -6,23 +6,15 @@ import 'recurring_detector.dart';
 import 'reminder_schedule.dart';
 import 'upcoming_items.dart';
 
-/// "Safe to spend today": what the monthly cap still allows per day once
-/// the bills still due this month are set aside, less what today already
-/// spent.
+/// What the monthly cap still leaves this month once the bills still due
+/// are set aside: the Monthly budget card's verdict.
 ///
-///   (cap - spent before today - bills due) / days left - spent today
+///   cap - spent this month - bills due
 ///
-/// Days left counts today through the month's last day. Spend is money out
-/// without transfers, the figure the budget card uses, plus rows still
-/// waiting for review: an imported alert is money already gone, and it may
-/// be what marked a bill paid.
+/// Spend is money out without transfers, the figure the budget card uses,
+/// plus rows still waiting for review: an imported alert is money already
+/// gone, and it may be what marked a bill paid.
 class SafeToSpend {
-  /// Today's allowance less today's spend; negative once today overspends.
-  final double leftToday;
-
-  /// What each remaining day may spend, today included.
-  final double dailyAllowance;
-
   /// The cap less this month's spend (today's too) and the bills due.
   final double remainingAfterToday;
 
@@ -43,15 +35,7 @@ class SafeToSpend {
   /// The cap it was worked out against.
   final double cap;
 
-  /// Today through the month's last day.
-  final int daysLeft;
-
-  /// Day of the month [daysLeft] counts from.
-  final int today;
-
   const SafeToSpend({
-    required this.leftToday,
-    required this.dailyAllowance,
     required this.remainingAfterToday,
     required this.billsDue,
     required this.billsCount,
@@ -59,8 +43,6 @@ class SafeToSpend {
     required this.spentToday,
     required this.pendingSpent,
     required this.cap,
-    required this.daysLeft,
-    required this.today,
   });
 
   /// This month's spend, waiting rows included, plus the bills due: what
@@ -72,14 +54,6 @@ class SafeToSpend {
 
   /// Spend alone passes the cap.
   bool get overCap => spentBeforeToday + spentToday > cap;
-
-  /// The allowance on day-of-month [day], later this month, if nothing more
-  /// is spent before it; null outside tomorrow..the last day.
-  double? allowanceOn(int day) {
-    final last = today + daysLeft - 1;
-    if (day <= today || day > last) return null;
-    return remainingAfterToday / (last - day + 1);
-  }
 }
 
 /// One unpaid bill: a reminder occurrence or a detected payment's next date.
@@ -267,20 +241,13 @@ SafeToSpend? computeSafeToSpend(
   }
   final todaySpent = finance.spendOnDay(now).spent + pendingToday;
   final monthSpent = finance.expenseInMonth(month) + pendingMonth;
-  final before = monthSpent - todaySpent;
-  final daysLeft = last - now.day + 1;
-  final daily = (cap - before - bills) / daysLeft;
   return SafeToSpend(
-    leftToday: daily - todaySpent,
-    dailyAllowance: daily,
     remainingAfterToday: cap - monthSpent - bills,
     billsDue: bills,
     billsCount: dueList.length,
-    spentBeforeToday: before,
+    spentBeforeToday: monthSpent - todaySpent,
     spentToday: todaySpent,
     pendingSpent: pendingMonth,
     cap: cap,
-    daysLeft: daysLeft,
-    today: now.day,
   );
 }

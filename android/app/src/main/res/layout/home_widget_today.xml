@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Today and Add (4x1): on the left (opens today's transactions) the day's
-     payments and imports to review, then the day's spend and, with a
-     monthly budget, safe to spend; on the right an Add button (opens the
+     payments and imports to review, then the day's spend; on the right an
+     Add button (opens the
      Add expense sheet). Where a one-row cell with large text holds one
      line only, HomeWidgets.todayAdd hides the first line rather than clip
      both, and the review count moves into the second; where the first
