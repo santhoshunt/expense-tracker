@@ -16,7 +16,6 @@ enum DashboardSection {
   // and the Monday note as they are.
   week(DashboardPage.overview, 'This week', true),
   monthlyBudget(DashboardPage.overview, 'Monthly budget', true),
-  forecast(DashboardPage.overview, 'Month-end forecast', true),
   recap(DashboardPage.overview, "Last month's recap", true),
   budgets(DashboardPage.overview, 'Budgets', true),
   owed(DashboardPage.overview, 'Who owes you', true),

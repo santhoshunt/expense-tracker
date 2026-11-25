@@ -10,7 +10,7 @@ import 'package:expense_tracker/services/recurring_detector.dart';
 import 'package:expense_tracker/services/safe_to_spend.dart';
 import 'package:expense_tracker/services/upcoming_items.dart';
 
-/// Marking bills paid from the forecast: a reminder's created date, and a
+/// Marking bills paid from Due this month: a reminder's created date, and a
 /// detected payment marked paid for one cycle. Amounts are made up.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

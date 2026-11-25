@@ -6,7 +6,6 @@ import '../services/spend_comparison.dart';
 import '../services/year_comparison.dart';
 import '../utils/app_theme.dart';
 import '../utils/contrast.dart';
-import '../utils/dates.dart';
 import '../utils/format.dart';
 import 'comparison_bar.dart';
 import 'dashboard_fold.dart';
@@ -111,23 +110,6 @@ List<CategoryCompare> sortCategoryCompares(
   }
 }
 
-/// The "This month vs last month" projection worked with its real inputs,
-/// mirroring `_project` in services/spend_comparison.dart: the reference
-/// month's curve when it has one, the flat daily pace otherwise. Null when
-/// the card shows no projection (month over, before day
-/// [kMinDaysForProjection], or nothing on either side).
-String? projectionExample(MonthComparison comparison) {
-  final c = comparison.vsPrevious;
-  final projected = c.actualFull;
-  if (!comparison.partial || projected == null || c.empty) return null;
-  final days = daysInMonth(comparison.month.year, comparison.month.month);
-  final ratio = c.reference <= 0 || c.referenceFull <= 0
-      ? '$days days ÷ ${comparison.paceDays} days on record'
-      : '${fmtMoney(c.referenceFull)} ÷ ${fmtMoney(c.reference)}';
-  return '${fmtMoney(c.actual)} so far × ($ratio) = '
-      '${fmtMoney(projected)} projected';
-}
-
 /// The shortfall note shown instead of a "usual" figure while fewer than
 /// [kMinUsualMonths] complete months are on record.
 String usualShortfallNote(int months) =>
@@ -139,24 +121,10 @@ String usualShortfallNote(int months) =>
 class UsualSpendCard extends StatelessWidget {
   final MonthComparison comparison;
 
-  /// The Month-end forecast's total while the month runs: what On track
-  /// for shows. Null falls back to the comparison's own projection.
-  final double? forecastTotal;
-
-  /// The forecast has no everyday estimate, so its total is a floor and
-  /// reads "At least".
-  final bool forecastIsFloor;
-
   /// Opens the comparison chart.
   final VoidCallback? onTap;
 
-  const UsualSpendCard({
-    super.key,
-    required this.comparison,
-    this.forecastTotal,
-    this.forecastIsFloor = false,
-    this.onTap,
-  });
+  const UsualSpendCard({super.key, required this.comparison, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -190,16 +158,9 @@ class UsualSpendCard extends StatelessWidget {
       child: _CompareBody(
         comparison: comparison,
         compare: c,
-        forecastTotal: forecastTotal,
-        forecastIsFloor: forecastIsFloor,
         referenceLine: comparison.partial
             ? 'Usually ${fmtMoneyWhole(c.reference)} by this day'
             : 'Usually ${fmtMoneyWhole(c.reference)} in a month',
-        projectionLine: (projected, floor) => floor
-            ? 'At least $projected by month end, against a usual '
-                  '${fmtMoneyWhole(c.referenceFull)} a month'
-            : 'On track for $projected, against a usual '
-                  '${fmtMoneyWhole(c.referenceFull)} a month',
         fullReferenceLine:
             'Usually ${fmtMoneyWhole(c.referenceFull)} in a full month',
         emptyLine: 'Nothing recorded this month, and nothing usually.',
@@ -213,36 +174,22 @@ class UsualSpendCard extends StatelessWidget {
 }
 
 /// The usual card's body: amount, signed difference, the bar, and the
-/// projected full month while one is still running.
+/// full reference month while this one is still running.
 class _CompareBody extends StatelessWidget {
   final MonthComparison comparison;
   final SpendCompare compare;
   final String referenceLine;
 
-  /// The projected line; [floor] says the figure is a floor ("At least").
-  final String Function(String projected, bool floor) projectionLine;
-
-  /// Stands in for [projectionLine] on the first few days of a month, when
-  /// there is no projection yet but the full reference month is still worth
-  /// naming ("show both" holds from day 1).
+  /// The whole reference month, under the bar while the month runs.
   final String fullReferenceLine;
   final String emptyLine;
   final String newLine;
   final String noneLine;
 
-  /// Stands in for the comparison's own projection while the month runs.
-  final double? forecastTotal;
-
-  /// [forecastTotal] is a floor: the forecast has no everyday estimate.
-  final bool forecastIsFloor;
-
   const _CompareBody({
     required this.comparison,
     required this.compare,
-    this.forecastTotal,
-    this.forecastIsFloor = false,
     required this.referenceLine,
-    required this.projectionLine,
     required this.fullReferenceLine,
     required this.emptyLine,
     required this.newLine,
@@ -260,7 +207,6 @@ class _CompareBody extends StatelessWidget {
     }
 
     final tone = _toneFor(context, compare.delta);
-    final projected = forecastTotal ?? compare.actualFull;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -346,20 +292,10 @@ class _CompareBody extends StatelessWidget {
             _ => referenceLine,
           },
         ),
-        if (comparison.partial)
-          if (projected != null) ...[
-            const Divider(height: 20),
-            Text(
-              projectionLine(
-                fmtMoneyWhole(projected),
-                forecastIsFloor && forecastTotal != null,
-              ),
-              style: muted,
-            ),
-          ] else if (compare.referenceFull > 0) ...[
-            const Divider(height: 20),
-            Text(fullReferenceLine, style: muted),
-          ],
+        if (comparison.partial && compare.referenceFull > 0) ...[
+          const Divider(height: 20),
+          Text(fullReferenceLine, style: muted),
+        ],
       ],
     );
   }

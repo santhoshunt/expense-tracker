@@ -23,17 +23,12 @@ const int kUsualWindowMonths = 6;
 /// Below this many usable months there is no honest baseline to show.
 const int kMinUsualMonths = 2;
 
-/// Projecting a full month from fewer elapsed days than this is noise: on
-/// day 1 the multiplier is 30.
-const int kMinDaysForProjection = 5;
-
 /// Category rows shown before "Show all".
 const int kTopMoversShown = 5;
 
 /// A month under this share of the usual run's middle spend is missing
-/// records, not a quiet month, and ends the run. The month-end forecast
-/// applies the same share to everyday spend instead. Both measure each
-/// month with its rows capped by [typicalRowCap].
+/// records, not a quiet month, and ends the run. Each month is measured
+/// with its rows capped by [typicalRowCap].
 const double kThinMonthShare = 0.25;
 
 /// In the missing-records test of a usual month, one row counts for at
@@ -80,13 +75,7 @@ class SpendCompare {
   /// The same window of the previous month, or the median of the usual ones.
   final double reference;
 
-  /// [actual] projected to the whole month while it is still running (by the
-  /// reference month's own spending curve, so it never contradicts the
-  /// headline delta), the exact total once it has ended, and null when too
-  /// few days have elapsed to project anything but noise.
-  final double? actualFull;
-
-  /// [reference] over whole months, for the projected line to sit against.
+  /// [reference] over whole months.
   final double referenceFull;
 
   final CompareState state;
@@ -94,7 +83,6 @@ class SpendCompare {
   const SpendCompare({
     required this.actual,
     required this.reference,
-    required this.actualFull,
     required this.referenceFull,
     required this.state,
   });
@@ -148,11 +136,6 @@ class MonthComparison {
   /// How many complete months fed the median, for the shortfall copy.
   final int usualMonths;
 
-  /// Days of this month the records cover, up to [throughDay]: fewer than
-  /// [throughDay] when the ledger's first transaction falls inside it. The
-  /// flat-pace projection divides by this, not by the day of the month.
-  final int paceDays;
-
   final SpendCompare vsPrevious;
   final SpendCompare vsUsual;
 
@@ -166,7 +149,6 @@ class MonthComparison {
     required this.throughDay,
     required this.partial,
     required this.usualMonths,
-    required this.paceDays,
     required this.vsPrevious,
     required this.vsUsual,
     required this.categories,
@@ -273,11 +255,6 @@ MonthComparison buildMonthComparison(
       !future &&
       first != null &&
       !DateTime(first.year, first.month, first.day).isAfter(previous);
-  // This month's own span on record, for the flat pace.
-  final paceDays =
-      first != null && first.year == anchor.year && first.month == anchor.month
-      ? (throughDay - first.day + 1).clamp(0, throughDay)
-      : throughDay;
 
   // Day-alignment only applies while the compared month is still running.
   // Once it has ended, every side is taken whole: cutting a 31-day reference
@@ -300,18 +277,9 @@ MonthComparison buildMonthComparison(
     throughDay: throughDay,
     partial: partial,
     usualMonths: window.length,
-    paceDays: paceDays,
     vsPrevious: SpendCompare(
       actual: actual,
       reference: prevRef,
-      actualFull: _project(
-        actual: actual,
-        reference: prevRef,
-        referenceFull: prevFull,
-        throughDay: throughDay,
-        paceDays: paceDays,
-        days: days,
-      ),
       referenceFull: prevFull,
       state: previousCovered
           ? compareStateFor(actual, prevRef)
@@ -320,14 +288,6 @@ MonthComparison buildMonthComparison(
     vsUsual: SpendCompare(
       actual: actual,
       reference: usualRef,
-      actualFull: _project(
-        actual: actual,
-        reference: usualRef,
-        referenceFull: usualFull,
-        throughDay: throughDay,
-        paceDays: paceDays,
-        days: days,
-      ),
       referenceFull: usualFull,
       state: window.length < kMinUsualMonths
           ? CompareState.notEnoughHistory
@@ -394,32 +354,6 @@ String deltaPhrase(SpendCompare c, {String than = ''}) {
   }
   final suffix = pct == null ? '' : ' (${(pct.abs() * 100).round()}%)';
   return '${fmtMoneyWhole(d.abs())}$suffix ${d > 0 ? 'more' : 'less'}$than';
-}
-
-/// Scales [actual] by how much of [referenceFull] the reference month had
-/// reached by the same day, so the projection assumes the rest of this month
-/// follows the reference month's curve. That makes it agree with the
-/// headline delta by construction (projected / referenceFull equals
-/// actual / reference): a flat daily pace could beat a front-loaded month
-/// while the headline said "less". The flat pace remains only as the
-/// fallback when there is no reference window to take a shape from, and it
-/// divides by the [paceDays] actually on record, waiting for
-/// [kMinDaysOfData] of them.
-double? _project({
-  required double actual,
-  required double reference,
-  required double referenceFull,
-  required int throughDay,
-  required int paceDays,
-  required int days,
-}) {
-  if (throughDay >= days) return actual;
-  if (throughDay < kMinDaysForProjection) return null;
-  if (reference <= 0 || referenceFull <= 0) {
-    if (paceDays < kMinDaysOfData) return null;
-    return actual * days / paceDays;
-  }
-  return actual * referenceFull / reference;
 }
 
 /// The shape of [actual] against [reference]: a zero baseline has no

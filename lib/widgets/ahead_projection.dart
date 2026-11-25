@@ -25,9 +25,9 @@ DateTime Function() aheadClock = DateTime.now;
 
 /// The Ahead tab's Expected balance section: the balance each of the next
 /// [kAheadDays] days leaves, from the headline net balance less spend
-/// waiting for review, with subscriptions, savings, income and everyday
-/// spending laid out day by day. Rolling from today whatever month the
-/// other tabs show.
+/// waiting for review, with the bills, subscriptions, savings and income
+/// the app knows about laid out day by day. Rolling from today whatever
+/// month the other tabs show.
 class AheadProjection extends StatefulWidget {
   final FinanceProvider finance;
 
@@ -760,7 +760,6 @@ class _Totals extends StatelessWidget {
     final subs = series.spendSubscriptions;
     final reminders = series.spendReminders;
     final income = series.income;
-    final everyday = series.everyday;
     final allSalary = series.days
         .expand((d) => d.items)
         .where((i) => i.kind == ForwardKind.income)
@@ -825,8 +824,13 @@ class _Totals extends StatelessWidget {
             'From ${fmtMoneyWhole(headline)} today',
             if (waiting > 0) 'waiting for review ${fmtMoneyWhole(-waiting)}',
             if (income > 0) '${allSalary ? 'salary' : 'income'} $incomeText',
-            if (everyday > 0) 'everyday spending ${fmtMoneyWhole(-everyday)}',
           ]),
+          style: muted,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Only the bills, subscriptions, savings and income the app knows '
+          'about move this balance.',
           style: muted,
         ),
       ],

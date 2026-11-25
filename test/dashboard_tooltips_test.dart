@@ -206,7 +206,6 @@ void main() {
       throughDay: 12,
       partial: true,
       usualMonths: usualMonths,
-      paceDays: 12,
       vsPrevious: previous,
       vsUsual: previous,
       categories: categories,
@@ -223,62 +222,6 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    // The This month so far heading's tip shows this example while there is
-    // no Month-end forecast to show instead.
-    test('the projection is worked with its real inputs', () {
-      expect(
-        projectionExample(
-          made(
-            previous: const SpendCompare(
-              actual: 30000,
-              reference: 25000,
-              actualFull: 48000,
-              referenceFull: 40000,
-              state: CompareState.ok,
-            ),
-          ),
-        ),
-        '${fmtMoney(30000)} so far × (${fmtMoney(40000)} ÷ '
-        '${fmtMoney(25000)}) = ${fmtMoney(48000)} projected',
-      );
-    });
-
-    test('with nothing last month the example shows the flat pace', () {
-      final line = projectionExample(
-        made(
-          previous: const SpendCompare(
-            actual: 12000,
-            reference: 0,
-            actualFull: 30000,
-            referenceFull: 0,
-            state: CompareState.newThisMonth,
-          ),
-        ),
-      );
-      expect(
-        line,
-        '${fmtMoney(12000)} so far × (30 days ÷ 12 days on record) = '
-        '${fmtMoney(30000)} projected',
-      );
-    });
-
-    test('no projection, no example', () {
-      expect(
-        projectionExample(
-          made(
-            previous: const SpendCompare(
-              actual: 500,
-              reference: 400,
-              actualFull: null,
-              referenceFull: 900,
-              state: CompareState.ok,
-            ),
-          ),
-        ),
-        isNull,
-      );
-    });
-
     testWidgets('categories vs usual works the top row', (tester) async {
       await show(
         tester,
@@ -287,7 +230,6 @@ void main() {
             previous: const SpendCompare(
               actual: 8400,
               reference: 6900,
-              actualFull: null,
               referenceFull: 6900,
               state: CompareState.ok,
             ),
@@ -323,7 +265,6 @@ void main() {
             previous: const SpendCompare(
               actual: 800,
               reference: 0,
-              actualFull: null,
               referenceFull: 0,
               state: CompareState.newThisMonth,
             ),

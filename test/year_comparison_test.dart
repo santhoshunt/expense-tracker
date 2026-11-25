@@ -66,7 +66,6 @@ void main() {
     expect(c.total.state, CompareState.ok);
     expect(c.total.actual, 1100);
     expect(c.total.reference, 600);
-    expect(c.total.actualFull, isNull);
     expect(c.total.referenceFull, 1800);
   });
 
@@ -117,7 +116,6 @@ void main() {
     expect(c.through, DateTime(2025, 12, 31));
     expect(c.total.actual, 700);
     expect(c.total.reference, 300);
-    expect(c.total.actualFull, c.total.actual);
     expect(c.total.referenceFull, 300);
     expect(c.total.state, CompareState.ok);
   });
@@ -139,7 +137,6 @@ void main() {
     expect(c.through, DateTime(2026, 12, 31));
     expect(c.total.actual, 300);
     expect(c.total.reference, 300);
-    expect(c.total.actualFull, 300);
   });
 
   test('records starting inside this year leave no fair comparison', () async {

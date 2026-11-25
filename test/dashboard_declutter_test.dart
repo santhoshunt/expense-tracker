@@ -18,8 +18,8 @@ import 'package:expense_tracker/widgets/lock_gate.dart';
 import 'dashboard_test_utils.dart';
 
 /// The v1.37.0 layout: the month selector and ⋯ menu in the app bar, the
-/// balance card's stat columns, the budget rows, the budget and
-/// forecast sharing a card, Upcoming's Show all and the notice slot.
+/// balance card's stat columns, the budget rows, the budget card,
+/// Upcoming's Show all and the notice slot.
 /// Amounts and notes are made up.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -311,7 +311,7 @@ void main() {
       expect(find.byType(BottomSheet), findsOneWidget);
     });
 
-    testWidgets('the cap and the forecast share one card', (tester) async {
+    testWidgets('the budget card ends at its verdict', (tester) async {
       await pumpHome(
         tester,
         seed: (p, s) async {
@@ -319,8 +319,8 @@ void main() {
           await spend(p, 'food', 3000, DateTime(now.year, now.month, 1));
         },
       );
-      // The label above the card; the card holds the budget's verdict and,
-      // under a hairline, the forecast.
+      // The label above the card; the card holds the budget's verdict and
+      // nothing under it: the Month-end forecast is gone.
       expect(find.text('Monthly budget'), findsOneWidget);
       final card = find
           .ancestor(
@@ -329,12 +329,13 @@ void main() {
           )
           .first;
       expect(
-        find.descendant(of: card, matching: find.text('Month-end forecast')),
-        findsOneWidget,
+        find.descendant(of: card, matching: find.byType(Divider)),
+        findsNothing,
       );
+      expect(find.text('Month-end forecast'), findsNothing);
     });
 
-    testWidgets('with the forecast hidden the budget card stands alone', (
+    testWidgets('a stored layout naming the removed forecast still loads', (
       tester,
     ) async {
       SharedPreferences.setMockInitialValues({

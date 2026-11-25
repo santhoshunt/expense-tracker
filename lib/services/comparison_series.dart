@@ -1,17 +1,11 @@
 import '../providers/finance_provider.dart';
 import '../utils/dates.dart';
-import 'month_forecast.dart';
 import 'safe_to_spend.dart';
 import 'spend_comparison.dart';
 
-/// One spend item due on a day of the chart: a bill, a reminder or a
-/// detected payment. [due] is its own date, so an overdue one keeps it.
-typedef DayDue = ({String label, double amount, DateTime due});
-
-/// The lines of the Trends comparison chart: this month's spend so far,
-/// the forecast from today to the month's end, and the month it is set
-/// against (last month, or a usual month). Each is cumulative: entry `i`
-/// is the spend from the 1st through day `i + 1`.
+/// The lines of the Trends comparison chart: this month's spend so far and
+/// the month it is set against (last month, or a usual month). Each is
+/// cumulative: entry `i` is the spend from the 1st through day `i + 1`.
 class ComparisonSeries {
   final DateTime month;
   final DateTime previousMonth;
@@ -23,13 +17,12 @@ class ComparisonSeries {
   /// month's last day.
   final int today;
 
-  /// Days 1..[today]. On the running month the last entry includes the
-  /// rows waiting for review, so it is the forecast's spent so far.
-  final List<double> actual;
+  /// [month] is the running month, its last day included.
+  final bool running;
 
-  /// Days [today]..[days] (its first entry is [actual]'s last), ending at
-  /// the Month-end forecast's total. Null for a month that has ended.
-  final List<double>? predicted;
+  /// Days 1..[today]. On the running month the last entry includes the
+  /// rows waiting for review.
+  final List<double> actual;
 
   /// Last month, its own length. Null when it is not fully on record.
   final List<double>? lastMonth;
@@ -38,24 +31,16 @@ class ComparisonSeries {
   /// months.
   final List<double>? usual;
 
-  /// Day of month to the spend items due that day; empty without a
-  /// forecast line.
-  final Map<int, List<DayDue>> dueByDay;
-
   const ComparisonSeries({
     required this.month,
     required this.previousMonth,
     required this.days,
     required this.today,
+    required this.running,
     required this.actual,
-    required this.predicted,
     required this.lastMonth,
     required this.usual,
-    this.dueByDay = const {},
   });
-
-  /// The forecast's total, or null for a month that has ended.
-  double? get forecastTotal => predicted?.last;
 }
 
 /// The usual curve over [days]: a shorter month's last day carries the
@@ -72,16 +57,13 @@ List<double> _cumulative(Map<int, double> byDay, int days) {
   return [for (var d = 1; d <= days; d++) total += byDay[d] ?? 0];
 }
 
-/// [forecast] is the Month-end forecast for [month] when it is the running
-/// month (null otherwise). [lastMonthOnRecord] is false when last month is
-/// not fully on record, as `MonthComparison.vsPrevious` reports.
+/// [lastMonthOnRecord] is false when last month is not fully on record, as
+/// `MonthComparison.vsPrevious` reports.
 ComparisonSeries buildComparisonSeries(
   FinanceProvider finance,
   DateTime month, {
   required DateTime now,
-  required MonthForecast? forecast,
   required bool lastMonthOnRecord,
-  Map<int, List<DayDue>> dueByDay = const {},
 }) {
   final anchor = DateTime(month.year, month.month);
   final days = daysInMonth(anchor.year, anchor.month);
@@ -94,36 +76,14 @@ ComparisonSeries buildComparisonSeries(
     actual[actual.length - 1] += pendingSpendIn(finance, anchor);
   }
 
-  List<double>? predicted;
-  if (running && forecast != null) {
-    // From the forecast's own spent so far, so the line ends exactly at its
-    // total: each bill steps it up on its due day (an overdue one today),
-    // and everyday spend adds the same amount each day after today.
-    final start = forecast.spentSoFar;
-    predicted = [
-      for (var d = today; d <= days; d++)
-        start +
-            forecast.bills
-                .where(
-                  (b) =>
-                      b.due.year != anchor.year ||
-                      b.due.month != anchor.month ||
-                      b.due.day <= d,
-                )
-                .fold(0.0, (s, b) => s + b.amount) +
-            forecast.perDay * (d - today),
-    ];
-    actual[actual.length - 1] = start;
-  }
-
   final usual = usualCumulativeByDay(finance, anchor);
   return ComparisonSeries(
     month: anchor,
     previousMonth: previous,
     days: days,
     today: today,
+    running: running,
     actual: actual,
-    predicted: predicted,
     lastMonth: lastMonthOnRecord
         ? _cumulative(
             finance.expenseByDayInMonth(previous),
@@ -131,6 +91,5 @@ ComparisonSeries buildComparisonSeries(
           )
         : null,
     usual: usual == null ? null : _cutUsual(usual, days),
-    dueByDay: predicted == null ? const {} : dueByDay,
   );
 }

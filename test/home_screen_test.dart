@@ -231,7 +231,7 @@ void main() {
   testWidgets('dashboard budget row deep-links to budget-filtered list', (
     tester,
   ) async {
-    // Tall enough to build the Budgets rows under the forecast card.
+    // Tall enough to build the Budgets rows under the cards above them.
     tester.view.physicalSize = const Size(800, 2000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -283,7 +283,7 @@ void main() {
   testWidgets('deleting the deep-linked budget un-filters the list cleanly', (
     tester,
   ) async {
-    // Tall enough to build the Budgets rows under the forecast card.
+    // Tall enough to build the Budgets rows under the cards above them.
     tester.view.physicalSize = const Size(800, 2000);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);

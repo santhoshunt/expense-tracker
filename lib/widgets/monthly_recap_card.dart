@@ -14,11 +14,9 @@ import 'status_dot.dart';
 /// "This month so far"'s tip; the Trends fold heading shows it too.
 const String kPaceTipMessage =
     'Spending from the 1st to today, against the same days of last month, '
-    'so a half-finished month is not measured against a whole one. On track '
-    'for is the Month-end forecast: spent so far, plus bills still due, plus '
-    'your usual everyday spending for the days left. Without an everyday '
-    'estimate it is a floor and reads At least. See chart opens both months '
-    'day by day.';
+    'so a half-finished month is not measured against a whole one. While '
+    "the month runs, the line under the bars gives all of last month's "
+    'spending. See chart opens both months day by day.';
 
 /// The monthly recap's tip, on the card's own title or on the Overview
 /// label above it.
@@ -191,29 +189,14 @@ class MonthlyRecapCard extends StatelessWidget {
 /// Trends' month against the one before it, for any month in Month view:
 /// spending through today (or the whole month once it has ended) against
 /// the same days of the previous month, the gap between them, and while the
-/// month runs where it is heading, from the Month-end forecast when there
-/// is one.
+/// month runs the previous month's whole total.
 class MonthPaceCard extends StatelessWidget {
   final MonthComparison comparison;
-
-  /// The Month-end forecast's total; null falls back to the comparison's
-  /// own projection.
-  final double? forecastTotal;
-
-  /// The forecast has no everyday estimate, so its total is a floor and
-  /// reads "At least".
-  final bool forecastIsFloor;
 
   /// Opens the day-by-day chart sheet. Null leaves the button out.
   final VoidCallback? onSeeChart;
 
-  const MonthPaceCard({
-    super.key,
-    required this.comparison,
-    this.forecastTotal,
-    this.forecastIsFloor = false,
-    this.onSeeChart,
-  });
+  const MonthPaceCard({super.key, required this.comparison, this.onSeeChart});
 
   @override
   Widget build(BuildContext context) {
@@ -242,23 +225,10 @@ class MonthPaceCard extends StatelessWidget {
     final window = c.partial
         ? '1 to ${c.throughDay} $short against $prevWindow'
         : 'All of $short against all of $prevShort';
-    // Where the month is heading: the forecast's total when there is one,
-    // so Trends and the Overview give the same figure.
-    final projected = c.partial ? (forecastTotal ?? prev.actualFull) : null;
-    final hasFull = compared && prev.referenceFull > 0;
-    String? projection;
-    if (projected != null) {
-      projection =
-          (forecastIsFloor
-              ? 'At least ${fmtMoneyWhole(projected)} by month end'
-              : 'On track for ${fmtMoneyWhole(projected)}') +
-          (hasFull
-              ? ', against ${fmtMoneyWhole(prev.referenceFull)} in all of '
-                    '$prevLong'
-              : '');
-    } else if (c.partial && hasFull) {
-      projection = 'All of $prevLong: ${fmtMoneyWhole(prev.referenceFull)}';
-    }
+    // While the month runs, all of last month for scale.
+    final fullLine = c.partial && compared && prev.referenceFull > 0
+        ? 'All of $prevLong: ${fmtMoneyWhole(prev.referenceFull)}'
+        : null;
 
     // No margin, as the recap card.
     return Card(
@@ -362,9 +332,9 @@ class MonthPaceCard extends StatelessWidget {
                 ),
                 CompareState.notEnoughHistory => const SizedBox.shrink(),
               },
-              if (projection != null) ...[
+              if (fullLine != null) ...[
                 Divider(height: 20, color: scheme.outlineVariant),
-                Text(projection, style: muted),
+                Text(fullLine, style: muted),
               ],
               if (onSeeChart case final see?)
                 Align(

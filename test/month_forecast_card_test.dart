@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:expense_tracker/models/account.dart';
-import 'package:expense_tracker/models/dashboard_layout.dart';
 import 'package:expense_tracker/models/reminder.dart';
 import 'package:expense_tracker/models/transaction.dart';
 import 'package:expense_tracker/providers/finance_provider.dart';
@@ -13,10 +12,9 @@ import 'package:expense_tracker/screens/accounts_screen.dart';
 import 'package:expense_tracker/screens/dashboard_screen.dart';
 import 'package:expense_tracker/utils/format.dart';
 
-import 'dashboard_test_utils.dart';
-
-/// The Overview's Month-end forecast card and the empty-account hint.
-/// Amounts are made up.
+/// The Monthly budget card's Due this month sheet (the Month-end forecast
+/// card that once held it is gone) and the empty-account hint. Amounts are
+/// made up.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -80,23 +78,7 @@ void main() {
     return s;
   }
 
-  testWidgets('shows on this month without a cap', (tester) async {
-    final p = await ledger(1200);
-    await pump(tester, p, await settings(), const DashboardScreen());
-    expect(find.text('Month-end forecast'), findsOneWidget);
-    // The forecast's row; the This week row says Spent so far too.
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('presence-month-forecast')),
-        matching: find.text('Spent so far'),
-      ),
-      findsOneWidget,
-    );
-    expect(find.textContaining('under your'), findsNothing);
-    expect(find.textContaining('over your'), findsNothing);
-  });
-
-  testWidgets('Bills due opens the list of what is due', (tester) async {
+  testWidgets('Due this month opens the list of what is due', (tester) async {
     final p = await ledger(1200);
     final now = DateTime.now();
     // Due on the month's last day: always ahead, or today.
@@ -109,19 +91,15 @@ void main() {
         expectedAmount: 799,
         // Last month's paid, so only this month's is due (an unpaid one
         // from the last week would show as overdue too).
-        lastPaidMonth:
-            '${DateTime(now.year, now.month - 1).year}-'
-            '${DateTime(now.year, now.month - 1).month.toString().padLeft(2, '0')}',
+        lastPaidMonth: _monthKey(DateTime(now.year, now.month - 1)),
       ),
     );
-    await pump(tester, p, await settings(), const DashboardScreen());
+    await pump(tester, p, await settings(cap: 50000), const DashboardScreen());
     await tester.tap(find.text('Due this month (1)'));
     await tester.pumpAndSettle();
-    expect(find.text('Due this month'), findsOneWidget);
-    // In the sheet: in the month's last week the Overview's Next 7 days
-    // card lists the same bill behind it.
     Finder inSheet(Finder f) =>
         find.descendant(of: find.byType(BottomSheet), matching: f);
+    expect(inSheet(find.text('Due this month')), findsOneWidget);
     expect(inSheet(find.text('Broadband')), findsOneWidget);
     expect(inSheet(find.textContaining('· reminder')), findsOneWidget);
 
@@ -155,7 +133,7 @@ void main() {
         lastPaidMonth: _monthKey(DateTime(now.year, now.month - 1)),
       ),
     );
-    await pump(tester, p, await settings(), const DashboardScreen());
+    await pump(tester, p, await settings(cap: 50000), const DashboardScreen());
     await tester.tap(find.text('Due this month (1)'));
     await tester.pumpAndSettle();
     expect(find.text('Added for you on the day'), findsOneWidget);
@@ -168,7 +146,6 @@ void main() {
     final p = await ledger(1200);
     await pump(tester, p, await settings(cap: 50000), const DashboardScreen());
     expect(find.text('${fmtMoneyWhole(48800)} left'), findsOneWidget);
-    // The forecast shares the card and leaves the verdict to it.
     expect(find.textContaining('under your'), findsNothing);
 
     final over = await ledger(90000);
@@ -183,40 +160,6 @@ void main() {
     expect(find.textContaining('over your'), findsNothing);
   });
 
-  testWidgets('with the budget hidden, the forecast says it instead', (
-    tester,
-  ) async {
-    final p = await ledger(1200);
-    final s = await settings(cap: 50000);
-    await s.setSectionHidden(DashboardSection.monthlyBudget, true);
-    await pump(tester, p, s, const DashboardScreen());
-    expect(find.textContaining('under your'), findsOneWidget);
-    expect(find.textContaining(' left'), findsNothing);
-  });
-
-  testWidgets('the Year view drops it', (tester) async {
-    final p = await ledger(1200);
-    // Year view is in the app bar's menu.
-    await pump(
-      tester,
-      p,
-      await settings(),
-      dashboardShell(const DashboardScreen()),
-    );
-    expect(find.text('Month-end forecast'), findsOneWidget);
-    await toggleYearView(tester);
-    expect(find.text('Month-end forecast'), findsNothing);
-  });
-
-  testWidgets('hidden from Cockpit, it goes', (tester) async {
-    final p = await ledger(1200);
-    final s = await settings(cap: 50000);
-    await s.setSectionHidden(DashboardSection.forecast, true);
-    await pump(tester, p, s, const DashboardScreen());
-    expect(find.text('Month-end forecast'), findsNothing);
-    expect(find.text('Monthly budget'), findsOneWidget);
-  });
-
   testWidgets('fits 320dp at text scale 2', (tester) async {
     final p = await ledger(123456);
     await pump(
@@ -228,7 +171,7 @@ void main() {
       textScale: 2,
     );
     expect(tester.takeException(), isNull);
-    expect(find.text('Month-end forecast'), findsOneWidget);
+    expect(find.text('Monthly budget'), findsOneWidget);
   });
 
   testWidgets('an emptied numbered account says so and offers a way out', (

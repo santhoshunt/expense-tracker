@@ -224,13 +224,13 @@ void main() {
     // The budget card's parts: the waiting row, the one bill, and all of it
     // together.
     expect(s.pendingSpent, 2000);
-    expect(s.billsCount, 1);
+    expect(s.bills, hasLength(1));
     expect(s.committed, 22500 + 2000 + 5000);
   });
 
   test('the bills count matches the bills summed', () async {
     final s = safe(await ledger(reminders: [rent, phone]));
-    expect(s.billsCount, 2);
+    expect(s.bills, hasLength(2));
     expect(s.pendingSpent, 0);
     expect(s.committed, 22500 + 6000);
   });

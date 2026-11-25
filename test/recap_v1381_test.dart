@@ -18,8 +18,8 @@ import 'package:expense_tracker/widgets/spend_history_sheet.dart';
 
 /// v1.38.1: the recap and pace cards sit flush (no margin), the recap's
 /// top categories are one row each, the history sheet shows Rename for a
-/// merchant, and the forecast's Spent so far says how many rows wait for
-/// review. Names and amounts are made up.
+/// merchant. (The Month-end forecast's Spent so far row went with the
+/// forecast in v2.3.7.) Names and amounts are made up.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -196,10 +196,9 @@ void main() {
 
     /// The Overview in the recap week of the running month, with last
     /// month's pay and fares, this month's spending and one row waiting
-    /// for review. Must use the real clock: the forecast is built only for
-    /// the month DateTime.now() falls in (_monthPlanSlot has no clock to
-    /// set), so the rows sit on the 1st and 2nd: never in the future. The
-    /// recap's day is fixed through recapClock.
+    /// for review. Uses the real clock for the running month, so the rows
+    /// sit on the 1st and 2nd: never in the future. The recap's day is
+    /// fixed through recapClock.
     Future<FinanceProvider> pumpOverview(
       WidgetTester tester, {
       required Size size,
@@ -289,68 +288,6 @@ void main() {
       expect(tester.getTopRight(hero).dx, lessThanOrEqualTo(320));
       expect(tester.takeException(), isNull);
     });
-
-    testWidgets('at 320dp and double text the forecast labels wrap whole '
-        'words', (tester) async {
-      await pumpOverview(tester, size: const Size(320, 4000), textScale: 2);
-      RenderParagraph paragraphOf(String text) {
-        final label = find.text(text);
-        expect(label, findsOneWidget, reason: text);
-        return tester.renderObject<RenderParagraph>(
-          find.descendant(of: label, matching: find.byType(RichText)),
-        );
-      }
-
-      // Wrapped, never cut short. (The card's name is the section label
-      // above it now, one line like every Overview label.)
-      for (final text in ['Spent so far, with 1 to review']) {
-        expect(paragraphOf(text).didExceedMaxLines, isFalse, reason: text);
-      }
-      // The label column keeps room for a whole word: "spending" in Roboto
-      // at double size is about 125dp, and 2x text in a 112dp column broke
-      // it. (The test font's square glyphs are wider than Roboto's, so the
-      // check is on the column, not the words.)
-      expect(
-        paragraphOf('Spent so far, with 1 to review').constraints.maxWidth,
-        greaterThanOrEqualTo(140),
-      );
-      expect(tester.takeException(), isNull);
-    });
-
-    testWidgets('at 390dp the forecast and recap amounts end together', (
-      tester,
-    ) async {
-      await pumpOverview(tester, size: const Size(390, 4000));
-      // Spent so far: this month's ₹2,400 and the ₹300 waiting.
-      final forecastAmount = find.text(fmtMoneyWhole(2700));
-      expect(forecastAmount, findsOneWidget);
-      // The recap's Transport row: of its two ₹400 figures (Spent and the
-      // row), the one level with the category name.
-      final transport = find.descendant(
-        of: find.byType(MonthlyRecapCard),
-        matching: find.text('Transport'),
-      );
-      final rowY = tester.getCenter(transport).dy;
-      final recapAmount = find
-          .descendant(
-            of: find.byType(MonthlyRecapCard),
-            matching: find.text(fmtMoneyWhole(400)),
-          )
-          .evaluate()
-          .where(
-            (e) =>
-                (tester.getCenter(find.byWidget(e.widget)).dy - rowY).abs() < 1,
-          )
-          .toList();
-      expect(recapAmount, hasLength(1));
-      expect(
-        tester.getTopRight(forecastAmount).dx,
-        moreOrLessEquals(
-          tester.getTopRight(find.byWidget(recapAmount.single.widget)).dx,
-          epsilon: 0.5,
-        ),
-      );
-    });
   });
 
   test('pendingSpendCountIn counts the rows pendingSpendIn adds up', () async {
@@ -438,61 +375,5 @@ void main() {
       );
       expect(find.text('Rename'), findsNothing);
     });
-  });
-
-  testWidgets('Spent so far says how many rows wait for review', (
-    tester,
-  ) async {
-    // Must use the real clock: the Dashboard builds the forecast only for
-    // the running month, read from DateTime.now() in _monthPlanSlot with no
-    // clock to set (recapClock moves only the recap). The rows sit on the
-    // month's 1st at midnight: never in the future, whatever day it runs.
-    final now = DateTime.now();
-    final first = DateTime(now.year, now.month, 1);
-    final p = FinanceProvider();
-    await p.load();
-    await p.addTransaction(
-      type: TxType.expense,
-      categoryId: 'food',
-      amount: 1200,
-      note: 'test groceries',
-      date: first,
-    );
-    await p.restoreTransaction(
-      Tx(
-        id: 'test-pending',
-        type: TxType.expense,
-        categoryId: 'food',
-        amount: 300,
-        note: 'test pending',
-        date: first,
-        pending: true,
-      ),
-    );
-    final s = SettingsProvider();
-    await s.load();
-    tester.view.physicalSize = const Size(400, 2400);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      MultiProvider(
-        providers: [
-          ChangeNotifierProvider.value(value: p),
-          ChangeNotifierProvider.value(value: s),
-        ],
-        child: const MaterialApp(home: Scaffold(body: DashboardScreen())),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('Spent so far, with 1 to review'), findsOneWidget);
-    // The plain label is the This week row's alone.
-    expect(find.text('Spent so far'), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('presence-week')),
-        matching: find.text('Spent so far'),
-      ),
-      findsOneWidget,
-    );
   });
 }

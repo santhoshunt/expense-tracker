@@ -42,8 +42,7 @@ void main() {
     bool lastMonthData = true,
     void Function(String id, DateTime month)? onViewCategory,
   }) async {
-    // Tall enough that the recap sits on screen under the Month-end
-    // forecast card and its See chart row.
+    // Tall enough that the recap sits on screen under the cards above it.
     tester.view.physicalSize = const Size(800, 900);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);

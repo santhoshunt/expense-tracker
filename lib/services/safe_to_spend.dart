@@ -20,8 +20,8 @@ class SafeToSpend {
 
   final double billsDue;
 
-  /// How many bills [billsDue] adds up.
-  final int billsCount;
+  /// The bills [billsDue] adds up, for the Due this month sheet.
+  final List<DueBill> bills;
 
   /// Spend this month other than today's (rows dated later in the month
   /// included), and today's.
@@ -38,7 +38,7 @@ class SafeToSpend {
   const SafeToSpend({
     required this.remainingAfterToday,
     required this.billsDue,
-    required this.billsCount,
+    required this.bills,
     required this.spentBeforeToday,
     required this.spentToday,
     required this.pendingSpent,
@@ -244,7 +244,7 @@ SafeToSpend? computeSafeToSpend(
   return SafeToSpend(
     remainingAfterToday: cap - monthSpent - bills,
     billsDue: bills,
-    billsCount: dueList.length,
+    bills: dueList,
     spentBeforeToday: monthSpent - todaySpent,
     spentToday: todaySpent,
     pendingSpent: pendingMonth,

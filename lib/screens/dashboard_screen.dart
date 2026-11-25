@@ -20,9 +20,7 @@ import '../services/backup_service.dart';
 import '../services/big_bills.dart';
 import '../services/card_bill.dart';
 import '../services/comparison_series.dart';
-import '../services/forward_series.dart';
 import '../services/merchant_stats.dart';
-import '../services/month_forecast.dart';
 import '../services/monthly_recap.dart';
 import '../services/recurring_detector.dart';
 import '../services/reminder_schedule.dart';
@@ -737,50 +735,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return _compare!;
   }
 
-  /// The This month vs chart for the shown month. With [chartForecast]
-  /// (the running month with an everyday estimate) its dashed line and,
-  /// from the shared forward builder, each day's spend items for the dial
-  /// dots and the readout; day 0 holds the overdue ones with their own
-  /// dates.
-  void _openComparisonChart(
-    FinanceProvider finance,
-    MonthForecast? chartForecast, {
-    required DateTime now,
-    required bool usual,
-  }) {
-    final dueByDay = <int, List<DayDue>>{};
-    if (chartForecast != null) {
-      final forward = buildForwardSeries(
-        finance,
-        patterns: _patterns(finance, now),
-        hidden: context.read<SettingsProvider>().hiddenUpcoming,
-        now: now,
-        to: chartForecast.lastDay,
-        perDay: chartForecast.perDay,
-      );
-      for (final day in forward.days) {
-        for (final item in day.items) {
-          if (item.kind != ForwardKind.spend) continue;
-          (dueByDay[day.date.day] ??= []).add((
-            label: item.bill.label,
-            amount: item.bill.amount,
-            due: item.bill.due,
-          ));
-        }
-      }
-    }
+  /// The This month vs chart for the shown month.
+  void _openComparisonChart(FinanceProvider finance, {required bool usual}) {
     showComparisonChartSheet(
       context,
       startOnUsual: usual,
       series: buildComparisonSeries(
         finance,
         _month,
-        now: now,
-        forecast: chartForecast,
+        now: DateTime.now(),
         lastMonthOnRecord:
             _comparison(finance).vsPrevious.state !=
             CompareState.notEnoughHistory,
-        dueByDay: dueByDay,
       ),
     );
   }
@@ -1051,16 +1017,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   /// What [_plan] last worked out, and for which inputs.
   Object? _planKey;
   SafeToSpend? _planSafe;
-  MonthForecast? _planForecast;
 
   /// The month against the cap (with a cap, on the running month in Month
-  /// view) and the Month-end forecast (on the running month), worked out
-  /// once per ledger, cap, hidden bills, month and day: the budget slot and
-  /// the forecast slot ask for them in the same frame. Callers select the
-  /// cap and the hidden bills themselves.
-  ({SafeToSpend? safe, MonthForecast? forecast}) _plan(
-    FinanceProvider finance,
-  ) {
+  /// view), worked out once per ledger, cap, hidden bills, month and day.
+  /// Callers select the cap and the hidden bills themselves.
+  SafeToSpend? _plan(FinanceProvider finance) {
     final settings = context.read<SettingsProvider>();
     final budget = settings.monthlyBudget;
     final now = DateTime.now();
@@ -1085,127 +1046,56 @@ class _DashboardScreenState extends State<DashboardScreen> {
               hidden: settings.hiddenUpcoming,
               now: now,
             );
-      _planForecast = !thisMonth
-          ? null
-          : computeMonthForecast(
-              finance,
-              patterns: _patterns(finance, now),
-              hidden: settings.hiddenUpcoming,
-              now: now,
-              cap: budget,
-            );
     }
-    return (safe: _planSafe, forecast: _planForecast);
+    return _planSafe;
   }
 
-  /// The Overview's Monthly budget and Month-end forecast sections. Both
-  /// showing (a cap, the running month, a forecast worth a card), neither
-  /// hidden and next to each other in Cockpit's order, they are one card in
-  /// the budget's slot, and the forecast's is empty; otherwise each slot
-  /// shows its own card. Each card sits under its section label.
-  ///
-  /// The budget uses the shown month's spend, so a past month shows its
-  /// usage too. The bills due and the forecast are about today, so only
-  /// under this month's figures; the forecast shows without a cap too.
-  Widget _monthPlanSlot(
-    BuildContext context,
-    FinanceProvider finance,
-    DashboardSection slot,
-  ) {
-    final settings = context.read<SettingsProvider>();
+  /// The Overview's Monthly budget section, under its section label, with a
+  /// cap set. The budget uses the shown month's spend, so a past month
+  /// shows its usage too. The bills due are about today, so only under
+  /// this month's figures.
+  Widget _monthPlanSlot(BuildContext context, FinanceProvider finance) {
     final budget = context.select<SettingsProvider, double>(
       (s) => s.monthlyBudget,
     );
-    // Hiding an Upcoming row changes the bills both set aside.
+    // Hiding an Upcoming row changes the bills set aside.
     context.select<SettingsProvider, String>(
       (s) => hiddenListKey(s.hiddenUpcoming),
     );
-    final budgetShows = budget > 0 && !_yearMode;
-    final plan = _plan(finance);
-    final safe = plan.safe;
-    final forecast = plan.forecast;
-    // Nothing spent, due or usual: no forecast worth a card.
-    final forecastShows = forecast != null && forecast.total > 0;
-    final layout = settings.dashboardLayout(DashboardPage.overview);
-    final budgetAt = layout.order.indexOf(DashboardSection.monthlyBudget);
-    final forecastAt = layout.order.indexOf(DashboardSection.forecast);
-    // Next to each other in Cockpit's order: moved apart there, they stay
-    // two cards where the user put them.
-    final merged =
-        budgetShows &&
-        forecastShows &&
-        (budgetAt - forecastAt).abs() == 1 &&
-        !layout.hidden.contains(DashboardSection.monthlyBudget) &&
-        !layout.hidden.contains(DashboardSection.forecast);
+    final safe = _plan(finance);
     // The budget's parts: confirmed spend, rows waiting for review and,
     // on the running month, the bills due.
     final confirmed = finance.budgetSpentInMonth(_month);
     final waiting = safe?.pendingSpent ?? pendingSpendIn(finance, _month);
     final bills = safe?.billsDue ?? 0.0;
-    Widget budgetCard({MonthForecast? shared}) => Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SectionLabel(
-          DashboardSection.monthlyBudget.label,
-          tip: _BudgetCard.tip(
-            confirmed: confirmed,
-            waiting: waiting,
-            bills: bills,
-            cap: budget,
-            safe: safe,
-          ),
-          trailing: 'cap ${fmtMoneyWhole(budget)}',
-        ),
-        _BudgetCard(
-          confirmed: confirmed,
-          waiting: waiting,
-          waitingCount: pendingSpendCountIn(finance, _month),
-          cap: budget,
-          safe: safe,
-          billsForecast: forecast,
-          forecast: shared,
-        ),
-      ],
-    );
-    final Widget? card;
-    if (merged) {
-      // Always the budget's slot: next to each other the two slots sit in
-      // the same place, and the Budget widget's jump scrolls to this one.
-      card = slot == DashboardSection.monthlyBudget
-          ? budgetCard(shared: forecast)
-          : null;
-    } else if (slot == DashboardSection.monthlyBudget) {
-      card = budgetShows ? budgetCard() : null;
-    } else {
-      card = forecastShows
-          ? Column(
+    final shows = budget > 0 && !_yearMode;
+    return AnimatedPresence(
+      visible: shows,
+      child: !shows
+          ? const SizedBox.shrink()
+          : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 SectionLabel(
-                  DashboardSection.forecast.label,
-                  tip: _ForecastBody.tip(forecast),
+                  DashboardSection.monthlyBudget.label,
+                  tip: _BudgetCard.tip(
+                    confirmed: confirmed,
+                    waiting: waiting,
+                    bills: bills,
+                    cap: budget,
+                    safe: safe,
+                  ),
+                  trailing: 'cap ${fmtMoneyWhole(budget)}',
                 ),
-                _ForecastCard(
-                  forecast: forecast,
-                  // The under or over the cap line is the budget card's
-                  // verdict; on its own it shows only with that card hidden.
-                  showCapLine: layout.hidden.contains(
-                    DashboardSection.monthlyBudget,
-                  ),
-                  onSeeChart: () => _openComparisonChart(
-                    finance,
-                    forecast.basis == EverydayBasis.none ? null : forecast,
-                    now: DateTime.now(),
-                    usual: false,
-                  ),
+                _BudgetCard(
+                  confirmed: confirmed,
+                  waiting: waiting,
+                  waitingCount: pendingSpendCountIn(finance, _month),
+                  cap: budget,
+                  safe: safe,
                 ),
               ],
-            )
-          : null;
-    }
-    return AnimatedPresence(
-      visible: card != null,
-      child: card ?? const SizedBox.shrink(),
+            ),
     );
   }
 
@@ -1216,10 +1106,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     message:
         'Year view adds up the 12 months of the year, from the month set in '
         'Settings → Appearance → Year starts in. April gives the financial '
-        'year, April to March. Trends compares the year with last year. '
-        'This week, the monthly budget, the Month-end forecast, the monthly '
-        'recap, budgets, the month comparisons, the heatmap, merchants, '
-        'groups and transfers are hidden.',
+        'year, April till March. Trends compares the year with last year. '
+        'This week, the monthly budget, the monthly recap, budgets, the '
+        'month comparisons, the heatmap, merchants, groups and transfers are '
+        'hidden.',
   );
 
   /// Hands the month selector to Home's app bar ([DashboardHeader]): the
@@ -1352,10 +1242,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (_openedForVisit.isNotEmpty && layoutKey != _openedAtLayout) {
       _openedForVisit.clear();
     }
-    // The Month-end forecast on Trends takes the cap and the hidden
-    // Upcoming rows. The page lists build lazily
-    // inside each page's Builder, so selects belong here, not in them.
-    context.select<SettingsProvider, double>((s) => s.monthlyBudget);
+    // The pages read the hidden Upcoming rows (Ahead's lists, the
+    // heatmap's dots). The page lists build lazily inside each page's
+    // Builder, so selects belong here, not in them.
     context.select<SettingsProvider, String>(
       (s) => hiddenListKey(s.hiddenUpcoming),
     );
@@ -1594,24 +1483,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             Builder(
               key: const ValueKey('presence-monthly-budget'),
-              builder: (context) => _monthPlanSlot(
-                context,
-                finance,
-                DashboardSection.monthlyBudget,
-              ),
-            ),
-          ],
-        ),
-        DashboardSection.forecast: (
-          visible: true,
-          title: null,
-          summary: null,
-          tip: null,
-          body: () => [
-            Builder(
-              key: const ValueKey('presence-month-forecast'),
-              builder: (context) =>
-                  _monthPlanSlot(context, finance, DashboardSection.forecast),
+              builder: (context) => _monthPlanSlot(context, finance),
             ),
           ],
         ),
@@ -1911,49 +1783,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final today = recapClock();
       final comparison = _yearMode ? null : _comparison(finance);
       final yearCompare = _yearMode ? _yearComparison(finance, year, sm) : null;
-      // The Month-end forecast, for the running month only: the cards' On
-      // track for and the chart's dashed line both use it.
-      final forecastNow = DateTime.now();
-      final settingsNow = context.read<SettingsProvider>();
-      final trendsForecast =
-          comparison == null ||
-              _month != DateTime(forecastNow.year, forecastNow.month)
-          ? null
-          : computeMonthForecast(
-              finance,
-              patterns: _patterns(finance, forecastNow),
-              hidden: settingsNow.hiddenUpcoming,
-              now: forecastNow,
-              cap: settingsNow.monthlyBudget,
-            );
-      // The cards take the forecast's total whenever there is one, so Trends
-      // and the Overview agree. Without an everyday estimate it is a floor
-      // and reads "At least"; the chart's dashed line waits for an
-      // estimate.
-      final cardForecast = trendsForecast?.total;
-      final forecastFloor = trendsForecast?.basis == EverydayBasis.none;
-      final chartForecast = forecastFloor ? null : trendsForecast;
-      String? forecastExample() {
-        final f = trendsForecast;
-        if (f == null) return null;
-        final parts = [
-          '${fmtMoney(f.spentSoFar)} spent',
-          if (f.billsDue > 0) '${fmtMoney(f.billsDue)} bills due',
-          if (f.everyday > 0) '${fmtMoney(f.everyday)} everyday',
-        ];
-        return '${parts.join(' + ')} = ${fmtMoney(f.total)}';
-      }
-
       void openChart({required bool usual}) {
         if (comparison == null) return;
-        // The forecast's own clock, so the chart and the card agree; the
-        // dashed line only when the card shows the forecast too.
-        _openComparisonChart(
-          finance,
-          chartForecast,
-          now: forecastNow,
-          usual: usual,
-        );
+        _openComparisonChart(finance, usual: usual);
       }
 
       String? against(SpendCompare? c, String what) {
@@ -2043,17 +1875,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           tip: InfoTip(
             title: paceTitle ?? DashboardSection.pace.label,
             message: kPaceTipMessage,
-            example: cardForecast == null
-                ? () => projectionExample(comparison!)
-                : forecastExample,
           ),
           body: () => [
             KeyedSubtree(
               key: _paceKey,
               child: MonthPaceCard(
                 comparison: comparison!,
-                forecastTotal: cardForecast,
-                forecastIsFloor: forecastFloor,
                 onSeeChart: () => openChart(usual: false),
               ),
             ),
@@ -2067,8 +1894,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           body: () => [
             UsualSpendCard(
               comparison: comparison!,
-              forecastTotal: cardForecast,
-              forecastIsFloor: forecastFloor,
               onTap: () => openChart(usual: true),
             ),
           ],
@@ -3004,8 +2829,8 @@ class _BigBillsCard extends StatelessWidget {
         'Quarterly, half-yearly and yearly bills, from your '
         'reminders with an amount and the subscriptions you '
         'marked. The monthly figure is each bill\'s yearly cost '
-        'spread over 12 months. The monthly budget and the forecast '
-        'still count a bill in full in the month it falls due.',
+        'spread over 12 months. The monthly budget still counts a bill in '
+        'full in the month it falls due, and the expected balance on its day.',
   );
 
   @override
@@ -3121,8 +2946,9 @@ class _UpcomingCard extends StatelessWidget {
         'payments to the same merchant about a month '
         'apart. A paid card shows a Paid tag in place of its amount. '
         'Tap a spotted payment to see its transactions, '
-        'make it a reminder or hide it. The Month-end '
-        'forecast lists every bill due this month.',
+        'make it a reminder or hide it. With a monthly cap set, '
+        'Due this month on the Monthly budget card lists every bill due '
+        'this month.',
     link: InfoLink(
       prompt: 'A bill the app cannot detect?',
       label: 'Add a reminder',
@@ -3982,22 +3808,12 @@ class _BudgetCard extends StatelessWidget {
   /// hold the bills due; null under any other month.
   final SafeToSpend? safe;
 
-  /// The month-end forecast whose bills the legend's Due row opens, even
-  /// when it does not share this card.
-  final MonthForecast? billsForecast;
-
-  /// The month-end forecast, when it shares this card (see
-  /// [_DashboardScreenState._monthPlanSlot]): its rows follow a hairline.
-  final MonthForecast? forecast;
-
   const _BudgetCard({
     required this.confirmed,
     required this.waiting,
     required this.waitingCount,
     required this.cap,
     this.safe,
-    this.billsForecast,
-    this.forecast,
   });
 
   /// The Monthly budget label's tip, with the sums worked out.
@@ -4035,7 +3851,6 @@ class _BudgetCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final f = forecast;
     final s = safe;
     final bills = s?.billsDue ?? 0.0;
     final committed = s?.committed ?? confirmed + waiting;
@@ -4062,7 +3877,6 @@ class _BudgetCard extends StatelessWidget {
           ? '${fmtMoneyWhole(-r)} over the cap'
           : '${fmtMoneyWhole(r)} under the cap';
     }
-    final bf = billsForecast;
     return FrostedPanel(
       radius: BorderRadius.circular(AppRadius.card),
       child: Padding(
@@ -4101,11 +3915,9 @@ class _BudgetCard extends StatelessWidget {
                     color: scheme.onSurfaceVariant,
                     style: _SwatchStyle.ring,
                   ),
-                  label: 'Due this month (${s.billsCount})',
+                  label: 'Due this month (${s.bills.length})',
                   amount: bills,
-                  onTap: bf == null
-                      ? null
-                      : () => _showForecastBills(context, bf),
+                  onTap: () => _showBillsDue(context, s.bills),
                 ),
               const SizedBox(height: 8),
             ],
@@ -4118,12 +3930,6 @@ class _BudgetCard extends StatelessWidget {
                 color: over ? scheme.error : color,
               ),
             ),
-            if (f != null) ...[
-              const SizedBox(height: 12),
-              Divider(height: 1, color: scheme.outlineVariant),
-              const SizedBox(height: 8),
-              _ForecastBody(forecast: f, compact: true),
-            ],
           ],
         ),
       ),
@@ -4409,332 +4215,19 @@ class _BudgetLegendRow extends StatelessWidget {
   }
 }
 
-/// Where this month is heading: spent so far, the bills still due and
-/// everyday spending for the days left, against the monthly cap when one
-/// is set ([computeMonthForecast]). Its own card when the monthly budget
-/// card does not hold it.
-class _ForecastCard extends StatelessWidget {
-  final MonthForecast forecast;
-
-  /// The under or over the cap line: only with the Monthly budget section
-  /// hidden, since that card's verdict says it otherwise.
-  final bool showCapLine;
-
-  /// Opens the This month vs chart; null shows no See chart row.
-  final VoidCallback? onSeeChart;
-
-  const _ForecastCard({
-    required this.forecast,
-    this.showCapLine = true,
-    this.onSeeChart,
-  });
-
-  @override
-  Widget build(BuildContext context) => FrostedPanel(
-    radius: BorderRadius.circular(AppRadius.card),
-    child: Padding(
-      padding: const EdgeInsets.all(AppSpace.card),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // The section label above names it.
-          _ForecastBody(
-            forecast: forecast,
-            showHeading: false,
-            showCapLine: showCapLine,
-          ),
-          if (onSeeChart case final see?)
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                // Ends on the figures' right edge.
-                style: flushEndTextButtonStyle,
-                onPressed: see,
-                // The label shortens rather than overflowing at large text
-                // on a narrow phone.
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Flexible(
-                      child: Text(
-                        'See chart',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Icon(Icons.chevron_right, size: 18),
-                  ],
-                ),
-              ),
-            ),
-        ],
-      ),
-    ),
-  );
-}
-
-/// The forecast's heading, headline and rows, for [_ForecastCard] or for
-/// the monthly budget card's lower half.
-class _ForecastBody extends StatelessWidget {
-  final MonthForecast forecast;
-
-  /// Inside the budget card, whose legend already holds the spend so far
-  /// and the bills: the headline, the everyday row and the footnote only.
-  final bool compact;
-
-  /// The under or over the cap line, when not [compact].
-  final bool showCapLine;
-
-  /// The "Month-end forecast" heading with its tip; off under a section
-  /// label that says it.
-  final bool showHeading;
-
-  const _ForecastBody({
-    required this.forecast,
-    this.compact = false,
-    this.showCapLine = true,
-    this.showHeading = true,
-  });
-
-  /// "Next 12 days, about ₹240 a day: ..." for [f]'s everyday row; null
-  /// without an estimate.
-  static String? _everydayHow(MonthForecast f) {
-    final days =
-        '${f.daysAfterToday} ${f.daysAfterToday == 1 ? 'day' : 'days'}';
-    final perDay = fmtMoneyWhole(f.perDay);
-    // The day count leads: on a narrow screen at large text the label
-    // wraps, and this is the part that must not be cut.
-    return switch (f.basis) {
-      EverydayBasis.usual when f.usualMonths == 2 =>
-        'Next $days, about $perDay a day: the lower of 2 recent months',
-      EverydayBasis.usual =>
-        'Next $days, about $perDay a day: the middle of '
-            '${f.usualMonths} recent months',
-      EverydayBasis.pace =>
-        "Next $days, about $perDay a day at this month's pace",
-      EverydayBasis.none => null,
-    };
-  }
-
-  /// The Month-end forecast's tip, with [f]'s sum worked out.
-  static InfoTip tip(MonthForecast f) {
-    final days =
-        '${f.daysAfterToday} ${f.daysAfterToday == 1 ? 'day' : 'days'}';
-    final perDay = fmtMoneyWhole(f.perDay);
-    final showEveryday = _everydayHow(f) != null && f.daysAfterToday > 0;
-    return InfoTip(
-      title: 'Month-end forecast',
-      message:
-          'Spent so far, including alerts still to review, plus the bills '
-          'still unpaid (due by the month end, or up to a week overdue; not '
-          'card bills or transfers), plus what you usually spend on the days '
-          'left, leaving bills out. Usual is the middle of your last complete '
-          'months (the lower, with only two). A month whose everyday spending '
-          "after today's date is under a quarter of the middle month's counts "
-          'as missing records and is left out; in that check one big purchase '
-          'counts as no more than 4 typical ones. With fewer than two, this '
-          "month's own pace once $kMinDaysOfData of its days "
-          'are on record. Without an estimate the figure is a floor and reads '
-          'At least.',
-      example: () {
-        final parts = [
-          '${fmtMoney(f.spentSoFar)} spent',
-          if (f.billsDue > 0) '${fmtMoney(f.billsDue)} bills due',
-          if (showEveryday)
-            '${fmtMoney(f.everyday)} everyday (about '
-                '$perDay a day for $days)',
-        ];
-        return '${parts.join(' + ')} = ${fmtMoney(f.total)}';
-      },
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final f = forecast;
-    final muted = TextStyle(color: scheme.onSurfaceVariant);
-    final by = fmtDateCompact(f.lastDay);
-    // How the everyday figure was worked out, under its row.
-    final everydayHow = _everydayHow(f);
-    final showEveryday = everydayHow != null && f.daysAfterToday > 0;
-    final under = f.underCap;
-    // Spent so far includes rows still waiting for review, which the balance
-    // card leaves out: the label says how many, so the two figures don't
-    // seem to disagree.
-    final toReview = pendingSpendCountIn(
-      context.watch<FinanceProvider>(),
-      DateTime(f.lastDay.year, f.lastDay.month),
-    );
-
-    Widget row(
-      String label,
-      double amount, {
-      String? detail,
-      VoidCallback? onTap,
-    }) {
-      // The label wraps, whole words only: the amount keeps at most 40% of
-      // the row and shrinks past that, so at large text on a narrow phone
-      // the label column stays wider than its longest word. The amounts
-      // end at the card's edge, as the recap's do; a tappable row's
-      // chevron follows its label instead of taking a slot after them.
-      final line = Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: LayoutBuilder(
-          builder: (context, box) => Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(child: Text(label, style: muted)),
-                        if (onTap != null)
-                          Icon(
-                            Icons.chevron_right,
-                            size: 18,
-                            color: scheme.onSurfaceVariant,
-                          ),
-                      ],
-                    ),
-                    if (detail != null)
-                      Text(
-                        detail,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              ConstrainedBox(
-                constraints: BoxConstraints(maxWidth: box.maxWidth * 0.4),
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: AlignmentDirectional.centerEnd,
-                  child: Text(fmtMoneyWhole(amount), maxLines: 1),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-      if (onTap == null) return line;
-      return InkWell(
-        borderRadius: BorderRadius.circular(8),
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 48),
-          child: Align(alignment: Alignment.centerLeft, child: line),
-        ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (showHeading) ...[
-          Row(
-            children: [
-              Icon(Icons.trending_up, size: 18, color: scheme.onSurfaceVariant),
-              const SizedBox(width: 8),
-              Flexible(
-                child: InfoLabel(
-                  // Wraps at large text rather than cutting the name short.
-                  label: Text('Month-end forecast', style: muted),
-                  tip: tip(f),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-        ],
-        // The headline in whole rupees: "At least" when there is no
-        // everyday estimate, so the total is a floor; "About" otherwise.
-        Text(
-          f.basis == EverydayBasis.none
-              ? 'At least ${fmtMoneyWhole(f.total)} by $by'
-              : 'About ${fmtMoneyWhole(f.total)} by $by',
-          style: Theme.of(
-            context,
-          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const SizedBox(height: 4),
-        if (!compact) ...[
-          row(
-            toReview == 0
-                ? 'Spent so far'
-                : 'Spent so far, with $toReview to review',
-            f.spentSoFar,
-          ),
-          if (f.billsDue > 0)
-            row(
-              'Due this month (${f.bills.length})',
-              f.billsDue,
-              onTap: () => _showForecastBills(context, f),
-            ),
-        ],
-        if (showEveryday)
-          row('Everyday spending', f.everyday, detail: everydayHow),
-        if (under != null && !compact && showCapLine) ...[
-          const SizedBox(height: 8),
-          // Green under, red over: the dot and the words.
-          Row(
-            children: [
-              StatusDot(
-                color: under >= 0 ? AppColors.of(context).green : scheme.error,
-                size: 8,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  under >= 0
-                      ? '${fmtMoneyWhole(under)} under your '
-                            '${fmtMoneyWhole(f.cap!)} budget'
-                      : '${fmtMoneyWhole(-under)} over your '
-                            '${fmtMoneyWhole(f.cap!)} budget',
-                  style: TextStyle(
-                    color: under >= 0
-                        ? AppColors.of(context).green
-                        : scheme.error,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-        if (f.basis == EverydayBasis.none && f.daysAfterToday > 0) ...[
-          const SizedBox(height: 6),
-          Text(
-            'Everyday spending is not counted yet: the records do not show '
-            'enough of it to estimate.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-/// The forecast's bills, one row each: what it is, when it is due, what it
-/// costs, whether it is a reminder or a payment the app detected, and a
+/// This month's bills due, one row each: what it is, when it is due, what
+/// it costs, whether it is a reminder or a payment the app detected, and a
 /// Paid button for one that was paid but still shows (a reminder not
 /// marked, an alert that never came). Whether a row is paid is read from
 /// the provider, so a reminder's two rows (last month's and this month's)
 /// and a reminder's payment alert arriving meanwhile stay right. A row
 /// marked here keeps an Undo while its mark is still the current one; the
 /// total below is the unpaid rows'.
-Future<void> _showForecastBills(BuildContext context, MonthForecast f) {
+Future<void> _showBillsDue(BuildContext context, List<DueBill> bills) {
   final finance = context.read<FinanceProvider>();
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
+  final lastDay = DateTime(now.year, now.month + 1, 0);
   // Row index → the Paid tapped on it: whether its mark still stands (a
   // later mark or an alert can move it on), and how to undo it.
   final undo =
@@ -4799,10 +4292,10 @@ Future<void> _showForecastBills(BuildContext context, MonthForecast f) {
           final scheme = Theme.of(ctx).colorScheme;
           final muted = TextStyle(color: scheme.onSurfaceVariant, fontSize: 12);
           var total = 0.0;
-          for (final b in f.bills) {
+          for (final b in bills) {
             if (!isPaid(b)) total += b.amount;
           }
-          final last = f.bills.length - 1;
+          final last = bills.length - 1;
           return SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
@@ -4823,26 +4316,26 @@ Future<void> _showForecastBills(BuildContext context, MonthForecast f) {
                         message:
                             'Reminders not yet paid, and regular payments the '
                             'app has spotted in your history, due by '
-                            '${fmtDateCompact(f.lastDay)} or up to a week '
-                            'overdue. Paid one already? Tap Paid: it leaves '
-                            'the forecast.',
+                            '${fmtDateCompact(lastDay)} or up to a week '
+                            'overdue. Paid one already? Tap Paid: it stops '
+                            'counting as due.',
                       ),
                     ],
                   ),
                   const SizedBox(height: 4),
                   Text(
                     'Reminders and regular payments due by '
-                    '${fmtDateCompact(f.lastDay)}.',
+                    '${fmtDateCompact(lastDay)}.',
                     style: muted,
                   ),
                   const SizedBox(height: 12),
-                  for (final (i, b) in f.bills.indexed)
+                  for (final (i, b) in bills.indexed)
                     GroupedSurface(
                       first: i == 0,
                       last: i == last,
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(14, 2, 14, 6),
-                        child: _ForecastBillRow(
+                        child: _BillDueRow(
                           bill: b,
                           today: today,
                           paid: isPaid(b),
@@ -4894,9 +4387,9 @@ Future<void> _showForecastBills(BuildContext context, MonthForecast f) {
   );
 }
 
-/// One bill in [_showForecastBills]: name and amount, then when it is due
-/// and what kind it is beside its Paid (or, once paid, Undo) button.
-class _ForecastBillRow extends StatelessWidget {
+/// One bill in [_showBillsDue]: name and amount, then when it is due and
+/// what kind it is beside its Paid (or, once paid, Undo) button.
+class _BillDueRow extends StatelessWidget {
   final DueBill bill;
   final DateTime today;
   final bool paid;
@@ -4907,7 +4400,7 @@ class _ForecastBillRow extends StatelessWidget {
   /// this sheet's to undo.
   final VoidCallback? onUndo;
 
-  const _ForecastBillRow({
+  const _BillDueRow({
     required this.bill,
     required this.today,
     required this.paid,

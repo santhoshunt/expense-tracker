@@ -99,10 +99,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       expect(find.text('This month vs'), findsOneWidget);
-      // The Forecast key shows only with an everyday estimate (the card's
-      // too): this ledger's thin history has none, which the series tests
-      // cover.
       expect(find.text('This month'), findsOneWidget);
+      expect(find.text('Forecast'), findsNothing);
     });
   }
 

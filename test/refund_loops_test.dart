@@ -9,7 +9,6 @@ import 'package:expense_tracker/providers/settings_provider.dart';
 import 'package:expense_tracker/services/backup_service.dart';
 import 'package:expense_tracker/services/home_widgets_service.dart';
 import 'package:expense_tracker/services/merchant_stats.dart';
-import 'package:expense_tracker/services/month_forecast.dart';
 import 'package:expense_tracker/services/recurring_detector.dart';
 import 'package:expense_tracker/services/spend_history.dart';
 import 'package:expense_tracker/services/weekly_digest.dart';
@@ -142,32 +141,6 @@ void main() {
         usualWeekByDay(p, DateTime(2026, 10, 12))[2],
       );
     });
-  });
-
-  test('the forecast pace counts the purchase less its refund', () async {
-    // October only, so the everyday figure is this month's own pace.
-    final rows = [
-      row('buy', TxType.expense, 'shopping', 2000, DateTime(2026, 10, 1)),
-      row('tea', TxType.expense, 'food', 100, DateTime(2026, 10, 3)),
-      row(
-        'back',
-        TxType.income,
-        'other_income',
-        500,
-        DateTime(2026, 10, 10),
-        refundOf: 'buy',
-      ),
-    ];
-    final now = DateTime(2026, 10, 20, 10);
-    MonthForecast? forecast(FinanceProvider p) =>
-        computeMonthForecast(p, patterns: const [], hidden: const {}, now: now);
-
-    final linked = forecast(await ledger(rows))!;
-    expect(linked.basis, EverydayBasis.pace);
-    // 1,500 + 100 over 20 days.
-    expect(linked.perDay, closeTo(80, 1e-9));
-    final plain = forecast(await ledger(rows, link: false))!;
-    expect(plain.perDay, closeTo(105, 1e-9));
   });
 
   group('merchant figures', () {

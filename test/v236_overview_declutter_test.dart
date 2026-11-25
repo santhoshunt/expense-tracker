@@ -270,7 +270,7 @@ void main() {
       now: at,
     )!;
     expect(s.billsDue, 2500);
-    expect(s.billsCount, 1);
+    expect(s.bills, hasLength(1));
     expect(s.pendingSpent, 1100);
     // 30,000 less 9,000, 600 and 1,100 spent, less the 2,500 bill.
     expect(s.remainingAfterToday, 16800);

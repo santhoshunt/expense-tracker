@@ -219,97 +219,32 @@ void main() {
       expect(c.vsPrevious.deltaPct, closeTo(0.4, 0.001));
     });
 
-    test(
-      'a month that has ended compares in full, with no projection',
-      () async {
-        final p = await sixMonths();
-        final c = buildMonthComparison(
-          p,
-          DateTime(2026, 8),
-          now: DateTime(2026, 9, 17),
-        );
-
-        expect(c.throughDay, 31);
-        expect(c.partial, isFalse);
-        expect(c.vsPrevious.actual, 1500);
-        expect(c.vsPrevious.actualFull, 1500, reason: 'exact, not projected');
-      },
-    );
-
-    test('projection scales to the month, and stays quiet early on', () async {
+    test('a month that has ended compares in full', () async {
       final p = await sixMonths();
-      final mid = buildMonthComparison(
+      final c = buildMonthComparison(
         p,
-        DateTime(2026, 9),
+        DateTime(2026, 8),
         now: DateTime(2026, 9, 17),
       );
-      // The projection follows the reference month's curve, not a flat daily
-      // pace: August had reached 1000 of its 1500 by the 17th, so September's
-      // 1400 scales by 1500/1000.
-      expect(mid.vsPrevious.actualFull, closeTo(1400 * 1500 / 1000, 0.001));
-      // Same figures in the usual window (every month spends alike here).
-      expect(mid.vsUsual.actualFull, closeTo(2100, 0.001));
 
-      final early = buildMonthComparison(
-        p,
-        DateTime(2026, 9),
-        now: DateTime(2026, 9, 3),
-      );
-      expect(
-        early.vsPrevious.actualFull,
-        isNull,
-        reason: 'a ×10 multiplier is noise, not a forecast',
-      );
+      expect(c.throughDay, 31);
+      expect(c.partial, isFalse);
+      expect(c.vsPrevious.actual, 1500);
     });
 
-    test('the projection always agrees with the headline delta', () async {
-      // A front-loaded August: 5000 by day 17, only 1000 after. A flat daily
-      // pace would project September past August's total even while the
-      // headline says "less" — the shape projection cannot contradict it.
+    test('no last month on record leaves nothing to compare', () async {
+      // First-ever data month: August is empty.
       final p = await loaded();
-      await spend(p, DateTime(2026, 8, 1), 5000);
-      await spend(p, DateTime(2026, 8, 20), 1000);
-      await spend(p, DateTime(2026, 9, 5), 4000);
+      await spend(p, DateTime(2026, 9, 1), 1700);
 
       final c = buildMonthComparison(
         p,
         DateTime(2026, 9),
         now: DateTime(2026, 9, 17),
       );
-      final prev = c.vsPrevious;
-      expect(prev.delta, -1000, reason: '4000 vs August\'s 5000 by day 17');
-      expect(prev.actualFull, closeTo(4000 * 6000 / 5000, 0.001));
-      expect(
-        prev.actualFull! / prev.referenceFull,
-        closeTo(prev.actual / prev.reference, 1e-9),
-        reason: 'projected share equals the headline share by construction',
-      );
-      expect(
-        prev.actualFull,
-        lessThan(prev.referenceFull),
-        reason: '"less" through day 17 must stay "less" projected',
-      );
+      expect(c.vsPrevious.state, CompareState.notEnoughHistory);
+      expect(c.vsPrevious.referenceFull, 0);
     });
-
-    test(
-      'no reference to take a shape from falls back to the flat pace',
-      () async {
-        // First-ever data month: August is empty, so the previous-month
-        // comparison has no curve to follow.
-        final p = await loaded();
-        await spend(p, DateTime(2026, 9, 1), 1700);
-
-        final c = buildMonthComparison(
-          p,
-          DateTime(2026, 9),
-          now: DateTime(2026, 9, 17),
-        );
-        // August is not on record at all, so there is no last-month
-        // comparison; the projection falls back to the flat pace.
-        expect(c.vsPrevious.state, CompareState.notEnoughHistory);
-        expect(c.vsPrevious.actualFull, closeTo(1700 * 30 / 17, 0.001));
-      },
-    );
 
     test(
       'a baseline below two months is refused rather than guessed',
@@ -427,7 +362,6 @@ void main() {
     SpendCompare c(double actual, double reference) => SpendCompare(
       actual: actual,
       reference: reference,
-      actualFull: null,
       referenceFull: reference,
       state: CompareState.ok,
     );
@@ -558,8 +492,7 @@ void main() {
   });
 
   group('records that start recently', () {
-    test('records starting this month: no last-month comparison, and the '
-        'pace divides by the days on record', () async {
+    test('records starting this month: no last-month comparison', () async {
       final p = await loaded();
       await spend(p, DateTime(2026, 9, 10), 1600);
       final c = buildMonthComparison(
@@ -568,21 +501,7 @@ void main() {
         now: DateTime(2026, 9, 25),
       );
       expect(c.vsPrevious.state, CompareState.notEnoughHistory);
-      expect(c.paceDays, 16, reason: '10th to 25th');
-      // 1600 over 16 days, across a 30-day month.
-      expect(c.vsPrevious.actualFull, closeTo(1600 * 30 / 16, 0.01));
-    });
-
-    test('fewer than 14 days on record: no projection yet', () async {
-      final p = await loaded();
-      await spend(p, DateTime(2026, 9, 20), 600);
-      final c = buildMonthComparison(
-        p,
-        DateTime(2026, 9),
-        now: DateTime(2026, 9, 25),
-      );
-      expect(c.paceDays, 6);
-      expect(c.vsPrevious.actualFull, isNull);
+      expect(c.vsPrevious.actual, 1600);
     });
 
     test('records starting part-way through last month leave no '
@@ -597,12 +516,9 @@ void main() {
       );
       expect(c.vsPrevious.state, CompareState.notEnoughHistory);
       expect(c.vsPrevious.reference, 0);
-      // Whole of September is on record, so the flat pace uses all 25 days.
-      expect(c.paceDays, 25);
-      expect(c.vsPrevious.actualFull, closeTo(900 * 30 / 25, 0.01));
     });
 
-    test('a long-running ledger keeps the reference month curve', () async {
+    test('a long-running ledger keeps the reference month', () async {
       final p = await sixMonths();
       final c = buildMonthComparison(
         p,
@@ -610,9 +526,9 @@ void main() {
         now: DateTime(2026, 9, 10),
       );
       expect(c.vsPrevious.state, isNot(CompareState.notEnoughHistory));
-      expect(c.paceDays, 10);
-      // August reached 1000 by the 10th of 1500: 1400 × 1500 / 1000.
-      expect(c.vsPrevious.actualFull, closeTo(2100, 0.01));
+      // August reached 1000 by the 10th, of 1500 in all.
+      expect(c.vsPrevious.reference, 1000);
+      expect(c.vsPrevious.referenceFull, 1500);
     });
 
     test("a category's usual starts at its own first spend", () async {

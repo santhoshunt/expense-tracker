@@ -8,13 +8,11 @@ import '../services/comparison_series.dart';
 import '../utils/app_theme.dart';
 import '../utils/format.dart';
 import '../utils/haptics.dart';
-import 'motion.dart';
 
 /// The Trends comparison chart, opened from "This month vs last month" or
-/// "This month vs usual": this month's spend so far (solid), the
-/// Month-end forecast from today to the month's end (dashed), and the
-/// month it is set against (dotted), with a "Today" tick between actual
-/// and predicted. A switch flips between last month and a usual month.
+/// "This month vs usual": this month's spend so far (solid) and the month
+/// it is set against (dotted). A switch flips between last month and a
+/// usual month.
 /// A drag on the chart or a turn of the day dial under it picks a day and
 /// shows its figures beside a guide line.
 Future<void> showComparisonChartSheet(
@@ -70,8 +68,6 @@ class _ComparisonChartBody extends StatelessWidget {
     final reference = usual ? s.usual : s.lastMonth;
     final refName = usual ? 'Usual' : prevName;
     final soFar = s.actual.isEmpty ? 0.0 : s.actual.last;
-    // One point (the month's last day) draws no line: no Forecast key.
-    final running = (s.predicted?.length ?? 0) > 1;
 
     // The footer of one view: the month name makes Last month's lines
     // longer than Usual's.
@@ -85,7 +81,7 @@ class _ComparisonChartBody extends StatelessWidget {
       final refToday = refAt(s.today);
       // The month is still running on its last day: so far, not all of it.
       return <String>[
-        if (s.predicted != null)
+        if (s.running)
           [
             'So far ${fmtMoneyWhole(soFar)}',
             if (refToday != null)
@@ -95,15 +91,11 @@ class _ComparisonChartBody extends StatelessWidget {
           ].join(' · ')
         else
           'All of $monthName ${fmtMoneyWhole(soFar)}',
-        [
-          if (s.forecastTotal != null)
-            'Forecast ${fmtMoneyWhole(s.forecastTotal!)}',
-          if (ref != null && ref.isNotEmpty)
-            usual
-                ? 'a usual month ${fmtMoneyWhole(ref.last)}'
-                : 'all of $prevName ${fmtMoneyWhole(ref.last)}',
-        ].join(' · '),
-      ].where((l) => l.isNotEmpty).toList();
+        if (ref != null && ref.isNotEmpty)
+          usual
+              ? 'A usual month ${fmtMoneyWhole(ref.last)}'
+              : 'All of $prevName ${fmtMoneyWhole(ref.last)}',
+      ];
     }
 
     // Both views laid out in one place, the other one invisible: the
@@ -177,12 +169,6 @@ class _ComparisonChartBody extends StatelessWidget {
               color: scheme.primary,
               style: _Stroke.solid,
             ),
-            if (running)
-              _LegendKey(
-                label: 'Forecast',
-                color: scheme.primary,
-                style: _Stroke.dashed,
-              ),
             // The widest of the two names holds the key's place.
             if (s.lastMonth != null || s.usual != null)
               Stack(
@@ -225,9 +211,8 @@ class _ComparisonChartBody extends StatelessWidget {
 const _chartHeight = 200.0;
 
 /// The chart with a picked day: a horizontal drag or a tap on the chart, or
-/// a turn of the dial under it, picks one; a tap on the Today tick puts it
-/// back. The guide line, the readout bubble and the dial follow the same
-/// day.
+/// a turn of the dial under it, picks one. The guide line, the readout
+/// bubble and the dial follow the same day.
 class _ScrubChart extends StatefulWidget {
   final ComparisonSeries series;
   final List<double>? reference;
@@ -273,24 +258,6 @@ class _ScrubChartState extends State<_ScrubChart> {
     _moving = false;
   }
 
-  void _clear() {
-    if (_day == null) return;
-    setState(() => _day = null);
-    Haptics.tick();
-    if (!_dial.hasClients) return;
-    _moving = true;
-    final target = widget.series.today - 1;
-    final duration = motionDuration(context, const Duration(milliseconds: 220));
-    if (duration == Duration.zero) {
-      _dial.jumpToItem(target);
-      _moving = false;
-    } else {
-      _dial
-          .animateToItem(target, duration: duration, curve: Curves.easeOutCubic)
-          .whenComplete(() => _moving = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -322,20 +289,8 @@ class _ScrubChartState extends State<_ScrubChart> {
                         _select(dayAt(d.localPosition), fromDial: false),
                     onHorizontalDragUpdate: (d) =>
                         _select(dayAt(d.localPosition), fromDial: false),
-                    onTapUp: (d) {
-                      final tx = _ComparisonChartPainter.xFor(
-                        s.today,
-                        s.days,
-                        width,
-                      );
-                      if (s.predicted != null &&
-                          _day != null &&
-                          (d.localPosition.dx - tx).abs() <= 12) {
-                        _clear();
-                      } else {
-                        _select(dayAt(d.localPosition), fromDial: false);
-                      }
-                    },
+                    onTapUp: (d) =>
+                        _select(dayAt(d.localPosition), fromDial: false),
                     child: CustomPaint(
                       painter: _ComparisonChartPainter(
                         series: s,
@@ -360,10 +315,6 @@ class _ScrubChartState extends State<_ScrubChart> {
                   month: s.month,
                   lastDay: s.days,
                   centre: _day ?? s.today,
-                  dueDays: {
-                    for (final e in s.dueByDay.entries)
-                      if (e.value.isNotEmpty) e.key,
-                  },
                   controller: _dial,
                   onChanged: (d) {
                     if (_moving) return;
@@ -400,7 +351,7 @@ class _ScrubChartState extends State<_ScrubChart> {
 
 /// Places the readout bubble beside the guide line at [gx]: right of it
 /// on the chart's left half, left of it on the right half, held inside the
-/// box. It starts below the Today label and ends above the day dial.
+/// box. It starts at the plot's top and ends above the day dial.
 class _BubblePlacement extends SingleChildLayoutDelegate {
   final double gx;
 
@@ -512,7 +463,7 @@ class _ReadoutBubble extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       // The day leads even with no figure of its own, as
-                      // on a future day with no forecast.
+                      // on a day after today.
                       line(
                         weekdayShortMonthDayFormat.format(
                           DateTime(s.month.year, s.month.month, d),
@@ -536,13 +487,12 @@ class _ReadoutBubble extends StatelessWidget {
 }
 
 /// A sideways dial of the month's days under a fixed pointer: weekday
-/// letters over day numbers, an orange dot on days with a spend item, the
-/// picked day boxed. It stops at the month's last day.
+/// letters over day numbers, the picked day boxed. It stops at the month's
+/// last day.
 class _DayDial extends StatelessWidget {
   final DateTime month;
   final int lastDay;
   final int centre;
-  final Set<int> dueDays;
   final _DayDialController controller;
 
   /// A turn of the dial landed on a day.
@@ -555,7 +505,6 @@ class _DayDial extends StatelessWidget {
     required this.month,
     required this.lastDay,
     required this.centre,
-    required this.dueDays,
     required this.controller,
     required this.onChanged,
     required this.onStep,
@@ -565,7 +514,6 @@ class _DayDial extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final orange = AppColors.of(context).orange;
     final weekday = weekdayLetterFormat;
     // Every day is laid out as wide as the widest number, so a day that has
     // to shrink shrinks by the same amount as its neighbours and the
@@ -678,27 +626,6 @@ class _DayDial extends StatelessWidget {
                                               : null,
                                         ),
                                       ),
-                                      // Every day keeps the dot's room, so days
-                                      // with a dot line up with the rest.
-                                      SizedBox(
-                                        height: 8,
-                                        child: dueDays.contains(d)
-                                            ? Align(
-                                                alignment:
-                                                    Alignment.bottomCenter,
-                                                child: Container(
-                                                  width: 5,
-                                                  height: 5,
-                                                  decoration: BoxDecoration(
-                                                    color: orange.withValues(
-                                                      alpha: fade,
-                                                    ),
-                                                    shape: BoxShape.circle,
-                                                  ),
-                                                ),
-                                              )
-                                            : null,
-                                      ),
                                     ],
                                   );
                                 },
@@ -771,7 +698,7 @@ class _DayDial extends StatelessWidget {
   }
 }
 
-enum _Stroke { solid, dashed, dotted }
+enum _Stroke { solid, dotted }
 
 class _LegendKey extends StatelessWidget {
   final String label;
@@ -830,8 +757,8 @@ Paint _paintFor(Color color, _Stroke style) => Paint()
   ..strokeCap = StrokeCap.round
   ..strokeWidth = style == _Stroke.dotted ? 2 : 2.5;
 
-/// Draws [points] as one line: solid, or in dashes or dots that run on
-/// across the joins.
+/// Draws [points] as one line: solid, or in dots that run on across the
+/// joins.
 void _strokePolyline(
   Canvas canvas,
   List<Offset> points,
@@ -847,8 +774,8 @@ void _strokePolyline(
     canvas.drawPath(path, paint);
     return;
   }
-  final on = style == _Stroke.dashed ? 7.0 : 0.5;
-  final off = style == _Stroke.dashed ? 5.0 : 4.5;
+  const on = 0.5;
+  const off = 4.5;
   var drawing = true;
   var left = on;
   for (var i = 1; i < points.length; i++) {
@@ -871,11 +798,8 @@ void _strokePolyline(
   }
 }
 
-/// This month's spend by [day]: so far through yesterday, the forecast from
-/// today on. Null after today without a forecast.
+/// This month's spend by [day]; null after today.
 double? _spendBy(ComparisonSeries s, int day) {
-  final predicted = s.predicted;
-  if (predicted != null && day >= s.today) return predicted[day - s.today];
   if (day > s.today) return null;
   return s.actual[day - 1];
 }
@@ -934,7 +858,7 @@ class _ComparisonChartPainter extends CustomPainter {
   /// The tallest value on the chart; 0 or less draws Nothing spent yet.
   static double maxOf(ComparisonSeries series, List<double>? reference) {
     var m = 0.0;
-    for (final l in [series.actual, series.predicted, reference]) {
+    for (final l in [series.actual, reference]) {
       if (l == null) continue;
       for (final v in l) {
         m = math.max(m, v);
@@ -1000,16 +924,6 @@ class _ComparisonChartPainter extends CustomPainter {
       );
     }
 
-    final predicted = s.predicted;
-    if (predicted != null) {
-      _strokePolyline(
-        canvas,
-        [for (final (i, v) in predicted.indexed) Offset(x(s.today + i), y(v))],
-        _paintFor(actualColor, _Stroke.dashed),
-        _Stroke.dashed,
-      );
-    }
-
     final actual = s.actual;
     _strokePolyline(
       canvas,
@@ -1023,17 +937,6 @@ class _ComparisonChartPainter extends CustomPainter {
         3.5,
         Paint()..color = actualColor,
       );
-    }
-
-    if (predicted != null) {
-      // The "|" between what happened and what is predicted.
-      final tx = x(s.today);
-      canvas.drawRect(
-        Rect.fromLTWH(tx - 1, _top - 4, 2, chartH + 4),
-        Paint()..color = referenceColor,
-      );
-      // Inside the chart on the month's last day, left of the tick.
-      _text(canvas, 'Today', Offset(tx + 4, 0), rightEdge: size.width);
     }
 
     if (sel != null) {
@@ -1088,7 +991,6 @@ class _ComparisonChartPainter extends CustomPainter {
     String text,
     Offset at, {
     bool center = false,
-    double? rightEdge,
     TextStyle? style,
   }) {
     final tp = _labels[(text, style)] ??= TextPainter(
@@ -1097,11 +999,7 @@ class _ComparisonChartPainter extends CustomPainter {
       // Axis labels keep their size: scaled up they would overlap.
       textScaler: TextScaler.noScaling,
     )..layout();
-    var o = at - Offset(center ? tp.width / 2 : 0, 0);
-    if (rightEdge != null && o.dx + tp.width > rightEdge) {
-      o = Offset(at.dx - 8 - tp.width, o.dy);
-    }
-    tp.paint(canvas, o);
+    tp.paint(canvas, at - Offset(center ? tp.width / 2 : 0, 0));
   }
 
   @override
@@ -1115,8 +1013,6 @@ class _ComparisonChartPainter extends CustomPainter {
         properties: SemanticsProperties(
           label: [
             'Spent ${fmtMoneyWhole(soFar)} by day ${s.today}',
-            if (s.forecastTotal != null)
-              'forecast ${fmtMoneyWhole(s.forecastTotal!)} by month end',
             if (ref != null && ref.isNotEmpty)
               '$referenceName ${fmtMoneyWhole(ref.last)} in all',
           ].join(', '),
@@ -1163,14 +1059,6 @@ class _DayDialController extends ScrollController {
   void jumpToItem(int i) {
     if (cell > 0) jumpTo(i * cell);
   }
-
-  Future<void> animateToItem(
-    int i, {
-    required Duration duration,
-    required Curve curve,
-  }) => cell > 0
-      ? animateTo(i * cell, duration: duration, curve: curve)
-      : Future.value();
 }
 
 /// Lets a fling run as far as it would, then settles on the nearest day.

@@ -10,7 +10,7 @@ import '../utils/dates.dart';
 const int kReminderGraceDays = 7;
 
 /// How many days before its due date a payment may land and still pay a
-/// reminder (and count as a bill row in the forecast).
+/// reminder.
 const int kReminderEarlyPayDays = 15;
 
 /// Most occurrences [reminderDueDatesBetween] lists: two years of monthly.

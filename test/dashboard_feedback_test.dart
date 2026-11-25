@@ -79,8 +79,8 @@ void main() {
         previousMonth: DateTime(2026, 9),
         days: 31,
         today: 10,
+        running: true,
         actual: [for (var d = 1; d <= 10; d++) d * 120.0],
-        predicted: [for (var d = 10; d <= 31; d++) d * 120.0],
         lastMonth: [for (var d = 1; d <= 30; d++) d * 100.0],
         usual: [for (var d = 1; d <= 31; d++) d * 90.0],
       );
@@ -113,7 +113,7 @@ void main() {
 
       final before = tester.getSize(find.byType(BottomSheet)).height;
       expect(
-        find.textContaining('all of September').hitTestable(),
+        find.textContaining('All of September').hitTestable(),
         findsOneWidget,
       );
 
@@ -126,7 +126,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.getSize(find.byType(BottomSheet)).height, before);
       expect(
-        find.textContaining('a usual month').hitTestable(),
+        find.textContaining('A usual month').hitTestable(),
         findsOneWidget,
       );
       expect(tester.takeException(), isNull);
@@ -140,8 +140,8 @@ void main() {
         previousMonth: DateTime(2026, 9),
         days: 31,
         today: 10,
+        running: true,
         actual: [for (var d = 1; d <= 10; d++) d * 120.25],
-        predicted: [for (var d = 10; d <= 31; d++) d * 1525.24],
         lastMonth: [for (var d = 1; d <= 30; d++) d * 100.5],
         usual: null,
       );
@@ -166,11 +166,12 @@ void main() {
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
 
-      // 31 x ₹1,525.24 is ₹47,282.44.
+      // 30 x ₹100.5 is ₹3,015.
       expect(
-        find.textContaining('Forecast ${fmtMoneyWhole(47282.44)}'),
+        find.textContaining('All of September ${fmtMoneyWhole(3015)}'),
         findsWidgets,
       );
+      expect(find.textContaining('Forecast'), findsNothing);
       expect(
         find.textContaining('So far ${fmtMoneyWhole(1202.5)}'),
         findsWidgets,
@@ -190,13 +191,10 @@ void main() {
         previousMonth: DateTime(2026, 9),
         days: 31,
         today: 10,
+        running: true,
         actual: [for (var d = 1; d <= 10; d++) d * 120.0],
-        predicted: [for (var d = 10; d <= 31; d++) d * 120.0],
         lastMonth: [for (var d = 1; d <= 30; d++) d * 100.0],
         usual: [for (var d = 1; d <= 31; d++) d * 90.0],
-        dueByDay: {
-          12: [(label: 'Rent', amount: 500, due: DateTime(2026, 10, 12))],
-        },
       );
       await tester.pumpWidget(
         MaterialApp(
@@ -257,15 +255,16 @@ void main() {
           'All Sep',
         ),
       ]) {
-        // Whole on screen, below the Today label, above the day dial.
+        // Whole on screen, below the plot's top, above the day dial.
         expect(bubble.left, greaterThanOrEqualTo(chart.left - 16));
         expect(bubble.right, lessThanOrEqualTo(chart.right + 16));
         expect(bubble.top, greaterThanOrEqualTo(chart.top + 14));
         expect(bubble.bottom, lessThanOrEqualTo(chart.bottom));
       }
-      expect(find.text(fmtMoneyWhole(3720)), findsOneWidget);
+      // After today this month has no figure: no predicted ₹3,720.
+      expect(find.text(fmtMoneyWhole(3720)), findsNothing);
       expect(find.text(fmtMoneyWhole(3000)), findsOneWidget);
-      for (final gone in ['That day', 'Rent', 'Expected by then']) {
+      for (final gone in ['That day', 'Expected by then']) {
         expect(find.textContaining(gone), findsNothing, reason: gone);
       }
 
@@ -289,13 +288,10 @@ void main() {
         previousMonth: DateTime(2026, 9),
         days: 31,
         today: 10,
+        running: true,
         actual: [for (var d = 1; d <= 10; d++) d * 120.0],
-        predicted: [for (var d = 10; d <= 31; d++) d * 120.0],
         lastMonth: [for (var d = 1; d <= 30; d++) d * 100.0],
         usual: [for (var d = 1; d <= 31; d++) d * 90.0],
-        dueByDay: {
-          12: [(label: 'Rent', amount: 500, due: DateTime(2026, 10, 12))],
-        },
       );
       final dial = find.byWidgetPredicate(
         (w) => w is ListView && w.scrollDirection == Axis.horizontal,
@@ -359,7 +355,6 @@ void main() {
         for (final r in letters) {
           expect(r.top, greaterThanOrEqualTo(box.top), reason: at);
           expect(r.bottom, lessThanOrEqualTo(box.bottom), reason: at);
-          // Day 12 carries a dot and still sits on the same line.
           expect(r.top, moreOrLessEquals(letters.first.top), reason: at);
         }
         numbers.sort((a, b) => a.left.compareTo(b.left));

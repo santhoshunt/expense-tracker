@@ -61,7 +61,7 @@ void main() {
       );
     });
 
-    test('a 1.30 Overview order gains the forecast after the budget', () {
+    test('a 1.30 Overview order keeps its sections in place', () {
       final l = DashboardPageLayout.fromJson(DashboardPage.overview, {
         'order': ['upcoming', 'monthlyBudget', 'recap', 'budgets', 'owed'],
       });
@@ -70,29 +70,23 @@ void main() {
       expect(l.order, [
         DashboardSection.week,
         DashboardSection.monthlyBudget,
-        DashboardSection.forecast,
         DashboardSection.recap,
         DashboardSection.budgets,
         DashboardSection.owed,
       ]);
     });
 
-    test('defaults put Big bills ahead after Upcoming on Ahead, and the '
-        'forecast right after the monthly budget', () {
+    test('defaults put Big bills ahead after Upcoming on Ahead', () {
       expect(DashboardSection.of(DashboardPage.ahead), [
         DashboardSection.projection,
         DashboardSection.upcoming,
         DashboardSection.bigBills,
         DashboardSection.subscriptions,
       ]);
-      final order = DashboardSection.of(DashboardPage.overview);
-      expect(
-        order.indexOf(DashboardSection.forecast),
-        order.indexOf(DashboardSection.monthlyBudget) + 1,
-      );
     });
 
-    test('a 1.39 Overview order drops the sections that moved to Ahead', () {
+    test('a 1.39 Overview order drops the sections that moved to Ahead, and '
+        'the Month-end forecast, removed in 2.3.7', () {
       final l = DashboardPageLayout.fromJson(DashboardPage.overview, {
         'order': [
           'monthlyBudget',
@@ -106,7 +100,6 @@ void main() {
       });
       expect(l.order, [
         DashboardSection.monthlyBudget,
-        DashboardSection.forecast,
         DashboardSection.owed,
         DashboardSection.week,
         DashboardSection.recap,

@@ -2,17 +2,17 @@ import '../models/dashboard_layout.dart' show kAheadDays;
 import '../models/transaction.dart';
 import '../providers/finance_provider.dart';
 import '../utils/dates.dart';
-import 'month_forecast.dart';
 import 'recurring_detector.dart';
 import 'reminder_schedule.dart';
 import 'safe_to_spend.dart';
 import 'subscriptions.dart';
 import 'upcoming_items.dart' show hitMarkedPaid, reminderCoversHit;
 
-/// The days ahead, one by one: the bills the monthly budget and the
-/// Month-end forecast count, the savings subscriptions, the money expected
-/// in, and the balance each day leaves. The Ahead projection reads it, and the This
-/// month vs chart reads its bills.
+/// The days ahead, one by one: the bills the monthly budget counts, the
+/// savings subscriptions, the money expected in, and the balance each day
+/// leaves. The Ahead projection and the Expected balance widgets read it.
+/// Only known payments and income move the balance: no everyday spending
+/// is guessed.
 
 /// What an item does to the balance.
 enum ForwardKind { spend, savings, income }
@@ -38,36 +38,24 @@ class ForwardDay {
   /// Larger amount first; day 0 also holds overdue items.
   final List<ForwardItem> items;
 
-  /// 0 on day 0, else the per-day figure.
-  final double everyday;
-
   /// The expected balance after this day.
   final double balance;
 
   const ForwardDay({
     required this.date,
     required this.items,
-    required this.everyday,
     required this.balance,
   });
-
-  /// Spend items plus everyday spending; savings and income left out.
-  double get expectedSpend =>
-      items
-          .where((i) => i.kind == ForwardKind.spend)
-          .fold(0.0, (s, i) => s + i.bill.amount) +
-      everyday;
 }
 
 /// The whole series from today.
 class ForwardSeries {
   final double start;
-  final double perDay;
 
   /// days[0] is today.
   final List<ForwardDay> days;
 
-  const ForwardSeries(this.start, this.perDay, this.days);
+  const ForwardSeries(this.start, this.days);
 
   ForwardDay get last => days.last;
 
@@ -95,20 +83,16 @@ class ForwardSeries {
 
   double get savings => _sum((i) => i.kind == ForwardKind.savings);
   double get income => _sum((i) => i.kind == ForwardKind.income);
-
-  /// Everyday spending over the days after today.
-  double get everyday => perDay * (days.length - 1);
 }
 
 /// The series from [now]'s day through [to], starting at [start].
 ///
-/// Spending is [billsDue] from [kReminderGraceDays] back, so over a window
-/// that ends on the month's last day it equals `MonthForecast.bills`; a
+/// Spending is [billsDue] from [kReminderGraceDays] back, so up to the
+/// month's last day it holds the bills the monthly budget counts; a
 /// payment repeats only past this month. [savings] (the active savings
 /// subscriptions) and the income patterns in [patterns] add one item per
 /// date, as do reminders [billsDue] leaves out: an income reminder from
 /// tomorrow, a money-out transfer reminder (not a Card bill) as savings.
-/// Every day after today also spends [perDay].
 ForwardSeries buildForwardSeries(
   FinanceProvider finance, {
   required List<RecurringHit> patterns,
@@ -116,7 +100,6 @@ ForwardSeries buildForwardSeries(
   required Set<String> hidden,
   required DateTime now,
   required DateTime to,
-  required double perDay,
   double start = 0,
 }) {
   DateTime day(DateTime d) => DateTime(d.year, d.month, d.day);
@@ -139,8 +122,8 @@ ForwardSeries buildForwardSeries(
       : byKey[b.patternKey]!.categoryId;
 
   final items = <ForwardItem>[];
-  // A spend pattern's dates after [due], only past this month so the This
-  // month vs chart still ends at the forecast total.
+  // A spend pattern's dates after [due], only past this month, where the
+  // bills match the monthly budget's.
   void repeatSpend(RecurringHit h, DateTime due) {
     for (var d = step(h, due); !d.isAfter(end); d = step(h, d)) {
       if (!d.isAfter(monthEnd)) continue;
@@ -159,7 +142,7 @@ ForwardSeries buildForwardSeries(
     }
   }
 
-  // The bills the monthly budget and the forecast count, then their repeats.
+  // The bills the monthly budget counts, then their repeats.
   final listed = <String>{};
   for (final b in billsDue(
     finance,
@@ -298,38 +281,23 @@ ForwardSeries buildForwardSeries(
             : day(it.bill.due) == date)
           it,
     ]..sort((a, b) => b.bill.amount.compareTo(a.bill.amount));
-    final everyday = i == 0 ? 0.0 : perDay;
-    balance += onDay.fold(0.0, (s, it) => s + it.signed) - everyday;
-    days.add(
-      ForwardDay(
-        date: date,
-        items: onDay,
-        everyday: everyday,
-        balance: balance,
-      ),
-    );
+    balance += onDay.fold(0.0, (s, it) => s + it.signed);
+    days.add(ForwardDay(date: date, items: onDay, balance: balance));
   }
-  return ForwardSeries(start, perDay, days);
+  return ForwardSeries(start, days);
 }
 
 /// The Ahead tab's series: [kAheadDays] days from [now], starting at the
 /// headline net balance less the spend waiting for review that is dated
-/// today or earlier, with the savings subscriptions and the month's
-/// forecast per day. [headline] and [waiting] are the two parts of that
-/// start. The Ahead view and the Expected balance widgets both read it.
+/// today or earlier, with the savings subscriptions. [headline] and
+/// [waiting] are the two parts of that start. The Ahead view and the
+/// Expected balance widgets both read it.
 ({ForwardSeries series, double headline, double waiting}) aheadSeries(
   FinanceProvider finance, {
   required List<RecurringHit> patterns,
   required Set<String> hidden,
   required DateTime now,
 }) {
-  final forecast = computeMonthForecast(
-    finance,
-    patterns: patterns,
-    hidden: hidden,
-    now: now,
-    wholeMonth: true,
-  );
   final savingsHits = [
     for (final i in cachedSubscriptions(finance, hidden).active)
       if (i.isSavings) i.hit,
@@ -346,7 +314,6 @@ ForwardSeries buildForwardSeries(
     hidden: hidden,
     now: now,
     to: DateTime(now.year, now.month, now.day + kAheadDays - 1),
-    perDay: forecast?.perDay ?? 0,
     start: headline - waiting,
   );
   return (series: series, headline: headline, waiting: waiting);

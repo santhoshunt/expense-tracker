@@ -76,8 +76,7 @@ YearComparison? buildYearComparison(
   final months = yearMonths(startYear, startMonth);
   final today = DateTime(now.year, now.month, now.day);
   // On the year's last day every month is taken whole, so the year counts as
-  // ended (actualFull set), the way buildMonthComparison treats a month on
-  // its last day.
+  // ended, the way buildMonthComparison treats a month on its last day.
   final partial = today.isBefore(bounds.last);
 
   // Months taken whole on both sides, then the cut month (if any) with the
@@ -127,9 +126,6 @@ YearComparison? buildYearComparison(
     total: SpendCompare(
       actual: actual,
       reference: reference,
-      // No projection for a running year: twelve months of a curve is too
-      // long a stretch to extrapolate from a few.
-      actualFull: partial ? null : actual,
       referenceFull: referenceFull,
       state: covered
           ? compareStateFor(actual, reference)

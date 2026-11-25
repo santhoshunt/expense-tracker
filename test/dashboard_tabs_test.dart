@@ -246,7 +246,6 @@ void main() {
     }) => SpendCompare(
       actual: actual,
       reference: reference,
-      actualFull: null,
       referenceFull: reference,
       state: state,
     );
@@ -261,7 +260,6 @@ void main() {
       throughDay: 17,
       partial: true,
       usualMonths: usualMonths,
-      paceDays: 17,
       vsPrevious: compare(1400, 1000),
       vsUsual: compare(1400, 1000, state: usualState),
       categories: categories,
@@ -297,12 +295,9 @@ void main() {
       expect(find.textContaining('August'), findsWidgets);
     });
 
-    testWidgets('too few days for a projection still names the full month', (
+    testWidgets('a running month names the full reference month', (
       tester,
     ) async {
-      // made() carries a null actualFull, the shape of a month's first days
-      // (before kMinDaysForProjection). "Show both" still holds: the full
-      // reference month is named even though nothing can be projected yet.
       await show(tester, MonthPaceCard(comparison: made()));
       expect(
         find.text('All of August: ${fmtMoneyWhole(1000)}'),
@@ -326,7 +321,6 @@ void main() {
         throughDay: 30,
         partial: false,
         usualMonths: 6,
-        paceDays: 30,
         vsPrevious: vs,
         vsUsual: compare(0, 1000),
         categories: const [],
